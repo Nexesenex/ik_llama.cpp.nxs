@@ -132,7 +132,8 @@ option(GGML_CUDA_USE_GRAPHS                 "ggml: use CUDA graphs (llama.cpp on
 
 option(GGML_IQK_FA_ALL_QUANTS               "ggml: compile all quants for IQK FlashAttention" OFF)
 
-option(GGML_CURL                            "ggml: use libcurl to download model from an URL" OFF)
+# option(GGML_CURL                            "ggml: use libcurl to download model from an URL" OFF)
+
 option(GGML_HIPBLAS                         "ggml: use hipBLAS"                               OFF)
 option(GGML_HIP_UMA                         "ggml: use HIP unified memory architecture"       OFF)
 option(GGML_VULKAN                          "ggml: use Vulkan"                                OFF)
