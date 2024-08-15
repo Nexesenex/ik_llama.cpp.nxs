@@ -6277,6 +6277,12 @@ static void llm_load_vocab(
                 tokenizer_pre == "codeshell") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_CODESHELL;
             } else if (
+                tokenizer_pre == "bloom") {
+                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_BLOOM;
+            } else if (
+                tokenizer_pre == "gpt3-finnish") {
+                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_GPT3_FINNISH;
+            } else if (
                 tokenizer_pre == "gpt-4o" ||
                 tokenizer_pre == "llama4") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_GPT4O;

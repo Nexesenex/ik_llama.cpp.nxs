@@ -100,12 +100,16 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_TEKKEN         = 20,
         LLAMA_VOCAB_PRE_TYPE_SMOLLM         = 21,
         LLAMA_VOCAB_PRE_TYPE_CODESHELL      = 22,
+        LLAMA_VOCAB_PRE_TYPE_BLOOM          = 23,
+        LLAMA_VOCAB_PRE_TYPE_GPT3_FINNISH   = 24,
+
         LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 28, //llama.cpp lists this as 28
         LLAMA_VOCAB_PRE_TYPE_GPT4O          = 29,
         LLAMA_VOCAB_PRE_TYPE_SUPERBPE       = 30,
         LLAMA_VOCAB_PRE_TYPE_TRILLION       = 31,
         LLAMA_VOCAB_PRE_TYPE_BAILINGMOE     = 32,
         LLAMA_VOCAB_PRE_TYPE_LLAMA4         = 33,
+
     };
 
     enum llama_rope_type {
