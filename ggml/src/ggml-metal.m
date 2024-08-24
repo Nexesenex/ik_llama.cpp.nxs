@@ -1140,6 +1140,19 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_context * ctx
                 return (op->src[1]->ne[0] == 192 && op->src[2]->ne[0] == 128) ||
                        (op->src[1]->ne[0] == 576 && op->src[2]->ne[0] == 512);
             }
+            % if (op->src[0]->ne[0] == 256) {
+                % return false;
+            % }
+            {
+                float softcap;
+
+                memcpy(&softcap, ((const float *) op->op_params) + 2, sizeof(softcap));
+
+                if (softcap != 0.0f) {
+                    return false;
+                }
+            }
+            % return ctx->support_simdgroup_mm; // TODO: over-restricted for vec-kernels
             return (op->src[1]->ne[0] ==  64 || op->src[1]->ne[0] ==  80 ||
                     op->src[1]->ne[0] ==  96 || op->src[1]->ne[0] == 112 ||
                     op->src[1]->ne[0] == 128 || op->src[1]->ne[0] == 256);
