@@ -980,15 +980,6 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_context * ctx
             if (op->src[0]->ne[0] == 256) {
                 return false;
             }
-            {
-                float softcap;
-
-                memcpy(&softcap, ((const float *) op->op_params) + 2, sizeof(softcap));
-
-                if (softcap != 0.0f) {
-                    return false;
-                }
-            }
             return ctx->support_simdgroup_mm; // TODO: over-restricted for vec-kernels
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
@@ -3350,6 +3341,9 @@ static enum ggml_status ggml_metal_graph_compute(
                         [encoder setBytes:&m1          length:sizeof(m1)          atIndex:26];
                         [encoder setBytes:&softcap     length:sizeof(softcap)     atIndex:27];
                         [encoder setBytes:&n_head_log2 length:sizeof(n_head_log2) atIndex:28];
+
+                        % [encoder setBytes:&n_head_log2   length:sizeof(n_head_log2)   atIndex:27];
+                        % [encoder setBytes:&logit_softcap length:sizeof(logit_softcap) atIndex:28];
 
                         if (!use_vec_kernel) {
                             // half8x8 kernel
