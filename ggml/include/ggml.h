@@ -397,6 +397,8 @@ extern "C" {
         GGML_TYPE_Q4_0_8_8 = 33,
         //
         // So we are able to consume MS BitNet I2_S quants
+        GGML_TYPE_TQ1_0   = 34,
+        GGML_TYPE_TQ2_0   = 35,
         //
         GGML_TYPE_I2_S    = 36,
         //
@@ -449,6 +451,7 @@ extern "C" {
         GGML_TYPE_IQ4_KS_R4 = 344,
         GGML_TYPE_Q8_KV_R8  = 398,
         GGML_TYPE_Q8_K_R8   = 399,
+
         GGML_TYPE_COUNT,
     };
 
