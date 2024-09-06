@@ -286,6 +286,9 @@ struct gpt_params {
     std::string lora_outfile = "ggml-lora-merged-f16.gguf";
 
     bool sweep_bench_output_jsonl = false;
+
+    // batched-bench params
+    bool batched_bench_output_jsonl = false;
 };
 
 void gpt_params_parse_from_env(gpt_params & params);
