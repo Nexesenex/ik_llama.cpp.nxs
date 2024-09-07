@@ -22286,7 +22286,8 @@ static bool ggml_thread_apply_priority(int32_t prio) {
     return true;
 }
 
-#else // posix?
+#elif defined(__gnu_linux__)
+// TODO: this may not work on BSD, to be verified
 
 static bool ggml_thread_apply_affinity(const bool * mask) {
     cpu_set_t cpuset;
@@ -22338,6 +22339,18 @@ static bool ggml_thread_apply_priority(int32_t prio) {
         return false;
     }
 
+    return true;
+}
+
+#else // unsupported platforms
+
+static bool ggml_thread_apply_affinity(const bool * mask) {
+    UNUSED(mask);
+    return true;
+}
+
+static bool ggml_thread_apply_priority(int32_t prio) {
+    UNUSED(prio);
     return true;
 }
 
