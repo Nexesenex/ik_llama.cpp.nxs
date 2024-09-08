@@ -975,8 +975,34 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             if (i < split_arg.size()) {
                 params.tensor_split[i] = std::stof(split_arg[i]);
             }
-            else {
-                params.tensor_split[i] = 0.0f;
+
+            // else {
+                // params.tensor_split[i] = 0.0f;
+
+            if (!current_line.empty()) result.push_back(current_line);
+        }
+    };
+    while (std::getline(iss, line)) {
+        add_line(line);
+    }
+    return result;
+}
+
+std::string llama_arg::to_string() {
+    // params for printing to console
+    const static int n_leading_spaces = 40;
+    const static int n_char_per_line_help = 70; // TODO: detect this based on current console
+    std::string leading_spaces(n_leading_spaces, ' ');
+
+    std::ostringstream ss;
+    for (const auto arg : args) {
+        if (arg == args.front()) {
+            if (args.size() == 1) {
+                ss << arg;
+            } else {
+                // first arg is usually abbreviation, we need padding to make it more beautiful
+                auto tmp = std::string(arg) + ", ";
+                ss << format("%-7s", tmp.c_str());
             }
         }
 #ifndef GGML_USE_CUDA_SYCL_VULKAN
