@@ -102,7 +102,6 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_BLOOM          = 23,
         LLAMA_VOCAB_PRE_TYPE_GPT3_FINNISH   = 24,
         LLAMA_VOCAB_PRE_TYPE_EXAONE         = 25,
-        LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 26, //llama.cpp lists this as 28
     };
 
     enum llama_rope_type {
@@ -173,51 +172,8 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_Q4_0_4_4      = 33, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q4_0_4_8      = 34, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q4_0_8_8      = 35, // except 1d tensors
-        //
-        LLAMA_FTYPE_MOSTLY_TQ1_0         = 84, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_TQ2_0         = 85, // except 1d tensors
-        //
-        LLAMA_FTYPE_MOSTLY_Q6_0          = 135, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ1_BN        = 136, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ2_BN        = 137, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ2_K         = 138, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ3_K         = 139, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ4_K         = 140, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ5_K         = 141, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ6_K         = 142, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ4_KS        = 145, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ3_KL        = 146, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ2_KS        = 147, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ4_KSS       = 148, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q8_KV         = 149, // except 1d tensors
-                                                //
-        LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q5_0_R4       = 208, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q2_K_R4       = 210, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q3_K_R4       = 211, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q4_K_R4       = 214, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q5_K_R4       = 216, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q6_K_R4       = 218, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4    = 219, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ2_XS_R4     = 220, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ3_XXS_R4    = 223, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ1_S_R4      = 224, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ4_NL_R4     = 225, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ3_S_R4      = 226, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ2_M_R4      = 229, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ4_XS_R8     = 230, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ1_M_R4      = 231, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q6_0_R4       = 335, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_BF16_R16      = 232, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ2_BN_R4     = 337, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ2_K_R4      = 338, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ3_K_R4      = 339, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ4_K_R4      = 340, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ5_K_R4      = 341, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ4_KS_R4     = 345, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q8_KV_R8      = 398, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q8_K_R8       = 399, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_TQ1_0         = 36, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_TQ2_0         = 37, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
@@ -317,11 +273,6 @@ extern "C" {
         };
     };
 
-    struct llama_model_tensor_buft_override {
-        const char * pattern;
-        ggml_backend_buffer_type_t buft;
-    };
-
     struct llama_model_params {
         int32_t n_gpu_layers; // number of layers to store in VRAM
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
@@ -349,14 +300,11 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
-        const struct llama_model_tensor_buft_override * tensor_buft_overrides;
-
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;    // only load the vocabulary, no weights
         bool use_mmap;      // use mmap if possible
         bool use_mlock;     // force system to keep model in RAM
         bool check_tensors; // validate model tensor data
-        bool repack_tensors;// repack if available
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -395,15 +343,7 @@ extern "C" {
         bool embeddings;  // if true, extract embeddings (together with logits)
         bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
         bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
-
-        int  mla_attn;    // whether to use MLA attention [EXPERIMENTAL]
-        int  attn_max_batch;    // maximum batch size for attention computations [EXPERIMENTAL]
-        bool fused_moe_up_gate; // whether to use fused MoE up/down op [EXPERIMENTAL]
-        int  min_experts;
-        float thresh_experts;
-
-      //bool no_perf;     // whether to measure performance timings, TODO: implement
-
+        bool no_perf;     // whether to measure performance timings
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
@@ -418,20 +358,11 @@ extern "C" {
         enum llama_ftype ftype;              // quantize to this llama_ftype
         enum ggml_type output_tensor_type;   // output tensor type
         enum ggml_type token_embedding_type; // token embeddings tensor type
-        enum ggml_type attn_q_type;          // attention query tensor type
-        enum ggml_type attn_k_type;          // attention key tensor type
-        enum ggml_type attn_v_type;          // attention value tensor type
-        enum ggml_type attn_qkv_type;        // attention query-key-value tensor type
-        enum ggml_type attn_output_type;     // attention output tensor type
-        enum ggml_type ffn_gate_type;        // feedforward network gate type
-        enum ggml_type ffn_down_type;        // feedforward network down type
-        enum ggml_type ffn_up_type;          // feedforward network up type
         bool allow_requantize;               // allow quantizing non-f32/f16 tensors
         bool quantize_output_tensor;         // quantize output.weight
         bool only_copy;                      // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
         bool pure;                           // quantize all tensors to the default type
         bool keep_split;                     // quantize to the same number of shards
-        bool ignore_imatrix_rules;           // If set to true, the built-in rules for refusing to quantize into certain quants without imatrix are ignored
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
     } llama_model_quantize_params;
@@ -1045,8 +976,6 @@ extern "C" {
                                   bool   add_ass,
                                   char * buf,
                                int32_t   length);
-    // Get list of built-in chat templates
-    LLAMA_API int32_t llama_chat_builtin_templates(const char ** output, size_t len);
 
     //
     // Sampling API
@@ -1247,13 +1176,30 @@ extern "C" {
     // NOTE: Used by llama.cpp examples, avoid using in third-party apps. Instead, do your own performance measurements.
     //
 
-    enum llama_perf_type {
-        LLAMA_PERF_TYPE_CONTEXT       = 0,
-        LLAMA_PERF_TYPE_SAMPLER_CHAIN = 1,
+    struct llama_perf_context_data {
+        double t_start_ms;
+        double t_load_ms;
+        double t_p_eval_ms;
+        double t_eval_ms;
+
+        int32_t n_p_eval;
+        int32_t n_eval;
     };
 
-    LLAMA_API void llama_perf_print(const void * ctx, enum llama_perf_type type);
-    LLAMA_API void llama_perf_reset(      void * ctx, enum llama_perf_type type);
+    struct llama_perf_sampler_data {
+        double t_sample_ms;
+
+        int32_t n_sample;
+    };
+
+    LLAMA_API struct llama_perf_context_data llama_perf_context      (const struct llama_context * ctx);
+    LLAMA_API void                           llama_perf_context_print(const struct llama_context * ctx);
+    LLAMA_API void                           llama_perf_context_reset(      struct llama_context * ctx);
+
+    // NOTE: the following work only with samplers constructed via llama_sampler_chain_init
+    LLAMA_API struct llama_perf_sampler_data llama_perf_sampler      (const struct llama_sampler * chain);
+    LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
+    LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
 
     LLAMA_API void llama_perf_dump_yaml(FILE * stream, const struct llama_context * ctx);
 
