@@ -54,6 +54,7 @@ TEST_TARGETS = \
 	tests/test-grammar-parser \
 	tests/test-json-schema-to-grammar \
 	tests/test-llama-grammar \
+	tests/test-log \
 	tests/test-model-load-cancel \
 	tests/test-opt \
 	tests/test-quantize-fns \
@@ -146,6 +147,14 @@ endif
 ifdef LLAMA_NO_METAL
 GGML_NO_METAL := 1
 DEPRECATE_WARNING := 1
+endif
+
+ifdef LLAMA_DISABLE_LOGS
+REMOVE_WARNING := 1
+endif
+
+ifdef LLAMA_SERVER_VERBOSE
+REMOVE_WARNING := 1
 endif
 
 ifndef UNAME_S
@@ -248,11 +257,11 @@ endif
 # Compile flags
 #
 
-# keep standard at C11 and C++17
+# keep standard at C11 and C++11
 MK_CPPFLAGS  = -Iggml/include -Iggml/src -Iinclude -Isrc -Icommon
 MK_CFLAGS    = -std=c11   -fPIC
-MK_CXXFLAGS  = -std=c++17 -fPIC
-MK_NVCCFLAGS = -std=c++17
+MK_CXXFLAGS  = -std=c++11 -fPIC
+MK_NVCCFLAGS = -std=c++11
 
 ifdef LLAMA_NO_CCACHE
 GGML_NO_CCACHE := 1
@@ -328,9 +337,9 @@ ifdef LLAMA_DEBUG
 	endif
 else
 	MK_CPPFLAGS   += -DNDEBUG
-	MK_CFLAGS     += -O3
-	MK_CXXFLAGS   += -O3
-	MK_NVCCFLAGS  += -O3
+	MK_CFLAGS     += -O3 -g
+	MK_CXXFLAGS   += -O3 -g
+	MK_NVCCFLAGS  += -O3 -g
 endif
 
 ifdef LLAMA_SANITIZE_THREAD
@@ -351,18 +360,10 @@ ifdef LLAMA_SANITIZE_UNDEFINED
 	MK_LDFLAGS  += -fsanitize=undefined -g
 endif
 
-ifdef LLAMA_SERVER_VERBOSE
-	MK_CPPFLAGS += -DSERVER_VERBOSE=$(LLAMA_SERVER_VERBOSE)
-endif
-
 ifdef LLAMA_SERVER_SSL
 	MK_CPPFLAGS += -DCPPHTTPLIB_OPENSSL_SUPPORT
 	MK_LDFLAGS += -lssl -lcrypto
 endif
-
-ifdef LLAMA_DISABLE_LOGS
-	MK_CPPFLAGS += -DLOG_DISABLE_LOGS
-endif # LLAMA_DISABLE_LOGS
 
 # warnings
 WARN_FLAGS = \
@@ -434,7 +435,7 @@ endif
 # TODO: probably these flags need to be tweaked on some architectures
 #       feel free to update the Makefile for your architecture and send a pull request or issue
 
-ifndef RISCV
+ifndef RISCV_CROSS_COMPILE
 
 ifeq ($(UNAME_M),$(filter $(UNAME_M),x86_64 i686 amd64))
 	# Use all CPU extensions that are available:
@@ -514,7 +515,12 @@ ifneq ($(filter loongarch64%,$(UNAME_M)),)
 	MK_CXXFLAGS += -mlasx
 endif
 
-else
+ifneq ($(filter riscv64%,$(UNAME_M)),)
+	MK_CFLAGS   += -march=rv64gcv -mabi=lp64d
+	MK_CXXFLAGS += -march=rv64gcv -mabi=lp64d
+endif
+
+else # RISC-V CROSS COMPILATION
 	MK_CFLAGS   += -march=rv64gcv -mabi=lp64d
 	MK_CXXFLAGS += -march=rv64gcv -mabi=lp64d
 endif
@@ -574,13 +580,6 @@ ifdef GGML_NVPL
 	OBJ_GGML    += ggml/src/ggml-blas.o
 endif # GGML_NVPL
 
-OBJ_GGML    += ggml/src/iqk/iqk_quantize.o
-ifndef GGML_NO_IQKMULMAT
-	MK_CFLAGS   += -DGGML_USE_IQK_MULMAT
-	MK_CPPFLAGS += -DGGML_USE_IQK_MULMAT
-	OBJ_GGML    += ggml/src/iqk/iqk_mul_mat.o
-endif
-
 ifndef GGML_NO_LLAMAFILE
 	MK_CPPFLAGS += -DGGML_USE_LLAMAFILE
 	OBJ_GGML    += ggml/src/llamafile/sgemm.o
@@ -600,10 +599,6 @@ else
 	OBJ_CUDA_TMPL += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/template-instances/fattn-vec*q4_0-q4_0.cu))
 	OBJ_CUDA_TMPL += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/template-instances/fattn-vec*q8_0-q8_0.cu))
 	OBJ_CUDA_TMPL += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/template-instances/fattn-vec*f16-f16.cu))
-	OBJ_CUDA_TMPL += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/template-instances/fattn-vec*q8_0-iq4_nl.cu))
-	OBJ_CUDA_TMPL += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/template-instances/fattn-vec*:iq4_nl-iq4_nl.cu))
-	OBJ_CUDA_TMPL += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/template-instances/fattn-vec*:q6_0-q5_0.cu))
-	OBJ_CUDA_TMPL += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/template-instances/fattn-vec*:q8_0-q6_0.cu))
 endif # GGML_CUDA_FA_ALL_QUANTS
 
 ifdef GGML_CUDA
@@ -936,6 +931,8 @@ OBJ_LLAMA = \
 
 OBJ_COMMON = \
 	common/common.o \
+	common/arg.o \
+	common/log.o \
 	common/console.o \
 	common/ngram-cache.o \
 	common/sampling.o \
@@ -1032,6 +1029,14 @@ $(info   - LLAMA_NO_CCACHE)
 $(info )
 endif
 
+ifdef REMOVE_WARNING
+$(info !!! REMOVAL WARNING !!!)
+$(info The following LLAMA_ options have been removed and are no longer supported)
+$(info   - LLAMA_DISABLE_LOGS   (https://github.com/ggerganov/llama.cpp/pull/9418))
+$(info   - LLAMA_SERVER_VERBOSE (https://github.com/ggerganov/llama.cpp/pull/9418))
+$(info )
+endif
+
 #
 # Build libraries
 #
@@ -1073,20 +1078,6 @@ ggml/src/ggml-blas.o: \
 	ggml/src/ggml-blas.cpp \
 	ggml/include/ggml-blas.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-ggml/src/iqk/iqk_quantize.o: \
-	ggml/src/iqk/iqk_quantize.cpp \
-	ggml/src/iqk/iqk_quantize.h \
-	ggml/src/ggml-quants.h ggml/src/ggml-common.h ggml/include/ggml.h ggml/src/ggml-impl.h
-
-ifndef GGML_NO_IQKMULMAT
-ggml/src/iqk/iqk_mul_mat.o: \
-	ggml/src/iqk/iqk_mul_mat.cpp \
-	ggml/src/iqk/iqk_mul_mat.h \
-	ggml/src/iqk/iqk_quantize.h \
-	ggml/src/ggml-quants.h ggml/src/ggml-common.h ggml/include/ggml.h ggml/src/ggml-impl.h
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-endif # GGML_NO_IQKMULMAT
 
 ifndef GGML_NO_LLAMAFILE
 ggml/src/llamafile/sgemm.o: \
@@ -1182,6 +1173,16 @@ common/common.o: \
 	include/llama.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+common/arg.o: \
+	common/arg.cpp \
+	common/arg.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+common/log.o: \
+	common/log.cpp \
+	common/log.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 common/sampling.o: \
 	common/sampling.cpp \
 	common/sampling.h \
@@ -1233,7 +1234,6 @@ clean:
 	rm -rvf ggml/*.so
 	rm -vrf ggml/src/*.o
 	rm -rvf ggml/src/llamafile/*.o
-	rm -rvf ggml/src/iqk/*.o
 	rm -rvf common/build-info.cpp
 	rm -vrf ggml/src/ggml-metal-embed.metal
 	rm -vrf ggml/src/ggml-cuda/*.o
@@ -1361,7 +1361,7 @@ llama-cvector-generator: examples/cvector-generator/cvector-generator.cpp \
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
 
 llama-convert-llama2c-to-ggml: examples/convert-llama2c-to-ggml/convert-llama2c-to-ggml.cpp \
-	$(OBJ_GGML) $(OBJ_LLAMA)
+	$(OBJ_ALL)
 	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
 
@@ -1539,6 +1539,11 @@ tests/test-arg-parser: tests/test-arg-parser.cpp \
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
 
 tests/test-llama-grammar: tests/test-llama-grammar.cpp \
+	$(OBJ_ALL)
+	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
+	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
+
+tests/test-log: tests/test-log.cpp \
 	$(OBJ_ALL)
 	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
