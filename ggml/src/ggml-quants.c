@@ -10,11 +10,13 @@
 
 #include "ggml-quants.h"
 #include "ggml-impl.h"
+
 #if GGML_USE_IQK_MULMAT
 #include "iqk/iqk_mul_mat.h"
 #include "iqk/iqk_quantize.h"
 #endif
 
+#include "ggml-cpu-impl.h"
 
 #include <math.h>
 #include <string.h>
