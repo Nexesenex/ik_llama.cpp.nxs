@@ -1077,6 +1077,13 @@ std::vector<llama_arg> gpt_params_parser_init(gpt_params & params, llama_example
         }
     ));
     add_opt(llama_arg(
+        {"--no-context-shift"},
+        format("disables context shift on inifinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
+        [](gpt_params & params) {
+            params.ctx_shift = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    add_opt(llama_arg(
         {"--chunks"}, "N",
         format("max number of chunks to process (default: %d, -1 = all)", params.n_chunks),
         [](gpt_params & params, int value) {
