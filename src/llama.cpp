@@ -20252,6 +20252,10 @@ int32_t llama_n_layer(const struct llama_model * model) {
     return model->hparams.n_layer;
 }
 
+int32_t llama_n_head(const struct llama_model * model) {
+    return model->hparams.n_head();
+}
+
 const struct llama_model * llama_get_model(const struct llama_context * ctx) {
     return &ctx->model;
 }
