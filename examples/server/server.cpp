@@ -2389,14 +2389,7 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
         return;
     }
 
-    LOG_INFO("request", {
-        {"remote_addr", req.remote_addr},
-        {"remote_port", req.remote_port},
-        {"status",      res.status},
-        {"method",      req.method},
-        {"path",        req.path},
-        {"params",      req.params},
-    });
+    LOG_INFO("request: %s %s %s %d\n", req.method.c_str(), req.path.c_str(), req.remote_addr.c_str(), res.status);
 
     LOG_VERBOSE("request", {
         {"request",  req.body},
@@ -2463,12 +2456,12 @@ int main(int argc, char ** argv) {
     std::unique_ptr<httplib::Server> svr;
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
-        LOG_INFO("Running with SSL", {{"key", params.ssl_file_key}, {"cert", params.ssl_file_cert}});
+        LOG_INFO("Running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
         svr.reset(
             new httplib::SSLServer(params.ssl_file_cert.c_str(), params.ssl_file_key.c_str())
         );
     } else {
-        LOG_INFO("Running without SSL", {});
+        LOG_INFO("Running without SSL\n");
         svr.reset(new httplib::Server());
     }
 #else
@@ -3253,7 +3246,7 @@ int main(int argc, char ** argv) {
     std::thread t([&]() { svr->listen_after_bind(); });
     svr->wait_until_ready();
 
-    LOG_INFO("HTTP server is listening", log_data);
+    LOG_INFO("%s: HTTP server is listening, hostname: %s, port: %d, http threads: %d\n", __func__, params.hostname.c_str(), params.port, params.n_threads_http);
 
     // load the model
     LOG_INFO("loading model", log_data);
