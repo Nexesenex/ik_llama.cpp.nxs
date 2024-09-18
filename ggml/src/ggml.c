@@ -23020,6 +23020,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 //        printf("%s(...): %d us\n", __func__, (int)(tim2-tim1));
 //#endif
     } else {
+        atomic_store_explicit(&threadpool->n_threads_cur, 1, memory_order_relaxed);
         ggml_graph_compute_thread(&threadpool->workers[0]);
     }
 #else
