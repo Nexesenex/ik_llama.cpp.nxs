@@ -1966,6 +1966,7 @@ int main(int argc, char ** argv) {
 
     params.n_ctx = 512;
     params.logits_all = true;
+    params.escape = false;
 
     auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_PERPLEXITY);
     if (!gpt_params_parse(argc, argv, params, options)) {
