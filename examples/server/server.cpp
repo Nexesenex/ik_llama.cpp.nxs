@@ -3350,6 +3350,22 @@ int main(int argc, char ** argv) {
         ctx_server.queue_tasks.start_loop();
     }
 
+    // print sample chat example to make it clear which template is used
+    // LOG_INFO("%s: chat template, built_in: %d, chat_example: '%s'\n", __func__, params.chat_template.empty(), llama_chat_format_example(ctx_server.model, params.chat_template).c_str());
+
+    ctx_server.queue_tasks.on_new_task(std::bind(
+                &server_context::process_single_task, &ctx_server, std::placeholders::_1));
+    ctx_server.queue_tasks.on_update_slots(std::bind(
+                &server_context::update_slots, &ctx_server));
+
+    shutdown_handler = [&](int) {
+        ctx_server.queue_tasks.terminate();
+    };
+
+    // LOG_INFO("%s: server is listening on %s:%d - starting the main loop\n", __func__, params.hostname.c_str(), params.port);
+
+    ctx_server.queue_tasks.start_loop();
+
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
     struct sigaction sigint_action;
     sigint_action.sa_handler = signal_handler;
