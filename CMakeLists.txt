@@ -198,15 +198,17 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
         DESTINATION lib/pkgconfig)
 
 #
-# programs, examples and tests
+# utils, programs, examples and tests
 #
 
-add_subdirectory(common)
+if (LLAMA_BUILD_COMMON)
+    add_subdirectory(common)
+endif()
 
 if (LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
     include(CTest)
     add_subdirectory(tests)
-endif ()
+endif()
 
 if (LLAMA_BUILD_EXAMPLES)
     add_subdirectory(examples)
