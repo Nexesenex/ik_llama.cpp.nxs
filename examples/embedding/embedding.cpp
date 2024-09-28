@@ -134,7 +134,7 @@ int main(int argc, char ** argv) {
     // tokenize the prompts and trim
     std::vector<std::vector<int32_t>> inputs;
     for (const auto & prompt : prompts) {
-        auto inp = ::llama_tokenize(ctx, prompt, true, false);
+        auto inp = ::llama_tokenize(ctx, prompt, true, true);
         if (inp.size() > n_batch) {
             fprintf(stderr, "%s: error: number of tokens in input line (%lld) exceeds batch size (%lld), increase batch size and re-run\n",
                     __func__, (long long int) inp.size(), (long long int) n_batch);
@@ -232,6 +232,11 @@ int main(int argc, char ** argv) {
                     }
                 }
                 fprintf(stdout, "\n");
+            }
+        } else if (pooling_type == LLAMA_POOLING_TYPE_RANK) {
+            for (int j = 0; j < n_embd_count; j++) {
+                // NOTE: if you change this log - update the tests in ci/run.sh
+                LOG("rerank score %d: %8.3f\n", j, emb[j * n_embd]);
             }
         } else {
             // print the first part of the embeddings or for a single prompt, the full embedding
