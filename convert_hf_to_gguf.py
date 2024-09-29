@@ -4248,7 +4248,8 @@ class GraniteMoeModel(GraniteModel):
         return super().modify_tensors(data_torch, name, bid)
 
 
-@Model.register("ChameleonForCausalLM")
+@Model.register("ChameleonForConditionalGeneration")
+@Model.register("ChameleonForCausalLM")  # obsolete
 class ChameleonModel(Model):
     model_arch = gguf.MODEL_ARCH.CHAMELEON
 
