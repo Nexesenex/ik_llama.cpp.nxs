@@ -7258,6 +7258,7 @@ struct ggml_tensor * ggml_cast(
 
     result->op     = GGML_OP_CPY;
     result->src[0] = a;
+    result->src[1] = result;
 
     return result;
 }
