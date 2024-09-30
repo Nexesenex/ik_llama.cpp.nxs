@@ -2245,6 +2245,7 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_opt_step_adamw(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
+            struct ggml_tensor  * grad,
             float                 alpha,
             float                 beta1,
             float                 beta2,
