@@ -252,7 +252,7 @@ const uint64_t keven_signs[128] = {
 
 }
 
-#if defined __x86_64__
+#if defined _M_X64
 
 #if defined HAVE_FANCY_SIMD
     #undef HAVE_FANCY_SIMD
@@ -7175,10 +7175,10 @@ struct F16 {
     static inline float reduce_add(Data data) { return _mm512_reduce_add_ps(data); }
     static inline Data fmadd(Data prev, Data v1, Data v2) { return _mm512_fmadd_ps(v1, v2, prev); }
     template <int k_step> static inline float reduce_max(const Data * data) {
-        return reduce_T<k_step, _mm512_max_ps, _mm512_reduce_max_ps>(data);
+        return reduce_T1<k_step, &F16::reduce_max>(data);
     }
     template <int k_step> static inline float reduce_add(const Data * data) {
-        return reduce_T<k_step, _mm512_add_ps, _mm512_reduce_add_ps>(data);
+        return reduce_T2<k_step, &F16::reduce_add>(data);
     }
 #elif defined __AVX2__
     using Data = __m256;
@@ -7237,18 +7237,34 @@ struct F16 {
         return reduce_T<k_step, vaddq_f16, &F16::reduce_add>(data);
     }
 #endif
-    template <int k_step, Data (*Op_combine)(Data, Data), float (*Op)(Data)>
-    static float reduce_T(const Data * data) {
+    template <int k_step, float (*Op)(Data)>
+    static float reduce_T1(const Data * data) {
         float result;
         if constexpr (k_step/block_size == 1) {
             result = Op(data[0]);
         }
         else if constexpr (k_step/block_size == 2) {
-            result = Op(Op_combine(data[0], data[1]));
+            result = Op(_mm256_max_ps(data[0], data[1]));
         }
         else {
-            auto vmax = Op_combine(data[0], data[1]);
-            for (int l = 2; l < k_step/block_size; ++l) vmax = Op_combine(vmax, data[l]);
+            auto vmax = _mm256_max_ps(data[0], data[1]);
+            for (int l = 2; l < k_step/block_size; ++l) vmax = _mm256_max_ps(vmax, data[l]);
+            result = Op(vmax);
+        }
+        return result;
+    }
+    template <int k_step, float (*Op)(Data)>
+    static float reduce_T2(const Data * data) {
+        float result;
+        if constexpr (k_step/block_size == 1) {
+            result = Op(data[0]);
+        }
+        else if constexpr (k_step/block_size == 2) {
+            result = Op(_mm256_add_ps(data[0], data[1]));
+        }
+        else {
+            auto vmax = _mm256_add_ps(data[0], data[1]);
+            for (int l = 2; l < k_step/block_size; ++l) vmax = _mm256_add_ps(vmax, data[l]);
             result = Op(vmax);
         }
         return result;
