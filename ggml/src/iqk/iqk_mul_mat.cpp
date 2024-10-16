@@ -7196,10 +7196,10 @@ struct F16 {
     static inline float reduce_max(Data data) { return hmax_float_8(data); }
     static inline float reduce_add(Data data) { return hsum_float_8(data); }
     template <int k_step> static inline float reduce_max(const Data * data) {
-        return reduce_T<k_step, _mm256_max_ps, &F16::reduce_max>(data);
+        return reduce_T2<k_step, &F16::reduce_max>(data);
     }
     template <int k_step> static inline float reduce_add(const Data * data) {
-        return reduce_T<k_step, _mm256_add_ps, &F16::reduce_add>(data);
+        return reduce_T2<k_step, &F16::reduce_add>(data);
     }
 #else
     using Data = float16x8_t;
