@@ -5907,12 +5907,29 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
         LLAMA_LOG_INFO("%s: model params     = %.3f M\n", __func__, ml.n_elements*1e-6);
     } else {
         LLAMA_LOG_INFO("%s: model params     = %.3f K\n", __func__, ml.n_elements*1e-3);
+        // LLAMA_LOG_INFO("%s: model params     = %.2f T\n", __func__, ml.n_elements*1e-12);
+    // } else if (ml.n_elements >= 1e9) {
+        // LLAMA_LOG_INFO("%s: model params     = %.2f B\n", __func__, ml.n_elements*1e-9);
+    // } else if (ml.n_elements >= 1e6) {
+        // LLAMA_LOG_INFO("%s: model params     = %.2f M\n", __func__, ml.n_elements*1e-6);
+    // } else {
+        // LLAMA_LOG_INFO("%s: model params     = %.2f K\n", __func__, ml.n_elements*1e-3);
     }
-    if (ml.n_bytes < GiB) {
-        LLAMA_LOG_INFO("%s: model size       = %.3f MiB (%.3f BPW) \n", __func__, ml.n_bytes/1024.0/1024.0,        ml.n_bytes*8.0/ml.n_elements);
-    } else {
-        LLAMA_LOG_INFO("%s: model size       = %.3f GiB (%.3f BPW) \n", __func__, ml.n_bytes/1024.0/1024.0/1024.0, ml.n_bytes*8.0/ml.n_elements);
-    }
+
+    LLAMA_LOG_INFO("%s: model size       =   %.2f Bytes (%.3f BPW) \n", __func__, ml.n_bytes/1.0,                    ml.n_bytes*8.0/ml.n_elements);
+    LLAMA_LOG_INFO("%s: model size       =      %.2f KB    (%.3f BPW) \n", __func__, ml.n_bytes/1000.0,               ml.n_bytes*8.0/ml.n_elements);
+    LLAMA_LOG_INFO("%s: model size       =      %.2f KiB   (%.3f BPW) \n", __func__, ml.n_bytes/1024.0,               ml.n_bytes*8.0/ml.n_elements);
+    LLAMA_LOG_INFO("%s: model size       =         %.2f MB    (%.3f BPW) \n", __func__, ml.n_bytes/1000.0/1000.0,        ml.n_bytes*8.0/ml.n_elements);
+    LLAMA_LOG_INFO("%s: model size       =         %.2f MiB   (%.3f BPW) \n", __func__, ml.n_bytes/1024.0/1024.0,        ml.n_bytes*8.0/ml.n_elements);
+    LLAMA_LOG_INFO("%s: model size       =            %.2f GB    (%.3f BPW) \n", __func__, ml.n_bytes/1000.0/1000.0/1000.0, ml.n_bytes*8.0/ml.n_elements);
+    LLAMA_LOG_INFO("%s: model size       =            %.2f GiB   (%.3f BPW) \n", __func__, ml.n_bytes/1024.0/1024.0/1024.0, ml.n_bytes*8.0/ml.n_elements);
+
+    // if (ml.n_bytes < GiB) {
+        // LLAMA_LOG_INFO("%s: model size       = %.3f MiB (%.3f BPW) \n", __func__, ml.n_bytes/1024.0/1024.0,        ml.n_bytes*8.0/ml.n_elements);
+    // } else {
+        // LLAMA_LOG_INFO("%s: model size       = %.3f GiB (%.3f BPW) \n", __func__, ml.n_bytes/1024.0/1024.0/1024.0, ml.n_bytes*8.0/ml.n_elements);
+    // }
+
     {
         auto n_bytes = ml.n_bytes;
         auto n_elements = ml.n_elements;
@@ -5923,11 +5940,21 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
             n_elements -= ggml_nelements(meta_tke);
             n_bytes -= ggml_nbytes(meta_out);
             n_elements -= ggml_nelements(meta_out);
-            if (n_bytes < GiB) {
-                LLAMA_LOG_INFO("%s: repeating layers = %.3f MiB (%.3f BPW", __func__, n_bytes/1024.0/1024.0,        n_bytes*8.0/n_elements);
-            } else {
-                LLAMA_LOG_INFO("%s: repeating layers = %.3f GiB (%.3f BPW", __func__, n_bytes/1024.0/1024.0/1024.0, n_bytes*8.0/n_elements);
-            }
+			
+            LLAMA_LOG_INFO("%s: repeating layers =   %.2f Bytes (%.3f BPW) \n", __func__, n_bytes/1.0,                    n_bytes*8.0/n_elements);
+            LLAMA_LOG_INFO("%s: repeating layers =      %.2f KB    (%.3f BPW) \n", __func__, n_bytes/1000.0,               n_bytes*8.0/n_elements);
+            LLAMA_LOG_INFO("%s: repeating layers =      %.2f KiB   (%.3f BPW) \n", __func__, n_bytes/1024.0,               n_bytes*8.0/n_elements);
+            LLAMA_LOG_INFO("%s: repeating layers =         %.2f MB    (%.3f BPW) \n", __func__, n_bytes/1000.0/1000.0,        n_bytes*8.0/n_elements);
+            LLAMA_LOG_INFO("%s: repeating layers =         %.2f MiB   (%.3f BPW) \n", __func__, n_bytes/1024.0/1024.0,        n_bytes*8.0/n_elements);
+            LLAMA_LOG_INFO("%s: repeating layers =            %.2f GB    (%.3f BPW) \n", __func__, n_bytes/1000.0/1000.0/1000.0, n_bytes*8.0/n_elements);
+            LLAMA_LOG_INFO("%s: repeating layers =            %.2f GiB   (%.3f BPW) \n", __func__, n_bytes/1024.0/1024.0/1024.0, n_bytes*8.0/n_elements);
+			
+            // if (n_bytes < GiB) {
+                // LLAMA_LOG_INFO("%s: repeating layers = %.3f MiB (%.3f BPW", __func__, n_bytes/1024.0/1024.0,        n_bytes*8.0/n_elements);
+            // } else {
+                // LLAMA_LOG_INFO("%s: repeating layers = %.3f GiB (%.3f BPW", __func__, n_bytes/1024.0/1024.0/1024.0, n_bytes*8.0/n_elements);
+            // }
+
             if (ml.n_elements >= 1e9) {
                 LLAMA_LOG_INFO(", %.3f B parameters)\n", n_elements*1e-9);
             } else {
