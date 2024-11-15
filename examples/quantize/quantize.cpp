@@ -77,8 +77,6 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "IQ3_X5L",  LLAMA_FTYPE_MOSTLY_IQ3_X5L,  " 3.90 bpw quantization mix",        },
     { "IQ3_X6L",  LLAMA_FTYPE_MOSTLY_IQ3_X6L,  " 4.00 bpw quantization mix",        },
     { "IQ3_X7L",  LLAMA_FTYPE_MOSTLY_IQ3_X7L,  " 4.10 bpw quantization mix",        },
-    { "IQ3_X145L", LLAMA_FTYPE_MOSTLY_IQ3_X145L, " 4.12 bpw quantization mix",      },
-    { "IQ3_X15L", LLAMA_FTYPE_MOSTLY_IQ3_X15L, " 4.14 bpw quantization mix",        },
     { "IQ3_EXL",  LLAMA_FTYPE_MOSTLY_IQ3_EXL,  " 3.75 bpw quantization mix",        },
     { "IQ3_SXL",  LLAMA_FTYPE_MOSTLY_IQ3_SXL,  " 3.90 bpw quantization mix",        },
     { "IQ3_UXL",  LLAMA_FTYPE_MOSTLY_IQ3_UXL,  " 4.05 bpw quantization mix",        },
@@ -104,6 +102,17 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "Q5_K_S2R",  LLAMA_FTYPE_MOSTLY_Q5_K_S2R,  " 5.6 bpw quantization mix",       },
     { "Q5_K_M3L",  LLAMA_FTYPE_MOSTLY_Q5_K_M3L,  " 5.8 bpw quantization mix",       },
     { "Q5_K_X4L",  LLAMA_FTYPE_MOSTLY_Q5_K_X4L,  " 6 bpw quantization mix",         },
+	
+    { "IQ3_X140L", LLAMA_FTYPE_MOSTLY_IQ3_X140L, " 4.12 bpw quantization mix",      },
+    { "IQ3_X141L", LLAMA_FTYPE_MOSTLY_IQ3_X141L, " 4.12 bpw quantization mix",      },
+    { "IQ3_X142L", LLAMA_FTYPE_MOSTLY_IQ3_X142L, " 4.12 bpw quantization mix",      },
+    { "IQ3_X143L", LLAMA_FTYPE_MOSTLY_IQ3_X143L, " 4.12 bpw quantization mix",      },
+    { "IQ3_X144L", LLAMA_FTYPE_MOSTLY_IQ3_X144L, " 4.12 bpw quantization mix",      },
+    { "IQ3_X145L", LLAMA_FTYPE_MOSTLY_IQ3_X145L, " 4.12 bpw quantization mix",      },
+    { "IQ3_X146L", LLAMA_FTYPE_MOSTLY_IQ3_X146L, " 4.12 bpw quantization mix",      },
+    { "IQ3_X147L", LLAMA_FTYPE_MOSTLY_IQ3_X147L, " 4.12 bpw quantization mix",      },
+    { "IQ3_X15L",  LLAMA_FTYPE_MOSTLY_IQ3_X15L,   " 4.14 bpw quantization mix",     },
+	
     { "Q6_K",     LLAMA_FTYPE_MOSTLY_Q6_K,     " 6.14G, +0.0217 ppl @ Llama-3-8B",  },
     { "Q8_0",     LLAMA_FTYPE_MOSTLY_Q8_0,     " 7.96G, +0.0026 ppl @ Llama-3-8B",  },
 
