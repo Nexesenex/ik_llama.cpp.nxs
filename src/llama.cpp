@@ -16655,8 +16655,12 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
     // difquant_six_eights_tensors has a broad 75% bump to the upper quant. Ex : 24/32
     auto difquant_six_eights_tensors = [](int i_layer, int n_layers) -> bool {
         // return i_layer <= 4*n_layers/8 || (i_layer > 5*n_layers/8 && i_layer <= 6*n_layers/8) || i_layer > 7*n_layers/8; (cata)
-        return i_layer <= n_layers/8 || (i_layer >= 2*n_layers/8 && i_layer < 3*n_layers/8) || i_layer > 4*n_layers/8;
+        return i_layer < n_layers/8 || (i_layer >= 2*n_layers/8 && i_layer < 3*n_layers/8) || i_layer >= 4*n_layers/8;
     };
+
+// 4 4 4 4 4 4 4 4 4 4 4 // 3 3 3 3 3 3 3 3 3 3 3 // 4 4 4 4 4 4 4 4 4 4 4
+// 3 3 3 3 3 3 3 3 3 3 3 // 4 4 4 4 4 4 4 4 4 4 4 // 4 4 4 4 4 4 4 4 4 4 4
+// 4 4 4 4 4 4 4 4 4 4 4 // 4 4 4 4 4 4 4 4 4 4 4 
 
     // difquant_six_eights_242416_tensors has a broad 80% bump to the upper quant. Ex : 24/32
     auto difquant_six_eights_242416_tensors = [](int i_layer, int n_layers) -> bool {
