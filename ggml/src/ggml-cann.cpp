@@ -1808,6 +1808,48 @@ GGML_CALL static bool ggml_backend_cann_supports_op(ggml_backend_t backend,
                     return false;
             }
         }
+        case GGML_OP_CONT: {
+            // TODO: support GGML_TYPE_BF16
+            switch (op->src[0]->type) {
+                case GGML_TYPE_F32:
+                case GGML_TYPE_F16:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        case GGML_OP_ROPE: {
+            // TODO: with ops-test v == 1
+            float * ext_factor = (float*)((int32_t*)op->op_params + 7);
+            // TODO: n_dims <= ne0
+            if (op->src[0]->ne[0] != op->op_params[1]) {
+                return false;
+            }
+            // TODO: ext_factor != 0
+            if (*ext_factor != 0) {
+                return false;
+            }
+
+            const int mode = ((const int32_t *) op->op_params)[2];
+            if (mode & GGML_ROPE_TYPE_MROPE) {
+                return false;
+            }
+            if (mode & GGML_ROPE_TYPE_VISION) {
+                return false;
+            }
+
+            return true;
+        }
+        case GGML_OP_UPSCALE: {
+            // aclnnUpsampleNearest2dGetWorkspaceSize not support
+            // selfDimN[2]/outDimN[2] or selfDimC[3]/outDimC[3] not equal
+            if (op->src[0]->ne[2] * op->ne[3] != op->src[0]->ne[3] * op->ne[2]) {
+                return false;
+            }
+            return true;
+        }
+        case GGML_OP_IM2COL:
+        case GGML_OP_CONCAT:
         case GGML_OP_DUP:
         case GGML_OP_REPEAT:
         case GGML_OP_CONCAT:

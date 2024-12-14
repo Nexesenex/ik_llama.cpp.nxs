@@ -415,6 +415,7 @@ Typically finetunes of the base models below are supported as well.
 - [x] [Mini CPM](https://huggingface.co/models?search=MiniCPM)
 - [x] [Moondream](https://huggingface.co/vikhyatk/moondream2)
 - [x] [Bunny](https://github.com/BAAI-DCAI/Bunny)
+- [x] [Qwen2-VL](https://huggingface.co/collections/Qwen/qwen2-vl-66cee7455501d7126940800d)
 
 **Bindings:**
 
