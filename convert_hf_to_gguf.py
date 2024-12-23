@@ -685,6 +685,9 @@ class Model:
         if chkhsh == "ad851be1dba641f2e3711822f816db2c265f788b37c63b4e1aeacb9ee92de8eb":
             # ref: https://huggingface.co/ai-sage/GigaChat-20B-A3B-instruct
             res = "gigachat"
+        if chkhsh == "d4c8f286ea6b520b3d495c4455483cfa2302c0cfcd4be05d781b6a8a0a7cdaf1":
+            # ref: https://huggingface.co/Infinigence/Megrez-3B-Instruct
+            res = "megrez"
 
         if chkhsh == "877081d19cf6996e2c4ff0e1236341e9b7bde288f5311a56a937f0afbbb3aeb5":
             # ref: https://huggingface.co/deepseek-ai/DeepSeek-V3
