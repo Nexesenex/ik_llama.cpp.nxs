@@ -373,6 +373,7 @@ Typically finetunes of the base models below are supported as well.
 - [x] [Qwen models](https://huggingface.co/models?search=Qwen/Qwen)
 - [x] [PLaMo-13B](https://github.com/ggerganov/llama.cpp/pull/3557)
 - [x] [Phi models](https://huggingface.co/models?search=microsoft/phi)
+- [x] [PhiMoE](https://github.com/ggerganov/llama.cpp/pull/11003)
 - [x] [GPT-2](https://huggingface.co/gpt2)
 - [x] [Orion 14B](https://github.com/ggerganov/llama.cpp/pull/5118)
 - [x] [InternLM2](https://huggingface.co/models?search=internlm2)
