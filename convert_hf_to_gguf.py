@@ -340,14 +340,34 @@ class Model:
                     for key in (
                         gguf.MODEL_TENSOR.TOKEN_EMBD,
                         gguf.MODEL_TENSOR.OUTPUT,
+                        gguf.MODEL_TENSOR.ATTN_V,
+                        gguf.MODEL_TENSOR.ATTN_K,
                     )
                 ):
                     if self.ftype in (
                         gguf.LlamaFileType.MOSTLY_TQ1_0,
                         gguf.LlamaFileType.MOSTLY_TQ2_0,
+                        gguf.LlamaFileType.MOSTLY_Q4_0,
+                        gguf.LlamaFileType.MOSTLY_Q4_1,
+                        gguf.LlamaFileType.MOSTLY_Q5_0,
+                        gguf.LlamaFileType.MOSTLY_Q5_1,
+                        # gguf.LlamaFileType.MOSTLY_Q6_0,
                     ):
                         # TODO: use Q4_K and Q6_K
-                        data_qtype = gguf.GGMLQuantizationType.F16
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    # elif self.ftype in (
+                        # gguf.LlamaFileType.MOSTLY_TQ1_0,
+                        # gguf.LlamaFileType.MOSTLY_TQ2_0,
+                    # ):
+                        # data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    # elif self.ftype in (
+                        # gguf.LlamaFileType.MOSTLY_Q2_K,
+                        # gguf.LlamaFileType.MOSTLY_Q3_K,
+                        # gguf.LlamaFileType.MOSTLY_Q4_K,
+                        # gguf.LlamaFileType.MOSTLY_Q5_K,
+                        # gguf.LlamaFileType.MOSTLY_Q6_K,
+                    # ):
+                        # data_qtype = gguf.GGMLQuantizationType.Q6_K
 
                 # No override (data_qtype is False), or wants to be quantized (data_qtype is True)
                 if isinstance(data_qtype, bool):
@@ -357,14 +377,46 @@ class Model:
                         data_qtype = gguf.GGMLQuantizationType.F16
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_BF16:
                         data_qtype = gguf.GGMLQuantizationType.BF16
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_0:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_1:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_0:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_1:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_1
+                    # elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0:
+                        # data_qtype = gguf.GGMLQuantizationType.Q6_0
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0:
                         data_qtype = gguf.GGMLQuantizationType.Q8_0
+
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_TQ1_0:
                         data_qtype = gguf.GGMLQuantizationType.TQ1_0
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_TQ2_0:
                         data_qtype = gguf.GGMLQuantizationType.TQ2_0
+
+                    # elif self.ftype == gguf.LlamaFileType.MOSTLY_Q2_K:
+                        # data_qtype = gguf.GGMLQuantizationType.Q2_K
+                    # elif self.ftype == gguf.LlamaFileType.MOSTLY_Q3_K:
+                        # data_qtype = gguf.GGMLQuantizationType.Q3_K
+                    # elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_K:
+                        # data_qtype = gguf.GGMLQuantizationType.Q4_K
+                    # elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_K:
+                        # data_qtype = gguf.GGMLQuantizationType.Q5_K
+                    # elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_K:
+                        # data_qtype = gguf.GGMLQuantizationType.Q6_K
+
                     else:
                         raise ValueError(f"Unknown file type: {self.ftype.name}")
+
+                # if data_qtype in [
+                    # gguf.GGMLQuantizationType.Q5_1, gguf.LlamaFileType.MOSTLY_Q5_0,
+                    # gguf.GGMLQuantizationType.Q4_1, gguf.LlamaFileType.MOSTLY_Q4_0,
+                    # ]:
+                    # logger.warning("**************************************************************************************")
+                    # logger.warning("** quantizing to `Q4_0`,`Q4_1`,`Q5_0`, or `Q5_1`is not equiv to using `llama-quantize`")
+                    # logger.warning("** `llama-quantize` uses `Q4_K` and `Q6_K` for the token embeddings but this code not")
+                    # logger.warning("**************************************************************************************")
 
                 try:
                     data = gguf.quants.quantize(data, data_qtype)
@@ -694,6 +746,19 @@ class Model:
         if chkhsh == "d4c8f286ea6b520b3d495c4455483cfa2302c0cfcd4be05d781b6a8a0a7cdaf1":
             # ref: https://huggingface.co/Infinigence/Megrez-3B-Instruct
             res = "megrez"
+
+        # if chkhsh == "1431a23e583c97432bc230bff598d103ddb5a1f89960c8f1d1051aaa944d0b35":
+            # ref: https://huggingface.co/sapienzanlp/Minerva-7B-base-v1.0
+            # res = "minerva-7b"
+        # if chkhsh == "8b5a93ed704057481f240da0be7e7dca721d7f8f4755263b6807227a2cbeae65":
+            # ref: https://huggingface.co/sentence-transformers/stsb-roberta-base
+            # res = "roberta-bpe"
+        # if chkhsh == "ad851be1dba641f2e3711822f816db2c265f788b37c63b4e1aeacb9ee92de8eb":
+            # ref: https://huggingface.co/ai-sage/GigaChat-20B-A3B-instruct
+            # res = "gigachat"
+        # if chkhsh == "d4c8f286ea6b520b3d495c4455483cfa2302c0cfcd4be05d781b6a8a0a7cdaf1":
+            # ref: https://huggingface.co/Infinigence/Megrez-3B-Instruct
+            # res = "megrez"
 
         if chkhsh == "877081d19cf6996e2c4ff0e1236341e9b7bde288f5311a56a937f0afbbb3aeb5":
             # ref: https://huggingface.co/deepseek-ai/DeepSeek-V3
@@ -3627,7 +3692,24 @@ class Cohere2Model(Model):
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
 
 
-@Model.register("OlmoForCausalLM")
+# @Model.register("Cohere2ForCausalLM")
+# class Cohere2Model(Model):
+    # model_arch = gguf.MODEL_ARCH.COHERE2
+
+    # def set_gguf_parameters(self):
+        # super().set_gguf_parameters()
+
+        # self.gguf_writer.add_logit_scale(self.hparams["logit_scale"])
+        # self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
+        # self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+
+        # rotary_pct = self.hparams["rotary_pct"]
+        # hidden_size = self.hparams["hidden_size"]
+        # num_attention_heads = self.hparams["num_attention_heads"]
+        # self.gguf_writer.add_rope_dimension_count(int(rotary_pct * (hidden_size // num_attention_heads)))
+        # self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+
 @Model.register("OLMoForCausalLM")
 class OlmoModel(Model):
     model_arch = gguf.MODEL_ARCH.OLMO
@@ -4137,7 +4219,6 @@ class DeepseekV2Model(Model):
         match = re.match(r"model.layers.(\d+)", name)
         if match and int(match.group(1)) >= block_count:
             return []
-
 
         # process the experts separately
         if name.find("mlp.experts") != -1:
@@ -4687,7 +4768,10 @@ class ChatGLMModel(Model):
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         # only add special tokens when they were not already loaded from config.json
         special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
+        # special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"]) # not_fixed glm4
+        token_id = tokenizer.get_command("<|user|>") # fix glm4
+        print(token_id) # fix glm4
+        special_vocab._set_special_token("eot", token_id) # fix glm4
         # this one is usually not in config.json anyway
         special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])
         special_vocab.add_to_gguf(self.gguf_writer)
@@ -5016,8 +5100,8 @@ def parse_args() -> argparse.Namespace:
         help="path to write to; default: based on input. {ftype} will be replaced by the outtype.",
     )
     parser.add_argument(
-        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "auto"], default="f16",
-        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, and auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type",
+        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "tq1_0", "tq2_0", "auto"], default="f16",
+        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, limited: q5_0 for Q5_0, etc, and auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type",
     )
     parser.add_argument(
         "--bigendian", action="store_true",
@@ -5116,9 +5200,21 @@ def main() -> None:
         "f32": gguf.LlamaFileType.ALL_F32,
         "f16": gguf.LlamaFileType.MOSTLY_F16,
         "bf16": gguf.LlamaFileType.MOSTLY_BF16,
+        "q4_0": gguf.LlamaFileType.MOSTLY_Q4_0,
+        "q4_1": gguf.LlamaFileType.MOSTLY_Q4_1,
+        "q5_0": gguf.LlamaFileType.MOSTLY_Q5_0,
+        "q5_1": gguf.LlamaFileType.MOSTLY_Q5_1,
+        # "q6_0": gguf.LlamaFileType.MOSTLY_Q6_0,
         "q8_0": gguf.LlamaFileType.MOSTLY_Q8_0,
         "tq1_0": gguf.LlamaFileType.MOSTLY_TQ1_0,
         "tq2_0": gguf.LlamaFileType.MOSTLY_TQ2_0,
+
+        # "q2_K": gguf.LlamaFileType.MOSTLY_Q2_K,
+        # "q3_K": gguf.LlamaFileType.MOSTLY_Q3_K,
+        # "q4_K": gguf.LlamaFileType.MOSTLY_Q4_K,
+        # "q5_K": gguf.LlamaFileType.MOSTLY_Q5_K,
+        # "q6_K": gguf.LlamaFileType.MOSTLY_Q6_K,
+
         "auto": gguf.LlamaFileType.GUESSED,
     }
 
