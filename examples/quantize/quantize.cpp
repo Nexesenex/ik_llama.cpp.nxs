@@ -126,8 +126,19 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "IQ3_X147L", LLAMA_FTYPE_MOSTLY_IQ3_X147L, " 4.12 bpw quantization mix",      },
     { "IQ3_X15L",  LLAMA_FTYPE_MOSTLY_IQ3_X15L,   " 4.14 bpw quantization mix",     },
 
-    { "IQ4_KSSR", LLAMA_FTYPE_MOSTLY_IQ4_KSSR, " 4.10 bpw quantization mix",      },
-    { "IQ4_KSS124L", LLAMA_FTYPE_MOSTLY_IQ4_KSS124L, " 4.10 bpw quantization mix",     },
+    { "IQ4_KSSR", LLAMA_FTYPE_MOSTLY_IQ4_KSSR, " 4.10 bpw quantization mix",        },
+    { "IQ4_KSS124L", LLAMA_FTYPE_MOSTLY_IQ4_KSS124L, " 4.10 bpw quantization mix",  },
+
+    { "IQ2_XXSR_144L", LLAMA_FTYPE_MOSTLY_IQ2_XXSR_144L, "2.40 bpw quantization mix", },
+    { "IQ2_XSR_144L", LLAMA_FTYPE_MOSTLY_IQ2_XSR_144L,  "2.50 bpw quantization mix",  },
+    { "IQ2_SR_144L", LLAMA_FTYPE_MOSTLY_IQ2_SR_144L,    "2.60 bpw quantization mix",  },
+    { "IQ2_MR_144L", LLAMA_FTYPE_MOSTLY_IQ2_MR_144L,    "2.70 bpw quantization mix",  },
+    { "IQ2_L_144L",  LLAMA_FTYPE_MOSTLY_IQ2_L_144L,     "2.80 bpw quantization mix",  },
+    { "IQ2_XL_143L", LLAMA_FTYPE_MOSTLY_IQ2_XL_143L,    "2.95 bpw quantization mix",  },
+    { "IQ3_XXSR_144L", LLAMA_FTYPE_MOSTLY_IQ3_XXSR_144L, "3.10 bpw quantization mix", },
+
+    { "IQ1_SR_145L", LLAMA_FTYPE_MOSTLY_IQ1_SR_145L, "1.8 bpw quantization mix", },
+
 };
 
 static const char * const LLM_KV_QUANTIZE_IMATRIX_FILE       = "quantize.imatrix.file";
