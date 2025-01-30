@@ -96,6 +96,7 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_BLOOM          = 23,
         LLAMA_VOCAB_PRE_TYPE_GPT3_FINNISH   = 24,
         LLAMA_VOCAB_PRE_TYPE_EXAONE         = 25,
+        LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 26, //llama.cpp lists this as 28
     };
 
     // note: these values should be synchronized with ggml_rope
@@ -1085,6 +1086,8 @@ extern "C" {
                                   bool   add_ass,
                                   char * buf,
                                int32_t   length);
+    // Get list of built-in chat templates
+    LLAMA_API int32_t llama_chat_builtin_templates(const char ** output, size_t len);
 
     //
     // Grammar
