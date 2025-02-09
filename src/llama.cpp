@@ -17098,7 +17098,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
 // 4 3 3 3 3 3 3 3 3 3 3 // 3 3 3 3 3 3 3 3 3 4 4
 
     auto difquant_thirteen_alt_sixteens_tensors = [](int i_layer, int n_layers) -> bool {
-        return i_layer < 12*n_layers*65/64/16 || i_layer >= n_layers-2; to be optimal for 1 to 8 GPUs, with room for the output tensor.
+        return i_layer < 12*n_layers*65/64/16 || i_layer >= n_layers-2; /*to be optimal for 1 to 8 GPUs, with room for the output tensor.*/
     };
 	
 //0 4 4 4 4 4 4 4 4 4 4 4 //10 4 4 4 4 4 4 4 4 4 4 4 //21 4 4 4 4 4 4 4 4 4 4 4

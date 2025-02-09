@@ -565,7 +565,7 @@ int main(int argc, char ** argv) {
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S  ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S_R4 ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M_R4 ||
-         params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M)) {
+         params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
         fprintf(stderr, "\n==========================================================================================\n");
         fprintf(stderr, "Please do not use IQ1_*, IQ2_*, Q2_K_S, or Q2_K quantization without an importance matrix!\n");
         fprintf(stderr, "==========================================================================================\n\n\n");
