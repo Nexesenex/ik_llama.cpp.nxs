@@ -759,7 +759,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 continue;
             }
             cmd_params_instance instance = {
-                /* .test_kind    = */ TEST_KIND_PP,
+                /* .test_kind    = */ TEST_KIND_TG,
                 /* .model        = */ m,
                 /* .n_prompt     = */ 0,
                 /* .n_gen        = */ n_gen,
@@ -787,7 +787,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 continue;
             }
             cmd_params_instance instance = {
-                /* .test_kind    = */ TEST_KIND_PP,
+                /* .test_kind    = */ TEST_KIND_PG,
                 /* .model        = */ m,
                 /* .n_prompt     = */ n_pg.first,
                 /* .n_gen        = */ n_pg.second,
