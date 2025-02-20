@@ -1322,8 +1322,6 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ6_K         = 42, # except 1d tensors
     MOSTLY_IQ2_TN        = 43, # except 1d tensors
 
-//
-
     # MOSTLY_TQ1_0         = 36  # except 1d tensors
     # MOSTLY_TQ2_0         = 37  # except 1d tensors
 
