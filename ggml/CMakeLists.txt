@@ -111,16 +111,16 @@ option(GGML_BLAS                            "ggml: use BLAS"                    
 set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
                                             "ggml: BLAS library vendor")
 option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             OFF)
-option(GGML_IQK_MUL_MAT                     "ggml: use optimized iqk matrix multiplications"  ON)
+option(GGML_IQK_MUL_MAT                     "ggml: use optimized iqk matrix multiplications"  OFF)
 
-option(GGML_CUDA                            "ggml: use CUDA"                                  ON)
+option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)
 option(GGML_MUSA                            "ggml: use MUSA"                                  OFF)
 option(GGML_CUDA_FORCE_DMMV                 "ggml: use dmmv instead of mmvq CUDA kernels"     OFF)
-option(GGML_CUDA_FORCE_MMQ                  "ggml: use mmq kernels instead of cuBLAS"         ON)
+option(GGML_CUDA_FORCE_MMQ                  "ggml: use mmq kernels instead of cuBLAS"         OFF)
 option(GGML_CUDA_FORCE_CUBLAS               "ggml: always use cuBLAS instead of mmq kernels"  OFF)
 set   (GGML_CUDA_DMMV_X   "32" CACHE STRING "ggml: x stride for dmmv CUDA kernels")
 set   (GGML_CUDA_MMV_Y     "1" CACHE STRING "ggml: y block size for mmv CUDA kernels")
-option(GGML_CUDA_F16                        "ggml: use 16 bit floats for some calculations"   ON)
+option(GGML_CUDA_F16                        "ggml: use 16 bit floats for some calculations"   OFF)
 set   (GGML_CUDA_KQUANTS_ITER "2" CACHE STRING
                                             "ggml: iters./thread per block for Q2_K/Q6_K")
 set   (GGML_CUDA_PEER_MAX_BATCH_SIZE "128" CACHE STRING
@@ -150,7 +150,7 @@ option(GGML_METAL_EMBED_LIBRARY             "ggml: embed Metal library"         
 set   (GGML_METAL_MACOSX_VERSION_MIN "" CACHE STRING
                                             "ggml: metal minimum macOS version")
 set   (GGML_METAL_STD "" CACHE STRING       "ggml: metal standard version (-std flag)")
-option(GGML_OPENMP                          "ggml: use OpenMP"                                ON)
+option(GGML_OPENMP                          "ggml: use OpenMP"                                OFF)
 option(GGML_RPC                             "ggml: use RPC"                                   OFF)
 option(GGML_SYCL                            "ggml: use SYCL"                                  OFF)
 option(GGML_SYCL_F16                        "ggml: use 16 bit floats for sycl calculations"   OFF)
