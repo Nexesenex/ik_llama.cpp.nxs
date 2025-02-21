@@ -6,9 +6,12 @@ And also to amuse myself learning more about merging relatively complex stuff.
 
 Current IK_Llama commit : 4b45b82e67d9362e7522e5c7107e9d99219e0432
 
-Previous Llama.cpp mainline base : b3570 -> b3638 (GGML sync "File version V2")
+1st Llama.cpp mainline base : b3570 -> b3638 (GGML sync "File version V2")
 
-Current Llama.cpp mainline base : b3638 -> b3672 (LCPP Bitnet quantization TQ1_0 and TQ2_0)
+2st Llama.cpp mainline base : b3638 -> b3672 (LCPP Bitnet quantization TQ1_0 and TQ2_0)
+
+3st Llama.cpp mainline base : b3672 -> b3703 (ditch sampling refactor)
+
 
 ----------
 
