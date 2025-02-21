@@ -1,3 +1,16 @@
+IK_Llama.cpp.nxs is my fork of Ikawrakow's clone of Llama_cpp.
+
+The objective of this fork is to adapt it to my quantization needs mainly, because Ikawrakow's quants are SOTA.
+Then, to be able to use them on Croco.cpp, my fork of Kobold.cpp.
+And also to amuse myself learning more about merging relatively complex stuff.
+
+Current IK_Llama commit : 4b45b82e67d9362e7522e5c7107e9d99219e0432
+Current Llama.cpp mainline base : b3570 -> b3638 (GGML sync "File version V2")
+
+
+----------
+
+
 # llama.cpp clone with better CPU performance
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
