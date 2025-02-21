@@ -391,7 +391,9 @@ struct lora_merge_ctx {
     }
 };
 
-static void print_usage(int, char ** argv) {
+static void print_usage(int argc, char ** argv, const gpt_params & params) {
+    gpt_params_print_usage(argc, argv, params);
+
     printf("\nexample usage:\n");
     printf("\n  %s -m base-model.gguf --lora lora-file.gguf -o merged-model-f16.gguf\n", argv[0]);
     printf("\nNOTE: output model is F16\n");
@@ -401,8 +403,8 @@ static void print_usage(int, char ** argv) {
 int main(int argc, char ** argv) {
     gpt_params params;
 
-    auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_EXPORT_LORA, print_usage);
-    if (!gpt_params_parse(argc, argv, params, options)) {
+    if (!gpt_params_parse(argc, argv, params)) {
+        print_usage(argc, argv, params);
         return 1;
     }
 

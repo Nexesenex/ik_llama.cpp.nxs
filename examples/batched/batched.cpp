@@ -7,7 +7,9 @@
 #include <string>
 #include <vector>
 
-static void print_usage(int, char ** argv) {
+static void print_usage(int argc, char ** argv, const gpt_params & params) {
+    gpt_params_print_usage(argc, argv, params);
+
     LOG_TEE("\nexample usage:\n");
     LOG_TEE("\n    %s -m model.gguf -p \"Hello my name is\" -n 32 -np 4\n", argv[0]);
     LOG_TEE("\n");
@@ -19,8 +21,8 @@ int main(int argc, char ** argv) {
     params.prompt = "Hello my name is";
     params.n_predict = 32;
 
-    auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_COMMON, print_usage);
-    if (!gpt_params_parse(argc, argv, params, options)) {
+    if (!gpt_params_parse(argc, argv, params)) {
+        print_usage(argc, argv, params);
         return 1;
     }
 
