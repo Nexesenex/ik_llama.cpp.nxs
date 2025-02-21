@@ -76,7 +76,7 @@ static void write_logfile(
     fprintf(logfile, "ppl_value: %f\n", results.ppl_value);
     yaml_dump_vector_float(logfile, "probs", results.probs);
 
-    llama_perf_dump_yaml(logfile, ctx);
+    llama_dump_timing_info_yaml(logfile, ctx);
     fclose(logfile);
 }
 
@@ -2007,7 +2007,13 @@ int main(int argc, char ** argv) {
 
     print_build_info();
 
-    LOG_TEE("%s: seed = %u\n", __func__, params.sparams.seed);
+    if (params.seed == LLAMA_DEFAULT_SEED) {
+        params.seed = time(NULL);
+    }
+
+    fprintf(stderr, "%s: seed  = %u\n", __func__, params.seed);
+
+    std::mt19937 rng(params.seed);
 
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -2048,8 +2054,7 @@ int main(int argc, char ** argv) {
         results = perplexity(ctx, params, n_ctx);
     }
 
-    LOG_TEE("\n");
-    llama_perf_print(ctx, LLAMA_PERF_TYPE_CONTEXT);
+    llama_print_timings(ctx);
     write_logfile(ctx, params, model, results);
 
     llama_free(ctx);
