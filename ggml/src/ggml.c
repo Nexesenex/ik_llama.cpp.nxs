@@ -14674,7 +14674,7 @@ UseGgmlGemm1:;
         }
 //#endif
 
-        ggml_barrier(params->shared);
+        ggml_barrier(params->threadpool);
 
 #if IK_PRINT_TIMING
         int64_t t2 = ggml_time_us();
@@ -14683,7 +14683,7 @@ UseGgmlGemm1:;
 
         if (ith == 0) {
             // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
-            //atomic_store(&params->shared->current_chunk, nth);
+            //atomic_store(&params->threadpool->current_chunk, nth);
         }
 
         ggml_barrier(params->threadpool);
@@ -14734,9 +14734,9 @@ UseGgmlGemm2:;
 #endif
 
     if (ith == 0) {
-        atomic_store(&params->shared->current_chunk, nth);
+        atomic_store(&params->threadpool->current_chunk, nth);
     }
-    ggml_barrier(params->shared);
+    ggml_barrier(params->threadpool);
 
     // This is the size of the first dimension of the result, so we can iterate that way. (see the ASSERT above, these are the same numbers)
     const int64_t nr0 = ne0;
@@ -15169,7 +15169,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         }
     }
 
-    ggml_barrier(params->shared);
+    ggml_barrier(params->threadpool);
 
 
     // so GGML_TENSOR_BINARY_OP_LOCALS works
