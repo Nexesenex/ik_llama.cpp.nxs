@@ -110,7 +110,7 @@ option(GGML_ACCELERATE                      "ggml: enable Accelerate framework" 
 option(GGML_BLAS                            "ggml: use BLAS"                                  ${GGML_BLAS_DEFAULT})
 set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
                                             "ggml: BLAS library vendor")
-option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             OFF)
+option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             ON)
 option(GGML_IQK_MUL_MAT                     "ggml: use optimized iqk matrix multiplications"  ON)
 
 option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)
@@ -149,7 +149,7 @@ option(GGML_METAL_EMBED_LIBRARY             "ggml: embed Metal library"         
 set   (GGML_METAL_MACOSX_VERSION_MIN "" CACHE STRING
                                             "ggml: metal minimum macOS version")
 set   (GGML_METAL_STD "" CACHE STRING       "ggml: metal standard version (-std flag)")
-option(GGML_OPENMP                          "ggml: use OpenMP"                                OFF)
+option(GGML_OPENMP                          "ggml: use OpenMP"                                ON)
 option(GGML_RPC                             "ggml: use RPC"                                   OFF)
 option(GGML_SYCL                            "ggml: use SYCL"                                  OFF)
 option(GGML_SYCL_F16                        "ggml: use 16 bit floats for sycl calculations"   OFF)
