@@ -16621,7 +16621,8 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         int nx = tensor->ne[0];
         int ny = tensor->ne[1];
         if (nx % QK_K != 0) {
-            LLAMA_LOG_WARN("\n\n%s : tensor cols %d x %d are not divisible by %d, required for %s", __func__, nx, ny, QK_K, ggml_type_name(new_type));
+            LLAMA_LOG_WARN("\n\n%s : tensor cols %d x %d not divisible by %d, required for %s", __func__, nx, ny, QK_K, ggml_type_name(new_type));
+            // LLAMA_LOG_WARN("\n\n%s : tensor cols %d x %d are not divisible by %d, required for %s", __func__, nx, ny, QK_K, ggml_type_name(new_type));
             convert_incompatible_tensor = true;
         } else {
             ++qs.n_k_quantized;
@@ -16675,7 +16676,8 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             case GGML_TYPE_Q6_K:   new_type = GGML_TYPE_Q8_0;   break;
             default: throw std::runtime_error("\nUnsupported tensor size encountered\n");
         }
-        LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
+        LLAMA_LOG_WARN(" - using %s\n", ggml_type_name(new_type));
+        // LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
         ++qs.n_fallback;
     }
 
