@@ -307,19 +307,25 @@ class Model:
                         gguf.MODEL_TENSOR.TOKEN_EMBD,
                         gguf.MODEL_TENSOR.OUTPUT,
                         gguf.MODEL_TENSOR.ATTN_V,
-                        # gguf.MODEL_TENSOR.ATTN_K,
+                        gguf.MODEL_TENSOR.ATTN_K,
                     )
                 ):
                     if self.ftype in (
-                        gguf.LlamaFileType.MOSTLY_TQ1_0,
-                        gguf.LlamaFileType.MOSTLY_TQ2_0,
+                        # gguf.LlamaFileType.MOSTLY_TQ1_0,
+                        # gguf.LlamaFileType.MOSTLY_TQ2_0,
                         gguf.LlamaFileType.MOSTLY_Q4_0,
                         gguf.LlamaFileType.MOSTLY_Q4_1,
                         gguf.LlamaFileType.MOSTLY_Q5_0,
                         gguf.LlamaFileType.MOSTLY_Q5_1,
+                        # gguf.LlamaFileType.MOSTLY_Q6_0,
                     ):
                         data_qtype = gguf.GGMLQuantizationType.Q8_0
-                    # if self.ftype in (
+                    # elif self.ftype in (
+                        # gguf.LlamaFileType.MOSTLY_TQ1_0,
+                        # gguf.LlamaFileType.MOSTLY_TQ2_0,
+                    # ):
+                        # data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    # elif self.ftype in (
                         # gguf.LlamaFileType.MOSTLY_Q2_K,
                         # gguf.LlamaFileType.MOSTLY_Q3_K,
                         # gguf.LlamaFileType.MOSTLY_Q4_K,
@@ -344,6 +350,8 @@ class Model:
                         data_qtype = gguf.GGMLQuantizationType.Q5_0
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_1:
                         data_qtype = gguf.GGMLQuantizationType.Q5_1
+                    # elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0:
+                        # data_qtype = gguf.GGMLQuantizationType.Q6_0
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0:
                         data_qtype = gguf.GGMLQuantizationType.Q8_0
 
@@ -3987,7 +3995,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "auto"], default="f16",
-        # "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "q2_K", "q3_K", "q4_K", "q5_K", "q6_K", "auto"], default="f16",
+        # "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", 'q6_0", "q2_K", "q3_K", "q4_K", "q5_K", "q6_K", "auto"], default="f16",
         help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, limited: q5_0 for Q5_0, etc, auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type",
     )
     parser.add_argument(
@@ -4078,6 +4086,7 @@ def main() -> None:
         "q4_1": gguf.LlamaFileType.MOSTLY_Q4_1,
         "q5_0": gguf.LlamaFileType.MOSTLY_Q5_0,
         "q5_1": gguf.LlamaFileType.MOSTLY_Q5_1,
+        # "q6_0": gguf.LlamaFileType.MOSTLY_Q6_0,
         "q8_0": gguf.LlamaFileType.MOSTLY_Q8_0,
 
         # "q2_K": gguf.LlamaFileType.MOSTLY_Q2_K,
