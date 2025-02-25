@@ -16411,7 +16411,13 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             new_type = GGML_TYPE_IQ5_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_IQ4_K_R4 && qs.model.hparams.n_gqa() >= 2) {
-            new_type = GGML_TYPE_IQ5_K;
+            new_type = GGML_TYPE_IQ5_K_R4;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_IQ5_K && qs.model.hparams.n_gqa() >= 2) {
+            new_type = GGML_TYPE_IQ6_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_IQ5_K_R4 && qs.model.hparams.n_gqa() >= 2) {
+            new_type = GGML_TYPE_IQ6_K;
         }
         else if ((ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M) &&
                 use_more_bits(qs.i_attention_wv, qs.n_attention_wv)) new_type = GGML_TYPE_Q6_K;
@@ -16486,6 +16492,24 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q6_K) {
             new_type = GGML_TYPE_Q5_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_0) {
+            new_type = GGML_TYPE_Q4_0;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q6_0) {
+            new_type = GGML_TYPE_Q5_0;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_K && qs.has_imatrix) {
+            new_type = GGML_TYPE_IQ2_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_IQ4_K) {
+            new_type = GGML_TYPE_IQ3_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_IQ5_K) {
+            new_type = GGML_TYPE_IQ4_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_IQ6_K) {
+            new_type = GGML_TYPE_IQ5_K;
         }
     } else if (name.find("ffn_down") != std::string::npos) {
         auto info = layer_info(qs.i_ffn_down, qs.n_ffn_down, name.c_str());
