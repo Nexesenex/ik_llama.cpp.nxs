@@ -109,6 +109,7 @@ models = [
     {"name": "gigachat",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ai-sage/GigaChat-20B-A3B-instruct"},
     {"name": "megrez",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Infinigence/Megrez-3B-Instruct"},
     {"name": "deepseek-r1-qwen", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"},
+    {"name": "gpt-4o",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Xenova/gpt-4o", },
 
     {"name": "deepseek-v3",    "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/deepseek-ai/DeepSeek-V3"},
 
@@ -133,6 +134,10 @@ def download_model(model):
     os.makedirs(f"models/tokenizers/{name}", exist_ok=True)
 
     files = ["config.json", "tokenizer.json", "tokenizer_config.json"]
+
+    if name == "gpt-4o":
+        # Xenova/gpt-4o is tokenizer-only, it does not contain config.json
+        files = ["tokenizer.json", "tokenizer_config.json"]
 
     if tokt == TOKENIZER_TYPE.SPM:
         files.append("tokenizer.model")
