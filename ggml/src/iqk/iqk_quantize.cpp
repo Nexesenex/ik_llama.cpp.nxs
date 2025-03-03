@@ -14,6 +14,8 @@
 #include "iqk_quantize.h"
 #include "iqk_config.h"
 
+#include "ggml-cpu-impl.h"
+
 #include <vector>
 #include <utility>
 #include <cstdint>

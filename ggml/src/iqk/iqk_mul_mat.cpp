@@ -23,6 +23,8 @@
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 
+#include "ggml-cpu-impl.h"
+
 // clang-format off
 
 // This matrix - vector and matrix - matrix multiplication implementation
