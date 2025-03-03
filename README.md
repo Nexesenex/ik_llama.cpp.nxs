@@ -17,6 +17,9 @@ Fourth Llama.cpp mainline base : b3671 -> b3680 (pre LCPP Refactor Sampling v2)
 Fifth Llama.cpp mainline base : b3680 -> b3681 (LCPP Refactor Sampling v2)
 - 2 IKL commits had to be reversed because I'm not able to port them.
 
+Sixth Llama.cpp mainline base : b3681 -> b3683 (LCPP Common : refactor arg parser)
+- IKL arguments had to be removed because I'm not able to port them.
+
 
 ----------
 
