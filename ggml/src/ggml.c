@@ -4309,6 +4309,16 @@ static void ggml_barrier(struct ggml_threadpool * tp) {
 
     // wait for other threads
     while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed) == n_passed) {
+
+        if (atomic_load_explicit(n_barrier_passed, memory_order_relaxed) != passed_old) {
+            return;
+
+        #if defined __ARM_NEON
+            __asm__ __volatile__("isb\n");
+        #endif
+
+        }
+
         ggml_thread_cpu_relax();
     }
 
