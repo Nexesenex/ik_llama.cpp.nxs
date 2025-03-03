@@ -10,6 +10,7 @@ Current IK_Llama commit :
 
 Current Llama.cpp mainline base : b3570 -> b3637-3 (pre GGML sync "File version V2")
 
+Second Llama.cpp mainline base revision : b3638 -> b3643-3 (pre Threadpool take 2)
 
 
 
