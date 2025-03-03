@@ -1,6 +1,4 @@
-#include "arg.h"
 #include "common.h"
-#include "log.h"
 #include "llama.h"
 
 #include <ctime>
@@ -40,16 +38,16 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
     llama_kv_cache_clear(ctx);
 
     // run model
-    LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
+    fprintf(stderr, "%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
     if (llama_model_has_encoder(model) && !llama_model_has_decoder(model)) {
         // encoder-only model
         if (llama_encode(ctx, batch) < 0) {
-            LOG_ERR("%s : failed to encode\n", __func__);
+            fprintf(stderr, "%s : failed to encode\n", __func__);
         }
     } else if (!llama_model_has_encoder(model) && llama_model_has_decoder(model)) {
         // decoder-only model
         if (llama_decode(ctx, batch) < 0) {
-            LOG_ERR("%s : failed to decode\n", __func__);
+            fprintf(stderr, "%s : failed to decode\n", __func__);
         }
     }
 
@@ -81,15 +79,16 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
 int main(int argc, char ** argv) {
     gpt_params params;
 
-    if (!gpt_params_parse(argc, argv, params, LLAMA_EXAMPLE_EMBEDDING)) {
+    auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_EMBEDDING);
+    if (!gpt_params_parse(argc, argv, params, options)) {
         return 1;
     }
-
-    gpt_init();
 
     params.embedding = true;
     // For non-causal models, batch size must be equal to ubatch size
     params.n_ubatch = params.n_batch;
+
+    print_build_info();
 
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -100,7 +99,7 @@ int main(int argc, char ** argv) {
     llama_model * model = llama_init.model;
     llama_context * ctx = llama_init.context;
     if (model == NULL) {
-        LOG_ERR("%s: unable to load model\n", __func__);
+        fprintf(stderr, "%s: error: unable to load model\n", __func__);
         return 1;
     }
 
@@ -110,19 +109,19 @@ int main(int argc, char ** argv) {
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
 
     if (llama_model_has_encoder(model) && llama_model_has_decoder(model)) {
-        LOG_ERR("%s: computing embeddings in encoder-decoder models is not supported\n", __func__);
+        fprintf(stderr, "%s: error: computing embeddings in encoder-decoder models is not supported\n", __func__);
         return 1;
     }
 
     if (n_ctx > n_ctx_train) {
-        LOG_WRN("%s: warning: model was trained on only %d context tokens (%d specified)\n",
+        fprintf(stderr, "%s: warning: model was trained on only %d context tokens (%d specified)\n",
                 __func__, n_ctx_train, n_ctx);
     }
 
     // print system information
     {
-        LOG_INF("\n");
-        LOG_INF("%s\n", gpt_params_get_system_info(params).c_str());
+        fprintf(stderr, "\n");
+        fprintf(stderr, "%s\n", gpt_params_get_system_info(params).c_str());
     }
 
     // split the prompt into lines
@@ -137,7 +136,7 @@ int main(int argc, char ** argv) {
     for (const auto & prompt : prompts) {
         auto inp = ::llama_tokenize(ctx, prompt, true, false);
         if (inp.size() > n_batch) {
-            LOG_ERR("%s: number of tokens in input line (%lld) exceeds batch size (%lld), increase batch size and re-run\n",
+            fprintf(stderr, "%s: error: number of tokens in input line (%lld) exceeds batch size (%lld), increase batch size and re-run\n",
                     __func__, (long long int) inp.size(), (long long int) n_batch);
             return 1;
         }
@@ -148,20 +147,20 @@ int main(int argc, char ** argv) {
     // it should be automatically added by the tokenizer when 'tokenizer.ggml.add_eos_token' is set to 'true'
     for (auto & inp : inputs) {
         if (inp.empty() || inp.back() != llama_token_sep(model)) {
-            LOG_WRN("%s: last token in the prompt is not SEP\n", __func__);
-            LOG_WRN("%s: 'tokenizer.ggml.add_eos_token' should be set to 'true' in the GGUF header\n", __func__);
+            fprintf(stderr, "%s: warning: last token in the prompt is not SEP\n", __func__);
+            fprintf(stderr, "%s:          'tokenizer.ggml.add_eos_token' should be set to 'true' in the GGUF header\n", __func__);
         }
     }
 
     // tokenization stats
     if (params.verbose_prompt) {
         for (int i = 0; i < (int) inputs.size(); i++) {
-            LOG_INF("%s: prompt %d: '%s'\n", __func__, i, prompts[i].c_str());
-            LOG_INF("%s: number of tokens in prompt = %zu\n", __func__, inputs[i].size());
+            fprintf(stderr, "%s: prompt %d: '%s'\n", __func__, i, prompts[i].c_str());
+            fprintf(stderr, "%s: number of tokens in prompt = %zu\n", __func__, inputs[i].size());
             for (int j = 0; j < (int) inputs[i].size(); j++) {
-                LOG("%6d -> '%s'\n", inputs[i][j], llama_token_to_piece(ctx, inputs[i][j]).c_str());
+                fprintf(stderr, "%6d -> '%s'\n", inputs[i][j], llama_token_to_piece(ctx, inputs[i][j]).c_str());
             }
-            LOG("\n\n");
+            fprintf(stderr, "\n\n");
         }
     }
 
@@ -212,57 +211,57 @@ int main(int argc, char ** argv) {
     batch_decode(ctx, batch, out, s, n_embd, params.embd_normalize);
 
     if (params.embd_out.empty()) {
-        LOG("\n");
+        fprintf(stdout, "\n");
 
         if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
             for (int j = 0; j < n_embd_count; j++) {
-                LOG("embedding %d: ", j);
+                fprintf(stdout, "embedding %d: ", j);
                 for (int i = 0; i < std::min(3, n_embd); i++) {
                     if (params.embd_normalize == 0) {
-                        LOG("%6.0f ", emb[j * n_embd + i]);
+                        fprintf(stdout, "%6.0f ", emb[j * n_embd + i]);
                     } else {
-                        LOG("%9.6f ", emb[j * n_embd + i]);
+                        fprintf(stdout, "%9.6f ", emb[j * n_embd + i]);
                     }
                 }
-                LOG(" ... ");
+                fprintf(stdout, " ... ");
                 for (int i = n_embd - 3; i < n_embd; i++) {
                     if (params.embd_normalize == 0) {
-                        LOG("%6.0f ", emb[j * n_embd + i]);
+                        fprintf(stdout, "%6.0f ", emb[j * n_embd + i]);
                     } else {
-                        LOG("%9.6f ", emb[j * n_embd + i]);
+                        fprintf(stdout, "%9.6f ", emb[j * n_embd + i]);
                     }
                 }
-                LOG("\n");
+                fprintf(stdout, "\n");
             }
         } else {
             // print the first part of the embeddings or for a single prompt, the full embedding
             for (int j = 0; j < n_prompts; j++) {
-                LOG("embedding %d: ", j);
+                fprintf(stdout, "embedding %d: ", j);
                 for (int i = 0; i < (n_prompts > 1 ? std::min(16, n_embd) : n_embd); i++) {
                     if (params.embd_normalize == 0) {
-                        LOG("%6.0f ", emb[j * n_embd + i]);
+                        fprintf(stdout, "%6.0f ", emb[j * n_embd + i]);
                     } else {
-                        LOG("%9.6f ", emb[j * n_embd + i]);
+                        fprintf(stdout, "%9.6f ", emb[j * n_embd + i]);
                     }
                 }
-                LOG("\n");
+                fprintf(stdout, "\n");
             }
 
             // print cosine similarity matrix
             if (n_prompts > 1) {
-                LOG("\n");
-                LOG("cosine similarity matrix:\n\n");
+                fprintf(stdout, "\n");
+                printf("cosine similarity matrix:\n\n");
                 for (int i = 0; i < n_prompts; i++) {
-                    LOG("%6.6s ", prompts[i].c_str());
+                    fprintf(stdout, "%6.6s ", prompts[i].c_str());
                 }
-                LOG("\n");
+                fprintf(stdout, "\n");
                 for (int i = 0; i < n_prompts; i++) {
                     for (int j = 0; j < n_prompts; j++) {
                         float sim = llama_embd_similarity_cos(emb + i * n_embd, emb + j * n_embd, n_embd);
-                        LOG("%6.2f ", sim);
+                        fprintf(stdout, "%6.2f ", sim);
                     }
-                    LOG("%1.10s", prompts[i].c_str());
-                    LOG("\n");
+                    fprintf(stdout, "%1.10s", prompts[i].c_str());
+                    fprintf(stdout, "\n");
                 }
             }
         }
@@ -271,43 +270,43 @@ int main(int argc, char ** argv) {
     if (params.embd_out == "json" || params.embd_out == "json+" || params.embd_out == "array") {
         const bool notArray = params.embd_out != "array";
 
-        LOG(notArray ? "{\n  \"object\": \"list\",\n  \"data\": [\n" : "[");
+        fprintf(stdout, notArray ? "{\n  \"object\": \"list\",\n  \"data\": [\n" : "[");
         for (int j = 0;;) { // at least one iteration (one prompt)
-            if (notArray) LOG("    {\n      \"object\": \"embedding\",\n      \"index\": %d,\n      \"embedding\": ",j);
-            LOG("[");
+            if (notArray) fprintf(stdout, "    {\n      \"object\": \"embedding\",\n      \"index\": %d,\n      \"embedding\": ",j);
+            fprintf(stdout, "[");
             for (int i = 0;;) { // at least one iteration (n_embd > 0)
-                LOG(params.embd_normalize == 0 ? "%1.0f" : "%1.7f", emb[j * n_embd + i]);
+                fprintf(stdout, params.embd_normalize == 0 ? "%1.0f" : "%1.7f", emb[j * n_embd + i]);
                 i++;
-                if (i < n_embd) LOG(","); else break;
+                if (i < n_embd) fprintf(stdout, ","); else break;
             }
-            LOG(notArray ? "]\n    }" : "]");
+            fprintf(stdout, notArray ? "]\n    }" : "]");
             j++;
-            if (j < n_embd_count) LOG(notArray ? ",\n" : ","); else break;
+            if (j < n_embd_count) fprintf(stdout, notArray ? ",\n" : ","); else break;
         }
-        LOG(notArray ? "\n  ]" : "]\n");
+        fprintf(stdout, notArray ? "\n  ]" : "]\n");
 
         if (params.embd_out == "json+" && n_prompts > 1) {
-            LOG(",\n  \"cosineSimilarity\": [\n");
+            fprintf(stdout, ",\n  \"cosineSimilarity\": [\n");
             for (int i = 0;;) { // at least two iteration (n_embd_count > 1)
-                LOG("    [");
+                fprintf(stdout, "    [");
                 for (int j = 0;;) { // at least two iteration (n_embd_count > 1)
                     float sim = llama_embd_similarity_cos(emb + i * n_embd, emb + j * n_embd, n_embd);
-                    LOG("%6.2f", sim);
+                    fprintf(stdout, "%6.2f", sim);
                     j++;
-                    if (j < n_embd_count) LOG(", "); else break;
+                    if (j < n_embd_count) fprintf(stdout, ", "); else break;
                 }
-                LOG(" ]");
+                fprintf(stdout, " ]");
                 i++;
-                if (i < n_embd_count) LOG(",\n"); else break;
+                if (i < n_embd_count) fprintf(stdout, ",\n"); else break;
             }
-            LOG("\n  ]");
+            fprintf(stdout, "\n  ]");
         }
 
-        if (notArray) LOG("\n}\n");
+        if (notArray) fprintf(stdout, "\n}\n");
     }
 
-    LOG("\n");
-    llama_perf_context_print(ctx);
+    LOG_TEE("\n");
+    llama_perf_print(ctx, LLAMA_PERF_TYPE_CONTEXT);
 
     // clean up
     llama_batch_free(batch);

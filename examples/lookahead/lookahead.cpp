@@ -1,7 +1,4 @@
-#include "arg.h"
 #include "common.h"
-#include "sampling.h"
-#include "log.h"
 #include "llama.h"
 
 #include <cstdio>
@@ -39,17 +36,22 @@ struct ngram_container {
 int main(int argc, char ** argv) {
     gpt_params params;
 
-    if (!gpt_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+    auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_COMMON);
+    if (!gpt_params_parse(argc, argv, params, options)) {
         return 1;
     }
-
-    gpt_init();
 
     const int W = 15; // lookahead window
     const int N = 5;  // n-gram size
     const int G = 15; // max verification n-grams
 
     const bool dump_kv_cache = params.dump_kv_cache;
+
+#ifndef LOG_DISABLE_LOGS
+    log_set_target(log_filename_generator("lookahead", "log"));
+    LOG_TEE("Log start\n");
+    log_dump_cmdline(argc, argv);
+#endif // LOG_DISABLE_LOGS
 
     // init llama.cpp
     llama_backend_init();
@@ -72,14 +74,14 @@ int main(int argc, char ** argv) {
     const int max_tokens_list_size = max_context_size - 4;
 
     if ((int) inp.size() > max_tokens_list_size) {
-        LOG_ERR("%s: prompt too long (%d tokens, max %d)\n", __func__, (int) inp.size(), max_tokens_list_size);
+        fprintf(stderr, "%s: error: prompt too long (%d tokens, max %d)\n", __func__, (int) inp.size(), max_tokens_list_size);
         return 1;
     }
 
-    LOG("\n\n");
+    fprintf(stderr, "\n\n");
 
     for (auto id : inp) {
-        LOG("%s", llama_token_to_piece(ctx, id).c_str());
+        fprintf(stderr, "%s", llama_token_to_piece(ctx, id).c_str());
     }
 
     fflush(stderr);
@@ -163,7 +165,7 @@ int main(int argc, char ** argv) {
         {
             const std::string token_str = llama_token_to_piece(ctx, id);
 
-            LOG("%s", token_str.c_str());
+            printf("%s", token_str.c_str());
             fflush(stdout);
         }
     }
@@ -253,7 +255,7 @@ int main(int argc, char ** argv) {
         }
 
         if (llama_decode(ctx, batch) != 0) {
-            LOG_ERR("\n\n%s: llama_decode failed - increase KV cache size\n", __func__);
+            fprintf(stderr, "\n\n%s: error: llama_decode failed - increase KV cache size\n", __func__);
             return 1;
         }
 
@@ -290,10 +292,10 @@ int main(int argc, char ** argv) {
                 const std::string token_str = llama_token_to_piece(ctx, id);
 
                 if (v == 0) {
-                    LOG("%s", token_str.c_str());
+                    printf("%s", token_str.c_str());
                 } else {
                     // print light cyan
-                    LOG("\033[0;96m%s\033[0m", token_str.c_str());
+                    printf("\033[0;96m%s\033[0m", token_str.c_str());
                 }
                 fflush(stdout);
 
@@ -327,21 +329,21 @@ int main(int argc, char ** argv) {
             // print known n-grams starting with token id (debug)
             if (0 && v == 0) {
                 if (ngrams_observed.cnt[id] > 0) {
-                    LOG("\n - %d n-grams starting with '%s'\n", ngrams_observed.cnt[id], llama_token_to_piece(ctx, id).c_str());
+                    printf("\n - %d n-grams starting with '%s'\n", ngrams_observed.cnt[id], llama_token_to_piece(ctx, id).c_str());
                 }
 
                 for (int i = 0; i < ngrams_observed.cnt[id]; i++) {
-                    LOG("   - ngram %2d: ", i);
+                    printf("   - ngram %2d: ", i);
 
                     const int idx = id*(N - 1)*G + i*(N - 1);
 
                     for (int j = 0; j < N - 1; j++) {
                         const std::string token_str = llama_token_to_piece(ctx, ngrams_observed.tokens[idx + j]);
 
-                        LOG("%s", token_str.c_str());
+                        printf("%s", token_str.c_str());
                     }
 
-                    LOG("\n");
+                    printf("\n");
                 }
             }
 
@@ -452,20 +454,20 @@ int main(int argc, char ** argv) {
 
     auto t_dec_end = ggml_time_us();
 
-    LOG("\n\n");
+    LOG_TEE("\n\n");
 
-    LOG_INF("encoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_input,   (t_enc_end - t_enc_start) / 1e6f, inp.size() / ((t_enc_end - t_enc_start) / 1e6f));
-    LOG_INF("decoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_predict, (t_dec_end - t_dec_start) / 1e6f, n_predict  / ((t_dec_end - t_dec_start) / 1e6f));
+    LOG_TEE("encoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_input,   (t_enc_end - t_enc_start) / 1e6f, inp.size() / ((t_enc_end - t_enc_start) / 1e6f));
+    LOG_TEE("decoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_predict, (t_dec_end - t_dec_start) / 1e6f, n_predict  / ((t_dec_end - t_dec_start) / 1e6f));
 
-    LOG_INF("\n");
-    LOG_INF("W = %2d\n", W);
-    LOG_INF("N = %2d\n", N);
-    LOG_INF("G = %2d\n", G);
-    LOG_INF("\n");
-    LOG_INF("n_predict = %d\n", n_predict);
-    LOG_INF("n_accept  = %d\n", n_accept);
+    LOG_TEE("\n");
+    LOG_TEE("W = %2d\n", W);
+    LOG_TEE("N = %2d\n", N);
+    LOG_TEE("G = %2d\n", G);
+    LOG_TEE("\n");
+    LOG_TEE("n_predict = %d\n", n_predict);
+    LOG_TEE("n_accept  = %d\n", n_accept);
 
-    LOG_INF("\n");
+    LOG_TEE("\n");
     gpt_perf_print(ctx, smpl);
 
     gpt_sampler_free(smpl);
@@ -479,7 +481,7 @@ int main(int argc, char ** argv) {
 
     llama_backend_free();
 
-    LOG("\n\n");
+    fprintf(stderr, "\n\n");
 
     return 0;
 }

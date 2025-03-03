@@ -1,11 +1,11 @@
-#include "arg.h"
 #include "common.h"
-#include "log.h"
 #include "llama.h"
 #include "ggml.h"
 
 #include <cstdio>
+#include <random>
 #include <string>
+#include <tuple>
 #include <vector>
 
 /**
@@ -31,22 +31,22 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
     GGML_ASSERT(n > 0);
     float sum = 0;
     for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        LOG("                                     [\n");
+        printf("                                     [\n");
         for (int64_t i2 = 0; i2 < ne[2]; i2++) {
             if (i2 == n && ne[2] > 2*n) {
-                LOG("                                      ..., \n");
+                printf("                                      ..., \n");
                 i2 = ne[2] - n;
             }
-            LOG("                                      [\n");
+            printf("                                      [\n");
             for (int64_t i1 = 0; i1 < ne[1]; i1++) {
                 if (i1 == n && ne[1] > 2*n) {
-                    LOG("                                       ..., \n");
+                    printf("                                       ..., \n");
                     i1 = ne[1] - n;
                 }
-                LOG("                                       [");
+                printf("                                       [");
                 for (int64_t i0 = 0; i0 < ne[0]; i0++) {
                     if (i0 == n && ne[0] > 2*n) {
-                        LOG("..., ");
+                        printf("..., ");
                         i0 = ne[0] - n;
                     }
                     size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
@@ -64,16 +64,16 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
                     } else {
                         GGML_ABORT("fatal error");
                     }
-                    LOG("%12.4f", v);
+                    printf("%12.4f", v);
                     sum += v;
-                    if (i0 < ne[0] - 1) LOG(", ");
+                    if (i0 < ne[0] - 1) printf(", ");
                 }
-                LOG("],\n");
+                printf("],\n");
             }
-            LOG("                                      ],\n");
+            printf("                                      ],\n");
         }
-        LOG("                                     ]\n");
-        LOG("                                     sum = %f\n", sum);
+        printf("                                     ]\n");
+        printf("                                     sum = %f\n", sum);
     }
 }
 
@@ -102,11 +102,11 @@ static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
         snprintf(src1_str, sizeof(src1_str), "%s{%s}", src1->name, ggml_ne_string(src1).c_str());
     }
 
-    LOG("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__,
-         t->name, ggml_type_name(t->type), ggml_op_desc(t),
-         src0->name, ggml_ne_string(src0).c_str(),
-         src1 ? src1_str : "",
-         ggml_ne_string(t).c_str());
+    printf("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__,
+           t->name, ggml_type_name(t->type), ggml_op_desc(t),
+           src0->name, ggml_ne_string(src0).c_str(),
+           src1 ? src1_str : "",
+           ggml_ne_string(t).c_str());
 
 
     // copy the data from the GPU memory if needed
@@ -132,7 +132,7 @@ static bool run(llama_context * ctx, const gpt_params & params) {
     std::vector<llama_token> tokens = ::llama_tokenize(ctx, params.prompt, add_bos);
 
     if (llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size(), 0, 0))) {
-        LOG_ERR("%s : failed to eval\n", __func__);
+        fprintf(stderr, "%s : failed to eval\n", __func__);
         return false;
     }
 
@@ -144,11 +144,12 @@ int main(int argc, char ** argv) {
 
     gpt_params params;
 
-    if (!gpt_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+    auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_COMMON);
+    if (!gpt_params_parse(argc, argv, params, options)) {
         return 1;
     }
 
-    gpt_init();
+    print_build_info();
 
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -165,15 +166,14 @@ int main(int argc, char ** argv) {
     llama_model * model = llama_init.model;
     llama_context * ctx = llama_init.context;
     if (model == nullptr || ctx == nullptr) {
-        LOG_ERR("%s : failed to init\n", __func__);
+        fprintf(stderr, "%s : failed to init\n", __func__);
         return 1;
     }
 
     // print system information
     {
-        LOG_INF("\n");
-        LOG_INF("%s\n", gpt_params_get_system_info(params).c_str());
-        LOG_INF("\n");
+        fprintf(stderr, "\n");
+        fprintf(stderr, "%s\n", gpt_params_get_system_info(params).c_str());
     }
 
     bool OK = run(ctx, params);
@@ -181,8 +181,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    LOG("\n");
-    llama_perf_context_print(ctx);
+    LOG_TEE("\n");
+    llama_perf_print(ctx, LLAMA_PERF_TYPE_CONTEXT);
 
     llama_free(ctx);
     llama_free_model(model);

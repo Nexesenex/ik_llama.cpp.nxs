@@ -1,21 +1,18 @@
-#include "arg.h"
 #include "common.h"
-#include "log.h"
 #include "llama.h"
 
-#include <algorithm>
-#include <array>
-#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <fstream>
-#include <mutex>
-#include <random>
 #include <sstream>
 #include <thread>
+#include <mutex>
+#include <atomic>
 #include <vector>
+#include <array>
+#include <fstream>
+#include <sstream>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -43,7 +40,7 @@ static void write_logfile(
     }
 
     if (params.hellaswag) {
-        LOG_WRN("%s: logging results is not implemented for HellaSwag. No files will be written.\n", __func__);
+        fprintf(stderr, "%s: warning: logging results is not implemented for HellaSwag. No files will be written.\n", __func__);
         return;
     }
 
@@ -51,7 +48,7 @@ static void write_logfile(
 
     const bool success = fs_create_directory_with_parents(params.logdir);
     if (!success) {
-        LOG_WRN("%s: failed to create logdir %s, cannot write logfile\n",
+        fprintf(stderr, "%s: warning: failed to create logdir %s, cannot write logfile\n",
                 __func__, params.logdir.c_str());
         return;
     }
@@ -60,7 +57,7 @@ static void write_logfile(
     FILE * logfile = fopen(logfile_path.c_str(), "w");
 
     if (logfile == NULL) {
-        LOG_ERR("%s: failed to open logfile %s\n", __func__, logfile_path.c_str());
+        fprintf(stderr, "%s: failed to open logfile %s\n", __func__, logfile_path.c_str());
         return;
     }
 
@@ -346,16 +343,16 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
     const bool add_bos = llama_add_bos_token(llama_get_model(ctx));
     GGML_ASSERT(!llama_add_eos_token(llama_get_model(ctx)));
 
-    LOG_INF("%s: tokenizing the input ..\n", __func__);
+    fprintf(stderr, "%s: tokenizing the input ..\n", __func__);
 
     std::vector<llama_token> tokens = ::llama_tokenize(ctx, params.prompt, true);
 
     const int n_ctx = llama_n_ctx(ctx);
 
     if (int(tokens.size()) < 2*n_ctx) {
-        LOG_ERR("%s: you need at least %d tokens to evaluate perplexity with a context of %d\n",__func__,2*n_ctx,
+        fprintf(stderr, "%s: you need at least %d tokens to evaluate perplexity with a context of %d\n",__func__,2*n_ctx,
                 n_ctx);
-        LOG_ERR("%s: the data file you provided tokenizes to only %zu tokens\n",__func__,tokens.size());
+        fprintf(stderr, "%s: the data file you provided tokenizes to only %zu tokens\n",__func__,tokens.size());
         return {std::move(tokens), 0., {}, {}};
     }
 
@@ -366,16 +363,16 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
     prob_history.resize(tokens.size());
 
     if (params.ppl_stride <= 0) {
-        LOG_ERR("%s: stride is %d but must be greater than zero!\n",__func__,params.ppl_stride);
+        fprintf(stderr, "%s: stride is %d but must be greater than zero!\n",__func__,params.ppl_stride);
         return {tokens, -1, logit_history, prob_history};
     }
 
     const int calc_chunk = n_ctx;
 
-    LOG_INF("%s: have %zu tokens. Calculation chunk = %d\n", __func__, tokens.size(), calc_chunk);
+    fprintf(stderr, "%s: have %zu tokens. Calculation chunk = %d\n", __func__, tokens.size(), calc_chunk);
 
     if (int(tokens.size()) <= calc_chunk) {
-        LOG_ERR("%s: there are only %zu tokens, this is not enough for a context size of %d and stride %d\n",__func__,
+        fprintf(stderr, "%s: there are only %zu tokens, this is not enough for a context size of %d and stride %d\n",__func__,
                 tokens.size(), n_ctx, params.ppl_stride);
         return {tokens, -1, logit_history, prob_history};
     }
@@ -389,14 +386,14 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
     int count = 0;
     double nll = 0.0;
 
-    LOG_INF("%s: calculating perplexity over %d chunks, batch_size=%d\n", __func__, n_chunk, n_batch);
+    fprintf(stderr, "%s: calculating perplexity over %d chunks, batch_size=%d\n", __func__, n_chunk, n_batch);
 
     for (int i = 0; i < n_chunk; ++i) {
         const int start =     i * params.ppl_stride;
         const int end   = start + calc_chunk;
 
         const int num_batches = (calc_chunk + n_batch - 1) / n_batch;
-        //LOG_DBG("%s: evaluating %d...%d using %d batches\n", __func__, start, end, num_batches);
+        //fprintf(stderr, "%s: evaluating %d...%d using %d batches\n", __func__, start, end, num_batches);
 
         std::vector<float> logits;
 
@@ -409,10 +406,10 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
             const int batch_start = start + j * n_batch;
             const int batch_size  = std::min(end - batch_start, n_batch);
 
-            //LOG_DBG("    Batch %d: starts at %d, size is %d, n_past is %d\n",j,batch_start,batch_size,j * n_batch);
+            //fprintf(stderr, "    Batch %d: starts at %d, size is %d, n_past is %d\n",j,batch_start,batch_size,j * n_batch);
             // TODO: use llama_batch.logits instead of relying on logits_all == true
             if (llama_decode(ctx, llama_batch_get_one(tokens.data() + batch_start, batch_size, j * n_batch, 0))) {
-                //LOG_ERR("%s : failed to eval\n", __func__);
+                //fprintf(stderr, "%s : failed to eval\n", __func__);
                 return {tokens, -1, logit_history, prob_history};
             }
 
@@ -436,17 +433,16 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
 
         if (i == 0) {
             const float t_total = std::chrono::duration<float>(t_end - t_start).count();
-            LOG_INF("%s: %.2f seconds per pass - ETA ", __func__, t_total);
+            fprintf(stderr, "%s: %.2f seconds per pass - ETA ", __func__, t_total);
             int total_seconds = (int)(t_total * n_chunk);
             if (total_seconds >= 60*60) {
-                LOG("%d hours ", total_seconds / (60*60));
+                fprintf(stderr, "%d hours ", total_seconds / (60*60));
                 total_seconds = total_seconds % (60*60);
             }
-            LOG("%.2f minutes\n", total_seconds / 60.0);
+            fprintf(stderr, "%.2f minutes\n", total_seconds / 60.0);
         }
-        LOG("\n");
 
-        //LOG_DBG("%s: using tokens %d...%d\n",__func__,params.n_ctx - params.ppl_stride + start, params.n_ctx + start);
+        //fprintf(stderr, "%s: using tokens %d...%d\n",__func__,params.n_ctx - params.ppl_stride + start, params.n_ctx + start);
         for (int j = n_ctx - params.ppl_stride - 1; j < n_ctx - 1; ++j) {
 
             // Calculate probability of next token, given the previous ones.
@@ -463,12 +459,13 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
         }
         // perplexity is e^(average negative log-likelihood)
         if (params.ppl_output_type == 0) {
-            LOG("[%d]%.4lf,", i + 1, std::exp(nll / count));
+            printf("[%d]%.4lf,", i + 1, std::exp(nll / count));
         } else {
-            LOG("%8d  %.4lf\n", i*params.ppl_stride, std::exp(nll / count));
+            printf("%8d  %.4lf\n", i*params.ppl_stride, std::exp(nll / count));
         }
+        fflush(stdout);
     }
-    LOG("\n");
+    printf("\n");
 
     return {tokens, std::exp(nll / count), logit_history, prob_history};
 }
@@ -490,26 +487,26 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     if (!params.logits_file.empty()) {
         logits_stream.open(params.logits_file.c_str(), std::ios::binary);
         if (!logits_stream.is_open()) {
-            LOG_ERR("%s: failed to open %s for writing\n", __func__, params.logits_file.c_str());
+            fprintf(stderr, "%s: failed to open %s for writing\n", __func__, params.logits_file.c_str());
             return {};
         }
-        LOG_INF("%s: saving all logits to %s\n", __func__, params.logits_file.c_str());
+        fprintf(stderr, "%s: saving all logits to %s\n", __func__, params.logits_file.c_str());
         logits_stream.write("_logits_", 8);
         logits_stream.write(reinterpret_cast<const char *>(&n_ctx), sizeof(n_ctx));
     }
 
     auto tim1 = std::chrono::high_resolution_clock::now();
-    LOG_INF("%s: tokenizing the input ..\n", __func__);
+    fprintf(stderr, "%s: tokenizing the input ..\n", __func__);
 
     std::vector<llama_token> tokens = ::llama_tokenize(ctx, params.prompt, true);
 
     auto tim2 = std::chrono::high_resolution_clock::now();
-    LOG_INF("%s: tokenization took %g ms\n",__func__,1e-3*std::chrono::duration_cast<std::chrono::microseconds>(tim2-tim1).count());
+    fprintf(stderr, "%s: tokenization took %g ms\n",__func__,1e-3*std::chrono::duration_cast<std::chrono::microseconds>(tim2-tim1).count());
 
     if (int(tokens.size()) < 2*n_ctx) {
-        LOG_ERR("%s: you need at least %d tokens to evaluate perplexity with a context of %d\n",__func__,2*n_ctx,
+        fprintf(stderr, "%s: you need at least %d tokens to evaluate perplexity with a context of %d\n",__func__,2*n_ctx,
                 n_ctx);
-        LOG_ERR("%s: the data file you provided tokenizes to only %zu tokens\n",__func__,tokens.size());
+        fprintf(stderr, "%s: the data file you provided tokenizes to only %zu tokens\n",__func__,tokens.size());
         return {std::move(tokens), 0., {}, {}};
     }
 
@@ -542,7 +539,7 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
         logits.reserve((size_t)n_ctx * n_vocab);
     }
 
-    LOG_INF("%s: calculating perplexity over %d chunks, n_ctx=%d, batch_size=%d, n_seq=%d\n", __func__, n_chunk, n_ctx, n_batch, n_seq);
+    fprintf(stderr, "%s: calculating perplexity over %d chunks, n_ctx=%d, batch_size=%d, n_seq=%d\n", __func__, n_chunk, n_ctx, n_batch, n_seq);
 
     std::vector<std::thread> workers(std::thread::hardware_concurrency() - 1);
 
@@ -615,7 +612,7 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
             }
 
             if (llama_decode(ctx, batch)) {
-                LOG_INF("%s : failed to eval\n", __func__);
+                fprintf(stderr, "%s : failed to eval\n", __func__);
                 return {tokens, -1, logit_history, prob_history};
             }
 
@@ -630,15 +627,14 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
             llama_synchronize(ctx);
             const auto t_end = std::chrono::high_resolution_clock::now();
             const float t_total = std::chrono::duration<float>(t_end - t_start).count();
-            LOG_INF("%s: %.2f seconds per pass - ETA ", __func__, t_total);
+            fprintf(stderr, "%s: %.2f seconds per pass - ETA ", __func__, t_total);
             int total_seconds = (int)(t_total*n_chunk/n_seq);
             if (total_seconds >= 60*60) {
-                LOG("%d hours ", total_seconds / (60*60));
+                fprintf(stderr, "%d hours ", total_seconds / (60*60));
                 total_seconds = total_seconds % (60*60);
             }
-            LOG("%.2f minutes\n", total_seconds / 60.0);
+            fprintf(stderr, "%.2f minutes\n", total_seconds / 60.0);
         }
-        LOG("\n");
 
         for (int seq = 0; seq < n_seq_batch; seq++) {
             const float * all_logits = num_batches > 1 ? logits.data() : llama_get_logits_ith(ctx, seq*n_ctx + first);
@@ -659,18 +655,19 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
 
             // perplexity is e^(average negative log-likelihood)
             if (params.ppl_output_type == 0) {
-                LOG("[%d]%.4lf,", i + seq + 1, std::exp(nll / count));
+                printf("[%d]%.4lf,", i + seq + 1, std::exp(nll / count));
             } else {
                 double av = nll/count;
                 double av2 = nll2/count - av*av;
                 if (av2 > 0) av2 = sqrt(av2/(count-1));
-                LOG("%8d  %.4lf  %4lf  %4lf\n", i*n_ctx, std::exp(nll / count), av, av2);
+                printf("%8d  %.4lf  %4lf  %4lf\n", i*n_ctx, std::exp(nll / count), av, av2);
             }
         }
+        fflush(stdout);
 
         logits.clear();
     }
-    LOG("\n");
+    printf("\n");
 
     nll2 /= count;
     nll /= count;
@@ -678,9 +675,9 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     nll2 -= nll * nll;
     if (nll2 > 0) {
         nll2 = sqrt(nll2/(count-1));
-        LOG_INF("Final estimate: PPL = %.4lf +/- %.5lf\n", ppl, nll2*ppl);
+        printf("Final estimate: PPL = %.4lf +/- %.5lf\n", ppl, nll2*ppl);
     } else {
-        LOG_ERR("Unexpected negative standard deviation of log(prob)\n");
+        printf("Unexpected negative standard deviation of log(prob)\n");
     }
 
     llama_batch_free(batch);
@@ -706,7 +703,7 @@ static bool decode_helper(llama_context * ctx, llama_batch & batch, std::vector<
 
         const int ret = llama_decode(ctx, batch_view);
         if (ret != 0) {
-            LOG_ERR("failed to decode the batch, n_batch = %d, ret = %d\n", n_batch, ret);
+            LOG_TEE("failed to decode the batch, n_batch = %d, ret = %d\n", n_batch, ret);
             return false;
         }
 
@@ -792,15 +789,15 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
     }
 
     if (prompt_lines.size() % 6 != 0) {
-        LOG_ERR("%s : number of lines in prompt not a multiple of 6.\n", __func__);
+        fprintf(stderr, "%s : number of lines in prompt not a multiple of 6.\n", __func__);
         return;
     }
 
     size_t hs_task_count = prompt_lines.size()/6;
-    LOG_INF("%s : loaded %zu tasks from prompt.\n", __func__, hs_task_count);
+    fprintf(stderr, "%s : loaded %zu tasks from prompt.\n", __func__, hs_task_count);
 
     const bool is_spm = llama_vocab_type(llama_get_model(ctx)) == LLAMA_VOCAB_TYPE_SPM;
-    LOG_INF("================================= is_spm = %d\n", is_spm);
+    fprintf(stderr, "================================= is_spm = %d\n", is_spm);
 
     // The tasks should be randomized so the score stabilizes quickly.
     bool randomize_tasks = true;
@@ -827,7 +824,7 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
         std::vector<llama_token> seq_tokens[4];
     };
 
-    LOG_INF("%s : selecting %zu %s tasks.\n", __func__, hs_task_count, (randomize_tasks?"randomized":"the first")  );
+    fprintf(stderr, "%s : selecting %zu %s tasks.\n", __func__, hs_task_count, (randomize_tasks?"randomized":"the first")  );
 
     // Select and read data from prompt lines
     std::vector<hs_data_t> hs_data(hs_task_count);
@@ -873,9 +870,9 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
         }
     }
 
-    LOG_INF("%s : calculating hellaswag score over selected tasks.\n", __func__);
+    fprintf(stderr, "%s : calculating hellaswag score over selected tasks.\n", __func__);
 
-    LOG("\ntask\tacc_norm\n");
+    printf("\ntask\tacc_norm\n");
 
     double acc = 0.0f;
 
@@ -943,7 +940,7 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            fprintf(stderr, "%s : task %zu does not fit in the context window\n", __func__, i0);
             return;
         }
 
@@ -951,7 +948,7 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
-            LOG_ERR("%s: llama_decode() failed\n", __func__);
+            fprintf(stderr, "%s: llama_decode() failed\n", __func__);
             return;
         }
 
@@ -1001,7 +998,7 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
                 }
             }
 
-            //LOG("max logprob ending idx %lu, gold ending idx %lu\n", ending_logprob_max_idx, hs_cur.gold_ending_idx);
+            //printf("max logprob ending idx %lu, gold ending idx %lu\n", ending_logprob_max_idx, hs_cur.gold_ending_idx);
 
             // If the gold ending got the maximum logprobe add one accuracy point
             if (ending_logprob_max_idx == hs_cur.gold_ending_idx) {
@@ -1009,7 +1006,8 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
             }
 
             // Print the accumulated accuracy mean x 100
-            LOG("%zu\t%.8lf\n", i + 1, acc/double(i + 1)*100.0);
+            printf("%zu\t%.8lf\n", i + 1, acc/double(i + 1)*100.0);
+            fflush(stdout);
         }
 
         i0 = i1 - 1;
@@ -1017,7 +1015,7 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
 
     llama_batch_free(batch);
 
-    LOG("\n");
+    printf("\n");
 }
 
 struct winogrande_entry {
@@ -1061,7 +1059,7 @@ static std::vector<winogrande_entry> load_winogrande_from_csv(const std::string 
             }
         }
         if (ipos != 4) {
-            LOG_ERR("%s: failed to find comma separators in <%s>\n", __func__, line.c_str());
+            printf("%s: failed to find comma separators in <%s>\n", __func__, line.c_str());
             continue;
         }
         auto sentence = line[comma_pos[0]+1] == '"' ? line.substr(comma_pos[0]+2, comma_pos[1] - comma_pos[0] - 3)
@@ -1075,13 +1073,13 @@ static std::vector<winogrande_entry> load_winogrande_from_csv(const std::string 
             if (sentence[where] == '_') break;
         }
         if (where == int(sentence.size())) {
-            LOG_ERR("%s: no _ in <%s>\n", __func__, sentence.c_str());
+            printf("%s: no _ in <%s>\n", __func__, sentence.c_str());
             continue;
         }
         std::istringstream stream(answer.c_str());
         int i_answer; stream >> i_answer;
         if (stream.fail() || i_answer < 1 || i_answer > 2) {
-            LOG_ERR("%s: failed to parse answer <%s>\n", __func__, answer.c_str());
+            printf("%s: failed to parse answer <%s>\n", __func__, answer.c_str());
             continue;
         }
         result.emplace_back();
@@ -1110,14 +1108,14 @@ static void winogrande_score(llama_context * ctx, const gpt_params & params) {
 
     auto data = load_winogrande_from_csv(params.prompt);
     if (data.empty()) {
-        LOG_ERR("%s: no tasks\n", __func__);
+        fprintf(stderr, "%s: no tasks\n", __func__);
         return;
     }
 
-    LOG_INF("%s : loaded %zu tasks from prompt.\n", __func__, data.size());
+    fprintf(stderr, "%s : loaded %zu tasks from prompt.\n", __func__, data.size());
 
     if (params.winogrande_tasks > 0 && params.winogrande_tasks < data.size()) {
-        LOG_INF("%s : selecting %zu random tasks\n", __func__, params.winogrande_tasks);
+        fprintf(stderr, "%s : selecting %zu random tasks\n", __func__, params.winogrande_tasks);
         std::mt19937 rng(1);
         std::vector<int> aux(data.size());
         for (int i = 0; i < int(data.size()); ++i) {
@@ -1135,7 +1133,7 @@ static void winogrande_score(llama_context * ctx, const gpt_params & params) {
         data = std::move(selected);
     }
 
-    LOG_INF("%s : tokenizing selected tasks\n", __func__);
+    fprintf(stderr, "%s : tokenizing selected tasks\n", __func__);
 
     for (auto & task : data) {
         task.seq_tokens[0] = ::llama_tokenize(ctx, task.first + task.choices[0] + task.second, true);
@@ -1158,7 +1156,7 @@ static void winogrande_score(llama_context * ctx, const gpt_params & params) {
         task.n_base2 = ::llama_tokenize(ctx, task.first + task.choices[1], true).size();
     }
 
-    LOG_INF("%s : calculating winogrande score over selected tasks.\n", __func__);
+    fprintf(stderr, "%s : calculating winogrande score over selected tasks.\n", __func__);
 
     const int n_vocab = llama_n_vocab(llama_get_model(ctx));
     const int n_ctx   = llama_n_ctx(ctx);
@@ -1219,7 +1217,7 @@ static void winogrande_score(llama_context * ctx, const gpt_params & params) {
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            fprintf(stderr, "%s : task %zu does not fit in the context window\n", __func__, i0);
             return;
         }
 
@@ -1227,7 +1225,7 @@ static void winogrande_score(llama_context * ctx, const gpt_params & params) {
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
-            LOG_ERR("%s: llama_decode() failed\n", __func__);
+            fprintf(stderr, "%s: llama_decode() failed\n", __func__);
             return;
         }
 
@@ -1287,20 +1285,20 @@ static void winogrande_score(llama_context * ctx, const gpt_params & params) {
             ++n_done;
 
             // print the accumulated accuracy mean x 100
-            LOG("%zu\t%.4lf\t%10.6f  %10.6f  %d  %d\n", i+1, 100.0 * n_correct/n_done, score_1st, score_2nd, result, task.answer);
+            printf("%zu\t%.4lf\t%10.6f  %10.6f  %d  %d\n", i+1, 100.0 * n_correct/n_done, score_1st, score_2nd, result, task.answer);
+            fflush(stdout);
         }
 
         i0 = i1 - 1;
     }
 
-    LOG("\n");
+    printf("\n");
 
     if (n_done < 100) return;
 
     const float p = 1.f*n_correct/n_done;
     const float sigma = 100.f*sqrt(p*(1-p)/(n_done-1));
-
-    LOG_INF("Final Winogrande score(%d tasks): %.4lf +/- %.4lf\n", n_done, 100*p, sigma);
+    printf("Final Winogrande score(%d tasks): %.4lf +/- %.4lf\n", n_done, 100*p, sigma);
 }
 
 static bool deserialize_string(std::istream & in, std::string & str) {
@@ -1349,7 +1347,7 @@ struct multiple_choice_task {
 static bool multiple_choice_prepare_one_task(llama_context * ctx, multiple_choice_task& task, bool log_error) {
     if (task.question.empty() || task.mc1.answers.empty()) {
         if (log_error) {
-            LOG_ERR("%s: found bad task with empty question and/or answers\n", __func__);
+            printf("%s: found bad task with empty question and/or answers\n", __func__);
         }
         return false;
     }
@@ -1357,7 +1355,7 @@ static bool multiple_choice_prepare_one_task(llama_context * ctx, multiple_choic
     for (auto& answer : task.mc1.answers) {
         if (answer.empty()) {
             if (log_error) {
-                LOG_ERR("%s: found empty answer\n", __func__);
+                printf("%s: found empty answer\n", __func__);
             }
             return false;
         }
@@ -1411,14 +1409,14 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
     uint32_t n_task;
     strstream.read((char *)&n_task, sizeof(n_task));
     if (strstream.fail() || n_task == 0) {
-        LOG_ERR("%s: no tasks\n", __func__);
+        printf("%s: no tasks\n", __func__);
         return;
     }
-    LOG_INF("%s: there are %u tasks in prompt\n", __func__, n_task);
+    printf("%s: there are %u tasks in prompt\n", __func__, n_task);
     std::vector<uint32_t> task_pos(n_task);
     strstream.read((char *)task_pos.data(), task_pos.size()*sizeof(uint32_t));
     if (strstream.fail()) {
-        LOG_ERR("%s: failed to read task positions from prompt\n", __func__);
+        printf("%s: failed to read task positions from prompt\n", __func__);
         return;
     }
 
@@ -1426,21 +1424,21 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
     if (params.multiple_choice_tasks == 0 || params.multiple_choice_tasks >= (size_t)n_task) {
         // Use all tasks
         tasks.resize(n_task);
-        LOG_INF("%s: reading tasks", __func__);
+        printf("%s: reading tasks", __func__);
         int n_dot = std::max((int) n_task/100, 1);
         int i = 0;
         for (auto& task : tasks) {
             ++i;
             if (!task.deserialize(strstream)) {
-                LOG_ERR("%s: failed to read task %d of %u\n", __func__, i, n_task);
+                printf("%s: failed to read task %d of %u\n", __func__, i, n_task);
                 return;
             }
-            if (i%n_dot == 0) LOG(".");
+            if (i%n_dot == 0) printf(".");
         }
-        LOG("done\n");
+        printf("done\n");
     }
     else {
-        LOG_INF("%s: selecting %zu random tasks from %u tasks available\n", __func__, params.multiple_choice_tasks, n_task);
+        printf("%s: selecting %zu random tasks from %u tasks available\n", __func__, params.multiple_choice_tasks, n_task);
         std::mt19937 rng(1);
         std::vector<int> aux(n_task);
         for (uint32_t i = 0; i < n_task; ++i) aux[i] = i;
@@ -1453,16 +1451,18 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
             aux.pop_back();
             strstream.seekg(task_pos[idx], std::ios::beg);
             if (!task.deserialize(strstream)) {
-                LOG_ERR("%s: failed to read task %d at position %u\n", __func__, idx, task_pos[idx]);
+                printf("%s: failed to read task %d at position %u\n", __func__, idx, task_pos[idx]);
                 return;
             }
         }
         n_task = params.multiple_choice_tasks;
     }
 
-    LOG_INF("%s: preparing task data", __func__);
+    printf("%s: preparing task data", __func__);
+    fflush(stdout);
     if (n_task > 500) {
-        LOG("...");
+        printf("...");
+        fflush(stdout);
         std::atomic<int> counter(0);
         std::atomic<int> n_bad(0);
         auto prepare = [&counter, &n_bad, &tasks, ctx] () {
@@ -1486,10 +1486,11 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
         for (auto& w : workers) w = std::thread(prepare);
         prepare();
         for (auto& w : workers) w.join();
-        LOG("done\n");
+        printf("done\n");
+        fflush(stdout);
         int nbad = n_bad;
         if (nbad > 0) {
-            LOG_ERR("%s: found %d malformed tasks\n", __func__, nbad);
+            printf("%s: found %d malformed tasks\n", __func__, nbad);
             return;
         }
     } else {
@@ -1501,15 +1502,16 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
                 return;
             }
             if (i_task%n_dot == 0) {
-                LOG(".");
+                printf(".");
+                fflush(stdout);
             }
         }
-        LOG("done\n");
+        printf("done\n");
     }
 
-    LOG_INF("%s : calculating TruthfulQA score over %zu tasks.\n", __func__, tasks.size());
+    printf("%s : calculating TruthfulQA score over %zu tasks.\n", __func__, tasks.size());
 
-    LOG("\ntask\tacc_norm\n");
+    printf("\ntask\tacc_norm\n");
 
     const int n_vocab = llama_n_vocab(llama_get_model(ctx));
     const int n_ctx   = llama_n_ctx(ctx);
@@ -1588,7 +1590,7 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            fprintf(stderr, "%s : task %zu does not fit in the context window\n", __func__, i0);
             return;
         }
 
@@ -1596,7 +1598,7 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
-            LOG_ERR("%s: llama_decode() failed\n", __func__);
+            fprintf(stderr, "%s: llama_decode() failed\n", __func__);
             return;
         }
 
@@ -1620,13 +1622,13 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
         // compute the logprobs for each ending of the decoded tasks
         for (size_t i = i0; i < i1; ++i) {
             auto & cur_task = tasks[i];
-            //LOG("==== Evaluating <%s> with correct answer ", cur_task.question.c_str());
+            //printf("==== Evaluating <%s> with correct answer ", cur_task.question.c_str());
             //for (int j = 0; j < int(cur_task.mc1.labels.size()); ++j) {
             //    if (cur_task.mc1.labels[j] == 1) {
-            //        LOG("%d", j+1);
+            //        printf("%d", j+1);
             //    }
             //}
-            //LOG("\n    common_prefix: %zu\n", cur_task.common_prefix);
+            //printf("\n    common_prefix: %zu\n", cur_task.common_prefix);
 
             // get the logits of the last token of the common prefix
             std::memcpy(tok_logits.data(), batch_logits.data() + n_vocab*cur_task.i_logits, n_vocab*sizeof(float));
@@ -1638,13 +1640,13 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
                 size_t count = 1;
                 float  log_prob  = std::log(first_probs[cur_task.seq_tokens[s][cur_task.common_prefix]]);
                 for (size_t j = cur_task.common_prefix; j < cur_task.seq_tokens[s].size() - 1; j++) {
-                    //LOG("        %zu  %g\n", ir, eval_results[ir]);
+                    //printf("        %zu  %g\n", ir, eval_results[ir]);
                     ++count;
                     log_prob += eval_results[ir++];
                 }
                 cur_task.log_probs[s] = log_prob / count;
-                //LOG("        Final: %g\n", log_prob / count);
-                //LOG("    <%s> : %g\n", cur_task.mc1.answers[s].c_str(), log_prob/count);
+                //printf("        Final: %g\n", log_prob / count);
+                //printf("    <%s> : %g\n", cur_task.mc1.answers[s].c_str(), log_prob/count);
             }
 
             // Find the ending with maximum logprob
@@ -1664,7 +1666,8 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
             ++n_done;
 
             // Print the accumulated accuracy mean x 100
-            LOG("%d\t%.8lf\n", n_done, 100.*n_correct/n_done);
+            printf("%d\t%.8lf\n", n_done, 100.*n_correct/n_done);
+            fflush(stdout);
         }
 
         i0 = i1 - 1;
@@ -1676,30 +1679,29 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
 
     float p = 1.f*n_correct/n_done;
     float sigma = sqrt(p*(1-p)/(n_done-1));
-    LOG("\n");
-    LOG_INF("Final result: %.4f +/- %.4f\n", 100.f*p, 100.f*sigma);
+    printf("\n Final result: %.4f +/- %.4f\n", 100.f*p, 100.f*sigma);
     p = 1.f*n_done/n_tot_answers;
     sigma = sqrt(p*(1-p)/(n_done-1));
-    LOG_INF("Random chance: %.4f +/- %.4f\n", 100.f*p, 100.f*sigma);
+    printf("Random chance: %.4f +/- %.4f\n", 100.f*p, 100.f*sigma);
 
-    LOG_INF("\n");
+    printf("\n");
 }
 
 static void kl_divergence(llama_context * ctx, const gpt_params & params) {
     if (params.logits_file.empty()) {
-        LOG_ERR("%s: you must provide a name of a file containing the log probabilities of the base model\n", __func__);
+        fprintf(stderr, "%s: you must provide a name of a file containing the log probabilities of the base model\n", __func__);
         return;
     }
     std::ifstream in(params.logits_file.c_str(), std::ios::binary);
     if (!in) {
-        LOG_ERR("%s: failed to open %s\n", __func__, params.logits_file.c_str());
+        fprintf(stderr, "%s: failed to open %s\n", __func__, params.logits_file.c_str());
         return;
     }
     {
         char check[9]; check[8] = 0;
         in.read(check, 8);
         if (in.fail() || strncmp("_logits_", check, 8) != 0) {
-            LOG_ERR("%s: %s does not look like a file containing log-probabilities\n", __func__, params.logits_file.c_str());
+            fprintf(stderr, "%s: %s does not look like a file containing log-probabilities\n", __func__, params.logits_file.c_str());
             return;
         }
     }
@@ -1707,7 +1709,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
     uint32_t n_ctx;
     in.read((char *)&n_ctx, sizeof(n_ctx));
     if (n_ctx > llama_n_ctx(ctx)) {
-        LOG_ERR("%s: %s has been computed with %u, while the current context is %d. Increase it with -c and retry\n",
+        fprintf(stderr, "%s: %s has been computed with %u, while the current context is %d. Increase it with -c and retry\n",
                 __func__, params.logits_file.c_str(), n_ctx, params.n_ctx);
     }
 
@@ -1715,16 +1717,16 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
     in.read((char *)&n_vocab, sizeof(n_vocab));
     in.read((char *)&n_chunk, sizeof(n_chunk));
     if (in.fail()) {
-        LOG_ERR("%s: failed reading n_vocab, n_chunk from %s\n", __func__, params.logits_file.c_str());
+        fprintf(stderr, "%s: failed reading n_vocab, n_chunk from %s\n", __func__, params.logits_file.c_str());
         return;
     }
     if (n_vocab != llama_n_vocab(llama_get_model(ctx))) {
-        LOG_ERR("%s: inconsistent vocabulary (%d vs %d)\n", __func__, n_vocab, llama_n_vocab(llama_get_model(ctx)));
+        fprintf(stderr, "%s: inconsistent vocabulary (%d vs %d)\n", __func__, n_vocab, llama_n_vocab(llama_get_model(ctx)));
     }
 
     std::vector<llama_token> tokens(n_ctx * n_chunk);
     if (in.read((char *)tokens.data(), tokens.size()*sizeof(tokens[0])).fail()) {
-        LOG_ERR("%s: failed reading evaluation tokens from %s\n", __func__, params.logits_file.c_str());
+        fprintf(stderr, "%s: failed reading evaluation tokens from %s\n", __func__, params.logits_file.c_str());
         return;
     }
 
@@ -1773,7 +1775,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         if (in.read((char *)log_probs_uint16.data(), log_probs_uint16.size()*sizeof(uint16_t)).fail()) {
-            LOG_ERR("%s: failed reading log-probs for chunk %d\n", __func__, i);
+            fprintf(stderr, "%s: failed reading log-probs for chunk %d\n", __func__, i);
             return;
         }
 
@@ -1794,7 +1796,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
 
             // TODO: use llama_batch.logits instead of relying on logits_all == true
             if (llama_decode(ctx, llama_batch_get_one(tokens.data() + batch_start, batch_size, j * n_batch, 0))) {
-                LOG_ERR("%s : failed to eval\n", __func__);
+                fprintf(stderr, "%s : failed to eval\n", __func__);
                 return;
             }
 
@@ -1811,16 +1813,16 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
 
         if (i == 0) {
             const float t_total = std::chrono::duration<float>(t_end - t_start).count();
-            LOG_INF("%s: %.2f seconds per pass - ETA ", __func__, t_total);
+            fprintf(stderr, "%s: %.2f seconds per pass - ETA ", __func__, t_total);
             int total_seconds = (int)(t_total * n_chunk);
             if (total_seconds >= 60*60) {
-                LOG("%d hours ", total_seconds / (60*60));
+                fprintf(stderr, "%d hours ", total_seconds / (60*60));
                 total_seconds = total_seconds % (60*60);
             }
-            LOG("%.2f minutes\n", total_seconds / 60.0);
+            fprintf(stderr, "%.2f minutes\n", total_seconds / 60.0);
+
+            printf("\nchunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p\n");
         }
-        LOG("\n");
-        LOG("chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p\n");
 
         const int first = n_ctx/2;
         const float * all_logits = num_batches > 1 ? logits.data() : llama_get_logits(ctx);
@@ -1829,77 +1831,79 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
         p_diff_ptr += n_ctx - 1 - first;
         kld_ptr    += n_ctx - 1 - first;
 
-        LOG("%4d", i+1);
+        printf("%4d", i+1);
 
         auto log_ppl = mean_and_uncertainty(kld.sum_nll, kld.sum_nll2, kld.count);
         const double ppl_val = exp(log_ppl.first);
         const double ppl_unc = ppl_val * log_ppl.second; // ppl_unc = sqrt( (dexp(x) / dx) ** 2 * log_ppl.second ** 2 )
-        LOG("    %9.4lf ± %9.4lf", ppl_val, ppl_unc);
+        printf("    %9.4lf ± %9.4lf", ppl_val, ppl_unc);
 
         auto log_ppl_base = mean_and_uncertainty(kld.sum_nll_base, kld.sum_nll_base2, kld.count);
         const double log_ppl_cov = covariance(kld.sum_nll, kld.sum_nll_base, kld.sum_nll_nll_base, kld.count);
         const double log_ppl_ratio_val = log_ppl.first - log_ppl_base.first;
         const double log_ppl_ratio_unc = sqrt(log_ppl.second*log_ppl.second + log_ppl_base.second*log_ppl_base.second - 2.0*log_ppl_cov);
-        LOG("    %10.5lf ± %10.5lf", log_ppl_ratio_val, log_ppl_ratio_unc);
+        printf("    %10.5lf ± %10.5lf", log_ppl_ratio_val, log_ppl_ratio_unc);
 
         auto kl_div = mean_and_uncertainty(kld.sum_kld, kld.sum_kld2, kld.count);
-        LOG("    %10.5lf ± %10.5lf", kl_div.first, kl_div.second);
+        printf("    %10.5lf ± %10.5lf", kl_div.first, kl_div.second);
 
         auto p_diff_mse   = mean_and_uncertainty(kld.sum_p_diff2, kld.sum_p_diff4, kld.count);
         const double p_diff_rms_val = sqrt(p_diff_mse.first);
         const double p_diff_rms_unc = 0.5/p_diff_rms_val * p_diff_mse.second;
-        LOG("    %6.3lf ± %6.3lf %%", 100.0*p_diff_rms_val, 100.0*p_diff_rms_unc);
+        printf("    %6.3lf ± %6.3lf %%", 100.0*p_diff_rms_val, 100.0*p_diff_rms_unc);
 
         double p_top_val = 1.*kld.n_same_top/kld.count;
         double p_top_unc = sqrt(p_top_val*(1 - p_top_val)/(kld.count - 1));
-        LOG("    %6.3lf ± %6.3lf %%", 100.0*p_top_val, 100.0*p_top_unc);
+        printf("    %6.3lf ± %6.3lf %%", 100.0*p_top_val, 100.0*p_top_unc);
 
-        LOG("\n");
+        printf("\n");
+
+        fflush(stdout);
 
         logits.clear();
     }
-    LOG("\n");
+    printf("\n");
 
     if (kld.count < 100) return; // we do not wish to do statistics on so few values
 
     std::sort(kld_values.begin(), kld_values.end());
     std::sort(p_diff_values.begin(), p_diff_values.end());
 
-    LOG("====== Perplexity statistics ======\n");
+    printf("====== Perplexity statistics ======\n");
 
     auto log_ppl = mean_and_uncertainty(kld.sum_nll, kld.sum_nll2, kld.count);
     const double ppl_val = exp(log_ppl.first);
     const double ppl_unc = ppl_val * log_ppl.second; // ppl_unc = sqrt( (dexp(x) / dx) ** 2 * log_ppl.second ** 2 )
-    LOG("Mean PPL(Q)                   : %10.6lf ± %10.6lf\n", ppl_val, ppl_unc);
+    printf("Mean PPL(Q)                   : %10.6lf ± %10.6lf\n", ppl_val, ppl_unc);
 
     auto log_ppl_base = mean_and_uncertainty(kld.sum_nll_base, kld.sum_nll_base2, kld.count);
     const double ppl_base_val = exp(log_ppl_base.first);
     const double ppl_base_unc = ppl_base_val * log_ppl_base.second; // ppl_base_unc = sqrt( (dexp(x) / dx) ** 2 * log_ppl_base.second ** 2 )
-    LOG("Mean PPL(base)                : %10.6lf ± %10.6lf\n", ppl_base_val, ppl_base_unc);
+    printf("Mean PPL(base)                : %10.6lf ± %10.6lf\n", ppl_base_val, ppl_base_unc);
 
     const double log_ppl_cov = covariance(kld.sum_nll, kld.sum_nll_base, kld.sum_nll_nll_base, kld.count);
-    // LOG("Cov(ln(PPL(Q)), ln(PPL(base))): %10.6lf\n", log_ppl_cov);
+    // printf("Cov(ln(PPL(Q)), ln(PPL(base))): %10.6lf\n", log_ppl_cov);
     const double log_ppl_cor = log_ppl_cov / (log_ppl.second*log_ppl_base.second);
-    LOG("Cor(ln(PPL(Q)), ln(PPL(base))): %6.2lf%%\n", 100.0*log_ppl_cor);
+    printf("Cor(ln(PPL(Q)), ln(PPL(base))): %6.2lf%%\n", 100.0*log_ppl_cor);
 
     const double log_ppl_ratio_val = log_ppl.first - log_ppl_base.first;
     const double log_ppl_ratio_unc = sqrt(log_ppl.second*log_ppl.second + log_ppl_base.second*log_ppl_base.second - 2.0*log_ppl_cov);
-    LOG("Mean ln(PPL(Q)/PPL(base))     : %10.6lf ± %10.6lf\n", log_ppl_ratio_val, log_ppl_ratio_unc);
+    printf("Mean ln(PPL(Q)/PPL(base))     : %10.6lf ± %10.6lf\n", log_ppl_ratio_val, log_ppl_ratio_unc);
 
     const double ppl_ratio_val = exp(log_ppl_ratio_val);
     const double ppl_ratio_unc = ppl_ratio_val * log_ppl_ratio_unc; // ppl_ratio_unc = sqrt( (dexp(x) / dx) ** 2 * log_ppl_ratio.second ** 2 )
-    LOG("Mean PPL(Q)/PPL(base)         : %10.6lf ± %10.6lf\n", ppl_ratio_val, ppl_ratio_unc);
+    printf("Mean PPL(Q)/PPL(base)         : %10.6lf ± %10.6lf\n", ppl_ratio_val, ppl_ratio_unc);
 
     const double ppl_cov = ppl_val * ppl_base_val * log_ppl_cov;
     const double ppl_diff_val = ppl_val - ppl_base_val;
     const double ppl_diff_unc = sqrt(ppl_unc*ppl_unc + ppl_base_unc*ppl_base_unc - 2.0*ppl_cov);
-    LOG("Mean PPL(Q)-PPL(base)         : %10.6lf ± %10.6lf\n", ppl_diff_val, ppl_diff_unc);
+    printf("Mean PPL(Q)-PPL(base)         : %10.6lf ± %10.6lf\n", ppl_diff_val, ppl_diff_unc);
 
-    LOG("\n");
+    printf("\n");
 
-    LOG("====== KL divergence statistics ======\n");
+    printf("====== KL divergence statistics ======\n");
     auto kl_div = mean_and_uncertainty(kld.sum_kld, kld.sum_kld2, kld.count);
-    LOG("Mean    KLD: %10.6lf ± %10.6lf\n", kl_div.first, kl_div.second);
+    printf("Mean    KLD: %10.6lf ± %10.6lf\n", kl_div.first, kl_div.second);
     auto kld_median = kld_values.size()%2 == 0 ? 0.5f*(kld_values[kld_values.size()/2] + kld_values[kld_values.size()/2-1])
                                                : kld_values[kld_values.size()/2];
 
@@ -1911,49 +1915,50 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
         return (1 - p)*values[ip] + p*values[std::min(ip+1, values.size()-1)];
     };
 
-    LOG("Maximum KLD: %10.6f\n", kld_values.back());
-    LOG("99.9%%   KLD: %10.6f\n", percentile(kld_values, 0.999f));
-    LOG("99.0%%   KLD: %10.6f\n", percentile(kld_values, 0.990f));
-    LOG("99.0%%   KLD: %10.6f\n", percentile(kld_values, 0.990f));
-    LOG("Median  KLD: %10.6f\n", kld_median);
-    LOG("10.0%%   KLD: %10.6f\n", percentile(kld_values, 0.100f));
-    LOG(" 5.0%%   KLD: %10.6f\n", percentile(kld_values, 0.050f));
-    LOG(" 1.0%%   KLD: %10.6f\n", percentile(kld_values, 0.010f));
-    LOG("Minimum KLD: %10.6f\n", kld_values.front());
+    printf("Maximum KLD: %10.6f\n", kld_values.back());
+    printf("99.9%%   KLD: %10.6f\n", percentile(kld_values, 0.999f));
+    printf("99.0%%   KLD: %10.6f\n", percentile(kld_values, 0.990f));
+    printf("99.0%%   KLD: %10.6f\n", percentile(kld_values, 0.990f));
+    printf("Median  KLD: %10.6f\n", kld_median);
+    printf("10.0%%   KLD: %10.6f\n", percentile(kld_values, 0.100f));
+    printf(" 5.0%%   KLD: %10.6f\n", percentile(kld_values, 0.050f));
+    printf(" 1.0%%   KLD: %10.6f\n", percentile(kld_values, 0.010f));
+    printf("Minimum KLD: %10.6f\n", kld_values.front());
 
-    LOG("\n");
+    printf("\n");
 
-    LOG("====== Token probability statistics ======\n");
+    printf("====== Token probability statistics ======\n");
 
     auto p_diff = mean_and_uncertainty(kld.sum_p_diff, kld.sum_p_diff2, kld.count);
-    LOG("Mean    Δp: %6.3lf ± %5.3lf %%\n",  100.0*p_diff.first, 100.0*p_diff.second);
+    printf("Mean    Δp: %6.3lf ± %5.3lf %%\n",  100.0*p_diff.first, 100.0*p_diff.second);
 
     auto p_diff_median = p_diff_values.size()%2 == 0 ? 0.5f*(p_diff_values[p_diff_values.size()/2] + p_diff_values[p_diff_values.size()/2-1])
                                                : p_diff_values[p_diff_values.size()/2];
 
-    LOG("Maximum Δp: %6.3lf%%\n",  100.0*p_diff_values.back());
-    LOG("99.9%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.999f));
-    LOG("99.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.990f));
-    LOG("95.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.950f));
-    LOG("90.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.900f));
-    LOG("75.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.750f));
-    LOG("Median  Δp: %6.3lf%%\n",  100.0*p_diff_median);
-    LOG("25.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.250f));
-    LOG("10.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.100f));
-    LOG(" 5.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.050f));
-    LOG(" 1.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.010f));
-    LOG(" 0.1%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.001f));
-    LOG("Minimum Δp: %6.3lf%%\n",  100.0*p_diff_values.front());
+    printf("Maximum Δp: %6.3lf%%\n",  100.0*p_diff_values.back());
+    printf("99.9%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.999f));
+    printf("99.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.990f));
+    printf("95.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.950f));
+    printf("90.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.900f));
+    printf("75.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.750f));
+    printf("Median  Δp: %6.3lf%%\n",  100.0*p_diff_median);
+    printf("25.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.250f));
+    printf("10.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.100f));
+    printf(" 5.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.050f));
+    printf(" 1.0%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.010f));
+    printf(" 0.1%%   Δp: %6.3lf%%\n", 100.0*percentile(p_diff_values, 0.001f));
+    printf("Minimum Δp: %6.3lf%%\n",  100.0*p_diff_values.front());
 
     auto p_diff_mse = mean_and_uncertainty(kld.sum_p_diff2, kld.sum_p_diff4, kld.count);
-    // LOG("MSE Δp    : %10.6lf ± %10.6lf\n", p_diff_mse.first, p_diff_mse.second);
+    // printf("MSE Δp    : %10.6lf ± %10.6lf\n", p_diff_mse.first, p_diff_mse.second);
 
     const double p_diff_rms_val = sqrt(p_diff_mse.first);
     const double p_diff_rms_unc = 0.5/p_diff_rms_val * p_diff_mse.second;
-    LOG("RMS Δp    : %6.3lf ± %5.3lf %%\n", 100.0*p_diff_rms_val, 100.0*p_diff_rms_unc);
+    printf("RMS Δp    : %6.3lf ± %5.3lf %%\n", 100.0*p_diff_rms_val, 100.0*p_diff_rms_unc);
 
     const double same_top_p = 1.0*kld.n_same_top/kld.count;
-    LOG("Same top p: %6.3lf ± %5.3lf %%\n", 100.0*same_top_p, 100.0*sqrt(same_top_p*(1.0 - same_top_p)/(kld.count - 1)));
+    printf("Same top p: %6.3lf ± %5.3lf %%\n", 100.0*same_top_p, 100.0*sqrt(same_top_p*(1.0 - same_top_p)/(kld.count - 1)));
+
 }
 
 int main(int argc, char ** argv) {
@@ -1962,16 +1967,15 @@ int main(int argc, char ** argv) {
     params.n_ctx = 512;
     params.logits_all = true;
 
-    if (!gpt_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY)) {
+    auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_PERPLEXITY);
+    if (!gpt_params_parse(argc, argv, params, options)) {
         return 1;
     }
-
-    gpt_init();
 
     const int32_t n_ctx = params.n_ctx;
 
     if (n_ctx <= 0) {
-        LOG_ERR("%s: perplexity tool requires '--ctx-size' > 0\n", __func__);
+        fprintf(stderr, "%s: perplexity tool requires '--ctx-size' > 0\n", __func__);
         return 1;
     }
 
@@ -1996,10 +2000,12 @@ int main(int argc, char ** argv) {
     }
 
     if (params.ppl_stride > 0) {
-        LOG_INF("Will perform strided perplexity calculation -> adjusting context size from %d to %d\n",
+        fprintf(stderr, "Will perform strided perplexity calculation -> adjusting context size from %d to %d\n",
                 params.n_ctx, params.n_ctx + params.ppl_stride/2);
         params.n_ctx += params.ppl_stride/2;
     }
+
+    print_build_info();
 
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -2010,21 +2016,21 @@ int main(int argc, char ** argv) {
     llama_model * model = llama_init.model;
     llama_context * ctx = llama_init.context;
     if (model == NULL) {
-        LOG_ERR("%s: unable to load model\n", __func__);
+        fprintf(stderr, "%s: error: unable to load model\n", __func__);
         return 1;
     }
 
     const int n_ctx_train = llama_n_ctx_train(model);
 
     if (params.n_ctx > n_ctx_train) {
-        LOG_WRN("%s: model was trained on only %d context tokens (%d specified)\n",
+        fprintf(stderr, "%s: warning: model was trained on only %d context tokens (%d specified)\n",
                 __func__, n_ctx_train, params.n_ctx);
     }
 
     // print system information
     {
-        LOG_INF("\n");
-        LOG_INF("%s\n", gpt_params_get_system_info(params).c_str());
+        fprintf(stderr, "\n");
+        fprintf(stderr, "%s\n", gpt_params_get_system_info(params).c_str());
     }
 
     struct results_perplexity results;
@@ -2040,9 +2046,8 @@ int main(int argc, char ** argv) {
         results = perplexity(ctx, params, n_ctx);
     }
 
-    LOG("\n");
-    llama_perf_context_print(ctx);
-
+    LOG_TEE("\n");
+    llama_perf_print(ctx, LLAMA_PERF_TYPE_CONTEXT);
     write_logfile(ctx, params, model, results);
 
     llama_free(ctx);

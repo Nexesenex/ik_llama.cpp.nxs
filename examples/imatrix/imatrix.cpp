@@ -1,6 +1,11 @@
-#include "arg.h"
+//
+// Copyright (C) 2024 Iwan Kawrakow
+// Copyright (C) 2023-2024 The ggml authors
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "common.h"
-#include "log.h"
 #include "llama.h"
 
 #include <cmath>
@@ -20,18 +25,19 @@
 #endif
 
 static void print_usage(int, char ** argv) {
-    LOG("\nexample usage:\n");
-    LOG("\n    %s \\\n"
-            "       -m model.gguf -f some-text.txt [-o imatrix.dat] [--process-output] \\\n"
+    LOG_TEE("\nexample usage:\n");
+    LOG_TEE("\n    %s \\\n"
+            "       -m model.gguf -f some-text.txt [-o imatrix.dat] [--process-output] [--verbosity 1] \\\n"
             "       [--no-ppl] [--chunk 123] [--output-frequency 10] [--save-frequency 0] \\\n"
             "       [--in-file imatrix-prev-0.dat --in-file imatrix-prev-1.dat ...]\n" , argv[0]);
-    LOG("\n");
+    LOG_TEE("\n");
 }
 
 struct Stats {
     std::vector<float> values;
     std::vector<int> counts;
     int ncall = 0;
+    int n_as = 1;
 };
 
 class IMatrixCollector {
@@ -83,7 +89,8 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         if (t->op != GGML_OP_MUL_MAT) return false;
         // why are small batches ignored (<16 tokens)?
         if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) return false;
-        if (!(wname.substr(0, 4) == "blk." || (m_params.process_output && wname == "output.weight"))) return false;
+        //printf("wname = %s\n", wname.c_str());
+        if (!(wname.substr(0, 4) == "blk." || (m_params.process_output && wname == m_params.output_tensor_name))) return false;
         return true;
     }
 
@@ -124,12 +131,18 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         if (e.values.empty()) {
             e.values.resize(src1->ne[0]*n_as, 0);
             e.counts.resize(src1->ne[0]*n_as, 0);
+            e.n_as = n_as;
         }
         else if (e.values.size() != (size_t)src1->ne[0]*n_as) {
-            LOG_ERR("%s: inconsistent size for %s (%d vs %d)\n", __func__, wname.c_str(), (int)e.values.size(), (int)src1->ne[0]*n_as);
+            fprintf(stderr, "Oops: inconsistent size for %s (%d vs %d)\n", wname.c_str(), (int)e.values.size(), (int)src1->ne[0]*n_as);
             exit(1); //GGML_ABORT("fatal error");
         }
-        LOG_DBGV(2, "%s[%d]: %32s, %s, %5d x %5d, %d\n", __func__, m_last_call, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[2], (int)src1->type);
+        else if (e.n_as != n_as) {
+            fprintf(stderr, "Oops: inconsistent n_as for %s (%d vs %d)\n", wname.c_str(), e.n_as, n_as);
+        }
+        if (m_params.verbosity > 1) {
+            printf("%s[%d]: %32s, %s, %5d x %5d, %d\n", __func__, m_last_call, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[2], (int)src1->type);
+        }
         // loop over all possible experts, regardless if they are used or not in the batch
         for (int ex = 0; ex < n_as; ++ex) {
             size_t e_start = ex*src1->ne[0];
@@ -150,8 +163,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                         e.values[e_start + j] += x[j]*x[j];
                         e.counts[e_start + j]++;
                         if (!std::isfinite(e.values[e_start + j])) {
-                            LOG("\n");
-                            LOG_ERR("%f detected in %s\n", e.values[e_start + j], wname.c_str());
+                            fprintf(stderr, "%f detected in %s\n", e.values[e_start + j], wname.c_str());
                             exit(1);
                         }
                     }
@@ -174,18 +186,20 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             e.counts.resize(src1->ne[0], 0);
         }
         else if (e.values.size() != (size_t)src1->ne[0]) {
-            LOG_ERR("%s: inconsistent size for %s (%d vs %d)\n", __func__, wname.c_str(), (int)e.values.size(), (int)src1->ne[0]);
+            fprintf(stderr, "Oops: inconsistent size for %s (%d vs %d)\n", wname.c_str(), (int)e.values.size(), (int)src1->ne[0]);
             exit(1); //GGML_ABORT("fatal error");
         }
         ++e.ncall;
-        LOG_DBGV(2, "%s[%d]: %32s, %s, %5d x %5d, %d\n", __func__, m_last_call, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[1], (int)src1->type);
+        if (m_params.verbosity > 1) {
+            printf("%s[%d]: %32s, %s, %5d x %5d, %d\n", __func__, m_last_call, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[1], (int)src1->type);
+        }
         for (int row = 0; row < (int)src1->ne[1]; ++row) {
             const float * x = data + row * src1->ne[0];
             for (int j = 0; j < (int)src1->ne[0]; ++j) {
                 e.values[j] += x[j]*x[j];
                 e.counts[j]++;
                 if (!std::isfinite(e.values[j])) {
-                    LOG_ERR("%f detected in %s\n", e.values[j], wname.c_str());
+                    fprintf(stderr, "%f detected in %s\n", e.values[j], wname.c_str());
                     exit(1);
                 }
             }
@@ -237,18 +251,48 @@ void IMatrixCollector::save_imatrix(int ncall) const {
         }
 
         if (n_zeros != 0 && is_first) {
-            LOG_INF("\n");
+            fprintf(stderr, "\n");
             is_first = false;
         }
 
         if (n_zeros == n_all) {
-            LOG_WRN("%s: entry '%40s' has no data - skipping\n", __func__, kv.first.c_str());
+            fprintf(stderr, "%s: entry '%40s' has no data - skipping\n", __func__, kv.first.c_str());
             continue;
         }
 
         if (n_zeros > 0) {
-            LOG_WRN("%s: entry '%40s' has partial data (%.2f%%) - skipping\n", __func__, kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
-            continue;
+            fprintf(stderr, "%s: entry '%40s' has partial data (%.2f%%)", __func__, kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
+            bool store_it = false;
+            if (kv.second.n_as > 1) {
+                int n_per_expert = n_all / kv.second.n_as;
+                std::vector<int> bad_experts;
+                bad_experts.reserve(kv.second.n_as);
+                for (int i = 0; i < kv.second.n_as; ++i) {
+                    auto counts = kv.second.counts.data() + i*n_per_expert;
+                    int nz_i = 0;
+                    for (int j = 0; j < n_per_expert; ++j) {
+                        if (counts[j] == 0) ++nz_i;
+                    }
+                    if (nz_i > 0) bad_experts.push_back(i);
+                }
+                fprintf(stderr, " %d out of %d experts are missing data", int(bad_experts.size()), kv.second.n_as);
+                if (bad_experts.size() < round(kv.second.n_as * 0.05)) {
+                    fprintf(stderr, " Storing **but be aware**\n");
+                    store_it = true;
+                    for (auto i : bad_experts) {
+                        auto counts = (int *)kv.second.counts.data() + i*n_per_expert;
+                        auto values = (float *)kv.second.values.data() + i*n_per_expert;
+                        for (int j = 0; j < n_per_expert; ++j) {
+                            counts[j] = 1;
+                            values[j] = 1;
+                        }
+                    }
+                }
+            }
+            if (!store_it) {
+                fprintf(stderr, " - skipping\n");
+                continue;
+            }
         }
 
         n_entries++;
@@ -256,7 +300,7 @@ void IMatrixCollector::save_imatrix(int ncall) const {
     }
 
     if (to_store.size() < m_stats.size()) {
-        LOG_WRN("%s: storing only %zu out of %zu entries\n", __func__, to_store.size(), m_stats.size());
+        fprintf(stderr, "%s: warning: storing only %zu out of %zu entries\n", __func__, to_store.size(), m_stats.size());
     }
 
     std::ofstream out(fname, std::ios::binary);
@@ -288,20 +332,21 @@ void IMatrixCollector::save_imatrix(int ncall) const {
         out.write(m_params.prompt_file.c_str(), len);
     }
 
-    LOGV(1, "\n");
-    LOG_DBGV(1, "%s: stored collected data after %d chunks in %s\n", __func__, m_last_call, fname.c_str());
+    if (m_params.verbosity > 0) {
+        fprintf(stderr, "\n%s: stored collected data after %d chunks in %s\n", __func__, m_last_call, fname.c_str());
+    }
 }
 
 bool IMatrixCollector::load_imatrix(const char * fname) {
     std::ifstream in(fname, std::ios::binary);
     if (!in) {
-        LOG_ERR("%s: failed to open %s\n",__func__, fname);
+        printf("%s: failed to open %s\n",__func__, fname);
         return false;
     }
     int n_entries;
     in.read((char*)&n_entries, sizeof(n_entries));
     if (in.fail() || n_entries < 1) {
-        LOG_ERR("%s: no data in file %s\n", __func__, fname);
+        printf("%s: no data in file %s\n", __func__, fname);
         return false;
     }
     for (int i = 0; i < n_entries; ++i) {
@@ -309,7 +354,7 @@ bool IMatrixCollector::load_imatrix(const char * fname) {
         std::vector<char> name_as_vec(len+1);
         in.read((char *)name_as_vec.data(), len);
         if (in.fail()) {
-            LOG_ERR("%s: failed reading name for entry %d from %s\n",__func__,i+1, fname);
+            printf("%s: failed reading name for entry %d from %s\n",__func__,i+1, fname);
             return false;
         }
         name_as_vec[len] = 0;
@@ -320,7 +365,7 @@ bool IMatrixCollector::load_imatrix(const char * fname) {
         int nval;
         in.read((char *)&nval, sizeof(nval));
         if (in.fail() || nval < 1) {
-            LOG_ERR("%s: failed reading number of values for entry %d\n",__func__,i);
+            printf("%s: failed reading number of values for entry %d\n",__func__,i);
             m_stats = {};
             return false;
         }
@@ -333,7 +378,7 @@ bool IMatrixCollector::load_imatrix(const char * fname) {
         std::vector<float> tmp(nval);
         in.read((char*)tmp.data(), nval*sizeof(float));
         if (in.fail()) {
-            LOG_ERR("%s: failed reading data for entry %d\n",__func__,i);
+            printf("%s: failed reading data for entry %d\n",__func__,i);
             m_stats = {};
             return false;
         }
@@ -434,25 +479,26 @@ static bool compute_imatrix(llama_context * ctx, const gpt_params & params) {
     const int n_ctx = llama_n_ctx(ctx);
 
     auto tim1 = std::chrono::high_resolution_clock::now();
-    LOG_INF("%s: tokenizing the input ..\n", __func__);
+    fprintf(stderr, "%s: tokenizing the input ..\n", __func__);
 
     std::vector<llama_token> tokens = ::llama_tokenize(ctx, params.prompt, true);
 
     auto tim2 = std::chrono::high_resolution_clock::now();
-    LOG_INF("%s: tokenization took %g ms\n",__func__,1e-3*std::chrono::duration_cast<std::chrono::microseconds>(tim2-tim1).count());
+    fprintf(stderr, "%s: tokenization took %g ms\n",__func__,1e-3*std::chrono::duration_cast<std::chrono::microseconds>(tim2-tim1).count());
 
     if (params.i_chunk > 0) {
         if (size_t((params.i_chunk + 2)*n_ctx) >= tokens.size()) {
-            LOG_ERR("%s: there will be not enough tokens left after removing %d chunks\n", __func__, params.i_chunk);
+            fprintf(stderr, "%s: there will be not enough tokens left after removing %d chunks\n", __func__, params.i_chunk);
             return false;
         }
-        LOG_INF("%s: removing initial %d chunks (%d tokens)\n", __func__, params.i_chunk, params.i_chunk*n_ctx);
+        fprintf(stderr, "%s: removing initial %d chunks (%d tokens)\n", __func__, params.i_chunk, params.i_chunk*n_ctx);
         tokens.erase(tokens.begin(), tokens.begin() + params.i_chunk*n_ctx);
     }
 
     if (int(tokens.size()) < 2*n_ctx) {
-        LOG_ERR("%s: you need at least %d tokens for a context of %d tokens\n", __func__, 2*n_ctx, n_ctx);
-        LOG_ERR("%s: the data file you provided tokenizes to only %zu tokens\n", __func__, tokens.size());
+        fprintf(stderr, "%s: you need at least %d tokens for a context of %d tokens\n",__func__,2*n_ctx,
+                n_ctx);
+        fprintf(stderr, "%s: the data file you provided tokenizes to only %zu tokens\n",__func__,tokens.size());
         return false;
     }
 
@@ -474,7 +520,7 @@ static bool compute_imatrix(llama_context * ctx, const gpt_params & params) {
     double nll = 0.0;
     double nll2 = 0.0;
 
-    LOG_INF("%s: computing over %d chunks with batch_size %d\n", __func__, n_chunk, n_batch);
+    fprintf(stderr, "%s: computing over %d chunks with batch_size %d\n", __func__, n_chunk, n_batch);
 
     std::vector<std::thread> workers(std::thread::hardware_concurrency() - 1);
 
@@ -510,7 +556,7 @@ static bool compute_imatrix(llama_context * ctx, const gpt_params & params) {
 
             // TODO: use batch.logits to save computations instead of relying on logits_all == true
             if (llama_decode(ctx, llama_batch_get_one(tokens.data() + batch_start, batch_size, j * n_batch, 0))) {
-                LOG_ERR("%s : failed to eval\n", __func__);
+                fprintf(stderr, "%s : failed to eval\n", __func__);
                 return false;
             }
 
@@ -527,29 +573,29 @@ static bool compute_imatrix(llama_context * ctx, const gpt_params & params) {
 
         if (i == 0) {
             const float t_total = std::chrono::duration<float>(t_end - t_start).count();
-            LOG_INF("%s: %.2f seconds per pass - ETA ", __func__, t_total);
+            fprintf(stderr, "%s: %.2f seconds per pass - ETA ", __func__, t_total);
             int total_seconds = (int)(t_total * n_chunk);
             if (total_seconds >= 60*60) {
-                LOG("%d hours ", total_seconds / (60*60));
+                fprintf(stderr, "%d hours ", total_seconds / (60*60));
                 total_seconds = total_seconds % (60*60);
             }
-            LOG("%.2f minutes\n", total_seconds / 60.0);
+            fprintf(stderr, "%.2f minutes\n", total_seconds / 60.0);
         }
 
         if (params.compute_ppl) {
             const int first = n_ctx/2;
-            const auto * all_logits = num_batches > 1 ? logits.data() : llama_get_logits(ctx);
+            const auto all_logits = num_batches > 1 ? logits.data() : llama_get_logits(ctx);
             process_logits(n_vocab, all_logits + first*n_vocab, tokens.data() + start + first, n_ctx - 1 - first,
                     workers, nll, nll2, logit_history.data() + start + first, prob_history.data() + start + first);
             count += n_ctx - first - 1;
 
-            LOG("[%d]%.4lf,", i + 1, std::exp(nll / count));
+            printf("[%d]%.4lf,", i + 1, std::exp(nll / count));
             fflush(stdout);
 
             logits.clear();
         }
     }
-    LOG("\n");
+    printf("\n");
 
     if (params.compute_ppl) {
         nll2 /= count;
@@ -558,9 +604,9 @@ static bool compute_imatrix(llama_context * ctx, const gpt_params & params) {
         nll2 -= nll * nll;
         if (nll2 > 0) {
             nll2 = sqrt(nll2/(count-1));
-            LOG("Final estimate: PPL = %.4lf +/- %.5lf\n", ppl, nll2*ppl);
+            printf("Final estimate: PPL = %.4lf +/- %.5lf\n", ppl, nll2*ppl);
         } else {
-            LOG("Unexpected negative standard deviation of log(prob)\n");
+            printf("Unexpected negative standard deviation of log(prob)\n");
         }
     }
 
@@ -572,27 +618,27 @@ int main(int argc, char ** argv) {
 
     params.n_ctx = 512;
     params.logits_all = true;
+    params.verbosity = 1;
 
-    if (!gpt_params_parse(argc, argv, params, LLAMA_EXAMPLE_IMATRIX, print_usage)) {
+    auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_IMATRIX, print_usage);
+    if (!gpt_params_parse(argc, argv, params, options)) {
         return 1;
     }
-
-    gpt_init();
 
     params.n_batch = std::min(params.n_batch, params.n_ctx);
 
     g_collector.set_params(params);
 
     for (const auto & in_file : params.in_files) {
-        LOG_INF("%s : loading imatrix from '%s'\n", __func__, in_file.c_str());
+        printf("%s : loading imatrix from '%s'\n", __func__, in_file.c_str());
         if (!g_collector.load_imatrix(in_file.c_str())) {
-            LOG_ERR("%s : failed to load %s\n", __func__, in_file.c_str());
+            fprintf(stderr, "%s : failed to load %s\n", __func__, in_file.c_str());
             return 1;
         }
     }
 
     if (params.in_files.size() > 1) {
-        LOG_INF("%s : saving combined imatrix to '%s'\n", __func__, params.out_file.c_str());
+        printf("%s : saving combined imatrix to '%s'\n", __func__, params.out_file.c_str());
         g_collector.save_imatrix();
     }
 
@@ -611,20 +657,20 @@ int main(int argc, char ** argv) {
     llama_model * model = llama_init.model;
     llama_context * ctx = llama_init.context;
     if (model == nullptr || ctx == nullptr) {
-        LOG_ERR("%s : failed to init\n", __func__);
+        fprintf(stderr, "%s : failed to init\n", __func__);
         return 1;
     }
 
     const int n_ctx_train = llama_n_ctx_train(model);
     if (params.n_ctx > n_ctx_train) {
-        LOG_WRN("%s: model was trained on only %d context tokens (%d specified)\n",
+        fprintf(stderr, "%s: warning: model was trained on only %d context tokens (%d specified)\n",
                 __func__, n_ctx_train, params.n_ctx);
     }
 
     // print system information
     {
-        LOG_INF("\n");
-        LOG_INF("%s\n", gpt_params_get_system_info(params).c_str());
+        fprintf(stderr, "\n");
+        fprintf(stderr, "%s\n", gpt_params_get_system_info(params).c_str());
     }
 
     if (!compute_imatrix(ctx, params)) {
@@ -633,8 +679,8 @@ int main(int argc, char ** argv) {
 
     g_collector.save_imatrix();
 
-    LOG("\n");
-    llama_perf_context_print(ctx);
+    LOG_TEE("\n");
+    llama_perf_print(ctx, LLAMA_PERF_TYPE_CONTEXT);
 
     llama_free(ctx);
     llama_free_model(model);

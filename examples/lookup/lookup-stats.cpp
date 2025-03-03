@@ -4,12 +4,13 @@
 #include "log.h"
 #include "ngram-cache.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cinttypes>
 #include <fstream>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 int main(int argc, char ** argv){
     gpt_params params;
@@ -18,8 +19,6 @@ int main(int argc, char ** argv){
     if (!gpt_params_parse(argc, argv, params, options)) {
         return 1;
     }
-
-    gpt_init();
 
     const int n_draft = params.n_draft;
 
@@ -50,7 +49,7 @@ int main(int argc, char ** argv){
             try {
                 ngram_cache_static = llama_ngram_cache_load(params.lookup_cache_static);
             } catch (std::ifstream::failure const &) {
-                LOG_ERR("failed to open static lookup cache: %s", params.lookup_cache_static.c_str());
+                fprintf(stderr, "error: failed to open static lookup cache: %s", params.lookup_cache_static.c_str());
                 exit(1);
             }
         }
@@ -129,7 +128,7 @@ int main(int argc, char ** argv){
             const int64_t eta_min  = eta_ms / (60*1000);
             const int64_t eta_s    = (eta_ms - 60*1000*eta_min) / 1000;
 
-            LOG_INF("lookup-stats: %d/%d done, ETA: %02" PRId64 ":%02" PRId64 "\n", i_start, n_input, eta_min, eta_s);
+            LOG_TEE("lookup-stats: %d/%d done, ETA: %02" PRId64 ":%02" PRId64 "\n", i_start, n_input, eta_min, eta_s);
         }
 
         // After each chunk, update the dynamic ngram cache with the context ngram cache:
@@ -137,24 +136,24 @@ int main(int argc, char ** argv){
         ngram_cache_context.clear();
     }
 
-    LOG("\n");
+    LOG_TEE("\n");
 
-    LOG_INF("\n");
-    LOG_INF("n_draft      = %d\n", n_draft);
-    LOG_INF("n_predict    = %d\n", n_input - n_input % n_ctx);
-    LOG_INF("n_drafted    = %d\n", n_drafted);
-    LOG_INF("t_draft_flat = %.2f ms\n", t_draft_flat_us*1e-3);
-    LOG_INF("t_draft      = %.2f ms, %.2f us per token, %.2f tokens per second\n",
+    LOG_TEE("\n");
+    LOG_TEE("n_draft      = %d\n", n_draft);
+    LOG_TEE("n_predict    = %d\n", n_input - n_input % n_ctx);
+    LOG_TEE("n_drafted    = %d\n", n_drafted);
+    LOG_TEE("t_draft_flat = %.2f ms\n", t_draft_flat_us*1e-3);
+    LOG_TEE("t_draft      = %.2f ms, %.2f us per token, %.2f tokens per second\n",
             t_draft_us*1e-3, 1.0f*t_draft_us/n_drafted, n_drafted/(1e-6*t_draft_us));
-    LOG_INF("n_accept     = %d\n", n_accept);
-    LOG_INF("accept       = %.3f%%\n", 100.0f * n_accept / n_drafted);
+    LOG_TEE("n_accept     = %d\n", n_accept);
+    LOG_TEE("accept       = %.3f%%\n", 100.0f * n_accept / n_drafted);
 
     llama_free(ctx);
     llama_free_model(model);
 
     llama_backend_free();
 
-    LOG("\n\n");
+    fprintf(stderr, "\n\n");
 
     return 0;
 }
