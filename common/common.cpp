@@ -347,7 +347,7 @@ void postprocess_cpu_params(cpu_params& cpuparams, const cpu_params* role_model)
 bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params, std::vector<llama_arg> & options) {
     std::string arg;
     const std::string arg_prefix = "--";
-    gpt_sampler_params & sparams = params.sparams;
+    // gpt_sampler_params & sparams = params.sparams;
 
     std::unordered_map<std::string, llama_arg *> arg_to_options;
     for (auto & opt : options) {
@@ -462,9 +462,9 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params, std::vecto
         params.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
-    if (sparams.seed == LLAMA_DEFAULT_SEED) {
-        sparams.seed = time(NULL);
-    }
+    // if (sparams.seed == LLAMA_DEFAULT_SEED) {
+        // sparams.seed = time(NULL);
+    // }
 
     return true;
 }
@@ -792,7 +792,7 @@ std::vector<llama_arg> gpt_params_parser_init(gpt_params & params, llama_example
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_INFILL}));
     add_opt(llama_arg(
         {"-s", "--seed"}, "SEED",
-        format("RNG seed (default: %d, use random seed for < 0)", params.sparams.seed),
+        format("RNG seed (default: %u, use random seed for %u)", params.sparams.seed, LLAMA_DEFAULT_SEED),
         [](gpt_params & params, const std::string & value) {
             params.sparams.seed = std::stoul(value);
         }
