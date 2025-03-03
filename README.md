@@ -22,6 +22,9 @@ Sixth Llama.cpp mainline base : b3681 -> b3683 (LCPP Common : refactor arg parse
 
 Seventh Llama.cpp mainline base : b3683 -> b3715 (pre LCPP common : move arg parser code to `arg.cpp` (#9388))
 
+Eigth Llama.cpp mainline base : b3715 -> b3749 (pre LCPP llama : llama_perf + option to disable timings during decode (#9355))
+
+
 
 ----------
 
