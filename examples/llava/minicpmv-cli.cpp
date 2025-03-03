@@ -318,7 +318,7 @@ int main(int argc, char ** argv) {
             }
         }
         printf("\n");
-        llama_perf_context_print(ctx_llava->ctx_llama);
+        llama_perf_print(ctx_llava->ctx_llama, LLAMA_PERF_TYPE_CONTEXT);
 
         ctx_llava->model = NULL;
         llava_free(ctx_llava);
