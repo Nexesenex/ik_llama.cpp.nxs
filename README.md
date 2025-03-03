@@ -24,6 +24,7 @@ Seventh Llama.cpp mainline base : b3683 -> b3715 (pre LCPP common : move arg par
 
 Eigth Llama.cpp mainline base : b3715 -> b3749 (pre LCPP llama : llama_perf + option to disable timings during decode (#9355))
 
+Ninth Llama.cpp mainline base : b3749 -> b3765 (pre Olmoe)
 
 
 ----------
