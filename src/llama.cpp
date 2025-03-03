@@ -14654,6 +14654,7 @@ struct llm_build_context {
                     model.layers[il].ffn_up_exps,
                     model.layers[il].ffn_gate_exps,
                     model.layers[il].ffn_down_exps,
+            nullptr,
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, false,
                     false, 0.0,
