@@ -20,6 +20,8 @@ Fifth Llama.cpp mainline base : b3680 -> b3681 (LCPP Refactor Sampling v2)
 Sixth Llama.cpp mainline base : b3681 -> b3683 (LCPP Common : refactor arg parser)
 - IKL arguments had to be removed because I'm not able to port them.
 
+Seventh Llama.cpp mainline base : b3683 -> b3715 (pre LCPP common : move arg parser code to `arg.cpp` (#9388))
+
 
 ----------
 
