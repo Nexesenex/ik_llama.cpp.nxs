@@ -222,7 +222,6 @@ enum llm_arch {
     LLM_ARCH_NEMOTRON,
     LLM_ARCH_EXAONE,
     LLM_ARCH_RWKV6,
-    LLM_ARCH_GRANITE,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -274,7 +273,6 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_NEMOTRON,        "nemotron"     },
     { LLM_ARCH_EXAONE,          "exaone"       },
     { LLM_ARCH_RWKV6,           "rwkv6"        },
-    { LLM_ARCH_GRANITE,         "granite"      },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
@@ -319,8 +317,6 @@ enum llm_kv {
     LLM_KV_RESCALE_EVERY_N_LAYERS,
     LLM_KV_TIME_MIX_EXTRA_DIM,
     LLM_KV_TIME_DECAY_EXTRA_DIM,
-    LLM_KV_RESIDUAL_SCALE,
-    LLM_KV_EMBEDDING_SCALE,
 
     LLM_KV_RESIDUAL_SCALE,
     LLM_KV_EMBEDDING_SCALE,
@@ -1507,22 +1503,6 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_CHANNEL_MIX_KEY,           "blk.%d.channel_mix_key" },
             { LLM_TENSOR_CHANNEL_MIX_VALUE,         "blk.%d.channel_mix_value" },
             { LLM_TENSOR_CHANNEL_MIX_RECEPTANCE,    "blk.%d.channel_mix_receptance" },
-        },
-    },
-    {
-        LLM_ARCH_GRANITE,
-        {
-            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
-            { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },
-            { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
-            { LLM_TENSOR_ATTN_Q,          "blk.%d.attn_q" },
-            { LLM_TENSOR_ATTN_K,          "blk.%d.attn_k" },
-            { LLM_TENSOR_ATTN_V,          "blk.%d.attn_v" },
-            { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
-            { LLM_TENSOR_FFN_NORM,        "blk.%d.ffn_norm" },
-            { LLM_TENSOR_FFN_GATE,        "blk.%d.ffn_gate" },
-            { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
-            { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
         },
     },
     {
@@ -6350,20 +6330,6 @@ static void llm_load_hparams(
                             default: model.type = e_model::MODEL_UNKNOWN;
                         } break;
                     case 61: model.type = e_model::MODEL_14B; break;
-                    default: model.type = e_model::MODEL_UNKNOWN;
-                }
-            } break;
-        case LLM_ARCH_GRANITE:
-            {
-                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-                ml.get_key(LLM_KV_LOGIT_SCALE, hparams.f_logit_scale);
-                ml.get_key(LLM_KV_RESIDUAL_SCALE, hparams.f_residual_scale);
-                ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale);
-                ml.get_key(LLM_KV_ATTENTION_SCALE, hparams.f_attention_scale);
-
-                switch (hparams.n_layer) {
-                    case 40: model.type = e_model::MODEL_3B; break;
-                    // Add additional layer/vocab/etc checks here for other model sizes
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
