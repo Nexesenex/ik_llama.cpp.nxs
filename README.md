@@ -10,6 +10,8 @@ First Llama.cpp mainline base : b3570 -> b3637 (pre GGML sync "File version V2")
 
 Second Llama.cpp mainline base revision : b3638 -> b3643 (pre Threadpool take 2)
 
+Third Llama.cpp mainline base : b3643 -> b3671 (pre LCPP Bitnet quantization TQ1_0 and TQ2_0)
+
 
 ----------
 
