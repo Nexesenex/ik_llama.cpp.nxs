@@ -12,6 +12,8 @@ Second Llama.cpp mainline base revision : b3638 -> b3643 (pre Threadpool take 2)
 
 Third Llama.cpp mainline base : b3643 -> b3671 (pre LCPP Bitnet quantization TQ1_0 and TQ2_0)
 
+Fourth Llama.cpp mainline base : b3671 -> b3680 (pre LCPP Refactor Sampling v2)
+
 
 ----------
 
