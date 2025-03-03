@@ -6,7 +6,9 @@ And also to amuse myself learning more about merging relatively complex stuff.
 
 Current IK_Llama commit : 
 
-Current Llama.cpp mainline base : b3570 -> b3637 (pre GGML sync "File version V2")
+First Llama.cpp mainline base : b3570 -> b3637 (pre GGML sync "File version V2")
+
+Second Llama.cpp mainline base revision : b3638 -> b3643 (pre Threadpool take 2)
 
 
 ----------
