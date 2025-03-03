@@ -14,6 +14,9 @@ Third Llama.cpp mainline base : b3643 -> b3671 (pre LCPP Bitnet quantization TQ1
 
 Fourth Llama.cpp mainline base : b3671 -> b3680 (pre LCPP Refactor Sampling v2)
 
+Fifth Llama.cpp mainline base : b3680 -> b3681 (LCPP Refactor Sampling v2)
+- 2 IKL commits had to be reversed because I'm not able to port them.
+
 
 ----------
 
