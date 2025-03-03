@@ -1920,8 +1920,7 @@ int main(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%ld: warmup prompt run\n", params_idx, params_count);
                 }
                 //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                test_prompt(ctx, 1, 0, t.n_batch, t.n_threads);
-                // test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
             }
             if (t.n_gen > 0) {
                 if (params.progress) {
