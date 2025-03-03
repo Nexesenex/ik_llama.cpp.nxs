@@ -1,4 +1,3 @@
-#include "arg.h"
 #include "common.h"
 #include "llama.h"
 
@@ -112,7 +111,8 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
 int main(int argc, char ** argv) {
     gpt_params params;
 
-    if (!gpt_params_parse(argc, argv, params, LLAMA_EXAMPLE_RETRIEVAL, print_usage)) {
+    auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_RETRIEVAL, print_usage);
+    if (!gpt_params_parse(argc, argv, params, options)) {
         return 1;
     }
 

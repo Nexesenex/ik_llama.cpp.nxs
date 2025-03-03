@@ -1,11 +1,9 @@
-#include "arg.h"
+#include "ggml.h"
 #include "log.h"
 #include "common.h"
-#include "sampling.h"
 #include "clip.h"
 #include "llava.h"
 #include "llama.h"
-#include "ggml.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -255,7 +253,8 @@ int main(int argc, char ** argv) {
 
     gpt_params params;
 
-    if (!gpt_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON, show_additional_info)) {
+    auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_COMMON, show_additional_info);
+    if (!gpt_params_parse(argc, argv, params, options)) {
         return 1;
     }
 

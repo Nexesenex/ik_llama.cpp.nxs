@@ -1,4 +1,3 @@
-#include "arg.h"
 #include "common.h"
 #include "llama.h"
 
@@ -20,7 +19,8 @@ int main(int argc, char ** argv) {
     params.n_keep = 32;
     params.i_pos  = -1;
 
-    if (!gpt_params_parse(argc, argv, params, LLAMA_EXAMPLE_PASSKEY, print_usage)) {
+    auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_PASSKEY, print_usage);
+    if (!gpt_params_parse(argc, argv, params, options)) {
         return 1;
     }
 

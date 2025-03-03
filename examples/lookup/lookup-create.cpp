@@ -1,8 +1,7 @@
-#include "arg.h"
-#include "common.h"
-#include "ngram-cache.h"
 #include "ggml.h"
 #include "llama.h"
+#include "common.h"
+#include "ngram-cache.h"
 
 #include <cstdint>
 #include <fstream>
@@ -14,7 +13,8 @@
 int main(int argc, char ** argv){
     gpt_params params;
 
-    if (!gpt_params_parse(argc, argv, params, LLAMA_EXAMPLE_LOOKUP)) {
+    auto options = gpt_params_parser_init(params, LLAMA_EXAMPLE_COMMON);
+    if (!gpt_params_parse(argc, argv, params, options)) {
         return 1;
     }
 
@@ -40,6 +40,4 @@ int main(int argc, char ** argv){
     fprintf(stderr, "%s: hashing done, writing file to %s\n", __func__, params.lookup_cache_static.c_str());
 
     llama_ngram_cache_save(ngram_cache, params.lookup_cache_static);
-
-    return 0;
 }

@@ -1,4 +1,3 @@
-#include "arg.h"
 #include "common.h"
 
 #include <fstream>
@@ -10,11 +9,11 @@ static void export_md(std::string fname, llama_example ex) {
     std::ofstream file(fname, std::ofstream::out | std::ofstream::trunc);
 
     gpt_params params;
-    auto ctx_arg = gpt_params_parser_init(params, ex);
+    auto options = gpt_params_parser_init(params, ex);
 
     file << "| Argument | Explanation |\n";
     file << "| -------- | ----------- |\n";
-    for (auto & opt : ctx_arg.options) {
+    for (auto & opt : options) {
         file << "| `";
         // args
         for (const auto & arg : opt.args) {
