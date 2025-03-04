@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <cinttypes>
-#include <climits>
 #include <cmath>
 #include <codecvt>
 #include <cstdarg>
@@ -23,7 +22,6 @@
 #include <regex>
 #include <sstream>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -2387,21 +2385,6 @@ std::string gpt_params_get_system_info(const gpt_params & params) {
 //
 // String utils
 //
-
-std::string string_format(const char * fmt, ...) {
-    va_list ap;
-    va_list ap2;
-    va_start(ap, fmt);
-    va_copy(ap2, ap);
-    int size = vsnprintf(NULL, 0, fmt, ap);
-    GGML_ASSERT(size >= 0 && size < INT_MAX); // NOLINT
-    std::vector<char> buf(size + 1);
-    int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);
-    GGML_ASSERT(size2 == size);
-    va_end(ap2);
-    va_end(ap);
-    return std::string(buf.data(), size);
-}
 
 std::vector<std::string> string_split(std::string input, char separator) {
     std::vector<std::string> parts;
