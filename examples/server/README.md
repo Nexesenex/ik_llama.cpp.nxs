@@ -540,8 +540,6 @@ Takes a prefix and a suffix and returns the predicted completion as stream.
 
     `input_suffix`: Set the suffix of the code to infill.
 
-It also accepts all the options of `/completion`.
-
     It also accepts all the options of `/completion` except `stream` and `prompt`.
 
 - **GET** `/props`: Return current server settings.
