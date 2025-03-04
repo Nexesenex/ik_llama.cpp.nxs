@@ -2511,10 +2511,6 @@ int main(int argc, char ** argv) {
         svr.reset(new httplib::Server());
     }
 #else
-    if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
-        LOG_ERR("Server is built without SSL support\n");
-        return 1;
-    }
     svr.reset(new httplib::Server());
 #endif
 
