@@ -1049,11 +1049,10 @@ ggml/src/ggml-alloc.o: \
 	$(CC)  $(CFLAGS)   -c $< -o $@
 
 ggml/src/ggml-backend.o: \
-	ggml/src/ggml-backend.cpp \
-	ggml/src/ggml-backend-impl.h \
+	ggml/src/ggml-backend.c \
 	ggml/include/ggml.h \
 	ggml/include/ggml-backend.h
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CC)  $(CFLAGS)   -c $< -o $@
 
 ggml/src/ggml-quants.o: \
 	ggml/src/ggml-quants.c \
