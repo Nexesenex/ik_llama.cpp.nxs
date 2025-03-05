@@ -3389,10 +3389,17 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_LEAKY_RELU:
         case GGML_OP_RWKV_WKV:
             return true;
-        case GGML_OP_FLASH_ATTN_EXT: {
-#ifndef FLASH_ATTN_AVAILABLE
-            return false;
-#endif
+        case GGML_OP_FLASH_ATTN_EXT:
+#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+            return (op->src[0]->ne[0] == 64 && op->src[1]->type == GGML_TYPE_F16) || op->src[0]->ne[0] == 128;
+#else
+            if (op->src[0]->ne[0] == 128) {
+                return true;
+            }
+            if (op->src[1]->ne[0] == 192 && op->src[2]->ne[0] == 128) {
+                return (op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16) ||
+                       (op->src[1]->type == GGML_TYPE_Q8_0 && op->src[2]->type == GGML_TYPE_Q8_0);
+            }
             if (op->src[0]->ne[0] ==  64 && op->src[1]->type == GGML_TYPE_F16) {
                 return true;
             }
