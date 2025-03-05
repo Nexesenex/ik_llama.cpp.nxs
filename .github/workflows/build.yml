@@ -282,7 +282,7 @@ jobs:
     strategy:
       matrix:
         sanitizer: [ADDRESS, THREAD, UNDEFINED]
-        build_type: [Debug]
+        build_type: [Debug, Release]
 
     steps:
       - name: Clone
