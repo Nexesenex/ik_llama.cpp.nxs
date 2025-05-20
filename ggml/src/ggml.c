@@ -18907,17 +18907,6 @@ static void ggml_compute_forward_ssm_scan_f32(
         }
     }
 
-/*     for (int i3 = 0; i3 < n_s; ++i3) {
-        for (int i2 = 0; i2 < n_t; ++i2) {
-            const float * s0 = (const float *) ((const char *) src0->data + ir0*(src0->nb[1]) + i3*(src0->nb[2])); // {d_state, d_inner, n_s}
-            const float * x  = (const float *) ((const char *) src1->data + ir0*(src1->nb[0]) + i2*(src1->nb[1]) + i3*(src1->nb[2])); // {d_inner, n_t, n_s}
-            const float * dt = (const float *) ((const char *) src2->data + ir0*(src2->nb[0]) + i2*(src2->nb[1]) + i3*(src2->nb[2])); // {d_inner, n_t, n_s}
-            const float * A  = (const float *) ((const char *) src3->data + ir0*(src3->nb[1])); // {d_state, d_inner}
-            const float * B  = (const float *) ((const char *) src4->data +  i2*(src4->nb[1]) + i3*(src4->nb[2])); // {d_state, n_t, n_s}
-            const float * C  = (const float *) ((const char *) src5->data +  i2*(src5->nb[1]) + i3*(src5->nb[2])); // {d_state, n_t, n_s}
-                  float * y  = (      float *) ((      char *) dst->data  + ir0*(src1->nb[0]) + i2*(src1->nb[1]) + i3*(src1->nb[2])); // {d_inner, n_t, n_s}
-                  float * s  = (      float *) ((      char *) dst->data  + ir0*(src0->nb[1]) + i3*(src0->nb[2]) +     src1->nb[3]);  // {d_state, d_inner, n_s} */
-
     for (int i2 = 0; i2 < n_t; ++i2) {
         int32_t * sq = (int32_t *) ((char *) src6->data +  i2*(src6->nb[1])); // {n_kv, n_tokens}
         float *   y  = (float *)   ((char *)  dst->data + ir0*(src1->nb[0]) +    i2*(src1->nb[1])); // {d_inner, n_tokens}
