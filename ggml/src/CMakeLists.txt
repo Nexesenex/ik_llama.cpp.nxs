@@ -320,17 +320,38 @@ if (GGML_CUDA)
         message(STATUS "CUDA found")
 
         if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-            # 52 == lowest CUDA 12 standard
-            # 60 == FP16 CUDA intrinsics
-            # 61 == integer CUDA intrinsics
-            # 70 == compute capability at which unrolling a loop in mul_mat_q kernels is faster
+            # native == GPUs available at build time
+            # 50     == Maxwell, lowest CUDA 12 standard
+            # 60     == P100, FP16 CUDA intrinsics
+            # 61     == Pascal, __dp4a instruction (per-byte integer dot product)
+            # 70     == V100, FP16 tensor cores
+            # 75     == Turing, int8 tensor cores
+            # 80     == Ampere, asynchronous data loading, faster tensor core instructions
+            # 86     == RTX 3000, needs CUDA v11.1
+            # 89     == RTX 4000, needs CUDA v11.8
+            #
+            # XX-virtual == compile CUDA code as PTX, do JIT compilation to binary code on first run
+            # XX-real    == compile CUDA code as device code for this specific architecture
+            # no suffix  == compile as both PTX and device code
+            #
+            # The default behavior for a non-native is to build virtual architectures as needed to cover all features needed
+            #     for best performance and to also build real architectures for the most commonly used GPUs.
             if (GGML_NATIVE AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.6" AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
                 set(CMAKE_CUDA_ARCHITECTURES "native")
             elseif (GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
-                set(CMAKE_CUDA_ARCHITECTURES "60;61;70;75;80")
+                if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
+                    set(CMAKE_CUDA_ARCHITECTURES "60-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real;89-real")
+                else()
+                    set(CMAKE_CUDA_ARCHITECTURES "60-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real")
+                endif()
+            elseif()
+                if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
+                    set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real;89-real")
+                else()
+                    set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real")
+                endif()
             else()
-                set(CMAKE_CUDA_ARCHITECTURES "50;61;70;75;80")
-                #set(CMAKE_CUDA_ARCHITECTURES "OFF") # use this to compile much faster, but only F16 models work
+                set(CMAKE_CUDA_ARCHITECTURES "OFF") # use this to compile much faster, but only F16 models work
             endif()
         endif()
         message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
