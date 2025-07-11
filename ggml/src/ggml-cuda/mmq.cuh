@@ -2026,33 +2026,43 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
     float * x_df = (float *) (x_qs + txs.qs);
 #endif // INT8_MMA_AVAILABLE
 
-    const int kqsx = threadIdx.x / 4;
+    const int kbx  = threadIdx.x / QI4_NL;
+    const int kqsx = threadIdx.x % QI4_NL;
 
 #pragma unroll
-    for (int i0 = 0; i0 < mmq_y; i0 += 4*nwarps) {
-        int i = i0 + 4*threadIdx.y + threadIdx.x%4;
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
+        int i = i0 + threadIdx.y;
 
         if (need_check) {
             i = min(i, i_max);
         }
 
-        const int blocks_per_tile_x_row = WARP_SIZE / QI4_NL;
+        const block_iq4_nl * bxi = (const block_iq4_nl *)(x + i*stride) + kbx0 + kbx;
 
-        const int kbxd = threadIdx.x % blocks_per_tile_x_row;
-        const block_iq4_nl * bxi = (const block_iq4_nl *)(x + i*stride) + kbx0 + kbxd;
+        const int aux_q4 = get_int_b2(bxi->qs, kqsx);
+        const int2 v = get_int_from_table_16(aux_q4);
+        const int k0 = 8 * (threadIdx.x / 4) + threadIdx.x % 4;
+#ifdef INT8_MMA_AVAILABLE
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + k0 + 0] = v.x;
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + k0 + 4] = v.y;
+#else
+        x_qs[i*(2*WARP_SIZE + 1)     + k0 + 0] = v.x;
+        x_qs[i*(2*WARP_SIZE + 1)     + k0 + 4] = v.y;
+#endif // INT8_MMA_AVAILABLE
+    }
+
+    const int blocks_per_tile_x_row = WARP_SIZE / QI4_NL;
+    const int kbxd = threadIdx.x % blocks_per_tile_x_row;
 
 #pragma unroll
-        for (int j = 0; j < 4; ++j) {
-            const int aux_q4 = get_int_b2(bxi->qs, 4*kqsx+j);
-            const int2 v = get_int_from_table_16(aux_q4, values);
-#ifdef INT8_MMA_AVAILABLE
-            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + 8*kqsx + j + 0] = v.x;
-            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + 8*kqsx + j + 4] = v.y;
-#else
-            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + j + 0] = v.x;
-            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + j + 4] = v.y;
-#endif // INT8_MMA_AVAILABLE
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps * QI4_NL) {
+        int i = i0 + threadIdx.y * QI4_NL + threadIdx.x / blocks_per_tile_x_row;
+
+        if (need_check) {
+            i = min(i, i_max);
         }
+
+        const block_iq4_nl * bxi = (const block_iq4_nl *)(x + i*stride) + kbx0 + kbxd;
 
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + kbxd] = __half2float(bxi->d);
@@ -2060,7 +2070,6 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         x_df[i*(WARP_SIZE/4) + i/4   + kbxd] = __half2float(bxi->d);
 #endif // INT8_MMA_AVAILABLE
     }
-
 }
 
 template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_iq2_xxs(
