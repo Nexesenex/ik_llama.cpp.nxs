@@ -20270,11 +20270,9 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS ||
                 ftype == LLAMA_FTYPE_MOSTLY_IQ1_S   || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M  ||
                 ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4 || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS_R4 ||
-                ftype == LLAMA_FTYPE_MOSTLY_IQ1_S_R4 || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M_R4) {
-                new_type = GGML_TYPE_Q2_K;
-            }
-            else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M_R4) {
-                new_type = GGML_TYPE_IQ3_S;
+                ftype == LLAMA_FTYPE_MOSTLY_IQ1_S_R4 || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M_R4 ||
+                ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M_R4) {
+                new_type = GGML_TYPE_IQ2_KL;
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_KT) {
                 new_type = GGML_TYPE_IQ3_S;
@@ -20624,7 +20622,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                     ftype == LLAMA_FTYPE_MOSTLY_IQ3_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ4_K   ||
                     ftype == LLAMA_FTYPE_MOSTLY_IQ4_KSS || ftype == LLAMA_FTYPE_MOSTLY_IQ4_KS ||  ftype == LLAMA_FTYPE_MOSTLY_IQ4_KS_R4 ||
                     ftype == LLAMA_FTYPE_MOSTLY_IQ5_KS || ftype == LLAMA_FTYPE_MOSTLY_IQ5_KS_R4 ||
-                    ftype == LLAMA_FTYPE_MOSTLY_IQ2_K  || ftype == LLAMA_FTYPE_MOSTLY_IQ3_K  || ftype == LLAMA_FTYPE_MOSTLY_IQ3_KL  ||
+                    ftype == LLAMA_FTYPE_MOSTLY_IQ3_K  || ftype == LLAMA_FTYPE_MOSTLY_IQ3_KL  ||
                     ftype == LLAMA_FTYPE_MOSTLY_Q4_K_R4 || ftype == LLAMA_FTYPE_MOSTLY_IQ4_NL_R4 || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS_R8 ||
                     ftype == LLAMA_FTYPE_MOSTLY_Q3_K_R4 || ftype == LLAMA_FTYPE_MOSTLY_IQ3_KT || ftype == LLAMA_FTYPE_MOSTLY_IQ3_KS ||
                     ftype == LLAMA_FTYPE_MOSTLY_Q2_K_R4|| ftype == LLAMA_FTYPE_MOSTLY_IQ4_K_R4 || ftype == LLAMA_FTYPE_MOSTLY_IQ3_K_R4 ||
@@ -20632,7 +20630,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                     new_type = GGML_TYPE_Q5_K; // should the IQ_K quants be applied here as the new type for the IQ_K ftypes ?
                     // also, this condition could be reproduced on attn_q, eventually with Q4_K instead of Q5_K.
                 }
-                else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_KL) {
+                else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_K || ftype == LLAMA_FTYPE_MOSTLY_IQ2_KL) {
                     new_type = GGML_TYPE_IQ4_KS;
                 }
             } else {
