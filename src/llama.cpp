@@ -20722,10 +20722,10 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         else new_type = GGML_TYPE_IQ4_K;
     }
 
-    if (custom_type < GGML_TYPE_COUNT) {
-        new_type = custom_type;
-        LLAMA_LOG_INFO("Using custom type %s for tensor %s\n", ggml_type_name(new_type), name.c_str());
-    }
+    // if (custom_type < GGML_TYPE_COUNT) {
+        // new_type = custom_type;
+        // LLAMA_LOG_INFO("Using custom type %s for tensor %s\n", ggml_type_name(new_type), name.c_str());
+    // }
 
     auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1]);
     if (working_type != new_type) {
@@ -21398,7 +21398,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 chunk_size_multiplier = num_rows;
             }
 
-            LLAMA_LOG_INFO("converting to %s .. ", ggml_type_name(new_type));
+            LLAMA_LOG_INFO("converts to %s .. ", ggml_type_name(new_type));
             fflush(stdout);
 
             if (work.size() < (size_t)nelements * 4) {
