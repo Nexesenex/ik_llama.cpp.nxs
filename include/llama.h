@@ -444,6 +444,7 @@ extern "C" {
         enum ggml_type ffn_up_type;          // feedforward network up type
         enum ggml_type shexp_type;           // shexp tensor type
         bool allow_requantize;               // allow quantizing non-f32/f16 tensors
+        bool dry_run;                        // dry run to check the size of the resulting tensors and quantized model
         bool quantize_output_tensor;         // quantize output.weight
         bool only_copy;                      // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
         bool pure;                           // quantize all tensors to the default type

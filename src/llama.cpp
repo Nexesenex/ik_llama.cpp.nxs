@@ -22017,6 +22017,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.ffn_up_type                 =*/ GGML_TYPE_COUNT,
         /*.shexp_type                  =*/ GGML_TYPE_COUNT,
         /*.allow_requantize            =*/ false,
+        /*.dry_run                     =*/ false,
         /*.quantize_output_tensor      =*/ true,
         /*.only_copy                   =*/ false,
         /*.pure                        =*/ false,
