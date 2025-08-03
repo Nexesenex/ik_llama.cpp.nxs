@@ -796,6 +796,7 @@ struct server_context {
 
     bool clean_kv_cache = true;
     bool add_bos_token  = true;
+    bool has_eos_token  = false;
 
     int32_t n_ctx; // total context for all clients / slots
 
@@ -859,7 +860,7 @@ struct server_context {
         n_ctx = llama_n_ctx(ctx);
 
         add_bos_token = llama_should_add_bos_token(model);
-        GGML_ASSERT(llama_add_eos_token(model) != 1);
+        has_eos_token = llama_add_eos_token(model) != 1;
 
         if (params.chat_template.empty() && !validate_model_chat_template(params.use_jinja)) {
             LOG_WARNING("%s: The chat template that comes with this model is not yet supported, falling back to chatml. This may cause the model to output suboptimal responses\n", __func__);
@@ -1272,7 +1273,7 @@ struct server_context {
         {
             slot.sparams.logit_bias.clear();
 
-            if (json_value(data, "ignore_eos", false)) {
+            if (json_value(data, "ignore_eos", false) && has_eos_token) {
                 slot.sparams.logit_bias[llama_token_eos(model)] = -INFINITY;
             }
 
