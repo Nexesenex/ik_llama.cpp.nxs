@@ -106,8 +106,8 @@ llama_token llama_token_sep_impl(const struct llama_vocab & vocab);
 llama_token llama_token_nl_impl (const struct llama_vocab & vocab);
 llama_token llama_token_pad_impl(const struct llama_vocab & vocab);
 
-int32_t llama_add_bos_token_impl(const struct llama_vocab & vocab);
-int32_t llama_add_eos_token_impl(const struct llama_vocab & vocab);
+bool llama_add_bos_token_impl(const struct llama_vocab & vocab);
+bool llama_add_eos_token_impl(const struct llama_vocab & vocab);
 
 llama_token llama_token_fim_pre_impl(const struct llama_vocab & vocab);
 llama_token llama_token_fim_suf_impl(const struct llama_vocab & vocab);
