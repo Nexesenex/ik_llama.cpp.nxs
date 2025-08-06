@@ -1290,6 +1290,152 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--cpu-moe-down" || arg == "-cmoed") {
+        params.tensor_buft_overrides.push_back({strdup("\\.ffn_down_exps"), ggml_backend_cpu_buffer_type()});
+        return true;
+    }
+    if (arg == "--cpu-moe-up-gate" || arg == "-cmoeug") {
+        params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|gate)_exps"), ggml_backend_cpu_buffer_type()});
+        return true;
+    }
+    if (arg == "--n-cpu-moe-down" || arg == "-ncmoed") {
+        CHECK_ARG
+        int32_t n_layers = std::stoi(argv[i]);
+        if (n_layers < 0) {
+            fprintf(stderr, "error: Invalid value for --n-cpu-moe-down: %d (must be >= 0)\n", n_layers);
+            invalid_param = true;
+            return true;
+        }
+        for (int32_t l = 0; l < n_layers; ++l) {
+            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_down_exps\\.weight)";
+            params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+        }
+        return true;
+    }
+    if (arg == "--n-cpu-moe-up-gate" || arg == "-ncmoeug") {
+        CHECK_ARG
+        int32_t n_layers = std::stoi(argv[i]);
+        if (n_layers < 0) {
+            fprintf(stderr, "error: Invalid value for --n-cpu-moe-up-gate: %d (must be >= 0)\n", n_layers);
+            invalid_param = true;
+            return true;
+        }
+        for (int32_t l = 0; l < n_layers; ++l) {
+            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|gate)_exps\\.weight)";
+            params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+        }
+        return true;
+    }
+    if (arg == "--n-cpu-moe-last" || arg == "-ncmoel") {
+        CHECK_ARG
+        int32_t n_layers = std::stoi(argv[i]);
+        if (n_layers < 0) {
+            fprintf(stderr, "error: Invalid value for --n-cpu-moe-last: %d (must be >= 0)\n", n_layers);
+            invalid_param = true;
+            return true;
+        }
+        for (int32_t l = 0; l > 94 - n_layers; ++l) {
+            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate)_exps\\.weight)";
+            params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+        }
+        return true;
+    }
+    if (arg == "--cpu-dense" || arg == "-cd") {
+        params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate)"), ggml_backend_cpu_buffer_type()});
+        return true;
+    }
+    if (arg == "--cpu-dense-down" || arg == "-cdd") {
+        params.tensor_buft_overrides.push_back({strdup("\\.ffn_down"), ggml_backend_cpu_buffer_type()});
+        return true;
+    }
+    if (arg == "--cpu-dense-up-gate" || arg == "-cdug") {
+        params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|gate)"), ggml_backend_cpu_buffer_type()});
+        return true;
+    }
+    if (arg == "--n-cpu-dense" || arg == "-ncd") {
+        CHECK_ARG
+        int32_t n_layers = std::stoi(argv[i]);
+        if (n_layers < 0) {
+            fprintf(stderr, "error: Invalid value for --n-cpu: %d (must be >= 0)\n", n_layers);
+            invalid_param = true;
+            return true;
+        }
+        for (int32_t l = 0; l < n_layers; ++l) {
+            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate)\\.weight)";
+            params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+        }
+        return true;
+    }
+    if (arg == "--n-cpu-dense-down" || arg == "-ncdd") {
+        CHECK_ARG
+        int32_t n_layers = std::stoi(argv[i]);
+        if (n_layers < 0) {
+            fprintf(stderr, "error: Invalid value for --n-cpu: %d (must be >= 0)\n", n_layers);
+            invalid_param = true;
+            return true;
+        }
+        for (int32_t l = 0; l < n_layers; ++l) {
+            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_down\\.weight)";
+            params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+        }
+        return true;
+    }
+    if (arg == "--n-cpu-dense-up-gate" || arg == "-ncdug") {
+        CHECK_ARG
+        int32_t n_layers = std::stoi(argv[i]);
+        if (n_layers < 0) {
+            fprintf(stderr, "error: Invalid value for --n-cpu-dense-up-gate: %d (must be >= 0)\n", n_layers);
+            invalid_param = true;
+            return true;
+        }
+        for (int32_t l = 0; l < n_layers; ++l) {
+            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|gate)\\.weight)";
+            params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+        }
+        return true;
+    }
+    if (arg == "--n-cpu-dense-last" || arg == "-ncdl") {
+        CHECK_ARG
+        int32_t n_layers = std::stoi(argv[i]);
+        if (n_layers < 0) {
+            fprintf(stderr, "error: Invalid value for --n-cpu-dense-last: %d (must be >= 0)\n", n_layers);
+            invalid_param = true;
+            return true;
+        }
+        for (int32_t l = 0; l > 94 - n_layers; ++l) {
+            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate)\\.weight)";
+            params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+        }
+        return true;
+    }
+    if (arg == "--n-cpu-lay" || arg == "-nclay") {
+        CHECK_ARG
+        int32_t n_layers = std::stoi(argv[i]);
+        if (n_layers < 0) {
+            fprintf(stderr, "error: Invalid value for --n-cpu-lay: %d (must be >= 0)\n", n_layers);
+            invalid_param = true;
+            return true;
+        }
+        for (int32_t l = 0; l < n_layers; ++l) {
+            std::string pattern = "blk\\." + std::to_string(l);
+            params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+        }
+        return true;
+    }
+    if (arg == "--n-cpu-lay-last" || arg == "-nclayl") {
+        CHECK_ARG
+        int32_t n_layers = std::stoi(argv[i]);
+        if (n_layers < 0) {
+            fprintf(stderr, "error: Invalid value for --n-cpu-lay-last: %d (must be >= 0)\n", n_layers);
+            invalid_param = true;
+            return true;
+        }
+        for (int32_t l = 0; l > 94 - n_layers; ++l) {
+            std::string pattern = "blk\\." + std::to_string(l);
+            params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+        }
+        return true;
+    }
     if (arg == "--no-mmap") {
         params.use_mmap = false;
         return true;
@@ -2103,8 +2249,29 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "       --no-mmap",              "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
     options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
-    options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
-    options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       -cmoe, --cpu-moe", "keep all MoE weights in CPU memory"});
+    options.push_back({ "*",           "       -ncmoe, --n-cpu-moe N", "keep MoE weights of the first N layers in CPU memory"});
+
+    options.push_back({ "*",           "       -cmoed, --cpu-moe-down", "keep all MoE down weights in CPU memory"});
+    options.push_back({ "*",           "       -cmoeug, --cpu-moe-up-gate", "keep all MoE up and gate weights in CPU memory"});
+
+    options.push_back({ "*",           "       -ncmoed, --n-cpu-moe-down N", "keep MOE down weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       -ncmoeug, --n-cpu-moe-up-gate N", "keep MOE up and gate weights of the first N layers in CPU memory"});
+
+    options.push_back({ "*",           "       -ncmoel, --n-cpu-moe-last N", "keep MoE weights of the last N layers in CPU memory"});
+
+    options.push_back({ "*",           "       -cd, --cpu-dense", "keep all weights in CPU memory"});
+    options.push_back({ "*",           "       -cdd, --cpu-dense-down", "keep all down weights in CPU memory"});
+    options.push_back({ "*",           "       -cdug, --cpu-dense-up-gate", "keep all up and gate weights in CPU memory"});
+
+    options.push_back({ "*",           "       -ncd, --n-cpu-dense N", "keep weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       -ncdd, --n-cpu-dense-down N", "keep down weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       -ncdug, --n-cpu-dense-up-gate N", "keep up and gate weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       -ncdl, --n-cpu-dense-last N", "keep weights of the last N layers in CPU memory"});
+
+    options.push_back({ "*",           "       -nclay, --n-cpu-lay N", "keep all weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       -nclayl, --n-cpu-lay-last N", "keep all weights of the last N layers in CPU memory"});
+
     options.push_back({ "*",           "       --numa TYPE",            "attempt optimizations that help on some NUMA systems\n"
                                                                         "  - distribute: spread execution evenly over all nodes\n"
                                                                         "  - isolate: only spawn threads on CPUs on the node that execution started on\n"
