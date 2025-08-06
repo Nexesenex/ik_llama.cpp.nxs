@@ -326,6 +326,102 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
                 __func__, mtp_first, n_layer - 1);
     }
 
+    if (ml.ncmoe_last > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        for (int i = n_layer - ml.ncmoe_last; i < n_layer; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|down|gate)_exps\\.weight)";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+        for (int i = n_layer - ml.ncmoe_last; i < n_layer; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\.ffn_gate_up_exps\\.weight";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+    }
+
+    if (ml.ncmoed_last > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        for (int i = n_layer - ml.ncmoed_last; i < n_layer; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_down_exps\\.weight)";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+    }
+
+    if (ml.ncmoeug_last > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        for (int i = n_layer - ml.ncmoeug_last; i < n_layer; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|gate)_exps\\.weight)";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+        for (int i = n_layer - ml.ncmoeug_last; i < n_layer; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\.ffn_gate_up_exps\\.weight";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+    }
+
+    if (ml.ncd > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        for (int i = 0; i < ml.ncd; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|down|gate)\\.weight)";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+    }
+
+    if (ml.ncdd > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        for (int i = 0; i < ml.ncdd; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_down\\.weight)";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+    }
+
+    if (ml.ncdug > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        for (int i = 0; i < ml.ncdug; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|gate)\\.weight)";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+    }
+
+    if (ml.ncdl > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        for (int i = n_layer - ml.ncdl; i < n_layer; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|down|gate)\\.weight)";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+    }
+
+    if (ml.ncddl > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        for (int i = n_layer - ml.ncddl; i < n_layer; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_down\\.weight)";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+    }
+
+    if (ml.ncdugl > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        for (int i = n_layer - ml.ncdugl; i < n_layer; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|gate)\\.weight)";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+    }
+
+    if (ml.nclay > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        for (int i = 0; i < ml.nclay; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i);
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+    }
+
+    if (ml.nclayl > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        for (int i = n_layer - ml.nclayl; i < n_layer; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i);
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+        }
+    }
+
     auto n_tensors = ml.n_tensors;
     if (ml.merge_qkv) n_tensors += n_layer;
     if (ml.merge_up_gate_exps) n_tensors += n_layer;

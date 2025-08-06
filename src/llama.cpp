@@ -3326,7 +3326,7 @@ static bool llm_load_tensors(
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
-        llama_model_loader ml(fname, params.ncmoe, params.use_mmap, params.use_direct_io, params.dio_type, params.dio_thread, params.dio_async, params.dio_fallback, params.dio_directgpu, params.check_tensors,
+        llama_model_loader ml(fname, params.ncmoe, params.ncmoe_last, params.ncmoed_last, params.ncmoeug_last, params.ncd, params.ncdd, params.ncdug, params.ncdl, params.ncddl, params.ncdugl, params.nclay, params.nclayl, params.use_mmap, params.use_direct_io, params.dio_type, params.dio_thread, params.dio_async, params.dio_fallback, params.dio_directgpu, params.check_tensors,
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
                 params.defer_experts,
                 params.kv_overrides, params.tensor_buft_overrides);
@@ -5463,6 +5463,17 @@ struct llama_model_params llama_model_default_params() {
         /*.split_vram_free_factor      =*/ 0.0f,
         /*.split_usage_penalty_factor  =*/ 0.0f,
         /*.ncmoe                       =*/ 0,
+        /*.ncmoe_last                  =*/ 0,
+        /*.ncmoed_last                 =*/ 0,
+        /*.ncmoeug_last                =*/ 0,
+        /*.ncd                         =*/ 0,
+        /*.ncdd                        =*/ 0,
+        /*.ncdug                       =*/ 0,
+        /*.ncdl                        =*/ 0,
+        /*.ncddl                       =*/ 0,
+        /*.ncdugl                      =*/ 0,
+        /*.nclay                       =*/ 0,
+        /*.nclayl                      =*/ 0,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.max_ctx_size                =*/ 0,
