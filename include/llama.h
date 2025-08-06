@@ -381,6 +381,17 @@ extern "C" {
         float split_vram_free_factor;
         float split_usage_penalty_factor;
         int32_t ncmoe;
+        int32_t ncmoe_last;
+        int32_t ncmoed_last;
+        int32_t ncmoeug_last;
+        int32_t ncd;
+        int32_t ncdd;
+        int32_t ncdug;
+        int32_t ncdl;
+        int32_t ncddl;
+        int32_t ncdugl;
+        int32_t nclay;
+        int32_t nclayl;
 
         enum ggml_type type_k;
         enum ggml_type type_v;

@@ -297,7 +297,7 @@ static void coalesce_ranges(std::vector<llama_file_range> & ranges) {
     ranges = std::move(merged);
 }
 
-llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool use_direct_io, int dio_type, bool dio_thread, bool dio_async, bool dio_fallback, bool dio_directgpu, bool check_tensors,
+llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, int ncmoe_last, int ncmoed_last, int ncmoeug_last, int ncd, int ncdd, int ncdug, int ncdl, int ncddl, int ncdugl, int nclay, int nclayl, bool use_mmap, bool use_direct_io, int dio_type, bool dio_thread, bool dio_async, bool dio_fallback, bool dio_directgpu, bool check_tensors,
         bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
@@ -613,6 +613,17 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     }
 
     this->ncmoe = ncmoe;
+    this->ncmoe_last = ncmoe_last;
+    this->ncmoed_last = ncmoed_last;
+    this->ncmoeug_last = ncmoeug_last;
+    this->ncd = ncd;
+    this->ncdd = ncdd;
+    this->ncdug = ncdug;
+    this->ncdl = ncdl;
+    this->ncddl = ncddl;
+    this->ncdugl = ncdugl;
+    this->nclay = nclay;
+    this->nclayl = nclayl;
     this->use_mmap = use_mmap;
     this->use_direct_io = use_direct_io;
     this->dio_type = dio_type;

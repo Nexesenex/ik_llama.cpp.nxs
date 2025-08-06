@@ -269,6 +269,17 @@ struct gpt_params {
     float   split_vram_free_factor      = 0.0f; // factor for VRAM availability (neutral: 0.0, you can test: 0.75)
     float   split_usage_penalty_factor  = 0.0f; // factor for memory usage penalty (neutral: 0.0, you can test: 0.25)
     int32_t ncmoe                 =       0; // number of layers in which MoE tensors are left in VRAM
+    int32_t ncmoe_last            =       0; // number of last layers with MoE tensors in CPU
+    int32_t ncmoed_last           =       0; // number of last layers with MoE down tensors in CPU
+    int32_t ncmoeug_last          =       0; // number of last layers with MoE up/gate/exps tensors in CPU
+    int32_t ncd                   =       0; // number of first layers with dense FFN tensors in CPU
+    int32_t ncdd                  =       0; // number of first layers with dense down tensors in CPU
+    int32_t ncdug                 =       0; // number of first layers with dense up/gate tensors in CPU
+    int32_t ncdl                  =       0; // number of last layers with dense FFN tensors in CPU
+    int32_t ncddl                 =       0; // number of last layers with dense down tensors in CPU
+    int32_t ncdugl                =       0; // number of last layers with dense up/gate tensors in CPU
+    int32_t nclay                 =       0; // number of first layers with all tensors in CPU
+    int32_t nclayl                =       0; // number of last layers with all tensors in CPU
     int32_t fit_margin            =       0; // safety margin for auto-fit in MiB
     bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)
     int32_t worst_graph_tokens    =       0; // number of tokens to use when reserving the worst graph

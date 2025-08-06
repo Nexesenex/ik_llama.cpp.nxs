@@ -43,6 +43,17 @@ struct llama_model_loader {
     size_t  n_bytes    = 0;
 
     int     ncmoe      = 0;
+    int     ncmoe_last = 0;
+    int     ncmoed_last = 0;
+    int     ncmoeug_last = 0;
+    int     ncd       = 0;
+    int     ncdd      = 0;
+    int     ncdug     = 0;
+    int     ncdl      = 0;
+    int     ncddl     = 0;
+    int     ncdugl    = 0;
+    int     nclay     = 0;
+    int     nclayl    = 0;
 
     bool use_mmap = false;
     bool use_direct_io = false;
@@ -88,7 +99,7 @@ struct llama_model_loader {
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
     llama_expert_tensor_index expert_tensor_index;
 
-    llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool use_direct_io, int dio_type, bool dio_thread, bool dio_async, bool dio_fallback, bool dio_directgpu, bool check_tensors, bool repack_tensors, bool use_thp,
+    llama_model_loader(const std::string & fname, int ncmoe, int ncmoe_last, int ncmoed_last, int ncmoeug_last, int ncd, int ncdd, int ncdug, int ncdl, int ncddl, int ncdugl, int nclay, int nclayl, bool use_mmap, bool use_direct_io, int dio_type, bool dio_thread, bool dio_async, bool dio_fallback, bool dio_directgpu, bool check_tensors, bool repack_tensors, bool use_thp,
             bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
             const llama_model_kv_override * param_overrides_p,
             const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
