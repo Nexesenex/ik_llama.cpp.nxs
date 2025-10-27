@@ -369,9 +369,6 @@ namespace grammar_parser {
             }
             // Validate the state to ensure that all rules are defined
             for (const auto & rule : state.rules) {
-                if (rule.empty()) {
-                    throw std::runtime_error("Undefined rule");
-                }
                 for (const auto & elem : rule) {
                     if (elem.type == LLAMA_GRETYPE_RULE_REF) {
                         // Ensure that the rule at that location exists
