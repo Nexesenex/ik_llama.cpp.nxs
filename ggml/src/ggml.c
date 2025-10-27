@@ -32111,6 +32111,9 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
             if (info->ne[0] % blck != 0) {
                 fprintf(stderr, "%s: tensor '%s' of type %d (%s) row length (%" PRId64 ") is not a multiple of block size (%" PRId64 ")\n",
                         __func__, info->name.data, (int) info->type, ggml_type_name(info->type), info->ne[0], blck);
+            // if (ggml_blck_size(info->type) == 0 || ne % ggml_blck_size(info->type) != 0) {
+                // fprintf(stderr, "%s: tensor '%s' of type %d (%s) number of elements (%" PRId64 ") is not a multiple of block size (%" PRId64 ")\n",
+                        // __func__, info->name.data, (int) info->type, ggml_type_name(info->type), ne, ggml_blck_size(info->type));
                 fclose(file);
                 gguf_free(ctx);
                 return NULL;
