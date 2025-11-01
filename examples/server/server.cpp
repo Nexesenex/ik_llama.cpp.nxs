@@ -845,13 +845,13 @@ struct server_slot {
 
         snprintf(buffer, 512, "          total time = %10.2f ms", t_prompt_processing + t_token_generation);
 
-        LOG_INFO(buffer, {
-            {"id_slot",             id},
-            {"id_task",             id_task},
-            {"t_prompt_processing", t_prompt_processing},
-            {"t_token_generation",  t_token_generation},
-            {"t_total",             t_prompt_processing + t_token_generation},
-        });
+        // LOG_INFO(buffer, {
+            // {"id_slot",             id},
+            // {"id_task",             id_task},
+            // {"t_prompt_processing", t_prompt_processing},
+            // {"t_token_generation",  t_token_generation},
+            // {"t_total",             t_prompt_processing + t_token_generation},
+        // });
     }
 };
 
@@ -2460,6 +2460,7 @@ struct server_context {
                     for (auto & slot : slots) {
                         if (slot.id_task == task.id_target) {
                             slot.release();
+                            slot.print_timings();
                             break;
                         }
                     }
@@ -2499,11 +2500,11 @@ struct server_context {
 
                         slots_data.push_back(slot_data);
                     }
-                    LOG_INFO("slot data", {
-                        {"id_task",            task.id},
-                        {"n_idle_slots",       n_idle_slots},
-                        {"n_processing_slots", n_processing_slots}
-                    });
+                    // LOG_INFO("slot data", {
+                        // {"id_task",            task.id},
+                        // {"n_idle_slots",       n_idle_slots},
+                        // {"n_processing_slots", n_processing_slots}
+                    // });
 
                     LOG_VERBOSE("slot data", {
                         {"id_task",            task.id},
@@ -2708,15 +2709,15 @@ struct server_context {
                 slot.command     = SLOT_COMMAND_NONE;
                 slot.t_last_used = ggml_time_us();
 
-                LOG_INFO("slot released", {
-                    {"id_slot",         slot.id},
-                    {"id_task",         slot.id_task},
-                    {"n_ctx",           n_ctx},
-                    {"n_past",          slot.n_past},
-                    {"n_system_tokens", system_tokens.size()},
-                    {"n_cache_tokens",  slot.cache_tokens.size()},
-                    {"truncated",       slot.truncated}
-                });
+                // LOG_INFO("slot released", {
+                    // {"id_slot",         slot.id},
+                    // {"id_task",         slot.id_task},
+                    // {"n_ctx",           n_ctx},
+                    // {"n_past",          slot.n_past},
+                    // {"n_system_tokens", system_tokens.size()},
+                    // {"n_cache_tokens",  slot.cache_tokens.size()},
+                    // {"truncated",       slot.truncated}
+                // });
 
                 queue_tasks.notify_slot_changed();
             }
@@ -2734,7 +2735,7 @@ struct server_context {
             }
 
             if (all_idle) {
-                LOG_INFO("all slots are idle", {});
+                // LOG_INFO("all slots are idle", {});
                 if (system_prompt.empty() && clean_kv_cache) {
                     kv_cache_clear();
                 }
@@ -2915,7 +2916,7 @@ struct server_context {
                             slot.state = SLOT_STATE_PROCESSING;
                             slot.command = SLOT_COMMAND_NONE;
                             slot.release();
-                            slot.print_timings();
+                            // slot.print_timings();
                             send_final_response(slot);
                             continue;
                         }
@@ -3041,7 +3042,7 @@ struct server_context {
                     // remove the non-common part from the cache
                     slot.cache_tokens.resize(slot.n_past);
 
-                    LOG_INFO("kv cache rm [p0, end)", {
+                    LOG_VERBOSE("kvcache rm [p0, end)", {
                         { "id_slot", slot.id },
                         { "id_task", slot.id_task },
                         { "p0",      p0 }
@@ -3074,12 +3075,21 @@ struct server_context {
                         slot_npast++;
                     }
 
-                    LOG_VERBOSE("prompt processing progress", {
-                        {"id_slot",  slot.id},
+                    // LOG_VERBOSE("prompt processing progress", {
+                        // {"id_slot",  slot.id},
+                        // {"n_past",   slot.n_past},
+                        // {"n_ctx",    n_ctx},
+                        // {"n_tokens", batch.n_tokens},
+                        // {"progress", (float) slot.n_prompt_tokens_processed / slot.n_prompt_tokens},
+                    // });
+
+                    LOG_INFO("PP", {
+                        // {"id_slot",  slot.id},
                         {"n_past",   slot.n_past},
-                        {"n_ctx",    n_ctx},
-                        {"n_tokens", batch.n_tokens},
-                        {"progress", (float) slot.n_prompt_tokens_processed / slot.n_prompt_tokens},
+                        // {"n_ctx",    n_ctx},
+                        // {"n_tokens", batch.n_tokens},
+                        {"total", slot.n_prompt_tokens},
+                        {"%_past", (float) slot.n_past / slot.n_prompt_tokens * 100},
                     });
 
                     // entire prompt has been processed - start decoding new tokens
@@ -3102,7 +3112,7 @@ struct server_context {
                         slot.n_decoded = 0;
                         slot.i_batch   = batch.n_tokens - 1;
 
-                        LOG_VERBOSE("prompt done", {
+                        LOG_INFO("OK", {
                             {"id_slot",  slot.id},
                             {"n_past",   slot.n_past},
                             {"n_ctx",    n_ctx},
@@ -3246,7 +3256,7 @@ struct server_context {
 
                 if (!process_token(result, slot)) {
                     slot.release();
-                    slot.print_timings();
+                    // slot.print_timings();
                     send_final_response(slot);
                     metrics.on_prediction(slot);
                 }
@@ -3355,7 +3365,7 @@ struct server_context {
                     if (!process_token(result, slot)) {
                         // release slot because of stop condition
                         slot.release();
-                        slot.print_timings();
+                        // slot.print_timings();
                         send_final_response(slot);
                         metrics.on_prediction(slot);
                         break;
@@ -3575,14 +3585,14 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
         return;
     }
 
-    LOG_INFO("request", {
-        {"remote_addr", req.remote_addr},
-        {"remote_port", req.remote_port},
-        {"status",      res.status},
-        {"method",      req.method},
-        {"path",        req.path},
-        {"params",      req.params},
-    });
+    // LOG_INFO("request", {
+        // {"remote_addr", req.remote_addr},
+        // {"remote_port", req.remote_port},
+        // {"status",      res.status},
+        // {"method",      req.method},
+        // {"path",        req.path},
+        // {"params",      req.params},
+    // });
 
     LOG_VERBOSE("request", {
         {"request",  req.body},
