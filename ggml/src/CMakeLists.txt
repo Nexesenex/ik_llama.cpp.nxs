@@ -373,6 +373,15 @@ if (GGML_CUDA)
         else()
             enable_language(CUDA)
         endif()
+		
+        if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
+            # Options are:
+            # - none (not recommended)
+            # - speed (nvcc's default)
+            # - balance
+            # - size
+            list(APPEND CUDA_FLAGS -compress-mode=${GGML_CUDA_COMPRESSION_MODE})
+        endif()
 
         file(GLOB   GGML_HEADERS_CUDA "ggml-cuda/*.cuh")
         list(APPEND GGML_HEADERS_CUDA "../include/ggml-cuda.h")
