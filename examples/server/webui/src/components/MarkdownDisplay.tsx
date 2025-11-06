@@ -11,7 +11,6 @@ import { ElementContent, Root } from 'hast';
 import { visit } from 'unist-util-visit';
 import { useAppContext } from '../utils/app.context';
 import { CanvasType } from '../utils/types';
-import { DocumentDuplicateIcon, PlayIcon } from '@heroicons/react/24/outline';
 
 export default function MarkdownDisplay({
   content,
@@ -110,8 +109,7 @@ export const CopyButton = ({
       }}
       onMouseLeave={() => setCopied(false)}
     >
-      <DocumentDuplicateIcon className="h-4 w-4" />
-      {copied ? 'Copied!' : 'Copy'}
+      {copied ? 'Copied!' : '📋 Copy'}
     </button>
   );
 };
@@ -135,8 +133,7 @@ export const RunPyCodeButton = ({
           })
         }
       >
-        <PlayIcon className="h-4 w-4" />
-        {"Run"}
+        ▶️ Run
       </button>
     </>
   );

@@ -48,11 +48,7 @@ export interface Message {
   children: Message['id'][];
 }
 
-export type MessageExtra =
-  | MessageExtraTextFile
-  | MessageExtraImageFile
-  | MessageExtraAudioFile
-  | MessageExtraContext;
+type MessageExtra = MessageExtraTextFile | MessageExtraContext; // TODO: will add more in the future
 
 export interface MessageExtraTextFile {
   type: 'textFile';
@@ -60,43 +56,12 @@ export interface MessageExtraTextFile {
   content: string;
 }
 
-export interface MessageExtraImageFile {
-  type: 'imageFile';
-  name: string;
-  base64Url: string;
-}
-
-export interface MessageExtraAudioFile {
-  type: 'audioFile';
-  name: string;
-  base64Data: string;
-  mimeType: string;
-}
-
 export interface MessageExtraContext {
   type: 'context';
-  name: string;
   content: string;
 }
 
-export type APIMessageContentPart =
-  | {
-      type: 'text';
-      text: string;
-    }
-  | {
-      type: 'image_url';
-      image_url: { url: string };
-    }
-  | {
-      type: 'input_audio';
-      input_audio: { data: string; format: 'wav' | 'mp3' };
-    };
-
-export type APIMessage = {
-  role: Message['role'];
-  content: string | APIMessageContentPart[];
-};
+export type APIMessage = Pick<Message, 'role' | 'content'>;
 
 export interface Conversation {
   id: string; // format: `conv-{timestamp}`
@@ -131,15 +96,4 @@ export interface SettingsPreset {
   name: string;
   createdAt: number; // timestamp from Date.now()
   config: Record<string, string | number | boolean>; // partial CONFIG_DEFAULT
-}
-
-// a non-complete list of props, only contains the ones we need
-export interface LlamaCppServerProps {
-  model_path: string;
-  n_ctx: number;
-  modalities?: {
-    vision: boolean;
-    audio: boolean;
-  };
-  // TODO: support params
 }

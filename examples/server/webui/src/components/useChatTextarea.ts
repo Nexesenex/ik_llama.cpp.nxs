@@ -37,7 +37,6 @@ export interface ChatTextareaApi {
   setValue: (value: string) => void;
   focus: () => void;
   ref: React.RefObject<HTMLTextAreaElement>;
-  refOnSubmit: React.MutableRefObject<(() => void) | null>; // Submit handler
   onInput: (event: React.FormEvent<HTMLTextAreaElement>) => void; // Input handler
 }
 
@@ -47,7 +46,7 @@ export interface ChatTextareaApi {
 export function useChatTextarea(initValue: string): ChatTextareaApi {
   const [savedInitValue, setSavedInitValue] = useState<string>(initValue);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const onSubmitRef = useRef<(() => void) | null>(null);
+
   // Effect to set initial value and height on mount or when initValue changes
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -92,7 +91,6 @@ export function useChatTextarea(initValue: string): ChatTextareaApi {
       }
     },
     ref: textareaRef,
-    refOnSubmit: onSubmitRef,
     onInput: handleInput,
   };
 }
