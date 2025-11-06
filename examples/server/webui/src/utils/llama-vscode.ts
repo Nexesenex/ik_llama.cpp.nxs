@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { MessageExtraContext } from './types';
 import { ChatTextareaApi } from '../components/useChatTextarea.ts';
-import { ChatExtraContextApi } from '../components/useChatExtraContext.tsx';
 
 // Extra context when using llama.cpp WebUI from llama-vscode, inside an iframe
 // Ref: https://github.com/ggml-org/llama.cpp/pull/11940
@@ -15,10 +15,11 @@ interface SetTextEvData {
  * window.postMessage({ command: 'setText', text: 'Spot the syntax error', context: 'def test()\n  return 123' }, '*');
  */
 
-export const useVSCodeContext = (
-  textarea: ChatTextareaApi,
-  extraContext: ChatExtraContextApi
-) => {
+export const useVSCodeContext = (textarea: ChatTextareaApi) => {
+  const [extraContext, setExtraContext] = useState<MessageExtraContext | null>(
+    null
+  );
+
   // Accept setText message from a parent window and set inputMsg and extraContext
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -26,25 +27,18 @@ export const useVSCodeContext = (
         const data: SetTextEvData = event.data;
         textarea.setValue(data?.text);
         if (data?.context && data.context.length > 0) {
-          extraContext.clearItems();
-          extraContext.addItems([
-            {
-              type: 'context',
-              name: 'Extra context',
-              content: data.context,
-            },
-          ]);
+          setExtraContext({
+            type: 'context',
+            content: data.context,
+          });
         }
         textarea.focus();
-        setTimeout(() => {
-          textarea.refOnSubmit.current?.();
-        }, 10); // wait for setExtraContext to finish
       }
     };
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [textarea, extraContext]);
+  }, [textarea]);
 
   // Add a keydown listener that sends the "escapePressed" message to the parent window
   useEffect(() => {
@@ -58,5 +52,9 @@ export const useVSCodeContext = (
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  return {};
+  return {
+    extraContext,
+    // call once the user message is sent, to clear the extra context
+    clearExtraContext: () => setExtraContext(null),
+  };
 };

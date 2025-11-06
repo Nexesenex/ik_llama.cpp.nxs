@@ -3,8 +3,7 @@ import { useAppContext } from '../utils/app.context';
 import { Message, PendingMessage } from '../utils/types';
 import { classNames } from '../utils/misc';
 import MarkdownDisplay, { CopyButton } from './MarkdownDisplay';
-import { ChevronLeftIcon, ChevronRightIcon,  ArrowPathIcon, PencilSquareIcon } from '@heroicons/react/24/outline';
-import ChatInputExtraContextItem from './ChatInputExtraContextItem';
+import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 
 interface SplitMessage {
   content: PendingMessage['content'];
@@ -83,11 +82,7 @@ export default function ChatMessage({
   if (!viewingChat) return null;
 
   return (
-    <div className="group" 
-      id={id}       
-      role="group"
-      aria-description={`Message from ${msg.role}`}
-    >
+    <div className="group" id={id}>
       <div
         className={classNames({
           chat: true,
@@ -95,13 +90,9 @@ export default function ChatMessage({
           'chat-end': msg.role === 'user',
         })}
       >
-        {msg.extra && msg.extra.length > 0 && (
-          <ChatInputExtraContextItem items={msg.extra} clickToShow />
-        )}
-
         <div
           className={classNames({
-            'chat-bubble chat-bubble-primary': true,
+            'chat-bubble markdown': true,
             'chat-bubble-base-300': msg.role !== 'user',
           })}
         >
@@ -177,6 +168,35 @@ export default function ChatMessage({
                         </div>
                       </details>
                     )}
+
+                    {msg.extra && msg.extra.length > 0 && (
+                      <details
+                        className={classNames({
+                          'collapse collapse-arrow mb-4 bg-base-200': true,
+                          'bg-opacity-10': msg.role !== 'assistant',
+                        })}
+                      >
+                        <summary className="collapse-title">
+                          Extra content
+                        </summary>
+                        <div className="collapse-content">
+                          {msg.extra.map(
+                            (extra, i) =>
+                              extra.type === 'textFile' ? (
+                                <div key={extra.name}>
+                                  <b>{extra.name}</b>
+                                  <pre>{extra.content}</pre>
+                                </div>
+                              ) : extra.type === 'context' ? (
+                                <div key={i}>
+                                  <pre>{extra.content}</pre>
+                                </div>
+                              ) : null // TODO: support other extra types
+                          )}
+                        </div>
+                      </details>
+                    )}
+
                     <MarkdownDisplay
                       content={content}
                       isGenerating={isPending}
@@ -253,7 +273,7 @@ export default function ChatMessage({
               onClick={() => setEditingContent(msg.content)}
               disabled={msg.content === null}
             >
-              <PencilSquareIcon className="h-4 w-4" /> Edit
+              ✍️ Edit
             </button>
           )}
           {/* assistant message */}
@@ -269,7 +289,7 @@ export default function ChatMessage({
                   }}
                   disabled={msg.content === null}
                 >
-                 <ArrowPathIcon className="h-4 w-4" /> Regenerate
+                  🔄 Regenerate
                 </button>
               )}
               {!isPending && (
@@ -278,7 +298,7 @@ export default function ChatMessage({
                   onClick={() => setEditingContent(msg.content)}
                   disabled={msg.content === null}
                 >
-                   <PencilSquareIcon className="h-4 w-4" /> Edit
+                   ✍️ Edit
                 </button>
               )}
             </>
