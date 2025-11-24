@@ -3,6 +3,26 @@
 #include "llama-impl.h"
 
 #include <cstdint>
+#include <algorithm>
+
+inline uint32_t llama_kv_pad_granularity(bool flash_attn) {
+    return flash_attn ? 256u : 32u;
+}
+
+// Compute the ring-window size for a SWA layer: the number of rows per sequence.
+// The window is padded to the granularity so that wraps are deterministic.
+inline uint32_t llama_kv_ring_win(uint32_t n_swa, uint32_t n_ubatch, bool flash_attn) {
+    const uint32_t pad = std::max<uint32_t>(llama_kv_pad_granularity(flash_attn), 256u);
+    return (uint32_t) GGML_PAD(n_swa + n_ubatch, pad);
+}
+
+// Compute the total ring size (rows across all sequences).
+// Returns 0 if the ring would not undercut the full context (caller should decide to stay dense).
+inline uint32_t llama_kv_ring_size(uint32_t n_swa, uint32_t n_ubatch, uint32_t kv_size, uint32_t n_seq_max, bool flash_attn) {
+    const uint32_t w = llama_kv_ring_win(n_swa, n_ubatch, flash_attn);
+    const uint32_t total = w * n_seq_max;
+    return total < kv_size ? total : 0;
+}
 
 struct llama_cparams {
     uint32_t n_ctx;           // context size used during inference
@@ -46,12 +66,18 @@ struct llama_cparams {
     bool dsa = false;                 // enable GLM DSA sparse attention (off by default; opt-in via --dsa)
     bool fused_idx_topk = false;      // enable the fused indexer topk op (off by default; opt-in via -fidx or --fused-indexer-topk)
     bool swa_compress = false;
+    bool dsv4_cache_cpu = false;      // keep DeepSeek-V4 compressed-attention K caches (CSA/HCA) in host memory
+    bool dsv4_lid_cache_cpu = false;  // also keep the DeepSeek-V4 indexer (LID) K cache in host memory
     int  dsa_top_k = -1;              // DSA top-k override (<0 => use the model's configured indexer_top_k)
-    bool split_mode_graph_scheduling;
+    bool split_mode_tensor_parallel_scheduling;
     //bool split_mode_f16;
     bool scheduler_async;
+    int  sched_max_copies;
     int  min_experts;
     float thresh_experts;
+    int  ser_n_tiers;                     // >=2 = multi-tier SER cascade
+    int  ser_min_experts[GGML_MAX_SER_TIERS];
+    float ser_thresh_experts[GGML_MAX_SER_TIERS];
     bool mtp;
     int  worst_graph_tokens;
     int  dflash_query_capacity = 0; // internal DFlash query capacity override
@@ -65,4 +91,8 @@ struct llama_cparams {
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
     void * cuda_params;
+
+    // Shark GPU clock elevation callback (Windows only)
+    void (*shark_callback)(bool start, void * user_data);
+    void * shark_callback_data;
 };

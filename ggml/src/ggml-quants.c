@@ -694,18 +694,27 @@ void quantize_row_q4_0_ref(const float * restrict x, block_q4_0 * restrict y, in
         const float d  = max / -8;
         const float id = d ? 1.0f/d : 0.0f;
 
-        y[i].d = GGML_FP32_TO_FP16(fudge*d);
-
+        float sumqx = 0, sumq2 = 0;
         for (int j = 0; j < qk/2; ++j) {
-            const float x0 = x[i*qk + 0    + j]*id;
-            const float x1 = x[i*qk + qk/2 + j]*id;
+            const float v0 = x[i*qk + 0    + j];
+            const float v1 = x[i*qk + qk/2 + j];
+            const float x0 = v0*id;
+            const float x1 = v1*id;
 
             const uint8_t xi0 = MIN(15, (int8_t)(x0 + 8.5f));
             const uint8_t xi1 = MIN(15, (int8_t)(x1 + 8.5f));
+            float q0 = xi0 - 8;
+            float q1 = xi1 - 8;
+            float w0 = v0*v0;
+            float w1 = v1*v1;
+            sumqx += w0*q0*v0 + w1*q1*v1;
+            sumq2 += w0*q0*q0 + w1*q1*q1;
 
             y[i].qs[j]  = xi0;
             y[i].qs[j] |= xi1 << 4;
         }
+
+        y[i].d = sumq2 > 0 ? GGML_FP32_TO_FP16(sumqx/sumq2) : GGML_FP32_TO_FP16(fudge*d);
     }
 }
 
@@ -736,19 +745,29 @@ void quantize_row_q4_1_ref(const float * restrict x, block_q4_1 * restrict y, in
         const float d  = (max - min) / ((1 << 4) - 1);
         const float id = d ? 1.0f/d : 0.0f;
 
-        y[i].d = GGML_FP32_TO_FP16(d);
         y[i].m = GGML_FP32_TO_FP16(min);
 
+        float sumqx = 0, sumq2 = 0;
         for (int j = 0; j < qk/2; ++j) {
-            const float x0 = (x[i*qk + 0    + j] - min)*id;
-            const float x1 = (x[i*qk + qk/2 + j] - min)*id;
+            const float v0 = x[i*qk + 0    + j];
+            const float v1 = x[i*qk + qk/2 + j];
+            const float x0 = (v0 - min)*id;
+            const float x1 = (v1 - min)*id;
 
             const uint8_t xi0 = MIN(15, (int8_t)(x0 + 0.5f));
             const uint8_t xi1 = MIN(15, (int8_t)(x1 + 0.5f));
+            float q0 = xi0;
+            float q1 = xi1;
+            float w0 = v0*v0;
+            float w1 = v1*v1;
+            sumqx += w0*q0*(v0 - min) + w1*q1*(v1 - min);
+            sumq2 += w0*q0*q0 + w1*q1*q1;
 
             y[i].qs[j]  = xi0;
             y[i].qs[j] |= xi1 << 4;
         }
+
+        y[i].d = sumq2 > 0 ? GGML_FP32_TO_FP16(sumqx/sumq2) : GGML_FP32_TO_FP16(d);
     }
 }
 
@@ -780,16 +799,23 @@ void quantize_row_q5_0_ref(const float * restrict x, block_q5_0 * restrict y, in
         const float d  = max / -16;
         const float id = d ? 1.0f/d : 0.0f;
 
-        y[i].d = GGML_FP32_TO_FP16(fudge * d);
-
         uint32_t qh = 0;
 
+        float sumqx = 0, sumq2 = 0;
         for (int j = 0; j < qk/2; ++j) {
-            const float x0 = x[i*qk + 0    + j]*id;
-            const float x1 = x[i*qk + qk/2 + j]*id;
+            const float v0 = x[i*qk + 0    + j];
+            const float v1 = x[i*qk + qk/2 + j];
+            const float x0 = v0*id;
+            const float x1 = v1*id;
 
             const uint8_t xi0 = MIN(31, (int8_t)(x0 + 16.5f));
             const uint8_t xi1 = MIN(31, (int8_t)(x1 + 16.5f));
+            float q0 = xi0 - 16;
+            float q1 = xi1 - 16;
+            float w0 = v0*v0;
+            float w1 = v1*v1;
+            sumqx += w0*q0*v0 + w1*q1*v1;
+            sumq2 += w0*q0*q0 + w1*q1*q1;
 
             y[i].qs[j] = (xi0 & 0x0F) | ((xi1 & 0x0F) << 4);
 
@@ -798,6 +824,7 @@ void quantize_row_q5_0_ref(const float * restrict x, block_q5_0 * restrict y, in
             qh |= ((xi1 & 0x10u) >> 4) << (j + qk/2);
         }
 
+        y[i].d = sumq2 > 0 ? GGML_FP32_TO_FP16(sumqx/sumq2) : GGML_FP32_TO_FP16(fudge*d);
         memcpy(&y[i].qh, &qh, sizeof(qh));
     }
 }
@@ -827,17 +854,25 @@ void quantize_row_q5_1_ref(const float * restrict x, block_q5_1 * restrict y, in
         const float d  = (max - min) / ((1 << 5) - 1);
         const float id = d ? 1.0f/d : 0.0f;
 
-        y[i].d = GGML_FP32_TO_FP16(d);
         y[i].m = GGML_FP32_TO_FP16(min);
 
         uint32_t qh = 0;
 
+        float sumqx = 0, sumq2 = 0;
         for (int j = 0; j < qk/2; ++j) {
-            const float x0 = (x[i*qk + 0    + j] - min)*id;
-            const float x1 = (x[i*qk + qk/2 + j] - min)*id;
+            const float v0 = x[i*qk + 0    + j];
+            const float v1 = x[i*qk + qk/2 + j];
+            const float x0 = (v0 - min)*id;
+            const float x1 = (v1 - min)*id;
 
             const uint8_t xi0 = (uint8_t)(x0 + 0.5f);
             const uint8_t xi1 = (uint8_t)(x1 + 0.5f);
+            float q0 = xi0;
+            float q1 = xi1;
+            float w0 = v0*v0;
+            float w1 = v1*v1;
+            sumqx += w0*q0*(v0 - min) + w1*q1*(v1 - min);
+            sumq2 += w0*q0*q0 + w1*q1*q1;
 
             y[i].qs[j] = (xi0 & 0x0F) | ((xi1 & 0x0F) << 4);
 
@@ -846,6 +881,7 @@ void quantize_row_q5_1_ref(const float * restrict x, block_q5_1 * restrict y, in
             qh |= ((xi1 & 0x10u) >> 4) << (j + qk/2);
         }
 
+        y[i].d = sumq2 > 0 ? GGML_FP32_TO_FP16(sumqx/sumq2) : GGML_FP32_TO_FP16(d);
         memcpy(&y[i].qh, &qh, sizeof(y[i].qh));
     }
 }
@@ -907,6 +943,60 @@ void quantize_row_q6_0(const float * restrict x, void * restrict y, int64_t k) {
     quantize_row_q6_0_ref(x, y, k);
 }
 
+void quantize_row_q6_1_ref(const float * restrict x, block_q6_1 * restrict y, int64_t k) {
+    static const int qk = QK6_1;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        float min = FLT_MAX;
+        float max = -FLT_MAX;
+
+        for (int j = 0; j < qk; j++) {
+            const float v = x[i*qk + j];
+
+            if (v < min) min = v;
+            if (v > max) max = v;
+        }
+
+        const float d  = (max - min) / ((1 << 6) - 1);
+        const float id = d ? 1.0f/d : 0.0f;
+
+        y[i].m = GGML_FP32_TO_FP16(min);
+
+        memset(y[i].qh, 0, qk/4);
+
+        float sumqx = 0, sumq2 = 0;
+        for (int j = 0; j < qk/2; ++j) {
+            const float v0 = x[i*qk + 0    + j];
+            const float v1 = x[i*qk + qk/2 + j];
+            const float x0 = (v0 - min)*id;
+            const float x1 = (v1 - min)*id;
+
+            const uint8_t xi0 = MIN(63, (int)(x0 + 0.5f));
+            const uint8_t xi1 = MIN(63, (int)(x1 + 0.5f));
+
+            y[i].qs[j] = (xi0 & 0x0F) | ((xi1 & 0x0F) << 4);
+
+            const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
+            y[i].qh[j%(qk/4)] |= (h << 4*(j/(qk/4)));
+
+            const float w0 = v0*v0;
+            const float w1 = v1*v1;
+            sumqx += w0*xi0*(v0 - min) + w1*xi1*(v1 - min);
+            sumq2 += w0*xi0*xi0 + w1*xi1*xi1;
+        }
+
+        y[i].d = sumq2 > 0 ? GGML_FP32_TO_FP16(sumqx/sumq2) : GGML_FP32_TO_FP16(d);
+    }
+}
+
+void quantize_row_q6_1(const float * restrict x, void * restrict y, int64_t k) {
+    quantize_row_q6_1_ref(x, y, k);
+}
+
 // reference implementation for deterministic creation of model files
 void quantize_row_q8_0_ref(const float * restrict x, block_q8_0 * restrict y, int64_t k) {
     assert(k % QK8_0 == 0);
@@ -925,13 +1015,20 @@ void quantize_row_q8_0_ref(const float * restrict x, block_q8_0 * restrict y, in
         const float d = amax / ((1 << 7) - 1);
         const float id = d ? 1.0f/d : 0.0f;
 
-        y[i].d = GGML_FP32_TO_FP16(fudge * d);
-
+        float sumqx = 0, sumq2 = 0;
         for (int j = 0; j < QK8_0; ++j) {
-            const float x0 = x[i*QK8_0 + j]*id;
+            const float v = x[i*QK8_0 + j];
+            const float x0 = v*id;
+            const int8_t xi = roundf(x0);
+            float q = xi;
+            float w = v*v;
+            sumqx += w*q*v;
+            sumq2 += w*q*q;
 
-            y[i].qs[j] = roundf(x0);
+            y[i].qs[j] = xi;
         }
+
+        y[i].d = sumq2 > 0 ? GGML_FP32_TO_FP16(sumqx/sumq2) : GGML_FP32_TO_FP16(fudge*d);
     }
 }
 
@@ -1700,6 +1797,29 @@ void dequantize_row_q6_0(const block_q6_0 * restrict x, float * restrict y, int6
     }
 }
 
+void dequantize_row_q6_1(const block_q6_1 * restrict x, float * restrict y, int64_t k) {
+    static const int qk = QK6_1;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+        const float m = GGML_FP16_TO_FP32(x[i].m);
+
+        for (int j = 0; j < qk/2; ++j) {
+            const uint8_t h = x[i].qh[j%(qk/4)] >> 4*(j/(qk/4));
+
+            const int32_t x0 = (x[i].qs[j] & 0x0F) | ((h << 4) & 0x30);
+            const int32_t x1 = (x[i].qs[j] >>   4) | ((h << 2) & 0x30);
+
+            y[i*qk + j + 0   ] = x0*d + m;
+            y[i*qk + j + qk/2] = x1*d + m;
+        }
+    }
+}
+
 void dequantize_row_q8_0(const block_q8_0 * restrict x, float * restrict y, int64_t k) {
     static const int qk = QK8_0;
 
@@ -1730,6 +1850,15 @@ static inline int nearest_int(float fval) {
     return (i & 0x007fffff) - 0x00400000;
 }
 
+// This function performs a sequential greedy/coordinate-descent optimization whose
+// every float accumulation is reproduced byte-for-byte on the GPU (see
+// ggml/src/ggml-cuda/quantize_gguf.cu). To keep that reproduction exact across
+// compilers, forbid FMA contraction (the built-in -use_fast_math/CUDA kernels are
+// already non-contracting; without this a /arch:AVX2 build contracts sumlx += w*x*l
+// and shifts the result by ~1 ulp). FP_CONTRACT is a standard pragma: honored by
+// clang (the fork's C/C++ compiler); MSVC cl ignores it, which is harmless since cl
+// never contracts by default.
+#pragma STDC FP_CONTRACT OFF
 static float make_qx_quants(int n, int nmax, const float * restrict x, int8_t * restrict L, int rmse_type,
         const float * restrict qw) {
     float max = 0;
@@ -1855,6 +1984,7 @@ static float make_qx_quants(int n, int nmax, const float * restrict x, int8_t * 
     }
     return scale;
 }
+#pragma STDC FP_CONTRACT ON
 
 static float make_q3_quants(int n, int nmax, const float * restrict x, int8_t * restrict L, bool do_rmse) {
     float max = 0;
@@ -3380,6 +3510,11 @@ size_t quantize_q6_K(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+// See the FP_CONTRACT note above make_qx_quants: the per-block weight
+// `qw[j]*sqrtf(sigma2 + x[j]*x[j])` and the row-level `sum_x2 += x[j]*x[j]`
+// are reproduced byte-for-byte on the GPU, so they must not be FMA-contracted
+// by the compiler.
+#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q4_0_impl(const float * restrict x, block_q4_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK4_0 == 32, "QK4_0 must be 32");
 
@@ -3413,6 +3548,7 @@ static void quantize_row_q4_0_impl(const float * restrict x, block_q4_0 * restri
         }
     }
 }
+#pragma STDC FP_CONTRACT ON
 
 static void quantize_row_q4_0_symmetric(const float * restrict x, block_q4_0 * restrict y, int64_t k) {
     static const int qk = QK4_0;
@@ -3514,6 +3650,11 @@ size_t quantize_q4_1(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+// See the FP_CONTRACT note above make_qx_quants: the per-block weight
+// `qw[j]*sqrtf(sigma2 + x[j]*x[j])` and the row-level `sum_x2 += x[j]*x[j]`
+// are reproduced byte-for-byte on the GPU, so they must not be FMA-contracted
+// by the compiler.
+#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q5_0_impl(const float * restrict x, block_q5_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK5_0 == 32, "QK5_0 must be 32");
 
@@ -3553,6 +3694,7 @@ static void quantize_row_q5_0_impl(const float * restrict x, block_q5_0 * restri
         memcpy(&y[ib].qh, &qh, sizeof(qh));
     }
 }
+#pragma STDC FP_CONTRACT ON
 
 size_t quantize_q5_0(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
@@ -3626,6 +3768,10 @@ size_t quantize_q5_1(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+// See the FP_CONTRACT note above make_qx_quants: the per-block weight
+// `qw[j]*sqrtf(sigma2 + x[j]*x[j])` is reproduced byte-for-byte on the GPU, so
+// it must not be FMA-contracted by the compiler.
+#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q6_0_impl(const float * restrict x, block_q6_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK6_0 == 32, "QK6_0 must be 32");
 
@@ -3664,6 +3810,7 @@ static void quantize_row_q6_0_impl(const float * restrict x, block_q6_0 * restri
         }
     }
 }
+#pragma STDC FP_CONTRACT ON
 
 size_t quantize_q6_0(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
@@ -3678,12 +3825,113 @@ size_t quantize_q6_0(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+static void quantize_row_q6_1_impl(const float * restrict x, block_q6_1 * restrict y, int64_t n_per_row, const float * quant_weights) {
+    static_assert(QK6_1 == 32, "QK6_1 must be 32");
+
+    if (!quant_weights) {
+        quantize_row_q6_1_ref(x, y, n_per_row);
+        return;
+    }
+
+    float weight[QK6_1];
+    uint8_t L[QK6_1], Laux[QK6_1];
+
+    float sum_x2 = 0;
+    for (int j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
+    float sigma2 = sum_x2/n_per_row;
+
+    const int64_t nb = n_per_row/QK6_1;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float * xb = x + QK6_1 * ib;
+        const float * qw = quant_weights + QK6_1 * ib;
+        for (int j = 0; j < QK6_1; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+        float min;
+        float d = make_qkx3_quants(QK6_1, 63, xb, weight, L, &min, Laux, -0.9f, 0.05f, 36, false);
+        y[ib].d = GGML_FP32_TO_FP16(d);
+        y[ib].m = GGML_FP32_TO_FP16(-min);
+
+        memset(y[ib].qh, 0, QK6_1/4);
+        for (int j = 0; j < QK6_1/2; ++j) {
+            const uint8_t xi0 = L[j];
+            const uint8_t xi1 = L[j + QK6_1/2];
+            y[ib].qs[j] = (xi0 & 0x0F) | ((xi1 & 0x0F) << 4);
+            const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
+            y[ib].qh[j%(QK6_1/4)] |= (h << 4*(j/(QK6_1/4)));
+        }
+    }
+}
+
+size_t quantize_q6_1(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
+        const struct quantize_user_data * user_data) {
+    GGML_UNUSED(user_data);
+    size_t row_size = ggml_row_size(GGML_TYPE_Q6_1, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q6_1_impl(src, (block_q6_1*)qrow, n_per_row, quant_weights);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
+// Importance-matrix quantizer for Q8_0. Q8_0 stores signed int8 codes with no
+// centering, so unlike Q4_0/Q5_0/Q6_0 it cannot use make_qx_quants (whose
+// offset encoding would overflow int8_t for 8-bit). Instead, downstream of the
+// plain `roundf(x*id)` codes it refines the scale with the weighted
+// least-squares d = sumqx/sumq2 (weighted by the per-block importance weight
+// qw[j]*sqrtf(sigma2 + x[j]*x[j]), the same convention as the other `_impl`
+// quantizers). See docs/cuda-quantize.md §4.4; the CUDA port must reproduce
+// this byte-for-byte so no FMA contraction is allowed here.
+#pragma STDC FP_CONTRACT OFF
+static void quantize_row_q8_0_impl(const float * restrict x, block_q8_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
+    if (!quant_weights) {
+        quantize_row_q8_0_ref(x, y, n_per_row);
+        return;
+    }
+
+    static_assert(QK8_0 == 32, "QK8_0 must be 32");
+
+    float weight[QK8_0];
+
+    float sum_x2 = 0;
+    for (int j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
+    float sigma2 = sum_x2/n_per_row;
+
+    const int64_t nb = n_per_row/QK8_0;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float * xb = x + QK8_0*ib;
+        const float * qw = quant_weights + QK8_0*ib;
+        for (int j = 0; j < QK8_0; ++j) weight[j] = qw[j]*sqrtf(sigma2 + xb[j]*xb[j]);
+
+        float amax = 0.0f;
+        for (int j = 0; j < QK8_0; ++j) amax = MAX(amax, fabsf(xb[j]));
+
+        const float d0 = amax/127.0f;
+        const float id0 = d0 ? 1.0f/d0 : 0.0f;
+
+        float sumqx = 0, sumq2 = 0;
+        for (int j = 0; j < QK8_0; ++j) {
+            const float v = xb[j];
+            const int8_t q = (int8_t) roundf(v*id0);
+            y[ib].qs[j] = q;
+            sumqx += weight[j]*q*v;
+            sumq2 += weight[j]*q*q;
+        }
+        y[ib].d = sumq2 > 0 ? GGML_FP32_TO_FP16(sumqx/sumq2) : GGML_FP32_TO_FP16(d0);
+    }
+}
+#pragma STDC FP_CONTRACT ON
+
 size_t quantize_q8_0(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
     GGML_UNUSED(user_data);
-    (void)quant_weights; // not used
     const size_t row_size = ggml_row_size(GGML_TYPE_Q8_0, n_per_row);
-    quantize_row_q8_0_ref(src, dst, (int64_t)nrow*n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q8_0_impl(src, (block_q8_0 *)qrow, n_per_row, quant_weights);
+        src += n_per_row;
+        qrow += row_size;
+    }
     return nrow * row_size;
 }
 
@@ -5645,8 +5893,86 @@ void ggml_vec_dot_q6_0_q8_0(int n, float * restrict s, size_t bs, const void * r
         return;
     }
 #endif
-    // TODO
-    *s = 0;
+    const int qk = QK8_0;
+    const int nb = n / qk;
+
+    int ib = 0;
+    float sumf = 0;
+
+    assert(n % qk == 0);
+    assert(qk == QK6_0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q6_0 * restrict x = vx;
+    const block_q8_0 * restrict y = vy;
+
+    for (; ib < nb; ++ib) {
+        int sumi0 = 0;
+        int sumi1 = 0;
+
+        for (int j = 0; j < qk/2; ++j) {
+            const uint8_t h = x[ib].qh[j%(qk/4)] >> 4*(j/(qk/4));
+
+            const int32_t xi0 = (int8_t)(((x[ib].qs[j] & 0x0F) | ((h << 4) & 0x30)) - 32);
+            const int32_t xi1 = (int8_t)(((x[ib].qs[j] >>   4) | ((h << 2) & 0x30)) - 32);
+
+            sumi0 += xi0 * y[ib].qs[j];
+            sumi1 += xi1 * y[ib].qs[j + qk/2];
+        }
+
+        int sumi = sumi0 + sumi1;
+        sumf += GGML_FP16_TO_FP32(x[ib].d) * GGML_FP16_TO_FP32(y[ib].d) * sumi;
+    }
+
+    *s = sumf;
+}
+
+void ggml_vec_dot_q6_1_q8_1(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q6_1, vx, bx, GGML_TYPE_Q8_1, vy, by, s, bs, 0, 1)) {
+        return;
+    }
+#endif
+    const int qk = QK8_1;
+    const int nb = n / qk;
+
+    int ib = 0;
+    float sumf = 0;
+
+    assert(n % qk == 0);
+    assert(qk == QK6_1);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q6_1 * restrict x = vx;
+    const block_q8_1 * restrict y = vy;
+
+    for (; ib < nb; ++ib) {
+        int sumi0 = 0;
+        int sumi1 = 0;
+
+        for (int j = 0; j < qk/2; ++j) {
+            const uint8_t h = x[ib].qh[j%(qk/4)] >> 4*(j/(qk/4));
+
+            const int32_t xi0 = (x[ib].qs[j] & 0x0F) | ((h << 4) & 0x30);
+            const int32_t xi1 = (x[ib].qs[j] >>   4) | ((h << 2) & 0x30);
+
+            sumi0 += xi0 * y[ib].qs[j];
+            sumi1 += xi1 * y[ib].qs[j + qk/2];
+        }
+
+        int sumi = sumi0 + sumi1;
+        sumf += GGML_FP16_TO_FP32(x[ib].d) * GGML_FP16_TO_FP32(y[ib].d) * sumi + GGML_FP16_TO_FP32(x[ib].m) * GGML_FP16_TO_FP32(y[ib].s);
+    }
+
+    *s = sumf;
 }
 
 void ggml_vec_dot_q8_0_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
@@ -15584,6 +15910,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_Q8_K_R16: break;
         case GGML_TYPE_Q8_KV:    break;
         case GGML_TYPE_BF16_R16: break;
+        case GGML_TYPE_Q6_1:    break;
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
             {

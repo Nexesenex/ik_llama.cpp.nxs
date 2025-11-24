@@ -1,6 +1,7 @@
 #include "server-task.h"
 #include "server-queue.h"
 #include "speculative.h"
+#include "common.h"
 #include "json-schema-to-grammar.h"
 #include <nlohmann/json_fwd.hpp>
 
@@ -45,6 +46,8 @@ struct server_slot {
     int32_t n_past = 0;
     int32_t n_past_prompt = 0;
     int32_t n_past_offset = 0;
+    int32_t n_past_start = 0;
+    int32_t n_ptp_start = 0;
     int32_t n_decoded = 0;
     int32_t n_remaining = -1;
     int32_t n_discarded_prompt = 0;
@@ -58,6 +61,8 @@ struct server_slot {
     int32_t n_prompt_tokens = 0;
     int32_t n_prompt_tokens_cache = 0;
     int32_t n_prompt_tokens_processed = 0;
+    int32_t n_prompt_tokens_processed_log = 0;
+    int64_t t_last_pp_log = 0;
 
     json prompt; // can be either a string, array of strings or array of token ids
 
@@ -113,6 +118,11 @@ struct server_slot {
     std::vector<std::vector<float>> allow_biasess;
     size_t allow_idx = 0;
 
+    // disallowlist (always active, wins over allowlist)
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> disallow_rules;
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> disallow_rules_prev;
+    std::vector<bool> disallow_banned;
+
     server_prompt server_cached_prompt;
 
     void prompt_save(server_prompt_cache& prompt_cache) const;
@@ -122,6 +132,7 @@ struct server_slot {
     llama_pos checkpoint_pos = -1;
     bool do_checkpoint = false;
     bool image_just_processed = false;
+    bool ctx_checkpoints_interval_gating = false;
 
     // sampling
     llama_token sampled; // in speculative mode, this is the last accepted token
@@ -177,9 +188,13 @@ struct server_slot {
 
     int64_t t_start_process_prompt;
     int64_t t_start_generation;
+    int64_t t_start_batch_100 = 0;
+    int32_t n_decoded_at_batch_100 = 0;
 
     double t_prompt_processing; // ms
     double t_token_generation; // ms
+
+    common_token_rate_limiter tgsl;
 
     void reset();
 
@@ -308,9 +323,11 @@ struct server_context {
 
     void kv_cache_clear();
 
-    void system_prompt_update();
+    bool system_prompt_disable(const char * reason);
 
-    bool system_prompt_set(const std::string& sys_prompt);
+    bool system_prompt_update();
+
+    bool system_prompt_set(const std::string& sys_prompt, std::string & why_not);
 
     bool process_token(completion_token_output& result, server_slot& slot);
 

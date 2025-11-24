@@ -81,6 +81,31 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q6_0_q8_1_imp
     return d6 * (sumi * ds8f.x - (32.f*vdr/QI6_0) * ds8f.y);
 }
 
+#define VDR_Q6_1_Q8_1_MMVQ 2
+#define VDR_Q6_1_Q8_1_MMQ  4
+
+template <int vdr> static __device__ __forceinline__ float vec_dot_q6_1_q8_1_impl(
+    const int * vl, const int * vh, const int * u, const half2 & dm6, const half2 & ds8) {
+
+    int sumi = 0;
+
+#pragma unroll
+    for (int i = 0; i < vdr; ++i) {
+        const int vi0 = ((vl[i] >> 0) & 0x0F0F0F0F) | ((vh[i] << 4) & 0x30303030);
+        const int vi1 = ((vl[i] >> 4) & 0x0F0F0F0F) | ((vh[i] << 2) & 0x30303030);
+
+        sumi = ggml_cuda_dp4a(vi0, u[2*i+0], sumi);
+        sumi = ggml_cuda_dp4a(vi1, u[2*i+1], sumi);
+    }
+
+    const float2 dm6f = __half22float2(dm6);
+    const float2 ds8f = __half22float2(ds8);
+    const float d6d8 = dm6f.x * ds8f.x;
+    const float m6s8 = dm6f.y * ds8f.y;
+
+    return sumi*d6d8 + m6s8 / (QI6_1 / vdr);
+}
+
 #define VDR_Q4_1_Q8_1_MMVQ 2
 #define VDR_Q4_1_Q8_1_MMQ  4
 
@@ -602,6 +627,25 @@ static __device__ __forceinline__ float vec_dot_q6_0_q8_1(
     return vec_dot_q6_0_q8_1_impl<VDR_Q6_0_Q8_1_MMVQ>(vl, vh, u, bq6_0->d, bq8_1->ds);
 }
 
+static __device__ __forceinline__ float vec_dot_q6_1_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q6_1 * bq6_1 = (const block_q6_1 *) vbq + kbx;
+
+    int vl[VDR_Q6_1_Q8_1_MMVQ];
+    int vh[VDR_Q6_1_Q8_1_MMVQ];
+    int u[2*VDR_Q6_1_Q8_1_MMVQ];
+
+#pragma unroll
+    for (int i = 0; i < VDR_Q6_1_Q8_1_MMVQ; ++i) {
+        vl[i]    = get_int_b2(bq6_1->qs, iqs + i);
+        vh[i]    = get_int_b2(bq6_1->qh,       i) >> 4*(iqs/2);
+        u[2*i+0] = get_int_b4(bq8_1->qs, iqs + i);
+        u[2*i+1] = get_int_b4(bq8_1->qs, iqs + i + QI6_1);
+    }
+
+    return vec_dot_q6_1_q8_1_impl<VDR_Q6_1_Q8_1_MMVQ>(vl, vh, u, bq6_1->dm, bq8_1->ds);
+}
 
 static __device__ __forceinline__ float vec_dot_q4_1_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
@@ -1129,6 +1173,24 @@ static __device__ __forceinline__ float vec_dot_iq1_m_q8_1(
 static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4, const int8_t * values) {
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
     return ggml_cuda_perm_table_16(q4, values);
+#elif defined(GGML_USE_HIP)
+    const uint32_t *values_u32 = (const uint32_t *)values;
+
+    const uint32_t q_even = q4;
+    const uint32_t q_odd  = (q4 >> 4);
+
+    uint32_t v_even_low = __builtin_amdgcn_perm(values_u32[1], values_u32[0], q_even & 0x07070707);
+    uint32_t v_odd_low = __builtin_amdgcn_perm(values_u32[1], values_u32[0], q_odd & 0x07070707);
+
+    uint32_t v_even_high = __builtin_amdgcn_perm(values_u32[3], values_u32[2], q_even & 0x07070707);
+    uint32_t v_odd_high = __builtin_amdgcn_perm(values_u32[3], values_u32[2], q_odd & 0x07070707);
+
+    uint32_t mask_even = 0x03020100 | ((q_even & 0x08080808) >> 1);
+    uint32_t res_x = __builtin_amdgcn_perm(v_even_high, v_even_low, mask_even);
+    uint32_t mask_odd = 0x03020100 | ((q_odd & 0x08080808) >> 1);
+    uint32_t res_y = __builtin_amdgcn_perm(v_odd_high, v_odd_low, mask_odd);
+
+    return make_int2(res_x, res_y);
 #elif defined(__CUDA_ARCH__)
     uint32_t v1, v2, v3, v4, mask;
     const uint32_t * values32 = (const uint32_t *)values;

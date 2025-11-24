@@ -50,10 +50,8 @@ static __device__ void quantize_f32_q4_0_block(const float * __restrict__ x, blo
         const uint8_t xi1 = min(15, (int8_t)(x1 + 8.5f));
         float q0 = xi0 - 8;
         float q1 = xi1 - 8;
-        float w0 = v0*v0;
-        float w1 = v1*v1;
-        sumqx += w0*q0*v0 + w1*q1*v1;
-        sumq2 += w0*q0*q0 + w1*q1*q1;
+        sumqx += q0*v0 + q1*v1;
+        sumq2 += q0*q0 + q1*q1;
 
         y->qs[j]  = xi0;
         y->qs[j] |= xi1 << 4;
@@ -79,15 +77,25 @@ static __device__ void quantize_f32_q4_1_block(const float * __restrict__ x, blo
     y->dm.x = d;
     y->dm.y = vmin;
 
+    float sumqx = 0, sumq2 = 0;
     for (int j = 0; j < QK4_1/2; ++j) {
-        const float x0 = (x[0       + j] - vmin)*id;
-        const float x1 = (x[QK4_1/2 + j] - vmin)*id;
+        const float v0 = x[0       + j];
+        const float v1 = x[QK4_1/2 + j];
+        const float x0 = (v0 - vmin)*id;
+        const float x1 = (v1 - vmin)*id;
 
         const uint8_t xi0 = min(15, (int8_t)(x0 + 0.5f));
         const uint8_t xi1 = min(15, (int8_t)(x1 + 0.5f));
+        float q0 = xi0;
+        float q1 = xi1;
+        sumqx += q0*(v0 - vmin) + q1*(v1 - vmin);
+        sumq2 += q0*q0 + q1*q1;
 
         y->qs[j]  = xi0;
         y->qs[j] |= xi1 << 4;
+    }
+    if (sumq2 > 0) {
+        y->dm.x = sumqx/sumq2;
     }
 }
 
@@ -109,16 +117,26 @@ static __device__ void quantize_f32_q5_0_block(const float * __restrict__ x, blo
     y->d = d;
 
     uint32_t qh = 0;
+    float sumqx = 0, sumq2 = 0;
     for (int j = 0; j < QK5_0/2; ++j) {
-        const float x0 = x[0       + j]*id;
-        const float x1 = x[QK5_0/2 + j]*id;
+        const float v0 = x[0       + j];
+        const float v1 = x[QK5_0/2 + j];
+        const float x0 = v0*id;
+        const float x1 = v1*id;
 
         const uint8_t xi0 = min(31, (int8_t)(x0 + 16.5f));
         const uint8_t xi1 = min(31, (int8_t)(x1 + 16.5f));
+        float q0 = xi0 - 16;
+        float q1 = xi1 - 16;
+        sumqx += q0*v0 + q1*v1;
+        sumq2 += q0*q0 + q1*q1;
 
         y->qs[j]  = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
         qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
         qh |= ((xi1 & 0x10u) >> 4) << (j + QK5_0/2);
+    }
+    if (sumq2 > 0) {
+        y->d = sumqx/sumq2;
     }
     memcpy(y->qh, &qh, sizeof(qh));
 }
@@ -139,17 +157,27 @@ static __device__ void quantize_f32_q5_1_block(const float * __restrict__ x, blo
     y->dm.x = d;
     y->dm.y = min;
 
+    float sumqx = 0, sumq2 = 0;
     uint32_t qh = 0;
     for (int j = 0; j < QK5_1/2; ++j) {
-        const float x0 = (x[0       + j] - min)*id;
-        const float x1 = (x[QK5_1/2 + j] - min)*id;
+        const float v0 = x[0       + j];
+        const float v1 = x[QK5_1/2 + j];
+        const float x0 = (v0 - min)*id;
+        const float x1 = (v1 - min)*id;
 
         const uint8_t xi0 = (uint8_t)(x0 + 0.5f);
         const uint8_t xi1 = (uint8_t)(x1 + 0.5f);
+        float q0 = xi0;
+        float q1 = xi1;
+        sumqx += q0*(v0 - min) + q1*(v1 - min);
+        sumq2 += q0*q0 + q1*q1;
 
         y->qs[j]  = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
         qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
         qh |= ((xi1 & 0x10u) >> 4) << (j + QK5_1/2);
+    }
+    if (sumq2 > 0) {
+        y->dm.x = sumqx/sumq2;
     }
     memcpy(y->qh, &qh, sizeof(qh));
 }
@@ -167,9 +195,18 @@ static __device__ void quantize_f32_q8_0_block(const float * __restrict__ x, blo
 
     y->d = d;
 
+    float sumqx = 0, sumq2 = 0;
     for (int j = 0; j < QK8_0; ++j) {
-        const float x0 = x[j]*id;
-        y->qs[j] = roundf(x0);
+        const float v = x[j];
+        const float x0 = v*id;
+        const int8_t xi = roundf(x0);
+        float q = xi;
+        sumqx += q*v;
+        sumq2 += q*q;
+        y->qs[j] = xi;
+    }
+    if (sumq2 > 0) {
+        y->d = sumqx/sumq2;
     }
 }
 
@@ -197,10 +234,8 @@ static __device__ void quantize_f32_iq4_nl_block(const float * __restrict__ x, b
         y->qs[j] = xi0 | (xi1 << 4);
         const float v0 = kvalues_iq4nl[xi0];
         const float v1 = kvalues_iq4nl[xi1];
-        const float w0 = x[0        + j]*x[0        + j];
-        const float w1 = x[QK4_NL/2 + j]*x[QK4_NL/2 + j];
-        sumqx += w0*v0*x[j] + w1*v1*x[QK4_NL/2 + j];
-        sumq2 += w0*v0*v0 + w1*v1*v1;
+        sumqx += v0*x[j] + v1*x[QK4_NL/2 + j];
+        sumq2 += v0*v0 + v1*v1;
     }
 
     //y->d = d;
@@ -227,16 +262,70 @@ static __device__ void quantize_f32_q6_0_block(const float * __restrict__ xi, bl
     y->d = d;
     memset(y->qh, 0, QK6_0/4);
 
+    float sumqx = 0, sumq2 = 0;
     for (int j = 0; j < QK6_0/2; ++j) {
-        const float x0 = xi[0       + j]*id;
-        const float x1 = xi[QK6_0/2 + j]*id;
+        const float v0 = xi[0       + j];
+        const float v1 = xi[QK6_0/2 + j];
+        const float x0 = v0*id;
+        const float x1 = v1*id;
 
         const uint8_t xi0 = min(63, (int8_t)(x0 + 32.5f));
         const uint8_t xi1 = min(63, (int8_t)(x1 + 32.5f));
+        float q0 = xi0 - 32;
+        float q1 = xi1 - 32;
+        sumqx += q0*v0 + q1*v1;
+        sumq2 += q0*q0 + q1*q1;
 
         y->qs[j]  = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
         const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
         y->qh[j%(QK6_0/4)] |= (h << 4*(j/(QK6_0/4)));
+    }
+    if (sumq2 > 0) {
+        y->d = sumqx/sumq2;
+    }
+}
+
+static __device__ void quantize_f32_q6_1_block(const float * __restrict__ xi, block_q6_1 * __restrict__ y) {
+
+    float vmin = FLT_MAX;
+    float vmax = -FLT_MAX;
+
+    for (int j = 0; j < QK6_1; ++j) {
+        const float v  = xi[j];
+        if (v < vmin) vmin = v;
+        if (v > vmax) vmax = v;
+    }
+
+    const float d  = (vmax - vmin) / ((1 << 6) - 1);
+    const float id = d ? 1.0f/d : 0.0f;
+
+    y->dm.x = d;
+    y->dm.y = vmin;
+
+    memset(y->qh, 0, QK6_1/4);
+
+    float sumqx = 0, sumq2 = 0;
+    for (int j = 0; j < QK6_1/2; ++j) {
+        const float v0 = xi[0       + j];
+        const float v1 = xi[QK6_1/2 + j];
+        const float x0 = (v0 - vmin)*id;
+        const float x1 = (v1 - vmin)*id;
+
+        const uint8_t xi0 = min(63, (int8_t)(x0 + 0.5f));
+        const uint8_t xi1 = min(63, (int8_t)(x1 + 0.5f));
+        float q0 = xi0;
+        float q1 = xi1;
+        float w0 = v0*v0;
+        float w1 = v1*v1;
+        sumqx += w0*q0*(v0 - vmin) + w1*q1*(v1 - vmin);
+        sumq2 += w0*q0*q0 + w1*q1*q1;
+
+        y->qs[j]  = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
+        const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
+        y->qh[j%(QK6_1/4)] |= (h << 4*(j/(QK6_1/4)));
+    }
+    if (sumq2 > 0) {
+        y->dm.x = sumqx/sumq2;
     }
 }
 
@@ -259,6 +348,10 @@ static __device__ void cpy_blck_f32_q5_1(const char * cxi, char * cdsti) {
 
 static __device__ void cpy_blck_f32_q6_0(const char * cxi, char * cdsti) {
     quantize_f32_q6_0_block((const float *)cxi, (block_q6_0 *)cdsti);
+}
+
+static __device__ void cpy_blck_f32_q6_1(const char * cxi, char * cdsti) {
+    quantize_f32_q6_1_block((const float *)cxi, (block_q6_1 *)cdsti);
 }
 
 static __device__ void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {

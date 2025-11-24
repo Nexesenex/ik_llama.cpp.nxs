@@ -129,9 +129,11 @@ struct llama_hparams {
     float    f_attn_temp_scale       = 0.1;
 
     // DSA (deepseek sparse attention)
-    uint32_t indexer_n_head    = 0;
-    uint32_t indexer_head_size = 0;
-    uint32_t indexer_top_k     = 0;
+    uint32_t indexer_n_head     = 0;
+    uint32_t indexer_head_size  = 0;
+    uint32_t indexer_top_k      = 0;
+    // k-pool indexer: tokens per compressed key cell (GGUF attention.indexer.kpool); 0 = plain per-token DSA (as in GLM-5.2)
+    uint32_t indexer_block_size = 0;
     // GLM-5.2 IndexShare: per-layer full/shared indexer map. "full" layers compute their own lightning-
     // indexer top-k; "shared" layers reuse the previous full layer's top-k. Populated from GGUF
     // indexer_types metadata if present, else derived from the GLM-5.2 config rule at load time.
@@ -169,7 +171,7 @@ struct llama_hparams {
     std::array<uint64_t, LLAMA_MAX_PLE_HEADS> ple_head_offsets      = {};
     std::array<uint64_t, LLAMA_MAX_PLE_HEADS> ple_head_vocab_sizes  = {};
 
-	// qwen3vl deepstack
+    // qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
 
     // gemma4 per-layer embedding
@@ -413,6 +415,31 @@ struct llama_hparams {
 
     uint32_t ple_conv_state() const {
         return ple_conv_kernel > 0 ? (ple_conv_kernel - 1) * ple_ngram_size : 0;
+    }
+
+    struct recurrent_state_layout {
+        uint32_t conv_width;
+        uint32_t conv_feature_width;
+        uint32_t ssm_width;
+        uint32_t ple_offset;
+        uint32_t ple_width;
+        uint32_t row_width;
+        bool has_ple;
+    };
+
+    recurrent_state_layout recurrent_state_layout_for(uint32_t il) const {
+        const auto [conv_dim, ssm_width] = n_embd_v_s_dims(ssm_dt_rank);
+        const uint32_t conv_width = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * conv_dim;
+        const uint32_t ple_width = n_embd_ple_conv(il);
+        return {
+            conv_width,
+            conv_dim,
+            ssm_width,
+            conv_width + ssm_width,
+            ple_width,
+            conv_width + ssm_width + ple_width,
+            ple_width > 0,
+        };
     }
 
     static bool is_float_close(float a, float b, float abs_tol) {

@@ -86,6 +86,7 @@ inline bool common_grammar_needs_prefill(const common_grammar & g) {
 
 #define X_COMMON_PARAMS_SAMPLING                                 /*  \
     */  X( int32_t , min_keep            , 0     , std::round )  /*  0 = disabled, otherwise samplers should return at least min_keep tokens \
+    */  X( int32_t , max_candidates      , 0     , std::round )  /*  0 = disabled, otherwise maximum candidates to keep after prefilter \
     */  X( int32_t , top_k               , 40    , std::round )  /*  <= 0 to use vocab size \
     */  X( float   , top_p               , 0.95f ,            )  /*  1.0 = disabled \
     */  X( float   , min_p               , 0.05f ,            )  /*  0.0 = disabled \
@@ -128,6 +129,10 @@ typedef struct common_params_sampling {
     int32_t     n_probs               = 0;                  // if greater than 0, output the probabilities of top n_probs tokens.
     int32_t     total_context_size    = 16840;
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
+    bool        no_space_after_quote  = false;              // contextual rule: while inside an open " quote, disallow tokens that begin with a space (e.g. " You -> "You)
+    float       boost_space_after_quote = 0.0f;             // contextual rule: while inside an open " quote, boost logits of tokens that begin with a space (e.g. "You -> " You)
+    float       eos_token_probability = 1.0f;               // scale factor for the probability of the EOS/EOG tokens (1.0 = no change, 0.0 = EOG tokens effectively disabled)
+    std::vector<std::string> special_eosg_tokens;          // if non-empty, the first occurrence of any of these strings in the generated text stops generation like an EOG/EOS token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
 
     std::vector<std::string> dry_sequence_breakers = { "\n", ":", "\"", "*" };     // default sequence breakers for DRY
@@ -229,6 +234,9 @@ struct common_sampler {
     std::vector<llama_token_data> cur;
     llama_sampler_dry* smpl;
 
+    bool              quote_open = false;              // true when the accepted text is inside an open " quote (contextual no_space_after_quote rule)
+    std::vector<bool> starts_with_space;               // vocab rows whose piece begins with a space (only built when no_space_after_quote is set)
+
     llama_sampler_adaptive_p * adapt_p_ctx;    // adaptive p sampler
 
     common_reasoning_budget_ctx * rbudget; // reasoning budget sampler
@@ -245,6 +253,11 @@ struct common_sampler {
 
     std::string  drafted_text;
     std::string* to_generated_text = nullptr;
+
+    std::string  special_eosg_text;                        // accumulated generated text for the special EOG string check
+    bool         special_eosg_hit = false;                 // the special EOG string was found in the generated text
+    std::string  special_eosg_matched;                     // the special EOG string that was found (if any)
+    llama_token  eosg_token = LLAMA_TOKEN_NULL;            // EOG token to emit when the special EOG string is hit
 
     // expiring logit bias
     struct elb_state {

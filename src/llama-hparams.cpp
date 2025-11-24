@@ -15,6 +15,12 @@ static const std::map<llama_rope_scaling_type, const char *> LLAMA_ROPE_SCALING_
     { LLAMA_ROPE_SCALING_TYPE_YARN,   "yarn"   },
 };
 
+static void llama_hparams_set_swa_layers_periodic(llama_hparams & hparams, uint32_t pattern) {
+    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+        hparams.swa_layers[i] = (i % pattern) < (pattern - 1);
+    }
+}
+
 static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::string & name) {
     for (const auto & kv : LLAMA_ROPE_SCALING_TYPES) {
         if (kv.second == name) {
@@ -302,7 +308,7 @@ void llm_load_hparams(
 
                 if (model.type == MODEL_17B_128E) {
                     hparams.use_kq_norm = false;
-                    }
+                }
             } break;
         case LLM_ARCH_DECI:
             {
@@ -310,7 +316,7 @@ void llm_load_hparams(
                 switch (hparams.n_layer) {
                     case 32: model.type = e_model::MODEL_7B; break;
                     case 80: model.type = e_model::MODEL_70B; break;
-	            case 162: model.type = e_model::MODEL_405B; break;
+                    case 162: model.type = e_model::MODEL_405B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
@@ -613,6 +619,7 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
                 ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
 
                 ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
@@ -679,9 +686,10 @@ void llm_load_hparams(
                         std::vector<uint32_t> ple_layers;
                         ml.get_arr(ml.llm_kv(LLM_KV_PLE_LAYERS), ple_layers);
                         for (uint32_t il : ple_layers) {
-                            if (il < hparams.n_layer) {
-                                hparams.ple_layer_arr[il] = true;
+                            if (il >= hparams.n_layer) {
+                                throw std::runtime_error(format("qwen4exp: PLE layer index %u is outside block count %u", il, hparams.n_layer));
                             }
+                            hparams.ple_layer_arr[il] = true;
                         }
                         ml.get_key(LLM_KV_PLE_NGRAM_SIZE,      hparams.ple_ngram_size);
                         ml.get_key(LLM_KV_PLE_HEADS_PER_NGRAM, hparams.ple_heads_per_ngram);
@@ -812,6 +820,9 @@ void llm_load_hparams(
                     case 64: // without MTP layer
                     case 65: // with MTP layer (64 main + 1 MTP)
                         model.type = e_model::MODEL_27B; break;
+                    case 96: // without MTP layer
+                    case 97: // with MTP layer (96 main + 1 MTP)
+                        model.type = e_model::MODEL_40B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
@@ -865,6 +876,9 @@ void llm_load_hparams(
                 bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
                 if (!found_swa && hparams.n_swa == 0) {
                     throw std::runtime_error("invalid value for sliding_window");
+                }
+                if (hparams.n_swa > 0) {
+                    std::fill(hparams.swa_layers.begin(), hparams.swa_layers.begin() + hparams.n_layer, true);
                 }
             } break;
         case LLM_ARCH_PLAMO:
@@ -932,6 +946,8 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping, false);
                 hparams.attn_soft_cap = true;
 
+                llama_hparams_set_swa_layers_periodic(hparams, 2);
+
                 switch (hparams.n_layer) {
                     case 26: model.type = e_model::MODEL_2B; break;
                     case 42: model.type = e_model::MODEL_9B; break;
@@ -948,6 +964,8 @@ void llm_load_hparams(
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                llama_hparams_set_swa_layers_periodic(hparams, hparams.n_swa_pattern);
 
                 switch (hparams.n_layer) {
                     case 26: model.type = e_model::MODEL_2B; break;
@@ -1476,6 +1494,7 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
                 ml.get_key(LLM_KV_LOGIT_SCALE, hparams.f_logit_scale);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
+                llama_hparams_set_swa_layers_periodic(hparams, hparams.n_swa_pattern);
                 switch (hparams.n_layer) {
                     case 32: model.type = e_model::MODEL_8B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
@@ -1589,7 +1608,7 @@ void llm_load_hparams(
 
                 model.type = e_model::MODEL_UNKNOWN;
             } break;
-	    case LLM_ARCH_DOTS1:
+        case LLM_ARCH_DOTS1:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
@@ -1640,7 +1659,11 @@ void llm_load_hparams(
 
                 //TODO OAI_MOE: SWA
                 //hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                //hparams.set_swa_pattern(2);
+
+                if (hparams.n_swa > 0) {
+                    hparams.n_swa_pattern = 2;
+                    llama_hparams_set_swa_layers_periodic(hparams, hparams.n_swa_pattern);
+                }
 
                 // TODO: switch (hparams.n_layer)
 
@@ -2183,6 +2206,123 @@ void llm_load_hparams(
                         }
                     }
                     validate_dflash_hparams(hparams, model.arch);
+                }
+            } break;
+        case LLM_ARCH_GLM5NEXT:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                // The DSA lightning-indexer k_norm is a plain (non-RMS) LayerNorm built via
+                // LLM_NORM, which uses hparams.f_norm_eps in ggml_norm(). The GGUF only carries
+                // the RMS eps, so mirror it as the DEEPSEEK4/GLM_DSA blocks do.
+                if (hparams.f_norm_eps <= 0.0f) {
+                    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps, false);
+                    if (hparams.f_norm_eps <= 0.0f) {
+                        hparams.f_norm_eps = hparams.f_norm_rms_eps;
+                    }
+                }
+
+                // The NextN/MTP block is appended after the trunk; trunk-only GGUFs still load
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                // believe the tensors: a stale count hides the last real layer
+                if (hparams.nextn_predict_layers > 0) {
+                    const std::string probe = LLM_TN(LLM_ARCH_GLM5NEXT)(LLM_TENSOR_NEXTN_EH_PROJ, "weight",
+                            hparams.n_layer - hparams.nextn_predict_layers);
+                    if (ml.get_tensor_meta(probe.c_str()) == nullptr) {
+                        hparams.nextn_predict_layers = 0;
+                    }
+                }
+
+                // MLA. GLM-5.3-Flash is nope-only (rope.dimension_count == 0), so n_rot stays 0 and
+                // the whole q head is the NoPE part
+                ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,      hparams.n_lora_q);
+                ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,     hparams.n_lora_kv);
+                ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k_full);
+                ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v_full);
+
+                // MoE with shared experts; GLM-5.3-Flash uses sigmoid gating
+                ml.get_key(LLM_KV_EXPERT_COUNT,                hparams.n_expert);
+                ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared, false);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                if (hparams.n_ff_shexp == 0 && hparams.n_expert_shared > 0) {
+                    hparams.n_ff_shexp = hparams.n_ff_exp;
+                }
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
+                if (hparams.expert_gating_func == LLM_EXPERT_GATING_FUNC_TYPE_NONE) {
+                    hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
+                }
+                // clamped SwiGLU (gate clamped before the SiLU, deepseek4 semantics)
+                ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,     hparams.swiglu_limits,        hparams.n_layer, false);
+                if (!ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP, hparams.swiglu_limits_shared, hparams.n_layer, false)) {
+                    hparams.swiglu_limits_shared = hparams.swiglu_limits;
+                }
+
+                // DSA k-pool indexer. Absent in a GGUF without indexer weights, which then
+                // runs dense MLA; indexer_block_size (kpool) is the tokens-per-compressed-key cell
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head,    false);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size, false);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k,     false);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_KPOOL,      hparams.indexer_block_size, false);
+                if (hparams.indexer_head_size > 0) {
+                    GGML_ASSERT(hparams.indexer_n_head > 0 && "GLM5NEXT indexer key length without indexer head count");
+                    if (hparams.indexer_block_size > 0 && hparams.indexer_top_k > 0 &&
+                            hparams.indexer_top_k % hparams.indexer_block_size != 0) {
+                        LLAMA_LOG_WARN("%s: indexer.top_k (%u) is not a multiple of indexer.kpool (%u); top-k will be clamped to whole pools\n",
+                                __func__, hparams.indexer_top_k, hparams.indexer_block_size);
+                    }
+                }
+
+                // hyper-connections (mHC) wrap every trunk attention/FFN block
+                ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT, hparams.dsv4_hc_mult);
+                ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
+                if (!ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON, hparams.dsv4_hc_eps, false)) {
+                    hparams.dsv4_hc_eps = hparams.f_norm_rms_eps;
+                }
+                if (hparams.dsv4_hc_mult == 0) {
+                    throw std::runtime_error("GLM5NEXT: hyper_connection.count is required");
+                }
+                if (hparams.dsv4_hc_sinkhorn_iters == 0) {
+                    throw std::runtime_error("GLM5NEXT: hyper_connection.sinkhorn_iterations is required");
+                }
+
+                // KDA (kimi-k3 low-rank parameterization on the KDA layers)
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL, hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_KDA_HEAD_DIM, hparams.ssm_d_state, false);
+                if (hparams.ssm_d_state == 0) {
+                    // older converters store the KDA head dim as ssm.state_size
+                    ml.get_key(LLM_KV_SSM_STATE_SIZE, hparams.ssm_d_state);
+                }
+                ml.get_key(LLM_KV_KDA_GATE_LOWER_BOUND, hparams.kda_gate_lower_bound, false);
+                if (hparams.kda_gate_lower_bound == 0.0f) {
+                    hparams.kda_gate_lower_bound = -5.0f;
+                }
+                GGML_ASSERT(hparams.kda_gate_lower_bound < 0.0f && "GLM5NEXT: only the bounded sigmoid gate is implemented");
+                hparams.ssm_dt_rank = hparams.n_head();
+                // no ssm.inner_size key in the GGUF: d_inner = head_dim * num_heads
+                hparams.ssm_d_inner = hparams.ssm_d_state * hparams.ssm_dt_rank;
+                // ssm_n_group (num KDA heads) is not in the GGUF; derive from n_head like bailingmoe3
+                if (!ml.get_key(LLM_KV_SSM_GROUP_COUNT, hparams.ssm_n_group, false)) {
+                    hparams.ssm_n_group = hparams.n_head();
+                }
+
+                // per-layer head_count_kv array: 0 marks the KDA (linear-attention) layers, 1 the MLA
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.recurrent_layer_arr[il] = hparams.n_head_kv_arr[il] == 0;
+                }
+                // unlike GLM-5.2 IndexShare, every MLA layer computes its own DSA top-k
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.indexer_is_full[il] = !hparams.recurrent_layer_arr[il];
+                }
+
+                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+
+                switch (hparams.n_layer - hparams.nextn_predict_layers) {
+                    case 45: model.type = e_model::MODEL_312B_A17B; break; // GLM-5.3-Flash
+                    default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
         case LLM_ARCH_MUSE_GLIMMER:

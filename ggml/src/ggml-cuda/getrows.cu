@@ -243,8 +243,13 @@ void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_F16:
             get_rows_cuda_float(src0, src1, dst, (const half *)src0_d, src1_i32, dst_d, stream);
             break;
-        case GGML_TYPE_F32:
+        case GGML_TYPE_BF16:
+            get_rows_cuda_float(src0, src1, dst, (const nv_bfloat16 *)src0_d, src1_i32, dst_d, stream);
+            break;
         case GGML_TYPE_I32:
+            get_rows_cuda_float(src0, src1, dst, (const int32_t *)src0_d, src1_i32, dst_d, stream);
+            break;
+        case GGML_TYPE_F32:
             get_rows_cuda_float(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
             break;
         case GGML_TYPE_Q4_0:
@@ -258,6 +263,15 @@ void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             break;
         case GGML_TYPE_Q5_1:
             get_rows_cuda<QK5_1, QR5_1, dequantize_q5_1>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
+            break;
+        case GGML_TYPE_Q6_0:
+            get_rows_cuda<QK6_0, QR6_0, dequantize_q6_0>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
+            break;
+        case GGML_TYPE_Q6_1:
+            get_rows_cuda<QK6_1, QR6_1, dequantize_q6_1>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
+            break;
+        case GGML_TYPE_IQ4_NL:
+            get_rows_cuda<QK4_NL, QR4_NL, dequantize_iq4_nl>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
             break;
         case GGML_TYPE_Q8_0:
             get_rows_cuda<QK8_0, QR8_0, dequantize_q8_0>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);

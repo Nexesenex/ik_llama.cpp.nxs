@@ -312,7 +312,7 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
         return;
     }
 
-    LOG_INFO("request", {
+    LOG_VERBOSE("request", {
         {"remote_addr", req.remote_addr},
         {"remote_port", req.remote_port},
         {"status",      res.status},
@@ -421,6 +421,8 @@ struct server_response_reader {
         if (has_next() && !cancelled) {
             // if tasks is not finished yet, cancel them
             cancelled = true;
+            // Stop shark GPU clock elevation (Windows only)
+            llama_shark_stop(ctx_server.ctx);
             std::vector<server_task> cancel_tasks;
             cancel_tasks.reserve(id_tasks.size());
             for (const auto& id_task : id_tasks) {
@@ -465,7 +467,7 @@ inline void signal_handler(int signal) {
 }
 
 static void log_prompt(const gpt_params & params_base, const json & body) {
-    if (params_base.minilog) {
+    if (params_base.dumplog) {
         LOG_TEE("Prompt:\n%s\n", body.dump(4).c_str());
     }
 }
@@ -484,6 +486,8 @@ int main(int argc, char ** argv) {
 
     // parse arguments from environment variables
     gpt_params_parse_from_env(params);
+
+    common_params_minilog(params);
 
     // Tee llama/ggml logs to --log-file; installed before model load so that
     // load-time logs are captured too.
@@ -506,12 +510,15 @@ int main(int argc, char ** argv) {
     server_log_json = params.log_json;
     server_verbose = params.verbosity > 0;
 
-
     // struct that contains llama context and inference
     server_context ctx_server;
 
     if (!params.system_prompt.empty()) {
-        ctx_server.system_prompt_set(params.system_prompt);
+        std::string why_not;
+        if (!ctx_server.system_prompt_set(params.system_prompt, why_not)) {
+            LOG_ERROR("--system-prompt rejected", {{"reason", why_not}});
+            return 1;
+        }
     }
 
     if (params.model_alias == "unknown") {
@@ -526,11 +533,27 @@ int main(int argc, char ** argv) {
         {"commit", LLAMA_COMMIT}
     });
 
+    LOG_INFO("Details", {
+        {"last_pr",         LLAMA_BUILD_LAST_MERGED_PR},
+        {"last_commit",     LLAMA_BUILD_LAST_COMMIT},
+    });
+
+    LOG_INFO("NXS", {
+        {"branch",          LLAMA_BUILD_BRANCH},
+        {"nexes_commits",   LLAMA_NEXES_COMMITS},
+    });
+
+    LOG_INFO("Rel", {
+        {"date",            LLAMA_BUILD_DATE},
+        {"compiler",        LLAMA_COMPILER},
+    });
+
     LOG_INFO("system info", {
         {"n_threads",       params.n_threads},
         {"n_threads_batch", params.n_threads_batch},
         {"total_threads",   std::thread::hardware_concurrency()},
         {"system_info",     llama_print_system_info()},
+        {"cuda_version",   ggml_cpu_has_cuda() ? LLAMA_BUILD_CUDA_VERSION : "not used in CPU mode."},
     });
 
     std::unique_ptr<httplib::Server> svr;
@@ -583,8 +606,28 @@ int main(int argc, char ** argv) {
     svr->set_write_timeout(params.timeout_write);
 
     if (!svr->bind_to_port(params.hostname, params.port)) {
-        fprintf(stderr, "\ncouldn't bind to server socket: hostname=%s port=%d\n\n", params.hostname.c_str(), params.port);
-        return 1;
+        fprintf(stderr, "\ncouldn't bind to server socket: hostname=%s port=%d (port in use)\n", params.hostname.c_str(), params.port);
+        fprintf(stderr, "trying fallback ports...\n");
+        bool bound = false;
+        if (params.port != 8080 && svr->bind_to_port(params.hostname, 8080)) {
+            params.port = 8080;
+            bound = true;
+        }
+        if (!bound) {
+            const int fallback_ports[] = { 16160, 24240, 32320, 40400, 48480, 56560, 64640 };
+            for (int port : fallback_ports) {
+                if (svr->bind_to_port(params.hostname, port)) {
+                    params.port = port;
+                    bound = true;
+                    break;
+                }
+            }
+        }
+        if (!bound) {
+            fprintf(stderr, "couldn't bind to server socket: all fallback ports in use\n\n");
+            return 1;
+        }
+        fprintf(stderr, "bound to fallback port: %d\n\n", params.port);
     }
 
     std::unordered_map<std::string, std::string> log_data;
@@ -1194,7 +1237,10 @@ int main(int argc, char ** argv) {
                 // non-stream, wait for the results
                 auto all_results = rd->wait_for_all(is_connection_closed);
                 if (all_results.is_terminated) {
-                    if (rd->any_task_on_slot()) llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+                    if (rd->any_task_on_slot()) {
+                        llama_shark_stop(ctx_server.ctx);
+                        llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+                    }
                     return; // connection is closed
                 }
                 else if (all_results.error) {
@@ -1217,7 +1263,10 @@ int main(int argc, char ** argv) {
                 // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
                 server_task_result_ptr first_result = rd->next(is_connection_closed);
                 if (first_result == nullptr) {
-                    if (rd->any_task_on_slot()) llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+                    if (rd->any_task_on_slot()) {
+                        llama_shark_stop(ctx_server.ctx);
+                        llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+                    }
                     return; // connection is closed
                 }
                 else if (first_result->is_error()) {
@@ -1590,7 +1639,10 @@ int main(int argc, char ** argv) {
 
         // collect results
         if (all_results.is_terminated) {
-            if (rd.any_task_on_slot()) llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+            if (rd.any_task_on_slot()) {
+                llama_shark_stop(ctx_server.ctx);
+                llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+            }
             return; // connection is closed
         }
         else if (all_results.error) {
@@ -2244,6 +2296,12 @@ int main(int argc, char ** argv) {
     svr->new_task_queue = [&params] { return new httplib::ThreadPool(params.n_threads_http); };
 
     LOG_INFO("HTTP server listening", log_data);
+
+    const int64_t t_end_server = ggml_time_us();
+    LOG_INFO(">>> Loading phase 3 (server) is complete!", {
+        {"Timer", (long long)((t_end_server - llama_get_start_loading_time_us()) / 1000000)},
+        {"Elapsed ms", (long long)((t_end_server - llama_get_start_ctx_time_us()) / 1000)}
+    });
 
     // run the HTTP server in a thread - see comment below
     std::thread t([&]() {

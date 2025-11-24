@@ -206,9 +206,9 @@ static std::string llama_format_tensor_shape(const std::vector<int64_t> & ne) {
 
 static std::string llama_format_tensor_shape(const struct ggml_tensor * t) {
     char buf[256];
-    snprintf(buf, sizeof(buf), "%5" PRId64, t->ne[0]);
+    snprintf(buf, sizeof(buf), "%6" PRId64, t->ne[0]);
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
-        snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), ", %5" PRId64, t->ne[i]);
+        snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), i >= 2 ? ", %4" PRId64 : ", %6" PRId64, t->ne[i]);
     }
     return buf;
 }
@@ -224,6 +224,7 @@ struct gguf_context;
 std::string gguf_kv_to_str(const gguf_context * ctx_gguf, int i);
 
 ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer);
+ggml_backend_buffer_type_t llama_default_buffer_type_cpu_pinned(void);
 
 struct llama_split_tensor {
     std::vector<ggml_tensor *> tensor_splits;

@@ -1,0 +1,6 @@
+* text=auto
+
+*.gguf binary
+*.png binary
+*.jpg binary
+*.jpeg binary

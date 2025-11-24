@@ -248,7 +248,9 @@
 #define GGML_MAX_NAME           64
 #endif
 #define GGML_MAX_OP_PARAMS      64
+#define GGML_MAX_SER_TIERS      7
 #define GGML_DEFAULT_N_THREADS  4
+#define GGML_MAX_N_THREADS 512
 #define GGML_DEFAULT_GRAPH_SIZE 2048
 #if UINTPTR_MAX == 0xFFFFFFFF
     #define GGML_MEM_ALIGN 4
@@ -458,6 +460,8 @@ extern "C" {
         GGML_TYPE_IQ2_KL  = 157,
         GGML_TYPE_IQ1_KT  = 158,
 
+        GGML_TYPE_Q6_1    = 180,
+
         GGML_TYPE_Q4_0_R8   = 202,
         GGML_TYPE_Q5_0_R4   = 206,
         GGML_TYPE_Q8_0_R8   = 208,
@@ -556,6 +560,8 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ3_KS  = 145, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ2_KL  = 146, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ1_KT  = 147, // except 1d tensors
+                                         //
+        GGML_FTYPE_MOSTLY_Q6_1    = 180, // except 1d tensors
                                          //
         GGML_FTYPE_MOSTLY_Q4_0_R8   = 202, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q8_0_R8   = 207, // except 1d tensors
@@ -661,6 +667,7 @@ extern "C" {
         GGML_OP_ARGSORT,
         GGML_OP_ARGSORT_THRESH,
         GGML_OP_GROUPED_TOPK,
+        GGML_OP_SER_MASK,
         GGML_OP_LEAKY_RELU,
         GGML_OP_SOFTCAP,
         GGML_OP_SOFT_CAP_MAX,
@@ -830,6 +837,23 @@ extern "C" {
     // If it returns true, the computation is aborted
     typedef bool (*ggml_abort_callback)(void * data);
 
+    enum ggml_sched_priority {
+        GGML_SCHED_PRIORITY_NORMAL = 0,
+        GGML_SCHED_PRIORITY_MEDIUM,
+        GGML_SCHED_PRIORITY_HIGH,
+        GGML_SCHED_PRIORITY_REALTIME,
+    };
+
+    struct ggml_threadpool_params {
+        bool          cpumask[GGML_MAX_N_THREADS];
+        int           n_threads;
+        enum ggml_sched_priority prio;
+        uint32_t      polling;
+    };
+
+    struct ggml_threadpool;
+    typedef struct ggml_threadpool * ggml_threadpool_t;
+
     // the compute plan that needs to be prepared for ggml_graph_compute()
     // since https://github.com/ggerganov/ggml/issues/287
     struct ggml_cplan {
@@ -844,6 +868,8 @@ extern "C" {
 
         // read-ahead selected MoE expert weights in the CPU matmul-id kernels
         bool moe_expert_prefetch;
+
+        struct ggml_threadpool * threadpool;
     };
 
     enum ggml_cgraph_eval_order {
@@ -875,6 +901,7 @@ extern "C" {
         struct ggml_hash_set visited_hash_set;
 
         enum ggml_cgraph_eval_order order;
+        bool reused;
     };
 
     // scratch buffer
@@ -924,6 +951,12 @@ extern "C" {
 
     GGML_API void    ggml_numa_init(enum ggml_numa_strategy numa); // call once for better performance on NUMA systems
     GGML_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node
+
+    // IK_OPENMP: batch thread threshold for barrier strategy
+    // expr format: ">N", "<N", ">=N", "<=N", "==N" (default: ">32")
+    GGML_API void    ggml_set_batch_thread_threshold(const char * expr);
+    GGML_API void    ggml_set_pp_batch_size(int batch_size);
+    GGML_API const char * ggml_get_batch_thread_threshold(void);
 
     GGML_API void    ggml_print_object (const struct ggml_object * obj);
     GGML_API void    ggml_print_objects(const struct ggml_context * ctx);
@@ -2458,6 +2491,13 @@ extern "C" {
             int                   min_entries,
             float                 threshold);
 
+    GGML_API struct ggml_tensor * ggml_argsort_thresh_cascade(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   n_tiers,
+            const int           * min_entries,
+            const float         * thresh);
+
     GGML_API struct ggml_tensor * ggml_arange(
             struct ggml_context * ctx,
             float                 start,
@@ -2475,6 +2515,13 @@ extern "C" {
             int                   k,
             int                   min_entries,
             float                 thresh);
+    GGML_API struct ggml_tensor * ggml_top_k_thresh_cascade(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   k,
+            int                   n_tiers,
+            const int           * min_entries,
+            const float         * thresh);
     GGML_API struct ggml_tensor * ggml_grouped_topk(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2488,6 +2535,19 @@ extern "C" {
 #else
 #define GGML_KQ_MASK_PAD 16
 #endif
+
+    // apply smart expert reduction (SER) thresholding on top of an already-selected
+    // top-k set of expert ids (e.g. from ggml_grouped_topk): per token, experts whose
+    // routing weight is below max*thresh (relative to the token's max routing weight)
+    // are dropped (marked -1), keeping at least min_experts. cascade form: see
+    // ggml_argsort_thresh_cascade for the multi-tier semantics.
+    GGML_API struct ggml_tensor * ggml_ser_mask(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,       // selected expert ids [n_expert_used, n_tokens] I32
+            struct ggml_tensor  * b,       // routing weights [n_expert, n_tokens] F32
+            int                   n_tiers, // 1 for single-tier, >=2 for cascade
+            const int           * min_entries,
+            const float         * thresh);
 
     // q:    [n_embd, n_batch,     n_head,    1]
     // k:    [n_embd, n_kv,        n_head_kv, 1]
@@ -2665,6 +2725,7 @@ extern "C" {
             struct ggml_tensor  * q,
             struct ggml_tensor  * w,
             struct ggml_tensor  * mask,
+            struct ggml_tensor  * blk_idx,
             enum ggml_unary_op    op,
             int                   n_top_k);
 
@@ -2890,13 +2951,21 @@ extern "C" {
     GGML_API int                   ggml_graph_n_nodes(struct ggml_cgraph* cgraph);
 
 
-    // ggml_graph_plan() has to be called before ggml_graph_compute()
-    // when plan.work_size > 0, caller must allocate memory for plan.work_data
-    GGML_API struct ggml_cplan ggml_graph_plan   (const struct ggml_cgraph * cgraph, int n_threads /*= GGML_DEFAULT_N_THREADS*/);
+    GGML_API struct ggml_cplan ggml_graph_plan   (const struct ggml_cgraph * cgraph, int n_threads, struct ggml_threadpool * threadpool /*= NULL*/);
     GGML_API enum ggml_status  ggml_graph_compute(      struct ggml_cgraph * cgraph, struct ggml_cplan * cplan);
     // same as ggml_graph_compute() but the work data is allocated as a part of the context
     // note: the drawback of this API is that you must have ensured that the context has enough memory for the work data
     GGML_API enum ggml_status  ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads);
+
+// threadpool API
+    GGML_API struct ggml_threadpool_params ggml_threadpool_params_default      (int n_threads);
+    GGML_API void                           ggml_threadpool_params_init         (struct ggml_threadpool_params * p, int n_threads);
+    GGML_API bool                           ggml_threadpool_params_match        (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
+    GGML_API struct ggml_threadpool *       ggml_threadpool_new                (struct ggml_threadpool_params * params);
+    GGML_API void                           ggml_threadpool_free               (struct ggml_threadpool * threadpool);
+    GGML_API int                            ggml_threadpool_get_n_threads      (struct ggml_threadpool * threadpool);
+    GGML_API void                           ggml_threadpool_pause              (struct ggml_threadpool * threadpool);
+    GGML_API void                           ggml_threadpool_resume             (struct ggml_threadpool * threadpool);
 
     GGML_API struct ggml_tensor * ggml_graph_get_tensor(struct ggml_cgraph * cgraph, const char * name);
 
@@ -3268,6 +3337,10 @@ extern "C" {
 
     GGML_API int ggml_cpu_has_avx        (void);
     GGML_API int ggml_cpu_has_avx_vnni   (void);
+    GGML_API int ggml_cpu_has_avx_vnni_int8(void);
+    GGML_API int ggml_cpu_has_avx_ne_convert(void);
+    GGML_API int ggml_cpu_has_avx_ifma   (void);
+    GGML_API int ggml_cpu_has_cmpccxadd (void);
     GGML_API int ggml_cpu_has_avx2       (void);
     GGML_API int ggml_cpu_has_avx512     (void);
     GGML_API int ggml_cpu_has_avx512_vbmi(void);

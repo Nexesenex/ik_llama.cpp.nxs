@@ -26,6 +26,10 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <chrono>
 
 #if defined(GGML_USE_HIPBLAS)
 #include "vendors/hip.h"
@@ -41,6 +45,18 @@
 
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
+
+// Backend-wide logging: shared by ggml-cuda.cu and the split-out TUs
+// (cuda-pstate-booster.cu, cuda-watchdog.cu). ggml_cuda_log is defined once in
+// ggml-cuda.cu; the callback globals and ggml_backend_cuda_log_set_callback
+// also live there.
+GGML_ATTRIBUTE_FORMAT(2, 3)
+void ggml_cuda_log(enum ggml_log_level level, const char * format, ...);
+
+#define GGML_CUDA_LOG_INFO(...) ggml_cuda_log(GGML_LOG_LEVEL_INFO, __VA_ARGS__)
+#define GGML_CUDA_LOG_WARN(...) ggml_cuda_log(GGML_LOG_LEVEL_WARN, __VA_ARGS__)
+#define GGML_CUDA_LOG_ERROR(...) ggml_cuda_log(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
+#define GGML_CUDA_LOG_DEBUG(...) ggml_cuda_log(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
 
 #define WARP_SIZE 32
 #define CUDART_HMAX   11070 // CUDA 11.7, min. ver. for which __hmax and __hmax2 are known to work (may be higher than needed)
@@ -61,6 +77,10 @@
 // An NVIDIA cc is 100*major + 10*minor and never comes anywhere near either offset
 #define GGML_CUDA_CC_IS_NVIDIA(cc)   (cc < CC_OFFSET_AMD)
 #define GGML_CUDA_CC_IS_AMD(cc)   (cc >= CC_OFFSET_AMD)
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
+#define GGML_CUDA_USE_CUB
+#endif
 
 #define MATRIX_ROW_PADDING 512 // last row of quant. matrices is a multiple of this to avoid out-of-bounds memory accesses
 
@@ -489,6 +509,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_Q6_0> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_Q6_1> {
+    static constexpr int qk = QK6_1;
+    static constexpr int qr = QR6_1;
+    static constexpr int qi = QI6_1;
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_Q8_0> {
     static constexpr int qk = QK8_0;
     static constexpr int qr = QR8_0;
@@ -588,9 +615,9 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ1_BN> {
 
 template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ2_BN> {
-    static constexpr int qk = QK_IQ1BN;
-    static constexpr int qr = QR1_BN;
-    static constexpr int qi = QI1_BN;
+    static constexpr int qk = QK_IQ2BN;
+    static constexpr int qr = QR2_BN;
+    static constexpr int qi = QI2_BN;
 };
 
 template<>
@@ -768,6 +795,51 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ5_K_R4> {
     static constexpr int qi = QI5_XS;
 };
 
+// See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
+// Precompute mp (m' in the paper) and L such that division
+// can be computed using a multiply (high 32b of 64b result)
+// and a shift:
+//
+// n/d = (mulhi(n, mp) + n) >> L;
+static const uint3 init_fastdiv_values(uint64_t d_64) {
+    GGML_ASSERT(d_64 != 0);
+    GGML_ASSERT(d_64 <= std::numeric_limits<uint32_t>::max());
+
+    uint32_t d = (uint32_t)d_64;
+
+    // compute L = ceil(log2(d));
+    uint32_t L = 0;
+    while (L < 32 && (uint32_t{ 1 } << L) < d) {
+        L++;
+    }
+
+    uint32_t mp = (uint32_t) ((uint64_t{ 1 } << 32) * ((uint64_t{ 1 } << L) - d) / d + 1);
+    // pack divisor as well to reduce error surface
+    return make_uint3(mp, L, d);
+}
+
+static __device__ __forceinline__ uint32_t fastdiv(uint32_t n, const uint3 fastdiv_values) {
+    // expects fastdiv_values to contain <mp, L, divisor> in <x, y, z>
+    // fastdiv_values.z (divisor) is unused here but used by fastmodulo/fast_div_modulo
+    // Compute high 32 bits of n * mp
+    const uint32_t hi = __umulhi(n, fastdiv_values.x);
+    // add n, apply bit shift
+    return (hi + n) >> fastdiv_values.y;
+}
+
+static __device__ __forceinline__ uint32_t fastmodulo(uint32_t n, const uint3 fastdiv_values) {
+    // expects  fastdiv_values to contain <mp, L, divisor> in <x, y, z> (see init_fastdiv_values)
+    return n - fastdiv(n, fastdiv_values) * fastdiv_values.z;
+}
+
+// Calculate both division and modulo at once, returns <n/divisor, n%divisor>
+static __device__ __forceinline__ uint2 fast_div_modulo(uint32_t n, const uint3 fastdiv_values) {
+    // expects  fastdiv_values to contain <mp, L, divisor> in <x, y, z> (see init_fastdiv_values)
+    const uint32_t div_val = fastdiv(n, fastdiv_values);
+    const uint32_t mod_val = n - div_val * fastdiv_values.z;
+    return make_uint2(div_val, mod_val);
+}
+
 
 //////////////////////
 
@@ -775,13 +847,17 @@ struct ggml_backend_cuda_context;
 
 struct ggml_cuda_device_info {
     int device_count;
+    int cuda_device_id[GGML_CUDA_MAX_DEVICES]; // maps logical index (0..device_count-1) → CUDA device index (matches nvidia-smi order)
+    int device_id[GGML_CUDA_MAX_DEVICES];       // reverse: CUDA device index → logical index, -1 if unused
 
     struct cuda_device_info {
         int     cc;                 // compute capability
         int     nsm;                // number of streaming multiprocessors
         size_t  smpb;               // max. shared memory per block
         size_t  smpbo;              // max. shared memory per block (with opt-in)
+        bool    integrated;         // Device is integrated as opposed to discrete
         bool    vmm;                // virtual memory support
+        bool    is_tcc;             // TCC driver mode (no WDDM pin quota)
         size_t  vmm_granularity;    // granularity of virtual memory
         size_t  total_vram;
     };
@@ -896,6 +972,17 @@ struct ggml_backend_cuda_context {
     const void * model;
     void * copy_buffer = nullptr;
     size_t copy_size   = 0;
+
+    // CUDA watchdog: monitors GPU progress and detects hangs
+    struct cuda_watchdog {
+        std::thread thread;
+        std::mutex mtx;
+        std::condition_variable cv;
+        cudaEvent_t event = nullptr;
+        bool armed = false;
+        bool stop = false;
+        bool hung = false;
+    } watchdog;
 
     explicit ggml_backend_cuda_context(int device, const void * model);
 

@@ -378,6 +378,13 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
             if (il == 0) ggml_set_name(q_idx, "opg0_idx_q");
 
             ggml_tensor * k_all_idx = ggml_view_2d(ctx0, idx_cache, d_idx, n_kv, idx_cache->nb[1], 0);
+            // The fused ggml_indexer_topk CUDA op only supports F16, F32, and quantized K. F32
+            // hits its cublasSgemm fallback, which faults, and BF16 is not accepted at all
+            // (asserts). Route any non-F16/non-quantized indexer cache through the proven F16
+            // branch (the non-fused mul_mat/top_k paths below accept F16 too).
+            if (!ggml_is_quantized(k_all_idx->type) && k_all_idx->type != GGML_TYPE_F16) {
+                k_all_idx = ggml_cast(ctx0, k_all_idx, GGML_TYPE_F16);
+            }
             ggml_tensor * w_idx = ggml_mul_mat(ctx0, layer.indexer_proj, x_normed);  // [n_ihead, T]
 
             const bool chunk_scores = openpangu_idx_score_should_chunk(n_tokens, OPENPANGU_IDX_SCORE_CHUNK);
@@ -390,7 +397,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                 // The op reads the mask row-strided, so the raw view suffices.
                 ggml_tensor * idx_mask = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens,
                                                       KQ_mask->nb[1], 0);
-                fused_sel_idx = ggml_indexer_topk(ctx0, k_all_idx, q_idx, w_idx, idx_mask,
+                fused_sel_idx = ggml_indexer_topk(ctx0, k_all_idx, q_idx, w_idx, idx_mask, nullptr,
                                                   GGML_UNARY_OP_RELU, (int) topk);    // [topk, T] i32
             }
             if (fused_sel_idx && supports_op(fused_sel_idx)) {
@@ -1159,9 +1166,14 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         if (!ggml_is_contiguous(Rin)) {
             Rin = ggml_cont(ctx0, Rin);
         }
+        // alpha (scale), beta (bias) must be F32 for ggml_hc_pre; gamma feeds the
+        // fused rms_norm gate which also requires F32, so upcast all three here.
+        auto to_f32 = [&](ggml_tensor * t) -> ggml_tensor * {
+            return t && t->type != GGML_TYPE_F32 ? ggml_cast(ctx0, t, GGML_TYPE_F32) : t;
+        };
         ggml_tensor * mixes = build_mhc_pre_projection(
-                Rin, phi, gamma, n_embd, S, hparams.f_norm_rms_eps, true); // [(S+2)*S, T]
-        ggml_tensor * all = ggml_hc_pre(ctx0, mixes, alpha, beta, (int) S, sink_iters, 0.0f);
+                Rin, phi, to_f32(gamma), n_embd, S, hparams.f_norm_rms_eps, true); // [(S+2)*S, T]
+        ggml_tensor * all = ggml_hc_pre(ctx0, mixes, to_f32(alpha), to_f32(beta), (int) S, sink_iters, 0.0f);
         ggml_tensor * h_pre  = ggml_view_2d(ctx0, all, S, n_tokens, S*sizeof(float), 0);
         ggml_tensor * h_post = ggml_view_2d(ctx0, all, S, n_tokens, S*sizeof(float), S*n_tokens*sizeof(float));
         ggml_tensor * h_res  = ggml_view_3d(ctx0, all, S, S, n_tokens,

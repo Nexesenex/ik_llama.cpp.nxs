@@ -10,6 +10,7 @@
 #include <cfloat>
 #include <numeric>
 #include <unordered_map>
+#include <cmath>
 #include <fstream>
 
 static void llama_log_softmax(float * array, size_t size) {
@@ -312,7 +313,10 @@ void llama_sample_typical_impl(struct llama_sampling * smpl, llama_token_data_ar
 
     float entropy = 0.0f;
     for (size_t i = 0; i < candidates->size; ++i) {
-        entropy += -candidates->data[i].p * logf(candidates->data[i].p);
+        const float p = candidates->data[i].p;
+        if (p > 0.0f) {
+            entropy -= p * logf(p);
+        }
     }
 
     // Compute the absolute difference between negative log probability and entropy for each candidate
@@ -608,18 +612,24 @@ llama_token llama_sample_token_mirostat_impl(struct llama_sampling * smpl, llama
     float sum_ti_sq = 0.0;
     for (size_t i = 0; i < size_t(m - 1) && i < candidates->size - 1; ++i) {
         float t_i = logf(float(i + 2) / float(i + 1));
-        float b_i = logf(candidates->data[i].p / candidates->data[i + 1].p);
+        float p_cur  = candidates->data[i].p;
+        float p_next = candidates->data[i + 1].p;
+        if (p_cur <= 0.0f || p_next <= 0.0f) {
+            continue;
+        }
+        float b_i = logf(p_cur / p_next);
         sum_ti_bi += t_i * b_i;
         sum_ti_sq += t_i * t_i;
     }
-    s_hat = sum_ti_bi / sum_ti_sq;
 
-    // Compute k from the estimated s_hat and target surprise value
-    float epsilon_hat = s_hat - 1;
-    float k = powf((epsilon_hat * powf(2, *mu)) / (1 - powf(n_vocab, -epsilon_hat)), 1 / s_hat);
+    if (sum_ti_sq > 0.0f) {
+        s_hat = sum_ti_bi / sum_ti_sq;
+        float epsilon_hat = s_hat - 1;
+        float k = powf((epsilon_hat * powf(2, *mu)) / (1 - powf(n_vocab, -epsilon_hat)), 1 / s_hat);
 
-    // Sample the next word X using top-k sampling
-    llama_sample_top_k_impl((struct llama_sampling *) nullptr, candidates, int(k), 1);
+        llama_sample_top_k_impl((struct llama_sampling *) nullptr, candidates, int(k), 1);
+    }
+
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
     llama_token X = llama_sample_token_impl(smpl, candidates);
     t_start_sample_us = ggml_time_us();
@@ -722,6 +732,13 @@ llama_token llama_sample_token_with_rng_impl(struct llama_sampling * smpl, llama
         probs[j] = sump;
     }
     probs.back() += sump;
+
+    if (sump == 0.0f || std::isnan(sump)) {
+        // all logits underflowed or NaN - pick first candidate
+        smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+        smpl->n_sample++;
+        return candidates->data[0].id;
+    }
 
     auto r = rng();
     auto p = sump * r / rng.max();

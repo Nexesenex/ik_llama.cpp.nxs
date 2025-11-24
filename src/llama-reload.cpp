@@ -340,13 +340,18 @@ reload_info::reload_info(const llama_model_loader & ml) {
         LLAMA_LOG_WARN("hotswap: run-time repacking (-rtr) is enabled; restored tensors cannot reproduce the repacked state and results may be inconsistent\n");
     }
     for (const auto & w : ml.weights) {
-        if (!w.tensor || w.idx >= (int)ml.files.size()) continue;
+        if (!w.tensor) continue;
+        // w.idx is the split number; resolve the file index (they differ
+        // with tensor_ids subsets or skipped missing splits)
+        auto it = ml.split_to_file_idx.find(w.idx);
+        if (it == ml.split_to_file_idx.end() || it->second >= ml.files.size()) continue;
+        const auto & file = ml.files[it->second];
 
         struct stat st;
-        if (stat(ml.files[w.idx]->get_path().c_str(), &st) != 0) continue;
+        if (stat(file->get_path().c_str(), &st) != 0) continue;
 
         tensor_reload_source src;
-        src.path        = ml.files[w.idx]->get_path();
+        src.path        = file->get_path();
         src.data_offset = w.offs;
         src.nbytes      = ggml_nbytes(w.tensor);
         src.last_mtime  = st.st_mtime;
@@ -686,7 +691,7 @@ static bool reload_tensor_split_path(
         bool returning_to_original,
         ggml_backend_buffer_t old_buf)
 {
-		(void)curr_type;
+    (void)curr_type;
     const char * name = ggml_get_name(tensor);
 
     if (returning_to_original) {
@@ -751,7 +756,7 @@ static bool reload_tensor_non_split_path(
         bool returning_to_original,
         ggml_backend_buffer_t old_buf)
 {
-		(void)curr_type;
+    (void)curr_type;
 #ifndef NDEBUG
     const char * name = ggml_get_name(tensor);
 #endif

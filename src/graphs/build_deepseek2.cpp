@@ -446,7 +446,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     }
 
     // ---- write the batch's indexer keys into the persistent indexer-key cache at kv_head ----
-    // kr_l[il] is [head_size, kv_size] (F16, MQA single head). Store {head_size, n_tokens}.
+    // kr_l[il] is [head_size, kv_size] (idx_type_k, MQA single head). Store {head_size, n_tokens}.
     ggml_tensor * kr_cache = kv_self.kr_l[il];
     GGML_ASSERT(kr_cache && "DSA indexer key cache not allocated");
     {
@@ -503,7 +503,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
             cb(indexer_score, "dsa_indexer_score_sink", il);
             ggml_build_forward_expand(gf, indexer_score);
         }
-        auto topk = ggml_indexer_topk(ctx0, indexer_k_b, indexer_q, indexer_weights, indexer_score, GGML_UNARY_OP_RELU, n_top_k);
+        auto topk = ggml_indexer_topk(ctx0, indexer_k_b, indexer_q, indexer_weights, indexer_score, nullptr, GGML_UNARY_OP_RELU, n_top_k);
         if (supports_op(topk)) {
             ggml_build_forward_expand(gf, topk);
             return topk;
@@ -1233,7 +1233,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 }
 
 ggml_cgraph * llm_build_context::build_deepseek2() {
-    const bool tp_mode = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
+    const bool tp_mode = (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
                           model.split_mode == LLAMA_SPLIT_MODE_ATTN);
 #ifdef GGML_USE_VULKAN
     const bool use_f32_attn_precision = true;

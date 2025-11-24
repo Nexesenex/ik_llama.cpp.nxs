@@ -29,6 +29,17 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     result->grammar = nullptr;
     result->rbudget = nullptr;
 
+    // precompute which vocab rows begin with a space for the contextual quote rules
+    // (no_space_after_quote and boost_space_after_quote)
+    if ((result->params.no_space_after_quote || result->params.boost_space_after_quote > 0.0f) && vocab != nullptr) {
+        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+        result->starts_with_space.resize(n_vocab);
+        for (llama_token id = 0; id < n_vocab; ++id) {
+            const auto piece = common_token_to_piece(vocab, id, false);
+            result->starts_with_space[id] = !piece.empty() && piece[0] == ' ';
+        }
+    }
+
     struct llama_grammar* grmr = nullptr;
     const std::string & grammar_str = common_grammar_value(params.grammar);
     if (grammar_str.compare(0, 11, "%llguidance") == 0) {
@@ -179,6 +190,23 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     result->elb_idx = 0;
     result->elb_search_pos = 0;
 
+    // find an EOG token to emit when one of the special EOG strings is hit
+    if (!params.special_eosg_tokens.empty()) {
+        result->eosg_token = llama_vocab_eos(vocab);
+        if (result->eosg_token == LLAMA_TOKEN_NULL) {
+            const int n_vocab = llama_vocab_n_tokens(vocab);
+            for (llama_token id = 0; id < n_vocab; ++id) {
+                if (llama_vocab_is_eog(vocab, id)) {
+                    result->eosg_token = id;
+                    break;
+                }
+            }
+        }
+        if (result->eosg_token == LLAMA_TOKEN_NULL) {
+            LOG_ERR("%s: no EOG token found, special EOG strings will be disabled\n", __func__);
+        }
+    }
+
     return result;
 }
 
@@ -219,11 +247,15 @@ static void llama_grammar_reset(common_sampler * ctx) {
 void common_sampler_reset(common_sampler * ctx) {
     // llama_grammar_reset(ctx);
     ctx->prev.clear();
+    ctx->quote_open = false;
     llama_sampler_dry_reset(ctx->smpl);
 
     llama_free_adaptive_p(ctx->adapt_p_ctx);
     ctx->adapt_p_ctx = llama_init_adaptive_p(ctx->params.adaptive_target, ctx->params.adaptive_decay, ctx->params.adaptive_updt_w_cur, ctx->rng());
     ctx->speculative_rng.seed(ctx->speculative_seed);
+    ctx->special_eosg_text.clear();
+    ctx->special_eosg_hit = false;
+    ctx->special_eosg_matched.clear();
 }
 
 void common_sampler_review(common_sampler * ctx, const size_t n_unsent, const bool rewind_status) {
@@ -250,6 +282,12 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
     dst->speculative_seed = src->speculative_seed;
     dst->speculative_rng = src->speculative_rng;
     dst->server_biases = src->server_biases;
+    dst->special_eosg_text = src->special_eosg_text;
+    dst->special_eosg_hit = src->special_eosg_hit;
+    dst->special_eosg_matched = src->special_eosg_matched;
+    dst->eosg_token = src->eosg_token;
+    dst->quote_open = src->quote_open;
+    dst->starts_with_space = src->starts_with_space;
 
     if (dst->grammar) {
         llama_grammar_free(dst->grammar);
@@ -504,6 +542,26 @@ static bool grammar_should_apply(struct common_sampler * gsmpl) {
     return true;
 }
 
+static llama_token llama_sampling_check_special_eog(
+        struct common_sampler * ctx_sampling,
+        struct llama_context * ctx_main,
+        llama_token id) {
+    const auto & tokens = ctx_sampling->params.special_eosg_tokens;
+    if (tokens.empty() || ctx_sampling->special_eosg_hit || ctx_sampling->eosg_token == LLAMA_TOKEN_NULL) {
+        return id;
+    }
+    const std::string text = ctx_sampling->special_eosg_text + common_token_to_piece(ctx_main, id);
+    for (const auto & token : tokens) {
+        if (text.find(token) != std::string::npos) {
+            ctx_sampling->special_eosg_hit = true;
+            ctx_sampling->special_eosg_matched = token;
+            LOG("%s: special EOG string '%s' found in generated text, stopping generation\n", __func__, token.c_str());
+            return ctx_sampling->eosg_token;
+        }
+    }
+    return id;
+}
+
 static llama_token llama_sampling_sample_impl(
                   struct common_sampler * ctx_sampling,
                   struct llama_context * ctx_main,
@@ -521,6 +579,7 @@ static llama_token llama_sampling_sample_impl(
     std::vector<float> original_logits;
     llama_sampling_prepare(ctx_sampling, ctx_main, ctx_cfg, idx, /* grammar_first= */ grammar_first, &original_logits);
     llama_token_data_array & cur_p = ctx_sampling->cur_p;
+
     if (ctx_sampling->grammar != NULL && !grammar_first) {
         GGML_ASSERT(!original_logits.empty());
     }
@@ -534,6 +593,13 @@ static llama_token llama_sampling_sample_impl(
     if (ctx_sampling->grammar != NULL && grammar_first && grammar_should_apply(ctx_sampling)) {
         // Apply grammar constraints to all candidates
         llama_grammar_apply(ctx_sampling->grammar, ctx_main, &cur_p);
+    }
+
+    // prefilter AFTER grammar: trimming before constraints apply can drop
+    // grammar-legal tokens (leaving zero legal candidates on resample)
+    const int32_t max_candidates = params.max_candidates;
+    if (max_candidates > 0) {
+        llama_sample_top_k(ctx_main, &cur_p, max_candidates, 1);
     }
 
     // llama_sampler_apply
@@ -568,7 +634,7 @@ static llama_token llama_sampling_sample_impl(
     }
 
     if (grammar_first || !grammar_should_apply(ctx_sampling)) {
-        return id;
+        return llama_sampling_check_special_eog(ctx_sampling, ctx_main, id);
     }
 
     if (ctx_sampling->grammar != NULL && !grammar_first && grammar_should_apply(ctx_sampling)) {
@@ -597,7 +663,7 @@ static llama_token llama_sampling_sample_impl(
     }
     ctx_sampling->n_valid = temp == 0.0f ? 0 : cur_p.size;
 
-    return id;
+    return llama_sampling_check_special_eog(ctx_sampling, ctx_main, id);
 }
 
 static llama_token_data_array llama_sampling_prepare_impl(
@@ -644,6 +710,24 @@ static llama_token_data_array llama_sampling_prepare_impl(
         common_expiring_logit_bias_apply(ctx_sampling, logits);
     }
 
+    if (params.eos_token_probability != 1.0f) {
+        const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx_main));
+        if (params.eos_token_probability == 0.0f) {
+            for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+                if (llama_vocab_is_eog(vocab, token_id)) {
+                    logits[token_id] = -INFINITY;
+                }
+            }
+        } else {
+            const float logp = std::log(params.eos_token_probability);
+            for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+                if (llama_vocab_is_eog(vocab, token_id)) {
+                    logits[token_id] += logp;
+                }
+            }
+        }
+    }
+
     cur.resize(n_vocab);
 
     if ((ctx_sampling->server_biases != nullptr) && (ctx_sampling->server_biases->size() == n_vocab)) {
@@ -683,6 +767,26 @@ static llama_token_data_array llama_sampling_prepare_impl(
                     cur_p.data[idx].logit = nl_logit;
                     break;
                 }
+            }
+        }
+    }
+
+    // contextual quote rule: while inside an open " quote, disallow tokens that begin with a space
+    // (e.g. " You -> "You, and a spaced closing quote today. " -> today.")
+    if (params.no_space_after_quote && ctx_sampling->quote_open && !ctx_sampling->starts_with_space.empty()) {
+        for (size_t idx = 0; idx < cur_p.size; ++idx) {
+            if (ctx_sampling->starts_with_space[cur_p.data[idx].id]) {
+                cur_p.data[idx].logit = -INFINITY;
+            }
+        }
+    }
+
+    // contextual quote rule: while inside an open " quote, boost logits of tokens that begin with a space
+    // (e.g. "You -> " You)
+    if (params.boost_space_after_quote > 0.0f && ctx_sampling->quote_open && !ctx_sampling->starts_with_space.empty()) {
+        for (size_t idx = 0; idx < cur_p.size; ++idx) {
+            if (ctx_sampling->starts_with_space[cur_p.data[idx].id]) {
+                cur_p.data[idx].logit += params.boost_space_after_quote;
             }
         }
     }
@@ -735,6 +839,14 @@ void common_sampler_accept(
         ctx_sampling->prev.push_back(token);
     }
 
+    // contextual quote rule: toggle the open-quote state when the accepted piece contains a quote mark
+    if (ctx_sampling->params.no_space_after_quote || ctx_sampling->params.boost_space_after_quote > 0.0f) {
+        const auto piece = common_token_to_piece(ctx_main, token, false);
+        if (std::count(piece.begin(), piece.end(), '"') & 1) {
+            ctx_sampling->quote_open = !ctx_sampling->quote_open;
+        }
+    }
+
     // grammar_should_apply() checks the reasoning budget state, so calculate this before we accept
     const auto accept_grammar = is_generated && grammar_should_apply(ctx_sampling);
     if (ctx_sampling->rbudget && is_generated) {
@@ -746,6 +858,20 @@ void common_sampler_accept(
     }
     if (ctx_sampling->smpl) {
         llama_sampler_dry_accept(ctx_sampling->smpl, token);
+    }
+
+    // track generated text for the special EOG string check
+    if (is_generated && !ctx_sampling->params.special_eosg_tokens.empty() && !ctx_sampling->special_eosg_hit) {
+        ctx_sampling->special_eosg_text += common_token_to_piece(ctx_main, token);
+        // only the tail is needed to detect the (short) markers
+        size_t cap = 0;
+        for (const auto & t : ctx_sampling->params.special_eosg_tokens) {
+            cap = std::max(cap, t.size());
+        }
+        cap += 1024;
+        if (ctx_sampling->special_eosg_text.size() > cap) {
+            ctx_sampling->special_eosg_text.erase(0, ctx_sampling->special_eosg_text.size() - cap);
+        }
     }
 
     if (ctx_sampling->elb_states.size() > ctx_sampling->elb_idx) {

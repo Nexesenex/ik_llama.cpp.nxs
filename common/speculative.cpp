@@ -1367,6 +1367,16 @@ common_speculative * common_speculative_init(
             cparams_dft.dflash_query_capacity = query_capacity;
         }
 
+        // qwen4exp shared companion: the predictor-only GGUF omits token_embd
+        // (qwen4exp.nextn_shared_target_tensors); borrow the target IO tensors
+        // before the draft context is created, like the DFlash sharing above.
+        if (!has_dflash_stage && !llama_model_share_qwen4exp_mtp_tensors(
+                    params.model_dft, llama_get_model(ctx_tgt))) {
+            LOG_ERR("%s: failed to share target IO tensors with the qwen4exp shared MTP companion\n", __func__);
+            return nullptr;
+        }
+
+
         ctx_dft = llama_init_from_model(params.model_dft, cparams_dft);
         if (ctx_dft == nullptr) {
             LOG_ERR("%s", "failed to create draft context\n");
@@ -2008,7 +2018,6 @@ bool common_speculative_load_draft_model(
     params_dft.cache_type_k     = params.cache_type_k.empty() ? params_base.cache_type_k : params.cache_type_k;
     params_dft.cache_type_v     = params.cache_type_v.empty() ? params_base.cache_type_v : params.cache_type_v;
 
-
     if (!params.params.empty()) {
         auto [argc, argv] = parse_command_line("llama-server " + params.params);
         if (!gpt_params_parse(argc, argv, params_dft)) {
@@ -2092,7 +2101,19 @@ bool common_speculative_prepare_mtp_runtime(
     if (!has_external_mtp) {
         gpt_params params_mtp = params_base;
         params_mtp.pooling_type = LLAMA_POOLING_TYPE_NONE;
+        // The embedded MTP companion is a second, fully independent llama_context of
+        // the same model. Its KV cache must mirror the target's (tail-layer full
+        // attention), so its n_ctx stays equal to the target's. Its graph compute
+        // buffers, however, are a second full set on top of the target's: prompt
+        // warmup re-decodes the target's batches, and with a large target n_ubatch
+        // those buffers can exceed the smallest device in a multi-GPU setup (OOM on
+        // the first long prompt). Draft generation only ever uses 1..n_max tokens per
+        // step, so cap the companion's n_ubatch to the stock default to keep its
+        // compute buffers small.
+        params_mtp.n_ubatch = std::min(params_mtp.n_ubatch, 512);
         params.cparams_dft = common_context_params_to_llama(params_mtp);
+        LOG_INF("%s: embedded MTP companion uses n_ctx=%d, n_batch=%d, n_ubatch=%d\n",
+                __func__, params.cparams_dft.n_ctx, params.cparams_dft.n_batch, params.cparams_dft.n_ubatch);
     }
 
     params.cparams_dft.mtp         = true;
@@ -2879,7 +2900,6 @@ static bool mtp_model_uses_recurrent_conditioning(const common_speculative_state
     if (state.ctx_mtp == nullptr) {
         return false;
     }
-    return true;
 
     const llama_model * model = llama_get_model(state.ctx_mtp);
     if (!llama_model_has_recurrent(model)) {

@@ -12,6 +12,7 @@ struct llama_model;
 #include <map>
 #include <set>
 #include <memory>
+#include <atomic>
 
 struct llama_swa_window_view {
     int64_t w_view  = 0;
@@ -116,6 +117,29 @@ struct llama_kv_cache {
     // computed before each graph build
     uint32_t n = 0;
 
+    bool     swa_ring = false;
+    uint32_t ring_w   = 0; // rows per sequence (the padded window)
+    uint32_t ring_n_swa = 0; // hparams.n_swa, needed by seq_rm rewind-safety check
+    std::vector<uint32_t> ring_occ;
+
+    struct ring_part {
+        uint32_t src_off;
+        uint32_t n;
+        uint32_t row;
+    };
+    std::vector<ring_part> ring_parts;
+
+    uint32_t ring_row(llama_seq_id s, llama_pos p) const {
+        GGML_ASSERT(s >= 0 && (uint32_t)s * ring_w < size_swa);
+        return (uint32_t) s * ring_w + (uint32_t) (p % (llama_pos) ring_w);
+    }
+
+    uint32_t ring_row_of_cell(uint32_t c) const {
+        const auto & cell = cells[c];
+        GGML_ASSERT(!cell.seq_id.empty());
+        return ring_row(*cell.seq_id.begin(), cell.pos);
+    }
+
     ggml_type type_k = GGML_TYPE_F16;
     ggml_type type_v = GGML_TYPE_F16;
 
@@ -174,6 +198,10 @@ struct llama_kv_cache {
         // One tensor per recurrent layer, each sized [conv_dim * max_tokens].
         //std::vector<std::vector<ggml_tensor *>> per_step_qkv;
         std::vector<std::vector<ggml_tensor *>> per_step_conv;
+        // Qwen4Exp PLE checkpoint state
+        std::vector<std::vector<ggml_tensor *>> per_step_ple;
+        std::vector<int64_t> per_step_ple_dim;
+        std::vector<int64_t> per_step_ple_offset;
 
         int32_t per_step_n_tokens = 0;
         int32_t per_step_max_allocated = 0;
@@ -229,6 +257,28 @@ struct llama_kv_cache {
         void release_dsv4_per_step();
         void release_dsv4_snapshot();
 
+        void release_per_step() {
+            for (struct ggml_context * ctx : per_step_ctxs) {
+                ggml_free(ctx);
+            }
+            for (ggml_backend_buffer_t buf : per_step_bufs) {
+                ggml_backend_buffer_free(buf);
+            }
+            per_step_ctxs.clear();
+            per_step_bufs.clear();
+            per_step_ssm.clear();
+            per_step_conv.clear();
+            per_step_ple.clear();
+            per_step_ple_dim.clear();
+            per_step_ple_offset.clear();
+            per_step_n_tokens = 0;
+            per_step_max_allocated = 0;
+            per_step_ssm_state_size = 0;
+            per_step_conv_state_dim = 0;
+            per_step_conv_dim = 0;
+            per_step_d_conv = 0;
+        }
+
         void release() {
             release_dsv4_per_step();
             release_dsv4_snapshot();
@@ -246,17 +296,7 @@ struct llama_kv_cache {
             allocated = false;
             saved = false;
 
-            for (struct ggml_context * ctx : per_step_ctxs) {
-                ggml_free(ctx);
-            }
-            per_step_ctxs.clear();
-            for (ggml_backend_buffer_t buf : per_step_bufs) {
-                ggml_backend_buffer_free(buf);
-            }
-            per_step_bufs.clear();
-            per_step_ssm.clear();
-            per_step_conv.clear();
-            per_step_max_allocated = 0;
+            release_per_step();
         }
 
         ~gpu_checkpoint() {
@@ -274,7 +314,7 @@ struct llama_kv_cache {
 
     // Per-step checkpoint: allocate, restore step k's full state (SSM + conv) to cache
     bool per_step_alloc(const llama_model & model, int max_tokens);
-    bool per_step_restore(const llama_model & model, ggml_backend_sched_t sched, int step);
+    bool per_step_restore(ggml_backend_sched_t sched, int step, uint32_t slot);
 
     ~llama_kv_cache() {
         for (struct ggml_context * ctx : ctxs) {
@@ -304,7 +344,33 @@ struct llama_control_vector {
     struct ggml_tensor * apply_to(struct ggml_context * ctx, struct ggml_tensor * cur, int  il) const {
         ggml_tensor * layer_dir = tensor_for(il);
         if (layer_dir != nullptr) {
-            cur = ggml_add(ctx, cur, layer_dir);
+            if (cur->op == GGML_OP_REDUCE) {
+                // In tensor-parallel mode the layer output is a REDUCE node: a view of the
+                // last device's partial, and after the reduce runs every device's partial
+                // holds the full sum. Adding the direction on top of the view would force
+                // the scheduler to copy the whole hidden state to every device for the next
+                // layer. Instead, apply the direction to the last local partial and rebuild
+                // the reduce so the full sum (including the direction) is written back into
+                // every device's partial, preserving the local-partial consumption pattern.
+                const int n = cur->op_params[1];
+                const uint32_t placeholders = cur->op_params[4];
+                ggml_tensor * srcs[GGML_MAX_SRC];
+                for (int j = 0; j < n; ++j) {
+                    srcs[j] = cur->src[j];
+                }
+                int last = n - 1;
+                while (last >= 0 && srcs[last] == nullptr) --last;
+                GGML_ASSERT(last >= 0);
+                // the original reduce is already expanded into the graph; turn it into a
+                // no-op so it does not overwrite the partials with the direction-free sum
+                // before the rebuilt reduce runs
+                cur->op_params[3] = 1;
+                srcs[last] = ggml_add(ctx, srcs[last], layer_dir);
+                cur = ggml_reduce(ctx, srcs, n, GGML_OP_ADD);
+                cur->op_params[4] = placeholders;
+            } else {
+                cur = ggml_add(ctx, cur, layer_dir);
+            }
         }
         return cur;
     }
@@ -343,6 +409,10 @@ struct llama_context {
 #endif
     ggml_backend_t backend_cpu = nullptr;
 
+    ggml_threadpool_t threadpool       = nullptr;
+    ggml_threadpool_t threadpool_batch = nullptr;
+    bool              threadpool_owned = false;
+
     bool has_evaluated_once = false;
 
     int64_t t_start_us;
@@ -356,6 +426,16 @@ struct llama_context {
     int32_t n_p_eval = 0; // number of tokens in eval calls for the prompt (with batch size > 1)
     int32_t n_eval   = 0; // number of eval calls
 
+    // Shark GPU clock elevation state (Windows only)
+    bool shark_active = false;
+    bool shark_prefill_done = false; // true after first prefill (n_tokens > 8)
+
+    // CUDA heartbeat / NVAPI poller state (Windows only). Per-context like
+    // shark_prefill_done so multiple contexts do not cross-trigger each other:
+    // a static local would let one context's first prefill arm another's gate.
+    bool hb_prefill_done     = false; // true after first prefill (n_tokens > 8)
+    bool nvapi_prefill_done  = false; // true after first prefill (n_tokens > 8)
+
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_t buf_output = nullptr;
 
@@ -367,6 +447,21 @@ struct llama_context {
     size_t  output_size = 0; // capacity (of tokens positions) for the output buffers
     int32_t n_outputs   = 0; // number of actually-used outputs in the current ubatch or last logical batch
     int32_t n_outputs_embd = 0; // number of embedding rows produced for the current logical batch
+
+    // SER expert-usage accounting. When enabled, a sched eval callback runs at
+    // ARGSORT_THRESH compute time and counts, per token, how many of the
+    // selected top-k experts are actually kept (non-negative = not dropped).
+    // n_experts_used_total is the sum over counted tokens of kept experts;
+    // n_expert_slots_total is the number of counted (token, MoE layer) pairs.
+    // Counters are atomic: the eval callback can fire from the async tenpar
+    // worker threads, which call ggml_backend_sched_eval concurrently.
+    bool     count_experts_used   = false;
+    std::atomic<uint64_t> n_experts_used_total = 0;
+    std::atomic<uint64_t> n_expert_slots_total = 0;
+
+    // previous eval callback saved while the expert-counting callback is active
+    ggml_backend_sched_eval_callback prev_cb_eval            = nullptr;
+    void *                           prev_cb_eval_user_data = nullptr;
 
     bool logits_all = false;
 
@@ -637,6 +732,10 @@ struct llama_context {
     struct ggml_tensor * inp_mtp_states = nullptr;
     struct ggml_tensor * inp_mtp_carry = nullptr; // F32 [n_embd, nextn-1] per-head hidden at the last committed position
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k
+    struct ggml_tensor * inp_kpool_cells     = nullptr; // I32 [kpool*n_pool] cell index of each pool member (pool b, member j at [b*kpool+j])
+    struct ggml_tensor * inp_kpool_bias      = nullptr; // F32 [n_pool, n_tokens] 0 if pool complete & visible to query, else -inf
+    struct ggml_tensor * inp_kpool_tail      = nullptr; // I32 [kpool-1, n_tokens] trailing incomplete pool cells (null when kpool==1)
+    struct ggml_tensor * inp_kpool_ape_slots = nullptr; // I32 [kpool] identity [0..kpool-1], gathers the ape rows in order
 
     // Qwen sparse attention: everything that depends on cache layout is computed on the host,
     // so the graph only gathers, pools and scores. One entry per distinct compress ratio.
@@ -656,10 +755,11 @@ struct llama_context {
     // pool every block; set on state restore and defrag, cleared by that graph's host fill
     bool qsa_pooled_stale = false;
 
-    // each sequence's recent tokens, read by the n-gram hash when a ubatch does not carry its
-    // first tokens' predecessors; trusted only while contiguous with the incoming position
+    // each sequence's tokens indexed by position, read by the n-gram hash when a ubatch does not
+    // carry its first tokens' predecessors. toks[p] is the token at position p (EOS for unwritten
+    // holes). Indexing by position keeps the hash exact across a speculative rollback: rejected
+    // drafts are simply overwritten at their positions instead of poisoning a sliding window.
     struct ple_history {
-        llama_pos next_pos = -1;
         std::vector<llama_token> toks;
     };
     std::map<llama_seq_id, ple_history> ple_hist;
@@ -701,6 +801,14 @@ struct llama_context {
         size_t        step = 0;
     };
     std::vector<CacheCopy> cache_copies;
+
+    struct RingCopy {
+        ggml_tensor * cpy = nullptr;
+        size_t        step = 0;
+        uint32_t      n    = 0;
+    };
+    std::vector<std::vector<RingCopy>> ring_copies;
+    uint64_t n_graph_rebuilds = 0;
     // GLM-DSA lightning indexer: the indexer-key cache (kr_l) write is a separate ggml_cpy that
     // the K/V cache_copies fixup does NOT cover. Under graph reuse (FA pads KV to 256, so n_kv
     // stays constant across consecutive decode ubatches and the graph IS reused) its view_offs
@@ -727,3 +835,5 @@ struct llama_context {
 
     int max_nodes(int n_tokens, int n_kv) const;
 };
+
+uint64_t llama_context_n_graph_rebuilds(const llama_context * ctx);

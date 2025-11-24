@@ -43,6 +43,8 @@ struct post_norm_data {
     float         f_rms_eps;
 };
 
+bool can_use_kv_swa_reduction(const llama_cparams & cparams, const llama_kv_cache & kv);
+
 struct llm_build_context {
     const llama_model    & model;
           llama_context  & lctx;
@@ -90,7 +92,7 @@ struct llm_build_context {
     const bool fused_mmad;
     const bool rope_cache;
     const bool k_cache_hadamard;
-    const bool split_mode_graph_scheduling;
+    const bool split_mode_tensor_parallel_scheduling;
     const int  min_experts;
     const float thresh_experts;
 
@@ -193,6 +195,7 @@ struct llm_build_context {
             ggml_tensor * wq, ggml_tensor * bq,
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
+            ggml_tensor * wkv, ggml_tensor * bkv,
             ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il, bool add_graph_split = false) const;
 
     std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_mul_mat_qkv_gated(ggml_cgraph * gf, ggml_tensor * cur,
@@ -431,6 +434,7 @@ struct llm_build_context {
 
     ggml_cgraph * build_bailingmoe2();
     ggml_cgraph * build_bailingmoe3();
+    ggml_cgraph * build_glm5next();
 
     ggml_cgraph * build_minimaxm2();
     ggml_cgraph * build_minimaxm3();
@@ -645,6 +649,10 @@ llm_expert_gating_func_type   gating_op,
         struct ggml_tensor * rope_cache
     );
 
+    struct ggml_tensor * build_glm5next_mtp(
+            const llama_layer & mtp_layer,
+            struct ggml_tensor * prev_embeddings,
+            struct ggml_cgraph * gf);
     struct ggml_tensor * build_qwen35_mtp(
         const struct llama_layer & mtp_layer,
         struct ggml_tensor * prev_embeddings,

@@ -132,16 +132,27 @@ add_library(llama
             graphs/build_openai.cpp
             graphs/build_bailingmoe2.cpp
             graphs/build_bailingmoe3.cpp
+            graphs/build_glm5next.cpp
             graphs/build_minimaxm2.cpp
             graphs/build_minimaxm3.cpp
             graphs/build_smollm3.cpp
             )
+
+if (WIN32)
+    target_sources(llama PRIVATE ../common/nvapi_poller.cpp ../common/nvapi_poller.h)
+endif()
 
 target_include_directories(llama PUBLIC . ../include)
 target_include_directories(llama PRIVATE ../ggml/src)
 target_compile_features   (llama PUBLIC cxx_std_17)
 
 target_link_libraries(llama PUBLIC ggml)
+
+if (WIN32)
+    target_include_directories(llama PRIVATE ../nvapi)
+    target_link_directories(llama PRIVATE ../nvapi/amd64)
+    target_link_libraries(llama PRIVATE nvapi64)
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)

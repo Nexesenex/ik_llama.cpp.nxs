@@ -8,11 +8,16 @@
 
 #include "iqk/iqk_quantize.h"
 
+#if defined(GGML_USE_CUDA)
+#  include "ggml-cuda.h"
+#endif
+
 #include <thread>
 #include <regex>
 #include <mutex>
 #include <fstream>
 #include <filesystem>
+#include <unordered_set>
 
 //
 // quantization
@@ -291,6 +296,7 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_IQ5_K_R4:
             case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q5_K:   new_type = GGML_TYPE_Q6_0;   break;
+            case GGML_TYPE_Q6_1:
             case GGML_TYPE_IQ6_K:
             case GGML_TYPE_Q6_K_R4:
             case GGML_TYPE_Q8_K_R8:
@@ -960,9 +966,84 @@ static llama_ftype repacked_ftype(llama_ftype ftype) {
     return ftype;
 }
 
+#if defined(GGML_USE_CUDA)
+// True when do_quantize's CUDA branch will handle `new_type` for this tensor.
+// Mirrors the CPU-side dispatch: Q4_0 uses the legacy ref (CUDA) when no
+// imatrix is present, the make_qx_quants imatrix path (also CUDA) when an
+// imatrix is present, and the symmetric kernel (CPU) when --symmetric-q4-0 is
+// requested.
+static bool cuda_quantize_eligible(ggml_type new_type, const float * imatrix, const llama_model_quantize_params * params) {
+    if (!params->cuda_quantize) return false;
+    switch (new_type) {
+        case GGML_TYPE_Q8_0:
+            return true;
+        case GGML_TYPE_Q4_0:
+            return !(params->user_data && static_cast<const quantize_user_data *>(params->user_data)->symmetric_q4_0);
+        case GGML_TYPE_Q5_0:
+            return true;
+        case GGML_TYPE_Q6_0:
+            return true;
+        default:
+            return false;
+    }
+}
+#else
+static bool cuda_quantize_eligible(ggml_type new_type, const float * imatrix, const llama_model_quantize_params * params) {
+    (void) new_type; (void) imatrix; (void) params;
+    return false;
+}
+#endif
+
 static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_type, const float * f32_data, char * new_data,
         const float * imatrix, std::vector<std::thread> & workers, size_t & new_size, int chunk_size_multiplier,
         const llama_model_quantize_params * params) {
+#if defined(GGML_USE_CUDA)
+    // bit-exact CUDA quantization of the legacy (non-OLS) block quants.
+    // Q8_0 has no CPU-side alternative (ref is always used). Q4_0 without an
+    // imatrix uses the legacy ref, with an imatrix the make_qx_quants path -
+    // both byte-exact on CUDA. --symmetric-q4-0 stays on the CPU.
+    if (cuda_quantize_eligible(new_type, imatrix, params)) {
+        // one expert slice at a time; the imatrix slice follows the CPU path's
+        // convention of imatrix + i02*ne[0] (one weight per column, reused for
+        // every row of the expert)
+        const int64_t nelements_matrix = tensor->ne[0]*tensor->ne[1];
+        const auto quantize = [&](const float * src, void * dst, const float * im) -> size_t {
+            if (new_type == GGML_TYPE_Q8_0) {
+                if (im) {
+                    return ggml_cuda_quantize_q8_0_imatrix(src, dst, tensor->ne[1], tensor->ne[0], im);
+                }
+                return ggml_cuda_quantize_q8_0(src, dst, tensor->ne[1], tensor->ne[0]);
+            }
+            if (new_type == GGML_TYPE_Q5_0) {
+                if (im) {
+                    return ggml_cuda_quantize_q5_0_imatrix(src, dst, tensor->ne[1], tensor->ne[0], im);
+                }
+                return ggml_cuda_quantize_q5_0(src, dst, tensor->ne[1], tensor->ne[0]);
+            }
+            if (new_type == GGML_TYPE_Q6_0) {
+                if (im) {
+                    return ggml_cuda_quantize_q6_0_imatrix(src, dst, tensor->ne[1], tensor->ne[0], im);
+                }
+                return ggml_cuda_quantize_q6_0(src, dst, tensor->ne[1], tensor->ne[0]);
+            }
+            if (im) {
+                return ggml_cuda_quantize_q4_0_imatrix(src, dst, tensor->ne[1], tensor->ne[0], im);
+            }
+            return ggml_cuda_quantize_q4_0(src, dst, tensor->ne[1], tensor->ne[0]);
+        };
+        new_size = 0;
+        for (int64_t i02 = 0; i02 < tensor->ne[2]; ++i02) {
+            void * this_data = (char *)new_data + i02*ggml_row_size(new_type, tensor->ne[0])*tensor->ne[1];
+            const float * this_imatrix = imatrix ? imatrix + i02*tensor->ne[0] : nullptr;
+            const size_t nb = quantize(f32_data + i02*nelements_matrix, this_data, this_imatrix);
+            if (nb == 0) {
+                throw std::runtime_error(std::string("CUDA ") + ggml_type_name(new_type) + " quantization failed");
+            }
+            new_size += nb;
+        }
+        return;
+    }
+#endif
     if (nthread > 1 && (tensor->ne[2] % nthread == 0 || tensor->ne[2] >= 2*nthread)) {
         std::mutex mutex;
         int counter = 0;
@@ -1026,7 +1107,7 @@ static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_t
     }
 }
 
-static void llama_model_quantize_internal(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
+static void llama_model_quantize_internal(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params, const size_t * tensor_ids) {
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
 
@@ -1036,6 +1117,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_Q5_0: default_type = GGML_TYPE_Q5_0; break;
         case LLAMA_FTYPE_MOSTLY_Q5_1: default_type = GGML_TYPE_Q5_1; break;
         case LLAMA_FTYPE_MOSTLY_Q6_0: default_type = GGML_TYPE_Q6_0; break;
+        case LLAMA_FTYPE_MOSTLY_Q6_1: default_type = GGML_TYPE_Q6_1; break;
         case LLAMA_FTYPE_MOSTLY_Q8_0: default_type = GGML_TYPE_Q8_0; break;
         case LLAMA_FTYPE_MOSTLY_Q8_KV:default_type = GGML_TYPE_Q8_KV;break;
         case LLAMA_FTYPE_MOSTLY_F16:  default_type = GGML_TYPE_F16;  break;
@@ -1135,14 +1217,25 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     constexpr bool use_mmap = false;
 #endif
 
+    // virtual-map: track which tensor names have been patched with BF16 data from the source
+    std::unordered_set<std::string> virtual_map_targets;
+    std::vector<no_init<uint8_t>> vmap_data;
+
     llama_model_kv_override * kv_overrides = nullptr;
     if (params->kv_overrides) {
         auto v = (std::vector<llama_model_kv_override>*)params->kv_overrides;
         kv_overrides = v->data();
     }
-    llama_model_loader ml(fname_inp, 0, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
+    // When --virtual-map is used, load the reference model (which has ALL tensors) instead of the source.
+    // With --skip-missing-splits the source split files whose tensors already exist quantized in the
+    // destination are tolerated as missing.
+    llama_model_loader ml(
+            params->virtual_map ? std::string(params->virtual_map) : fname_inp,
+            0, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
             /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false,
-            /* defer_experts */ false, kv_overrides, nullptr);
+            /* defer_experts */ false, kv_overrides, nullptr,
+            params->virtual_map ? nullptr : tensor_ids,
+            params->skip_missing_splits);
     ml.init_mappings(false); // no prefetching
 
     llama_model model;
@@ -1158,6 +1251,69 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     }
 
     struct quantize_state_internal qs(model, params);
+
+    // --virtual-map: patch BF16 data from source model into reference model tensors
+    if (params->virtual_map && tensor_ids) {
+        const int64_t t_start_us = llama_time_us();
+        LLAMA_LOG_INFO("%s: virtual-map: loading source BF16 tensors from '%s'\n", __func__, fname_inp.c_str());
+
+        llama_model_loader src_ml(fname_inp, 0, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
+                /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false,
+                /* defer_experts */ false, /* kv_overrides */ nullptr, /* tensor_buft_overrides */ nullptr, tensor_ids,
+                params->skip_missing_splits);
+        src_ml.init_mappings(false);
+
+        // read_buf for non-mmap source reading
+        std::vector<no_init<uint8_t>> src_read_buf;
+
+        // persistent storage for all patched tensor data (sized upfront so the pointers stay valid)
+        size_t total_nbytes = 0;
+        for (int i = 0; i < src_ml.n_tensors; ++i) {
+            total_nbytes += ggml_nbytes(src_ml.get_weight(i)->tensor);
+        }
+        vmap_data.resize(total_nbytes);
+        uint8_t * vmap_buf = reinterpret_cast<uint8_t*>(vmap_data.data());
+
+        size_t vmap_offs = 0;
+        for (int i = 0; i < src_ml.n_tensors; ++i) {
+            const auto * src_weight = src_ml.get_weight(i);
+            auto * src_tensor = src_weight->tensor;
+            const std::string name = ggml_get_name(src_tensor);
+
+            size_t nbytes = ggml_nbytes(src_tensor);
+
+            if (!src_ml.use_mmap) {
+                if (src_read_buf.size() < nbytes) {
+                    src_read_buf.resize(nbytes);
+                }
+                src_tensor->data = src_read_buf.data();
+            }
+            src_ml.load_data_for(src_tensor);
+
+            // Find matching tensor in reference model by name
+            const auto * ref_weight = ml.get_weight(name.c_str());
+            if (!ref_weight) {
+                throw std::runtime_error(format("virtual_map: tensor '%s' not found in reference model", name.c_str()));
+            }
+            auto * ref_tensor = ref_weight->tensor;
+
+            // Copy the BF16 data into the persistent buffer
+            std::memcpy(vmap_buf + vmap_offs, src_tensor->data, nbytes);
+
+            // Replace the reference tensor's type and data with the source BF16 data
+            LLAMA_LOG_INFO("%s: virtual-map: patching '%s' (%s -> %s)\n",
+                    __func__, name.c_str(), ggml_type_name(ref_tensor->type), ggml_type_name(src_tensor->type));
+            ref_tensor->type = src_tensor->type;
+            ref_tensor->data = vmap_buf + vmap_offs;
+            vmap_offs += nbytes;
+
+            virtual_map_targets.insert(name);
+        }
+
+        const int64_t t_end_us = llama_time_us();
+        LLAMA_LOG_INFO("%s: virtual-map: patched %d tensors in %8.2f ms\n",
+                __func__, (int)virtual_map_targets.size(), (t_end_us - t_start_us) / 1000.0);
+    }
 
     if (params->only_copy) {
         ftype = model.ftype;
@@ -1287,12 +1443,13 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     //  - qs.n_attention_wv == 3 * model.hparams.n_layer for Encoder-Decoder models
     //  - model.arch == LLM_ARCH_DECI                    for Deci-Nemotron   models
     //
-    //GGML_ASSERT((qs.n_attention_wv == 0 ||
-    //             qs.n_attention_wv == (int)model.hparams.n_layer ||
-    //             qs.n_attention_wv == 3 * (int)model.hparams.n_layer ||
-    //             model.arch == LLM_ARCH_DECI ||
-    //             model.arch == LLM_ARCH_GEMMA4 ||
-    //             model.arch == LLM_ARCH_UNKNOWN) && "n_attention_wv is unexpected");
+    // GGML_ASSERT((qs.n_attention_wv == 0 ||
+                 // qs.n_attention_wv == (int)model.hparams.n_layer ||
+                 // qs.n_attention_wv == 3 * (int)model.hparams.n_layer ||
+                 // model.arch == LLM_ARCH_DECI ||
+                 // model.arch == LLM_ARCH_GLM5NEXT ||
+                 // model.arch == LLM_ARCH_GEMMA4 ||
+                 // model.arch == LLM_ARCH_UNKNOWN) && "n_attention_wv is unexpected");
 
     size_t total_size_org = 0;
     size_t total_size_new = 0;
@@ -1306,14 +1463,14 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     std::vector<no_init<uint8_t>> work;
     std::vector<no_init<float>> f32_conv_buf;
 
-    uint16_t n_split = 1;
+    uint16_t n_outputs = 1;
     // Assume split index is continuous
     if (params->keep_split) {
         for (int i = 0; i < ml.n_tensors; ++i) {
-            n_split = std::max(uint16_t(ml.get_weight(i)->idx+1), n_split);
+            n_outputs = std::max(uint16_t(ml.get_weight(i)->idx+1), n_outputs);
         }
     }
-    std::vector<gguf_context*> ctx_outs(n_split, NULL);
+    std::vector<gguf_context*> ctx_outs(n_outputs, NULL);
     ctx_outs[0] = ctx_out;
 
     ggml_tensor extra;
@@ -1368,17 +1525,21 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     }
 
     // Set split info if needed
-    if (n_split > 1) {
+    // Use the original declared split count when part of the source splits are missing
+    // or only a subset is loaded, so the output split files keep the original shard numbering
+    const uint16_t out_split_count = std::max<uint16_t>((uint16_t) ctx_outs.size(), ml.n_split_total);
+    if (out_split_count > 1) {
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
+            if (ctx_outs[i] == NULL) continue;
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_NO).c_str(), i);
-            gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), n_split);
+            gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), out_split_count);
             gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), ml.n_tensors);
         }
     }
 
     int cur_split = -1;
     std::ofstream fout;
-    std::vector<bool> split_skipped(n_split, false);
+    std::vector<bool> split_skipped(out_split_count, false);
     auto close_ofstream = [&]() {
         // Write metadata and close file handler
         if (fout.is_open()) {
@@ -1390,15 +1551,12 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         }
     };
     auto new_ofstream = [&](int index) {
-        if (params->dry_run) {
-            return;
-        }
         cur_split = index;
         GGML_ASSERT(ctx_outs[cur_split] && "Find uninitialized gguf_context");
         std::string fname = fname_out;
         if (params->keep_split) {
             char split_path[PATH_MAX] = {0};
-            llama_split_path(split_path, sizeof(split_path), fname_out.c_str(), cur_split, n_split);
+            llama_split_path(split_path, sizeof(split_path), fname_out.c_str(), cur_split, out_split_count);
             fname = std::string(split_path);
         }
 
@@ -1412,6 +1570,17 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
         }
 
+        if (params->dry_run) {
+            return;
+        }
+
+        if (params->skip_first_shard) {
+            if (cur_split == 0) {
+                LLAMA_LOG_INFO("%s: split file %s skipped because --skip-first-shard is enabled\n", __func__, fname.c_str());
+                return;
+            }
+        }
+
         ensure_output_directory(fname);
         fout = std::ofstream(fname, std::ios::binary);
         fout.exceptions(std::ofstream::failbit); // fail fast on write errors
@@ -1421,6 +1590,15 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     };
 
     const auto tn = LLM_TN(model.arch);
+
+    if (out_split_count > 1) {
+        LLAMA_LOG_INFO("[%4s/%4s] (%4s/%4s) %37s - [%6s, %6s, %4s, %4s], type = %7s, size = %8s MiB -> %7s MiB\n",
+                "idx", "tot", "shd", "tot", "tensor name", "dim0", "dim1", "dim2", "dim3", "type", "before", "after");
+    } else {
+        LLAMA_LOG_INFO("[%4s/%4s] %37s - [%6s, %6s, %4s, %4s], type = %7s, size = %8s MiB -> %7s MiB\n",
+                "idx", "tot", "tensor name", "dim0", "dim1", "dim2", "dim3", "type", "before", "after");
+    }
+
     new_ofstream(0);
     for (int i = 0; i < ml.n_tensors; ++i) {
         auto weight = ml.get_weight(i);
@@ -1439,19 +1617,30 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
         std::string name = ggml_get_name(tensor);
 
-        if (!ml.use_mmap) {
-            if (read_data.size() < ggml_nbytes(tensor)) {
-                read_data.resize(ggml_nbytes(tensor));
+        // patched tensors already have their data loaded via virtual-map
+        if (virtual_map_targets.find(name) == virtual_map_targets.end()) {
+            if (!ml.use_mmap) {
+                if (read_data.size() < ggml_nbytes(tensor)) {
+                    read_data.resize(ggml_nbytes(tensor));
+                }
+                tensor->data = read_data.data();
             }
-            tensor->data = read_data.data();
+            ml.load_data_for(tensor);
         }
-        ml.load_data_for(tensor);
 
-        LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
-               ++idx, ml.n_tensors,
-               ggml_get_name(tensor),
-               llama_format_tensor_shape(tensor).c_str(),
-               ggml_type_name(tensor->type));
+        if (out_split_count > 1) {
+            LLAMA_LOG_INFO("[%4d/%4d] (%4d/%4d) %37s - [%s], type = %7s, ",
+                   ++idx, ml.n_tensors, weight->idx + 1, out_split_count,
+                   ggml_get_name(tensor),
+                   llama_format_tensor_shape(tensor).c_str(),
+                   ggml_type_name(tensor->type));
+        } else {
+            LLAMA_LOG_INFO("[%4d/%4d] %37s - [%s], type = %7s, ",
+                   ++idx, ml.n_tensors,
+                   ggml_get_name(tensor),
+                   llama_format_tensor_shape(tensor).c_str(),
+                   ggml_type_name(tensor->type));
+        }
 
         bool quantize = tensor->type != GGML_TYPE_I32 &&
                         tensor->type != GGML_TYPE_I64 &&
@@ -1712,7 +1901,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 chunk_size_multiplier = num_rows;
             }
 
-            LLAMA_LOG_INFO("converting to %s .. ", ggml_type_name(new_type));
+            LLAMA_LOG_INFO(cuda_quantize_eligible(new_type, imatrix, params) ? "converts to %7s .. " : "converting to %7s .. ",
+                    ggml_type_name(new_type));
             fflush(stdout);
 
             if (params->dry_run) {
@@ -1747,21 +1937,29 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                         fout.write((const char *) new_data, new_size);
                         zeros(fout, GGML_PAD(new_size, align) - new_size);
                         total_size_new += new_size;
-                        LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", cur_size/1024.0/1024.0, new_size/1024.0/1024.0);
+                        LLAMA_LOG_INFO("size = %8.2f MiB -> %7.2f MiB\n", cur_size/1024.0/1024.0, new_size/1024.0/1024.0);
                     } else {
                         gguf_set_tensor_type(ctx_outs[cur_split], name.c_str(), tensor->type);
                         gguf_set_tensor_data(ctx_outs[cur_split], name.c_str(), tensor->data, cur_size);
                         fout.write((const char *) tensor->data, cur_size);
                         zeros(fout, GGML_PAD(cur_size, align) - cur_size);
                         total_size_new += cur_size;
-                        LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", cur_size/1024.0/1024.0, cur_size/1024.0/1024.0);
+                        LLAMA_LOG_INFO("size = %8.2f MiB -> %7.2f MiB\n", cur_size/1024.0/1024.0, cur_size/1024.0/1024.0);
                     }
 
-                    LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
-                           ++idx, ml.n_tensors,
-                           ggml_get_name(tensor),
-                           llama_format_tensor_shape(tensor).c_str(),
-                           ggml_type_name(tensor->type));
+                    if (out_split_count > 1) {
+                        LLAMA_LOG_INFO("[%4d/%4d] (%4d/%4d) %37s - [%s], type = %7s, ",
+                               ++idx, ml.n_tensors, weight->idx + 1, out_split_count,
+                               ggml_get_name(tensor),
+                               llama_format_tensor_shape(tensor).c_str(),
+                               ggml_type_name(tensor->type));
+                    } else {
+                        LLAMA_LOG_INFO("[%4d/%4d] %37s - [%s], type = %7s, ",
+                               ++idx, ml.n_tensors,
+                               ggml_get_name(tensor),
+                               llama_format_tensor_shape(tensor).c_str(),
+                               ggml_type_name(tensor->type));
+                    }
 
                     new_type = params->extra_output_type;
                     chunk_size_multiplier = 1;
@@ -1771,7 +1969,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                     } else {
                         chunk_size_multiplier = num_rows;
                     }
-                    LLAMA_LOG_INFO("converting to %s .. ", ggml_type_name(new_type));
+                    LLAMA_LOG_INFO(cuda_quantize_eligible(new_type, imatrix, params) ? "converts to %7s .. " : "converting to %7s .. ",
+                            ggml_type_name(new_type));
                     fflush(stdout);
 
                     do_quantize(nthread, tensor, new_type, f32_data, (char *)new_data, imatrix, workers,
@@ -1784,7 +1983,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 }
 
             }
-            LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", ggml_nbytes(tensor)/1024.0/1024.0, new_size/1024.0/1024.0);
+            LLAMA_LOG_INFO("size = %8.2f MiB -> %7.2f MiB\n", ggml_nbytes(tensor)/1024.0/1024.0, new_size/1024.0/1024.0);
         }
 
 QuantizationDone:;
@@ -1806,6 +2005,12 @@ QuantizationDone:;
         gguf_free(c);
     }
 
+    if (params->dry_run) {
+        LLAMA_LOG_INFO("%s: dry-run mode - no files written\n", __func__);
+    } else if (params->partial_requant && total_size_new == 0) {
+        LLAMA_LOG_INFO("%s: nothing requantized - all output files already exist\n", __func__);
+    }
+
     LLAMA_LOG_INFO("%s: model size  = %8.2f MB\n", __func__, total_size_org/1024.0/1024.0);
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MB\n", __func__, total_size_new/1024.0/1024.0);
 
@@ -1818,9 +2023,10 @@ QuantizationDone:;
 uint32_t llama_model_quantize(
         const char * fname_inp,
         const char * fname_out,
-        const llama_model_quantize_params * params) {
+        const llama_model_quantize_params * params,
+        const size_t * tensor_ids) {
     try {
-        llama_model_quantize_internal(fname_inp, fname_out, params);
+        llama_model_quantize_internal(fname_inp, fname_out, params, tensor_ids);
         return 0;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to quantize: %s\n", __func__, err.what());

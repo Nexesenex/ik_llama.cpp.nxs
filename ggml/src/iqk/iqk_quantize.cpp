@@ -14,6 +14,8 @@
 #include "iqk_quantize.h"
 #include "iqk_config.h"
 
+extern bool g_iqk_r16_path;
+
 #include "iqk_gemm_ktquants.h"
 
 #include <vector>
@@ -5418,12 +5420,27 @@ void dequantize_row_q4_0_r8(const block_iq4_nl_r8 * x, float * y, int64_t k) {
     for (int ib = 0; ib < nb; ++ib) {
         for (int k = 0; k < 8; ++k) {
             float scale = GGML_FP16_TO_FP32(x[ib].d[k]);
+#ifdef __AVX2__
+            // out[4*l+i+ 0] = scale*((qs[32*l+4*k+i] & 0xf) - 8)   low nibbles
+            // out[4*l+i+16] = scale*((qs[32*l+4*k+i] >> 4) - 8)   high nibbles
+            const uint32_t * q32 = (const uint32_t *)(x[ib].qs + 4*k);
+            __m128i s0 = _mm_set_epi32(q32[24], q32[16], q32[8], q32[0]);
+            __m256i a0 = _mm256_cvtepu8_epi32(s0);
+            __m256i a1 = _mm256_cvtepu8_epi32(_mm_srli_si128(s0, 8));
+            __m256 vscale = _mm256_set1_ps(scale);
+            float * out = yk[k] + QK4_0*ib;
+            _mm256_storeu_ps(out +  0, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_and_si256(a0, _mm256_set1_epi32(0xf)), _mm256_set1_epi32(8)))));
+            _mm256_storeu_ps(out +  8, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_and_si256(a1, _mm256_set1_epi32(0xf)), _mm256_set1_epi32(8)))));
+            _mm256_storeu_ps(out + 16, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_srli_epi32(a0, 4), _mm256_set1_epi32(8)))));
+            _mm256_storeu_ps(out + 24, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_srli_epi32(a1, 4), _mm256_set1_epi32(8)))));
+#else
             for (int l = 0; l < 4; ++l) {
                 for (int i = 0; i < 4; ++i) {
                     yk[k][QK4_0*ib+4*l+i+ 0] = scale * ((x[ib].qs[32*l+4*k+i] & 0xf) - 8);
                     yk[k][QK4_0*ib+4*l+i+16] = scale * ((x[ib].qs[32*l+4*k+i] >>  4) - 8);
                 }
             }
+#endif
         }
     }
 }
@@ -5521,10 +5538,26 @@ void dequantize_row_q8_0_r8(const block_q8_0_r8 * x, float * y, int64_t k) {
     for (int ib = 0; ib < nb; ++ib) {
         for (int k = 0; k < 8; ++k) {
             float scale = GGML_FP16_TO_FP32(x[ib].d[k]);
+#ifdef __AVX2__
+            // out[4*l+i+0]   = scale*qs[32*l+4*k+i]      (16 bytes, l-major)
+            // out[4*l+i+16]  = scale*qs[32*l+4*k+i+128]  (16 bytes, l-major)
+            // the dwords at offsets 4*k + {0,32,64,96} are exactly out bytes 0..15
+            const uint32_t * q32 = (const uint32_t *)(x[ib].qs + 4*k);
+            __m128i s0 = _mm_set_epi32(q32[24], q32[16], q32[8], q32[0]);
+            const uint32_t * q32h = (const uint32_t *)(x[ib].qs + 4*k + 128);
+            __m128i s1 = _mm_set_epi32(q32h[24], q32h[16], q32h[8], q32h[0]);
+            __m256 vscale = _mm256_set1_ps(scale);
+            float * out = yk[k] + QK8_0*ib;
+            _mm256_storeu_ps(out +  0, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(s0))));
+            _mm256_storeu_ps(out +  8, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(s0, 8)))));
+            _mm256_storeu_ps(out + 16, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(s1))));
+            _mm256_storeu_ps(out + 24, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(s1, 8)))));
+#else
             for (int l = 0; l < 4; ++l) for (int i = 0; i < 4; ++i) {
                 yk[k][QK8_0*ib+4*l+i+ 0] = scale * x[ib].qs[32*l+4*k+i+  0];
                 yk[k][QK8_0*ib+4*l+i+16] = scale * x[ib].qs[32*l+4*k+i+128];
             }
+#endif
         }
     }
 }
@@ -5767,8 +5800,20 @@ static void repack_iq4_xs(int nrows, int n_per_row, const block_iq4_xs * x, bloc
     for (int row = 0; row < nrows; row += 8) {
         for (int k = 0; k < 8; ++k) x8[k] = x + nblock*k;
         for (int ibl = 0; ibl < nblock; ++ibl) {
+            // Offline repack is stream-bound: prefetch the next source blocks while shuffling the current one.
+#if defined(__x86_64__) || defined(_M_X64)
+            if (ibl + 1 < nblock) {
+                for (int k = 0; k < 8; ++k) _mm_prefetch((const char *)&x8[k][ibl+1], _MM_HINT_T0);
+            }
+#endif
+#ifdef __AVX2__
+            // Same as the memsets (32B + 16B zeroes) but without a libc call per block.
+            _mm256_storeu_si256((__m256i *)y[ibl].scales_l, _mm256_setzero_si256());
+            _mm_storeu_si128((__m128i *)y[ibl].scales_h, _mm_setzero_si128());
+#else
             std::memset(y[ibl].scales_l, 0, QK_K/8);
             std::memset(y[ibl].scales_h, 0, QK_K/16);
+#endif
             for (int k = 0; k < 8; ++k) {
                 y[ibl].d[k] = x8[k][ibl].d;
                 for (int ib = 0; ib < QK_K/32; ++ib) {
@@ -6101,8 +6146,20 @@ static void repack_q4_k(int nrows, int n_per_row, const block_q4_K * x, block_q4
     for (int row = 0; row < nrows; row += 4) {
         for (int k = 0; k < 4; ++k) x4[k] = x + nblock*k;
         for (int ibl = 0; ibl < nblock; ++ibl) {
+            // Offline repack is stream-bound: prefetch the next source blocks while shuffling the current one.
+#if defined(__x86_64__) || defined(_M_X64)
+            if (ibl + 1 < nblock) {
+                for (int k = 0; k < 4; ++k) _mm_prefetch((const char *)&x4[k][ibl+1], _MM_HINT_T0);
+            }
+#endif
+#ifdef __AVX2__
+            // Same as the memsets (32B + 16B zeroes) but without a libc call per block.
+            _mm256_storeu_si256((__m256i *)y[ibl].scales_l, _mm256_setzero_si256());
+            _mm_storeu_si128((__m128i *)y[ibl].scales_h, _mm_setzero_si128());
+#else
             std::memset(y[ibl].scales_l, 0, QK_K/8);
             std::memset(y[ibl].scales_h, 0, QK_K/16);
+#endif
             for (int k = 0; k < 4; ++k) {
                 y[ibl].d[k+0] = x4[k][ibl].d;
                 y[ibl].d[k+4] = x4[k][ibl].dmin;
@@ -6214,6 +6271,13 @@ static void repack_q6_k(int nrows, int n_per_row, const block_q6_K * x, block_q6
     for (int row = 0; row < nrows; row += 4) {
         for (int k = 0; k < 4; ++k) x4[k] = x + nblock*k;
         for (int ibl = 0; ibl < nblock; ++ibl) {
+            // Offline repack is stream-bound: prefetch the next source blocks while shuffling the current one.
+            // (No zero-stores: d/scales/ql/qh are fully overwritten, unlike q4_k/q5_k scales.)
+#if defined(__x86_64__) || defined(_M_X64)
+            if (ibl + 1 < nblock) {
+                for (int k = 0; k < 4; ++k) _mm_prefetch((const char *)&x4[k][ibl+1], _MM_HINT_T0);
+            }
+#endif
             for (int k = 0; k < 4; ++k) {
                 y[ibl].d[k] = x4[k][ibl].d;
                 convert_q6_k(x4[k][ibl], L);
@@ -6323,8 +6387,20 @@ static void repack_q5_k(int nrows, int n_per_row, const block_q5_K * x, block_q5
     for (int row = 0; row < nrows; row += 4) {
         for (int k = 0; k < 4; ++k) x4[k] = x + nblock*k;
         for (int ibl = 0; ibl < nblock; ++ibl) {
+            // Offline repack is stream-bound: prefetch the next source blocks while shuffling the current one.
+#if defined(__x86_64__) || defined(_M_X64)
+            if (ibl + 1 < nblock) {
+                for (int k = 0; k < 4; ++k) _mm_prefetch((const char *)&x4[k][ibl+1], _MM_HINT_T0);
+            }
+#endif
+#ifdef __AVX2__
+            // Same as the memsets (32B + 16B zeroes) but without a libc call per block.
+            _mm256_storeu_si256((__m256i *)y[ibl].scales_l, _mm256_setzero_si256());
+            _mm_storeu_si128((__m128i *)y[ibl].scales_h, _mm_setzero_si128());
+#else
             std::memset(y[ibl].scales_l, 0, QK_K/8);
             std::memset(y[ibl].scales_h, 0, QK_K/16);
+#endif
             for (int k = 0; k < 4; ++k) {
                 y[ibl].d[k+0] = x4[k][ibl].d;
                 y[ibl].d[k+4] = x4[k][ibl].dmin;
@@ -7143,11 +7219,22 @@ static void repack_q16_k(int nrows, int n_per_row, const block_q8_K * x, block_q
                     for (int i = 0; i < 4; ++i) y[ibl].qs[64*ib + 4*k + i] = x16[k][ibl].qs[4*ib+i];
                 }
             }
-#ifdef HAVE_FANCY_SIMD
+#if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_FANCY_SIMD)
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[ibl].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[ibl].qs + l, v);
             }
+#else
+            if (g_iqk_r16_path) {
+                for (int l = 0; l < 64; ++l) {
+                    auto v = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[ibl].qs + 2*l+0), _mm256_set1_epi8(-128));
+                    _mm256_storeu_si256((__m256i *)y[ibl].qs + 2*l+0, v);
+                    v = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[ibl].qs + 2*l+1), _mm256_set1_epi8(-128));
+                    _mm256_storeu_si256((__m256i *)y[ibl].qs + 2*l+1, v);
+                }
+            }
+#endif
 #endif
         }
         x += 16*nblock;
@@ -7248,7 +7335,7 @@ static void repack_q8_KV(int nrows, int n_per_row, const char * cx, char * cy, [
             m1 = _mm256_unpackhi_epi64(t0, t1);
             m2 = _mm256_unpacklo_epi64(t2, t3);
             m3 = _mm256_unpackhi_epi64(t2, t3);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             if (online) {
                 m0 = _mm256_add_epi8(m0, _mm256_set1_epi8(127));
                 m1 = _mm256_add_epi8(m1, _mm256_set1_epi8(127));
@@ -8040,9 +8127,26 @@ static void repack_iq3_s(int nrows, int n_per_row, const block_iq3_s * x, block_
     for (int row = 0; row < nrows; row += 4) {
         for (int k = 0; k < 4; ++k) x4[k] = x + nblock*k;
         for (int ibl = 0; ibl < nblock; ++ibl) {
+            // Offline repack is stream-bound: prefetch the next source blocks while shuffling the current one.
+#if defined(__x86_64__) || defined(_M_X64)
+            if (ibl + 1 < nblock) {
+                for (int k = 0; k < 4; ++k) _mm_prefetch((const char *)&x4[k][ibl+1], _MM_HINT_T0);
+            }
+#endif
+#ifdef __AVX2__
+            // Same as the memsets (16B + 128B + 32B zeroes) but without a libc call per block.
+            // Scales/signs/qh are OR-accumulated below, so they must start zeroed.
+            _mm_storeu_si128((__m128i *)y[ibl].scales, _mm_setzero_si128());
+            _mm256_storeu_si256((__m256i *)y[ibl].signs + 0, _mm256_setzero_si256());
+            _mm256_storeu_si256((__m256i *)y[ibl].signs + 1, _mm256_setzero_si256());
+            _mm256_storeu_si256((__m256i *)y[ibl].signs + 2, _mm256_setzero_si256());
+            _mm256_storeu_si256((__m256i *)y[ibl].signs + 3, _mm256_setzero_si256());
+            _mm256_storeu_si256((__m256i *)y[ibl].qh, _mm256_setzero_si256());
+#else
             std::memset(y[ibl].scales, 0, QK_K/16);
             std::memset(y[ibl].signs,  0, QK_K/2);
             std::memset(y[ibl].qh,     0, QK_K/8);
+#endif
             for (int k = 0; k < 4; ++k) {
                 y[ibl].d[k] = x4[k][ibl].d;
                 for (int ib = 0; ib < QK_K/64; ++ib) {
@@ -8923,9 +9027,9 @@ void QuantizerIQKT<block_size, group_size, num_bits, is_abs, is_int>::find_best_
             auto xl = xb + 4*l;
             auto wl = weight + 4*l;
             auto vx4 = _mm_loadu_ps(xl);
-            auto vx = _mm256_mul_ps(vid_p, _mm256_set_m128(vx4, vx4));
+            auto vx = _mm256_mul_ps(vid_p, MM256_SET1_M128(vx4));
             auto vw4 = _mm_loadu_ps(wl);
-            auto vw = _mm256_set_m128(vw4, vw4);
+            auto vw = MM256_SET1_M128(vw4);
             int jbest = -1;
             if (ncluster == 256 || ncluster == 625) {
                 _mm256_storeu_ps(sx, vx);

@@ -18,16 +18,21 @@
 #include <type_traits>
 #include <unordered_set>
 
-static bool dsv4_cache_type_supported(ggml_type type) {
-    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0;
+static bool dsv4_main_k_cache_type_supported(ggml_type type) {
+    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q6_1;
+}
+
+static bool dsv4_indexer_k_cache_type_supported(ggml_type type) {
+    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q6_1;
 }
 
 // Per-step capture is limited to the eight-row CSA/LID ring.
 // TODO: Expand to a larger number
 static constexpr int DSV4_PER_STEP_MAX_STATE_ROWS = 8;
 
-static bool dsv4_validate_cache_type(ggml_type type, int64_t width, const char * name) {
-    if (!dsv4_cache_type_supported(type)) {
+static bool dsv4_validate_cache_type(ggml_type type, int64_t width, const char * name, bool is_indexer) {
+    const bool supported = is_indexer ? dsv4_indexer_k_cache_type_supported(type) : dsv4_main_k_cache_type_supported(type);
+    if (!supported) {
         LLAMA_LOG_ERROR("%s: unsupported DSV4 %s cache type %s\n", __func__, name, ggml_type_name(type));
         return false;
     }
@@ -888,8 +893,8 @@ bool llama_context::ensure_dsv4_cache_tensors() {
     const uint32_t csa_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, dsv4_runtime::CSA_RATIO), 256u);
     const uint32_t hca_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, dsv4_runtime::HCA_RATIO), 256u);
 
-    if (!dsv4_validate_cache_type(kv_self.type_k, n_embd_head, "raw/CSA/HCA") ||
-        !dsv4_validate_cache_type(cparams.idx_type_k, n_indexer_head, "LID")) {
+    if (!dsv4_validate_cache_type(kv_self.type_k, n_embd_head, "raw/CSA/HCA", false) ||
+        !dsv4_validate_cache_type(cparams.idx_type_k, n_indexer_head, "LID", true)) {
         return false;
     }
 
@@ -938,9 +943,22 @@ bool llama_context::ensure_dsv4_cache_tensors() {
         return true;
     };
 
+    // When the compressed-attention K caches live in host memory, only the
+    // context-sized K caches (CSA/HCA/LID K) are moved; the small per-layer
+    // compression state tensors stay next to the layer so ggml_ds4_comp can
+    // keep running on the layer's backend.
+    const ggml_backend_buffer_type_t cpu_buft = (cparams.dsv4_cache_cpu || cparams.dsv4_lid_cache_cpu)
+        ? llama_default_buffer_type_cpu(true) : nullptr;
+
     for (int32_t il = 0; il < n_layer; ++il) {
         const uint32_t ratio = model.hparams.dsv4_compress_ratios[(size_t) il];
         ggml_backend_buffer_type_t buft = llama_dsv4_layer_buft(*this, il);
+        ggml_backend_buffer_type_t k_buft = cpu_buft != nullptr ? cpu_buft : buft;
+        // The LID/indexer K cache is small and is scanned by the indexer top-k
+        // on every step - keep it on the layer's device unless explicitly
+        // requested otherwise. The CSA/HCA K caches are the large ones and are
+        // only read via sparse gathers, so they tolerate host memory well.
+        ggml_backend_buffer_type_t lid_buft = cparams.dsv4_lid_cache_cpu && cpu_buft != nullptr ? cpu_buft : buft;
 
         if (ratio == dsv4_runtime::CSA_RATIO) {
             cache.csa_k[(size_t) il] = ggml_new_tensor_3d(cache.cache_ctx, kv_self.type_k, n_embd_head, csa_kv*n_stream, 1);
@@ -950,8 +968,8 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             cache.lid_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_indexer_head, 2*dsv4_runtime::CSA_RATIO*n_stream);
             cache.lid_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_indexer_head, 2*dsv4_runtime::CSA_RATIO*n_stream);
 
-            if (!alloc_tensor(cache.csa_k[(size_t) il], buft) ||
-                !alloc_tensor(cache.lid_k[(size_t) il], buft) ||
+            if (!alloc_tensor(cache.csa_k[(size_t) il], k_buft) ||
+                !alloc_tensor(cache.lid_k[(size_t) il], lid_buft) ||
                 !alloc_tensor(cache.csa_state_kv[(size_t) il], buft) ||
                 !alloc_tensor(cache.csa_state_score[(size_t) il], buft) ||
                 !alloc_tensor(cache.lid_state_kv[(size_t) il], buft) ||
@@ -965,7 +983,7 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             cache.hca_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, dsv4_runtime::HCA_RATIO*n_stream);
             cache.hca_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, dsv4_runtime::HCA_RATIO*n_stream);
 
-            if (!alloc_tensor(cache.hca_k[(size_t) il], buft) ||
+            if (!alloc_tensor(cache.hca_k[(size_t) il], k_buft) ||
                 !alloc_tensor(cache.hca_state_kv[(size_t) il], buft) ||
                 !alloc_tensor(cache.hca_state_score[(size_t) il], buft)) {
                 LLAMA_LOG_ERROR("%s: failed to allocate DSV4 HCA buffers for layer %d\n", __func__, il);
@@ -1000,6 +1018,64 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             (float) (csa_state_bytes + hca_state_bytes + lid_state_bytes) / (1024.0f * 1024.0f),
             (float) (csa_k_bytes + hca_k_bytes + lid_k_bytes + csa_state_bytes + hca_state_bytes + lid_state_bytes) / (1024.0f * 1024.0f),
             n_stream);
+    // Peak indexer (LID) top-k work buffer size. The indexer top-k op is fused
+    // into the graph of each CSA layer, so a copy of this temporary work buffer
+    // is allocated on every GPU that hosts a CSA layer.
+    {
+        const int64_t n_kv   = csa_kv; // LID kv per stream
+        const int64_t n_head = model.hparams.indexer_n_head;
+        const int64_t n_embd = model.hparams.indexer_head_size;
+        const int64_t n_tok  = std::max<int64_t>(1, cparams.n_ubatch);
+
+        int64_t max_rows;
+        if (cparams.idx_type_k == GGML_TYPE_F16) {
+            max_rows = std::min<int64_t>(256, n_tok);
+        } else {
+            max_rows = std::min<int64_t>(256, (int64_t(1) << 26) / std::max<int64_t>(1, n_kv*n_head));
+            max_rows = std::max<int64_t>(1, std::min<int64_t>(max_rows, n_tok));
+        }
+
+        size_t work_bytes = 0;
+        if (cparams.idx_type_k == GGML_TYPE_F16) {
+            work_bytes += (size_t) n_kv * n_head * max_rows * 2;      // kq (f16)
+            work_bytes += (size_t) n_kv * max_rows * sizeof(float);   // score
+            work_bytes += (size_t) n_kv * max_rows * sizeof(int);     // sorted
+            work_bytes += (size_t) n_embd * n_head * max_rows * 2;    // q_f16 (f16)
+        } else {
+            work_bytes += (size_t) n_kv * max_rows * n_head * sizeof(float); // kq
+            work_bytes += (size_t) n_kv * max_rows * sizeof(float);          // score
+            work_bytes += (size_t) n_kv * max_rows * sizeof(int);            // sorted
+        }
+
+        std::vector<std::string> gpu_names;
+        for (int32_t il = 0; il < n_layer; ++il) {
+            if (model.hparams.dsv4_compress_ratios[(size_t) il] != dsv4_runtime::CSA_RATIO) {
+                continue;
+            }
+            const char * name = ggml_backend_buft_name(llama_dsv4_layer_buft(*this, il));
+            if (name != nullptr && std::find(gpu_names.begin(), gpu_names.end(), name) == gpu_names.end()) {
+                gpu_names.push_back(name);
+            }
+        }
+
+        if (gpu_names.size() > 1) {
+            std::string gpus;
+            for (size_t i = 0; i < gpu_names.size(); ++i) {
+                if (i > 0) gpus += ", ";
+                gpus += gpu_names[i];
+            }
+            LLAMA_LOG_INFO("%s: indexer work buffer = %7.2f MiB per GPU (%s)\n", __func__,
+                    (float) work_bytes / (1024.0f * 1024.0f), gpus.c_str());
+        } else {
+            LLAMA_LOG_INFO("%s: indexer work buffer = %7.2f MiB on %s\n", __func__,
+                    (float) work_bytes / (1024.0f * 1024.0f),
+                    gpu_names.empty() ? "CPU" : gpu_names[0].c_str());
+        }
+    }
+
+    if (cparams.dsv4_cache_cpu) {
+        LLAMA_LOG_INFO("%s: DSV4 compressed-attention K caches (CSA/HCA/LID) are in host memory\n", __func__);
+    }
 
     return true;
 }

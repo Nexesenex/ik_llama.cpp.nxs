@@ -104,11 +104,14 @@ extern "C" {
     GGML_API           void ggml_backend_cpu_set_n_threads     (ggml_backend_t backend_cpu, int n_threads);
     GGML_API           void ggml_backend_cpu_set_moe_expert_prefetch(ggml_backend_t backend_cpu, bool enable);
     GGML_API           void ggml_backend_cpu_set_abort_callback(ggml_backend_t backend_cpu, ggml_abort_callback abort_callback, void * abort_callback_data);
+    GGML_API           void ggml_backend_cpu_set_threadpool    (ggml_backend_t backend_cpu, struct ggml_threadpool * threadpool);
 
     // Create a backend buffer from an existing pointer
     GGML_API GGML_CALL ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size);
 
     GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void);
+
+    GGML_API GGML_CALL void ggml_backend_cpu_get_memory(size_t * free_mem, size_t * total_mem);
 
 #ifdef GGML_USE_CPU_HBM
     GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_hbm_buffer_type(void);
@@ -213,13 +216,16 @@ extern "C" {
     // enable or disable op offload for a given op
     GGML_API void                 ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op op, bool on_or_off);
     GGML_API void                 ggml_backend_sched_set_only_active_experts(ggml_backend_sched_t sched, bool on_or_off);
-    GGML_API void                 ggml_backend_sched_set_split_mode_graph(ggml_backend_sched_t sched, bool on_or_off, bool async);
+    GGML_API void                 ggml_backend_sched_set_split_mode_tensor_parallel(ggml_backend_sched_t sched, bool on_or_off, bool async);
     GGML_API void                 ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extra_alloc_MiB);
 
     // prefetch mmap'd MoE expert weights into the page cache
     GGML_API bool                 ggml_backend_prefetch_init(int n_threads);
     GGML_API void                 ggml_backend_prefetch_register_mapping(const void * addr, size_t size);
     GGML_API void                 ggml_backend_prefetch_unregister_mapping(const void * addr);
+
+    // set max number of parallel copies for pipeline parallelism (must be called before scheduler init)
+    GGML_API void                 ggml_backend_sched_set_n_copies(int n_copies);
 
     //
     // Utils

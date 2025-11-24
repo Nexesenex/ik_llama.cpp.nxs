@@ -85,44 +85,6 @@ static std::string format_mib(double value, int precision, const char * missing)
     return buffer;
 }
 
-static void llama_selective_log_callback(ggml_log_level level, const char * text, void * user_data) {
-    (void) level;
-    (void) user_data;
-    const char * skip_patterns[] = {
-        "Setting default device in layer",
-        "llama_model_loader: Dumping metadata",
-        "llama_model_loader: - kv  ",
-        "llama_model_loader: - type ",
-        "validate_override:",
-        "load: printing all EOG",
-        "load:   - ",
-        "load: special tokens cache",
-        "load: token to piece cache",
-        "llm_load_print_meta:",
-        "print_info:",
-        "------------------- Layer sizes",
-        "Layer ",
-        "llm_load_tensors:",
-        "==========================",
-        "merging up/gate in layer",
-        "repacking up/gate experts weight in layer",
-    };
-    for (const char * pat : skip_patterns) {
-        if (strstr(text, pat) != nullptr) {
-            return;
-        }
-    }
-    // Skip incomplete/continuation lines
-    int i = 0;
-    while (text[i] == ' ' || text[i] == '\t') {
-        i++;
-    }
-    if (text[i] == ',' || text[i] == '(' || text[i] == ')'|| (text[i] >= '0' && text[i] <= '9')) {
-        return;
-    }
-    LOG_TEE("%s", text);
-}
-
 static void print_usage(int argc, char ** argv) {
     gpt_params params;
     params.sweep_bench = true;
@@ -151,9 +113,7 @@ int main(int argc, char ** argv) {
     if (params.nrep < 1) params.nrep = 1;
     if (params.sweep_stride < 1) params.sweep_stride = 1;
 
-    if (params.minilog) {
-        llama_log_set(llama_selective_log_callback, nullptr);
-    }
+    common_params_minilog(params);
 
     // init LLM
 
@@ -165,10 +125,28 @@ int main(int argc, char ** argv) {
         vram_tracker.start();
     }
 
+    LOG_TEE("%s: branch        = %s\n", __func__, LLAMA_BUILD_BRANCH);
+    LOG_TEE("%s: last PR       = %s\n", __func__, LLAMA_BUILD_LAST_MERGED_PR);
+    LOG_TEE("%s: last commit   = %s\n", __func__, LLAMA_BUILD_LAST_COMMIT);
+    LOG_TEE("%s: nexes commits = %d\n", __func__, LLAMA_NEXES_COMMITS);
+    if (ggml_cpu_has_cuda()) {
+        LOG_TEE("%s: cuda version = %s\n", __func__, LLAMA_BUILD_CUDA_VERSION);
+    } else {
+        LOG_TEE("%s: cuda version = not used in CPU mode.\n", __func__);
+    }
+    LOG_TEE("%s: built with %s on the %s\n", __func__, LLAMA_COMPILER, LLAMA_BUILD_DATE);
+    LOG_TEE("%s\n", gpt_params_get_system_info(params).c_str());
+
+    // IK_OPENMP: set PP batch size for barrier threshold logging
+    // pp_batch = min(n_batch, n_ubatch) as per llama.cpp logic
+    int pp_batch = params.n_ubatch > 0 ? std::min(params.n_batch, params.n_ubatch) : params.n_batch;
+    ggml_set_pp_batch_size(pp_batch);
+
     // initialize the model
 
     llama_model_params model_params = common_model_params_to_llama(params);
 
+    ggml_set_batch_thread_threshold(params.ggml_batch_thread_thresh.c_str());
     llama_model * model = llama_model_load_from_file(params.model.c_str(), model_params);
 
     if (model == NULL) {
@@ -183,6 +161,26 @@ int main(int argc, char ** argv) {
     if (ctx == NULL) {
         fprintf(stderr , "%s: error: failed to create the llama_context\n" , __func__);
         return 1;
+    }
+
+    // allowlist/disallowlist (Option A): restrict the output logits computation to the allowed subset of vocab rows
+    if (params.allow_subset) {
+        if (params.allow_rules.empty() && params.disallow_rules.empty() && params.disallow_pieces.empty() && !params.disallow_emdash) {
+            LOG_TEE("%s: warning: --allowlist-subset given without --allowlist-unicode-rule or --disallowlist-unicode-rule, ignoring\n", __func__);
+        } else {
+            const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+            std::vector<std::string> vocab_pieces;
+            vocab_pieces.reserve(n_vocab);
+            for (int32_t id = 0; id < n_vocab; ++id) {
+                vocab_pieces.push_back(common_token_to_piece(ctx, id, true));
+            }
+            const auto ids = common_allowlist_union_ids(model, vocab_pieces, params.allow_rules, params.allow_pieces, params.disallow_rules, params.disallow_pieces, params.disallow_emdash);
+            if (!ids.empty() && llama_model_set_output_subset(model, ids.data(), (int32_t) ids.size()) == 0) {
+                LOG_TEE("%s: output logits restricted to %d/%d vocab rows by the allowlist/disallowlist\n", __func__, (int32_t) ids.size(), n_vocab);
+            } else {
+                LOG_TEE("%s: warning: output logits subset not enabled (allowlist/disallowlist active, subset unsupported)\n", __func__);
+            }
+        }
     }
 
     const bool use_checkpoint = common_speculative_needs_checkpoint(model);

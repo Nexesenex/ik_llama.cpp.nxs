@@ -16,9 +16,15 @@ static inline __device__ void ggml_cuda_swap(T & a, T & b) {
 
 struct store_ser {
     constexpr static bool has_thresh = true;
-    int   min_experts;
-    float thresh_experts;
-    store_ser(int min, float thresh) : min_experts(min), thresh_experts(thresh) {}
+    int   n_tiers;
+    int   min_experts[GGML_MAX_SER_TIERS];
+    float thresh_experts[GGML_MAX_SER_TIERS];
+    store_ser(int n_tiers, const int * min, const float * thresh) : n_tiers(n_tiers) {
+        for (int i = 0; i < n_tiers; ++i) {
+            min_experts[i]   = min[i];
+            thresh_experts[i] = thresh[i];
+        }
+    }
 };
 
 struct store {
@@ -80,9 +86,44 @@ static __global__ void k_argsort_f32_T(const float * x, dst_t * dst, const int n
         float max_val = x_row[dst_row[0]];
         if (col < ntop) {
             if constexpr (std::is_same_v<dst_t, int>) {
-                dst[row * ntop + col] = col < s.min_experts || x_row[dst_row[col]] >= s.thresh_experts*max_val ? dst_row[col] : -1;
+                if (s.n_tiers == 1) {
+                    dst[row * ntop + col] = col < s.min_experts[0] || x_row[dst_row[col]] >= s.thresh_experts[0]*max_val ? dst_row[col] : -1;
+                } else {
+                    // cascade: scan tiers from the most conservative (largest c) down.
+                    // tier (c,t) passes iff at least c experts exceed max*t; when it
+                    // passes, keep ALL experts that clear max*t (variable count, bounded
+                    // above by the top-k view) to match the original SER behavior; if no
+                    // tier passes, the last tier's c is the absolute floor.
+                    int keep = s.min_experts[s.n_tiers-1];
+                    for (int ti = 0; ti < s.n_tiers; ++ti) {
+                        int cnt = 0;
+                        for (int j = 0; j < ncols && x_row[dst_row[j]] >= s.thresh_experts[ti]*max_val; ++j) {
+                            cnt++;
+                        }
+                        if (cnt >= s.min_experts[ti]) {
+                            keep = cnt;
+                            break;
+                        }
+                    }
+                    dst[row * ntop + col] = col < keep ? dst_row[col] : -1;
+                }
             } else {
-                dst[row * ntop + col] = col < s.min_experts || x_row[dst_row[col]] >= s.thresh_experts*max_val ? x_row[dst_row[col]] : 0.f;
+                if (s.n_tiers == 1) {
+                    dst[row * ntop + col] = col < s.min_experts[0] || x_row[dst_row[col]] >= s.thresh_experts[0]*max_val ? x_row[dst_row[col]] : 0.f;
+                } else {
+                    int keep = s.min_experts[s.n_tiers-1];
+                    for (int ti = 0; ti < s.n_tiers; ++ti) {
+                        int cnt = 0;
+                        for (int j = 0; j < ncols && x_row[dst_row[j]] >= s.thresh_experts[ti]*max_val; ++j) {
+                            cnt++;
+                        }
+                        if (cnt >= s.min_experts[ti]) {
+                            keep = cnt;
+                            break;
+                        }
+                    }
+                    dst[row * ntop + col] = col < keep ? x_row[dst_row[col]] : 0.f;
+                }
             }
         }
     } else {
@@ -302,7 +343,7 @@ static int next_power_of_2(int x) {
 
 template <typename dst_t>
 static void argsort_f32_T_cuda(const float * x, dst_t * dst, const int ncols, const int nrows, int ntop,
-        ggml_sort_order order, int min_experts, float thresh_experts, cudaStream_t stream) {
+        ggml_sort_order order, int n_tiers, const int * min_experts, const float * thresh_experts, cudaStream_t stream) {
     // bitonic sort requires ncols to be power of 2
     const int ncols_pad = next_power_of_2(ncols);
 
@@ -313,17 +354,19 @@ static void argsort_f32_T_cuda(const float * x, dst_t * dst, const int ncols, co
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
     GGML_ASSERT(shared_mem <= ggml_cuda_info().devices[ggml_cuda_get_device()].smpb);
 
+    const bool has_ser = n_tiers > 0 && min_experts != nullptr && thresh_experts != nullptr;
+
     if (order == GGML_SORT_ORDER_ASC) {
-        if (min_experts >= 0 && min_experts < ncols && thresh_experts > 0) {
+        if (has_ser) {
             k_argsort_f32_T<GGML_SORT_ORDER_ASC, store_ser><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad,
-                    ntop, {min_experts, thresh_experts});
+                    ntop, store_ser(n_tiers, min_experts, thresh_experts));
         } else {
             k_argsort_f32_T<GGML_SORT_ORDER_ASC, store><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, ntop, {});
         }
     } else if (order == GGML_SORT_ORDER_DESC) {
-        if (min_experts >= 0 && min_experts < ncols && thresh_experts > 0) {
+        if (has_ser) {
             k_argsort_f32_T<GGML_SORT_ORDER_DESC, store_ser><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad,
-                    ntop, {min_experts, thresh_experts});
+                    ntop, store_ser(n_tiers, min_experts, thresh_experts));
         } else {
             k_argsort_f32_T<GGML_SORT_ORDER_DESC, store><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, ntop, {});
         }
@@ -622,7 +665,7 @@ void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     }
 #endif
 
-    argsort_f32_T_cuda(src0_d, (int *)dst_d, ncols, nrows, ncols, order, -1, 0.f, stream);
+    argsort_f32_T_cuda(src0_d, (int *)dst_d, ncols, nrows, ncols, order, 0, nullptr, nullptr, stream);
 }
 
 void ggml_cuda_op_argsort_thresh(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -638,11 +681,16 @@ void ggml_cuda_op_argsort_thresh(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int64_t ncols = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    int min_experts = dst->op_params[0];
-    float thresh;
-    memcpy(&thresh, dst->op_params + 1, sizeof(float));
+    int   n_tiers      = dst->op_params[0];
+    int   min_experts[GGML_MAX_SER_TIERS];
+    float thresh[GGML_MAX_SER_TIERS];
+    GGML_ASSERT(n_tiers >= 1 && n_tiers <= GGML_MAX_SER_TIERS);
+    for (int i = 0; i < n_tiers; ++i) {
+        min_experts[i] = dst->op_params[1 + 2*i];
+        memcpy(&thresh[i], dst->op_params + 2 + 2*i, sizeof(float));
+    }
 
-    argsort_f32_T_cuda(src0_d, (int *)dst_d, ncols, nrows, ncols, GGML_SORT_ORDER_DESC, min_experts, thresh, stream);
+    argsort_f32_T_cuda(src0_d, (int *)dst_d, ncols, nrows, ncols, GGML_SORT_ORDER_DESC, n_tiers, min_experts, thresh, stream);
 }
 
 static void ggml_cuda_op_topk_sum(ggml_backend_cuda_context & ctx, const float * src, const float * bias, float * src_p, float * dst,
@@ -684,7 +732,7 @@ void ggml_cuda_op_grouped_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 #if 0
     ggml_cuda_pool_alloc<float> sorted_group_scores(ctx.pool(), nk*nrows*n_groups);
     argsort_f32_T_cuda((const float *)src->data, sorted_group_scores.get(), n_per_group, nrows*n_groups, nk,
-            GGML_SORT_ORDER_DESC, -1, 0.0f, ctx.stream());
+            GGML_SORT_ORDER_DESC, 0, nullptr, nullptr, ctx.stream());
     CUDA_CHECK(cudaGetLastError());
     ggml_cuda_pool_alloc<float> group_scores(ctx.pool(), nrows*n_groups);
     sum_rows_f32_cuda((const float *)sorted_group_scores.get(), group_scores.get(), nk, nrows*n_groups, ctx.stream());
@@ -696,7 +744,7 @@ void ggml_cuda_op_grouped_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 #endif
 
     ggml_cuda_pool_alloc<int> discarded_groups(ctx.pool(), nrows*n_discarded_groups);
-    argsort_f32_T_cuda(group_scores.get(), discarded_groups.get(), n_groups, nrows, n_discarded_groups, GGML_SORT_ORDER_ASC, -1, 0.0f, ctx.stream());
+    argsort_f32_T_cuda(group_scores.get(), discarded_groups.get(), n_groups, nrows, n_discarded_groups, GGML_SORT_ORDER_ASC, 0, nullptr, nullptr, ctx.stream());
     CUDA_CHECK(cudaGetLastError());
 
     {
@@ -707,8 +755,100 @@ void ggml_cuda_op_grouped_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         CUDA_CHECK(cudaGetLastError());
     }
 
-    argsort_f32_T_cuda((const float *)src->data, (int *)dst->data, ne00, nrows, ne0, GGML_SORT_ORDER_DESC, -1, 0.0f, ctx.stream());
+    argsort_f32_T_cuda((const float *)src->data, (int *)dst->data, ne00, nrows, ne0, GGML_SORT_ORDER_DESC, 0, nullptr, nullptr, ctx.stream());
 
+}
+
+// apply SER thresholding on top of an already-selected top-k set of expert ids
+// (e.g. the output of ggml_grouped_topk). src0 = ids [n_expert_used, n_tokens] I32,
+// src1 = routing weights [n_expert, n_tokens] F32, dst = ids with dropped experts -1.
+static __global__ void k_ser_mask(
+        const int32_t * __restrict__ ids,   // [n_expert_used, n_tokens]
+        const float   * __restrict__ wts,   // [n_expert, n_tokens]
+        int32_t       * __restrict__ dst,   // [n_expert_used, n_tokens]
+        const int n_expert_used,
+        const int n_expert,
+        const int n_tiers,
+        const store_ser ser) {
+
+    const int token = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n_tokens = gridDim.x * blockDim.x;
+    if (token >= n_tokens) {
+        return;
+    }
+
+    const int32_t * ids_row = ids + token*n_expert_used;
+    const float   * wts_row = wts + token*n_expert;
+    int32_t       * dst_row = dst + token*n_expert_used;
+
+    // max routing weight among the selected experts (the grouped selection is
+    // already sorted descending; both the ids and their weights are unmodified
+    // on every backend, unlike the full weight row which the CUDA grouped_topk
+    // mutates in place by masking discarded groups to -INFINITY)
+    float max_value = -INFINITY;
+    for (int j = 0; j < n_expert_used; ++j) {
+        max_value = fmaxf(max_value, wts_row[ids_row[j]]);
+    }
+
+    if (n_tiers == 1) {
+        // single tier: keep the first min_entries always, drop the rest below max*thresh
+        for (int j = 0; j < n_expert_used; ++j) {
+            const int32_t id = ids_row[j];
+            dst_row[j] = (j >= ser.min_experts[0] && wts_row[id] < max_value*ser.thresh_experts[0]) ? -1 : id;
+        }
+    } else {
+        // cascade: same semantics as argsort_thresh over the selected set (which is
+        // sorted by weight descending)
+        int keep = ser.min_experts[n_tiers-1];
+        for (int ti = 0; ti < n_tiers; ++ti) {
+            int cnt = 0;
+            for (int j = 0; j < n_expert_used && wts_row[ids_row[j]] >= max_value*ser.thresh_experts[ti]; ++j) {
+                cnt++;
+            }
+            if (cnt >= ser.min_experts[ti]) {
+                keep = cnt;
+                break;
+            }
+        }
+        for (int j = 0; j < n_expert_used; ++j) {
+            dst_row[j] = j < keep ? ids_row[j] : -1;
+        }
+    }
+}
+
+void ggml_cuda_op_ser_mask(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0]; // ids
+    const ggml_tensor * src1 = dst->src[1]; // weights
+
+    GGML_ASSERT(src0->type == GGML_TYPE_I32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_I32);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(src1));
+
+    const int n_expert_used = src0->ne[0];
+    const int n_expert      = src1->ne[0];
+    const int n_tokens      = src0->ne[1];
+    GGML_ASSERT(n_expert_used <= n_expert);
+    GGML_ASSERT(src1->ne[1] == n_tokens);
+
+    const int n_tiers = dst->op_params[0];
+    GGML_ASSERT(n_tiers >= 1 && n_tiers <= GGML_MAX_SER_TIERS);
+
+    int     min_experts[GGML_MAX_SER_TIERS];
+    float   thresh_experts[GGML_MAX_SER_TIERS];
+    for (int i = 0; i < n_tiers; ++i) {
+        min_experts[i]    = dst->op_params[1 + 2*i];
+        memcpy(&thresh_experts[i], dst->op_params + 2 + 2*i, sizeof(float));
+    }
+    const store_ser ser(n_tiers, min_experts, thresh_experts);
+
+    const dim3 block_dims(256);
+    const dim3 block_nums((n_tokens + 255)/256);
+
+    k_ser_mask<<<block_nums, block_dims, 0, ctx.stream()>>>(
+            (const int32_t *) src0->data, (const float *) src1->data, (int32_t *) dst->data,
+            n_expert_used, n_expert, n_tiers, ser);
 }
 
 void cuda_bailingmoev2_experts(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * topk) {

@@ -61,13 +61,16 @@ delta_net::delta_net(llama_context & _lctx, const llama_batch & _batch) : lctx(_
     }
 
     const uint32_t qnext_state_slots = llm_build_context::llama_kv_qnext_state_slots(lctx.kv_self);
-    GGML_ASSERT(qnext_state_slots > 0);
-
+    // An MTP sub-graph may contain no recurrent (KDA) layers, in which case the
+    // context KV cache has no state slots at all. That is fine as long as no
+    // KDA layer is actually built (build_layer_attn_kda asserts its presence).
     // Reserve-graph builds may not carry explicit sequence IDs, in which case
     // the fallback sequence slot is 0.
     for (llama_seq_id s : token_seq_ids) {
         GGML_ASSERT(s >= 0);
-        GGML_ASSERT((uint32_t) s < qnext_state_slots);
+        if (qnext_state_slots > 0) {
+            GGML_ASSERT((uint32_t) s < qnext_state_slots);
+        }
     }
 
     int max_per_step = lctx.kv_self.save_per_step_ssm
@@ -114,10 +117,11 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
     g = channel_gate ? ggml_permute(ctx0, g, 1, 2, 0, 3) : ggml_permute(ctx0, g, 2, 0, 3, 1);
     beta = ggml_permute(ctx0, beta, 2, 0, 1, 3);
 
+    // state from KV cache has a strided last dim (nb[3] = state_row_size > S_v * S_v * H_v * sizeof(float));
+    // the kernel handles this natively because n_seqs=1 always, making batch_idx=0, so the stride is never
+    // used for address arithmetic. skip the wasted ggml_cont D2D copy.
+    GGML_ASSERT(n_seqs == 1 && "delta_net state contiguity skip requires n_seqs == 1");
     ggml_tensor * state_flat = ggml_reshape_4d(ctx0, state, S_v, S_v * H_v, 1, n_seqs);
-    if (!ggml_is_contiguous(state_flat)) {
-        state_flat = ggml_cont_4d(ctx0, state_flat, S_v, S_v * H_v, 1, n_seqs);
-    }
 
     cb(q,         "q_fused", il);
     cb(k,         "k_fused", il);
@@ -333,6 +337,12 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     cb(state, "state_predelta", il);
     ggml_build_forward_expand(gf, state);
 
+    // ssm_conv (src2 = conv1d weight) must be F32 on CPU (ggml.c) and CUDA (ssm-conv.cu);
+    // upcast so BF16-kept conv1d weights work like F32 ones
+    if (ssm_conv1d->type != GGML_TYPE_F32) {
+        ssm_conv1d = ggml_cast(ctx0, ssm_conv1d, GGML_TYPE_F32);
+    }
+
     ggml_tensor * conv_output_raw = ggml_ssm_conv(ctx0, conv_states, qkv_mixed, ssm_conv1d, inp_s_seq_qnext, per_step_conv);
     cb(conv_output_raw, "conv_output_raw", il);
 
@@ -468,7 +478,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     GGML_ASSERT(num_v_heads % num_k_heads == 0);
     int64_t gqa_ratio   = num_v_heads / num_k_heads;
 
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && kv_self.s_l[il]->extra) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL && kv_self.s_l[il]->extra) {
         GGML_ASSERT(head_k_dim == head_v_dim);
         auto split_s_l = (ggml_split_tensor_t *)kv_self.s_l[il]->extra;
         GGML_ASSERT(split_s_l);
@@ -665,4 +675,3 @@ ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgrap
     return out;
 
 }
-

@@ -27,14 +27,14 @@ struct ggml_cuda_graph {
     uint64_t uid = 0;
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t instance = nullptr;
-    size_t num_nodes = 0;
-    std::vector<cudaGraphNode_t> nodes;
-    std::vector<cudaKernelNodeParams> params;
+    uint64_t last_used_seq = 0;
     bool disable_due_to_gpu_arch = false;
     bool disable_due_to_too_many_updates = false;
     bool disable_due_to_failed_graph_capture = false;
+    bool disable_due_to_batch_gt_1 = false;
     int number_consecutive_updates = 0;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
+    std::vector<int> cpy_node_indices;
     bool use_cpy_indirection = false;
     std::vector<char *> cpy_dest_ptrs;
     char ** dest_ptrs_d;

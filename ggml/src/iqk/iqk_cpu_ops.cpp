@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <type_traits>
 //#include <thread>
 
 #ifdef __ARM_NEON
@@ -45,10 +46,25 @@ inline float group_score_max(int n_per_group, const float * data) {
 }
 // Actual top-nk group score: sum of top-nk probabilities in the group
 inline float group_score(int n_per_group, int nk, const float * data, float * aux) {
-    for (int j = 0; j < n_per_group; ++j) aux[j] = data[j];
+    int j = 0;
+#if defined(__AVX2__)
+    for (; j + 7 < n_per_group; j += 8) {
+        _mm256_storeu_ps(aux + j, _mm256_loadu_ps(data + j));
+    }
+#endif
+    for (; j < n_per_group; ++j) aux[j] = data[j];
     std::partial_sort(aux, aux + nk, aux + n_per_group, std::greater<float>{});
+    j = 0;
+#if defined(__AVX2__)
+    auto vsum = _mm256_setzero_ps();
+    for (; j + 7 < nk; j += 8) {
+        vsum = _mm256_add_ps(vsum, _mm256_loadu_ps(aux + j));
+    }
+    float sum = hsum_float_8(vsum);
+#else
     float sum = 0;
-    for (int j = 0; j < nk; ++j) sum += aux[j];
+#endif
+    for (; j < nk; ++j) sum += aux[j];
     return sum;
 }
 inline std::vector<std::pair<float,int>> & get_work_buffer(size_t size) {
@@ -57,6 +73,26 @@ inline std::vector<std::pair<float,int>> & get_work_buffer(size_t size) {
     return buffer;
 
 }
+#if defined(__AVX2__)
+inline void iqk_fill_pairs(int n, int isrc, int idst, const float * src, std::pair<float,int> * aux) {
+    int j = 0;
+    auto vindex = _mm256_setr_epi32(isrc, isrc + 1, isrc + 2, isrc + 3, isrc + 4, isrc + 5, isrc + 6, isrc + 7);
+    for (; j + 7 < n; j += 8) {
+        auto vf  = _mm256_loadu_ps(src + isrc + j);
+        auto vi  = _mm256_castsi256_ps(vindex);
+        auto t0  = _mm256_unpacklo_ps(vf, vi);
+        auto t1  = _mm256_unpackhi_ps(vf, vi);
+        _mm256_storeu_ps((float *)(aux + idst + j),     _mm256_permute2f128_ps(t0, t1, 0x20));
+        _mm256_storeu_ps((float *)(aux + idst + j + 4), _mm256_permute2f128_ps(t0, t1, 0x31));
+        vindex = _mm256_add_epi32(vindex, _mm256_set1_epi32(8));
+    }
+    for (; j < n; ++j) aux[idst + j] = { src[isrc + j], isrc + j };
+}
+#else
+inline void iqk_fill_pairs(int n, int isrc, int idst, const float * src, std::pair<float,int> * aux) {
+    for (int j = 0; j < n; ++j) aux[idst + j] = { src[isrc + j], isrc + j };
+}
+#endif
 #ifdef __ARM_NEON
 inline float32x4_t v_sigmoid(float32x4_t x) {
     const float32x4_t one = vdupq_n_f32(1.0f);
@@ -153,6 +189,30 @@ void iqk_sumrows_div(struct ggml_tensor * div, int ith, int nth) {
     int last  = std::min(first + npt, nrows);
     if (last < first) return;
 
+#if defined __AVX2__
+    if (ne00 >= 8) {
+        for (int ir = first; ir < last; ++ir) {
+            auto values = (const float *)((const char *)src->data + ir*src->nb[1]);
+            __m256 vsum = _mm256_setzero_ps();
+            int j = 0;
+            for (; j + 7 < ne00; j += 8) {
+                auto v = _mm256_loadu_ps(values + j);
+                vsum = _mm256_add_ps(vsum, v);
+            }
+            float sum = hsum_float_8(vsum);
+            for (; j < ne00; ++j) sum += values[j];
+            float norm = sum > 0 ? 1/sum : 0.0f;
+            auto result = (float *)((char *)div->data + ir*div->nb[1]);
+            j = 0;
+            for (; j + 7 < ne00; j += 8) {
+                _mm256_storeu_ps(result + j, _mm256_mul_ps(_mm256_loadu_ps(values + j), _mm256_set1_ps(norm)));
+            }
+            for (; j < ne00; ++j) result[j] = values[j]*norm;
+        }
+        return;
+    }
+#endif
+
     for (int ir = first; ir < last; ++ir) {
         auto values = (const float *)((const char *)src->data + ir*src->nb[1]);
         float sum = 0;
@@ -210,10 +270,10 @@ void iqk_grouped_top_k(ggml_tensor * dst, int ith, int nth) {
             for (int ig = 0; ig < n_top_groups; ++ig) {
                 int i0 = n_per_group * ig;
                 int j0 = n_per_group * groups[ig].second;
-                for (int j = 0; j < n_per_group; ++j) aux[i0 + j] = { data[j0 + j], j0 + j };
+                iqk_fill_pairs(n_per_group, j0, i0, data, aux.data());
             }
         } else {
-            for (int j = 0; j < ne00; ++j) aux[j] = { data[j], j };
+            iqk_fill_pairs(ne00, 0, 0, data, aux.data());
         }
         if (ne0 < n_top_groups*n_per_group) {
             std::partial_sort(aux.begin(), aux.begin() + ne0, aux.begin() + n_top_groups*n_per_group, std::greater<std::pair<float,int>>{});
@@ -245,7 +305,7 @@ void iqk_argsort(ggml_tensor * dst, int ith, int nth) {
 
     for (int ir = first; ir < last; ++ir) {
         auto data = (const float *)((const char *)src->data + ir*src->nb[1]);
-        for (int j = 0; j < ne00; ++j) aux[j] = {data[j], j};
+        iqk_fill_pairs(ne00, 0, 0, data, aux.data());
         if (nk < ne00) {
             if (order == GGML_SORT_ORDER_DESC) {
                 std::partial_sort(aux.begin(), aux.begin() + nk, aux.begin() + ne00, std::greater<std::pair<float,int>>{});
@@ -308,7 +368,16 @@ void iqk_bailingmoev2_experts(struct ggml_tensor * dst, struct ggml_tensor * top
         auto weights = (float *)((char *)dst->data + ir*dst->nb[2]);
         auto ids = (int32_t *)((char *)topk->data + ir*topk->nb[1]);
         if (ne0 > n_per_group*n_top_groups) {
-            for (int j = 0; j < ne0; ++j) {
+            int j = 0;
+#if defined(__AVX2__)
+            auto vindex = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+            for (; j + 7 < ne0; j += 8) {
+                _mm256_storeu_ps(weights + j, _mm256_loadu_ps(values + j));
+                _mm256_storeu_si256((__m256i *)(ids + j), vindex);
+                vindex = _mm256_add_epi32(vindex, _mm256_set1_epi32(8));
+            }
+#endif
+            for (; j < ne0; ++j) {
                 weights[j] = values[j];
                 ids[j]     = j;
             }
@@ -323,10 +392,10 @@ void iqk_bailingmoev2_experts(struct ggml_tensor * dst, struct ggml_tensor * top
             for (int ig = 0; ig < n_top_groups; ++ig) {
                 int i0 = n_per_group * ig;
                 int j0 = n_per_group * groups[ig].second;
-                for (int j = 0; j < n_per_group; ++j) aux[i0 + j] = { biased_values[j0 + j], j0 + j };
+                iqk_fill_pairs(n_per_group, j0, i0, biased_values, aux.data());
             }
         } else {
-            for (int j = 0; j < ne00; ++j) aux[j] = { biased_values[j], j };
+            iqk_fill_pairs(ne00, 0, 0, biased_values, aux.data());
         }
         std::partial_sort(aux.begin(), aux.begin() + ne0, aux.begin() + n_top_groups*n_per_group, std::greater<std::pair<float,int>>{});
         for (int j = 0; j < ne0; ++j) {
@@ -406,7 +475,7 @@ void iqk_openai_experts(struct ggml_tensor * topk, struct ggml_tensor * softmax,
 
     for (int ir = first; ir < last; ++ir) {
         auto data = (const float *)((const char *)probs->data + ir*probs->nb[1]);
-        for (int j = 0; j < ne00; ++j) aux[j] = { data[j], j };
+        iqk_fill_pairs(ne00, 0, 0, data, aux.data());
         if (ne0 < ne00) {
             std::partial_sort(aux.begin(), aux.begin() + ne0, aux.begin() + ne00, std::greater<std::pair<float,int>>{});
         } else {
@@ -415,15 +484,36 @@ void iqk_openai_experts(struct ggml_tensor * topk, struct ggml_tensor * softmax,
         auto weights = (float *)((char *)softmax->data + ir*softmax->nb[1]);
         auto ids = (int32_t *)((char *)topk->data + ir*topk->nb[1]);
         float max = aux.front().first;
+        int j1 = 0;
+#if defined(__AVX2__)
+        auto vmax  = _mm256_set1_ps(max);
+        auto vsum  = _mm256_setzero_ps();
+        for (; j1 + 7 < ne0; j1 += 8) {
+            auto vindex = _mm256_setr_epi32(j1, j1 + 1, j1 + 2, j1 + 3, j1 + 4, j1 + 5, j1 + 6, j1 + 7);
+            auto w = v_expf(_mm256_sub_ps(_mm256_i32gather_ps((const float *)&aux[j1].first, vindex, 8), vmax));
+            vsum = _mm256_add_ps(vsum, w);
+            _mm256_storeu_ps(weights + j1, w);
+            _mm256_storeu_si256((__m256i *)(ids + j1), _mm256_i32gather_epi32((const int *)&aux[j1].second, vindex, 8));
+        }
+        float sum = hsum_float_8(vsum);
+#else
         float sum = 0;
-        for (int j = 0; j < ne0; ++j) {
-            weights[j] = expf(aux[j].first - max);
-            ids[j]     = aux[j].second;
-            sum += weights[j];
+#endif
+        for (; j1 < ne0; ++j1) {
+            weights[j1] = expf(aux[j1].first - max);
+            ids[j1]     = aux[j1].second;
+            sum += weights[j1];
         }
         GGML_ASSERT(sum > 0);
         float norm = 1/sum;
-        for (int j = 0; j < ne0; ++j) weights[j] *= norm;
+        int j = 0;
+#if defined(__AVX2__)
+        auto vnorm = _mm256_set1_ps(norm);
+        for (; j + 7 < ne0; j += 8) {
+            _mm256_storeu_ps(weights + j, _mm256_mul_ps(_mm256_loadu_ps(weights + j), vnorm));
+        }
+#endif
+        for (; j < ne0; ++j) weights[j] *= norm;
     }
 }
 
@@ -467,14 +557,34 @@ void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth) {
             auto x1 = (const float *)c1;
             auto ids = (const int *)(cids + ir*src3->nb[1]);
             float s = scales[ids[0]] * x1[0];
-            for (int k = 0; k < ne00; ++k) y[k] = x0[k] * s;
+            int k = 0;
+#ifdef __AVX2__
+            auto vs = _mm256_set1_ps(s);
+            for (; k + 7 < ne00; k += 8) {
+                _mm256_storeu_ps(y + k, _mm256_mul_ps(_mm256_loadu_ps(x0 + k), vs));
+            }
+#endif
+            for (; k < ne00; ++k) y[k] = x0[k] * s;
             for (int j = 1; j < ne01; ++j) {
                 c0 += src0->nb[1];
                 c1 += src1->nb[1];
                 x0 = (const float *)c0;
                 x1 = (const float *)c1;
                 s  = x1[0] * scales[ids[j]];
-                for (int k = 0; k < ne00; ++k) y[k] += x0[k] * s;
+                k = 0;
+#ifdef __AVX2__
+                vs = _mm256_set1_ps(s);
+                for (; k + 7 < ne00; k += 8) {
+                    auto vx = _mm256_loadu_ps(x0 + k);
+                    auto vy = _mm256_loadu_ps(y + k);
+#ifdef __FMA__
+                    _mm256_storeu_ps(y + k, _mm256_fmadd_ps(vx, vs, vy));
+#else
+                    _mm256_storeu_ps(y + k, _mm256_add_ps(_mm256_mul_ps(vx, vs), vy));
+#endif
+                }
+#endif
+                for (; k < ne00; ++k) y[k] += x0[k] * s;
             }
         }
 
@@ -489,13 +599,33 @@ void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth) {
         auto  y = (     float *)cy;
         auto x0 = (const float *)c0;
         auto x1 = (const float *)c1;
-        for (int k = 0; k < ne00; ++k) y[k] = x0[k] * x1[0];
+        int k = 0;
+#ifdef __AVX2__
+        auto vs = _mm256_set1_ps(x1[0]);
+        for (; k + 7 < ne00; k += 8) {
+            _mm256_storeu_ps(y + k, _mm256_mul_ps(_mm256_loadu_ps(x0 + k), vs));
+        }
+#endif
+        for (; k < ne00; ++k) y[k] = x0[k] * x1[0];
         for (int j = 1; j < ne01; ++j) {
             c0 += src0->nb[1];
             c1 += src1->nb[1];
             x0 = (const float *)c0;
             x1 = (const float *)c1;
-            for (int k = 0; k < ne00; ++k) y[k] += x0[k] * x1[0];
+            k = 0;
+#ifdef __AVX2__
+            vs = _mm256_set1_ps(x1[0]);
+            for (; k + 7 < ne00; k += 8) {
+                auto vx = _mm256_loadu_ps(x0 + k);
+                auto vy = _mm256_loadu_ps(y + k);
+#ifdef __FMA__
+                _mm256_storeu_ps(y + k, _mm256_fmadd_ps(vx, vs, vy));
+#else
+                _mm256_storeu_ps(y + k, _mm256_add_ps(_mm256_mul_ps(vx, vs), vy));
+#endif
+            }
+#endif
+            for (; k < ne00; ++k) y[k] += x0[k] * x1[0];
         }
     }
 }
@@ -507,7 +637,34 @@ void fast_ht(int n, T * values) {
     float scale = 1;
     for (int h = 1; h < n; h <<= 1) {
         for (int i = 0; i < n; i += 2*h) {
-            for (int j = i; j < i + h; ++j) {
+            int j = i;
+#ifdef __AVX2__
+            if constexpr (std::is_same_v<T, float>) {
+                // 8-wide butterfly: only valid once h >= 8 so both 8-lane
+                // loads stay inside the [i, i+2h) block.
+                if (h >= 8) {
+                    for (; j + 7 < i + h; j += 8) {
+                        auto vx = _mm256_loadu_ps(values + j);
+                        auto vy = _mm256_loadu_ps(values + j + h);
+                        _mm256_storeu_ps(values + j,     _mm256_add_ps(vx, vy));
+                        _mm256_storeu_ps(values + j + h, _mm256_sub_ps(vx, vy));
+                    }
+                } else if (h == 4) {
+                    // h=4: one block of 8 elements (2h = 8) fits a full register and the
+                    // butterfly operands (j, j+4) are the two 128-bit halves of the vector.
+                    // Add/sub the halves and reassemble (sums in the low lane, diffs in the
+                    // high lane), bit-identical to the scalar butterfly.
+                    auto vx = _mm256_loadu_ps(values + i);
+                    __m128 lo = _mm256_castps256_ps128(vx);
+                    __m128 hi = _mm256_extractf128_ps(vx, 1);
+                    __m128 s = _mm_add_ps(lo, hi);
+                    __m128 d = _mm_sub_ps(lo, hi);
+                    _mm256_storeu_ps(values + i, _mm256_set_m128(d, s));
+                    j = i + 8;
+                }
+            }
+#endif
+            for (; j < i + h; ++j) {
                 T x = values[j], y = values[j + h];
                 values[j+0] = x + y;
                 values[j+h] = x - y;
@@ -863,7 +1020,16 @@ inline float sum_row_squared(int ncols, const float * x) {
 }
 inline float sum_row_squared(int ncols, const ggml_half * x) {
     float sum = 0;
-    for (int j = 0; j < ncols; ++j) {
+    int j = 0;
+#if defined(__AVX2__) && defined(__F16C__)
+    auto vsum = _mm256_setzero_ps();
+    for (; j + 7 < ncols; j += 8) {
+        auto v = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + j)));
+        vsum = _mm256_fmadd_ps(v, v, vsum);
+    }
+    sum = hsum_float_8(vsum);
+#endif
+    for (; j < ncols; ++j) {
         float v = GGML_FP16_TO_FP32(x[j]);
         sum += v*v;
     }
@@ -871,7 +1037,17 @@ inline float sum_row_squared(int ncols, const ggml_half * x) {
 }
 inline float sum_row_squared(int ncols, const ggml_bf16_t * x) {
     float sum = 0;
-    for (int j = 0; j < ncols; ++j) {
+    int j = 0;
+#if defined(__AVX2__)
+    auto vsum = _mm256_setzero_ps();
+    for (; j + 7 < ncols; j += 8) {
+        auto vi = _mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)(x + j))), 16);
+        auto v = _mm256_castsi256_ps(vi);
+        vsum = _mm256_fmadd_ps(v, v, vsum);
+    }
+    sum = hsum_float_8(vsum);
+#endif
+    for (; j < ncols; ++j) {
         float v = GGML_BF16_TO_FP32(x[j]);
         sum += v*v;
     }
@@ -896,14 +1072,38 @@ inline void rms_rms_add(int ncols, float scale1, float scale2, const float * x1,
     }
 }
 inline void rms_rms_add(int ncols, float scale1, float scale2, const ggml_half * x1, const ggml_half * x2, const float * c1, const float * c2, float * dst) {
-    for (int j = 0; j < ncols; ++j) {
+    int j = 0;
+#if defined(__AVX2__) && defined(__F16C__)
+    auto vs1 = _mm256_set1_ps(scale1);
+    auto vs2 = _mm256_set1_ps(scale2);
+    for (; j + 7 < ncols; j += 8) {
+        auto vx1 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x1 + j)));
+        auto vx2 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x2 + j)));
+        auto vc1 = _mm256_loadu_ps(c1 + j);
+        auto vc2 = _mm256_loadu_ps(c2 + j);
+        _mm256_storeu_ps(dst + j, _mm256_add_ps(_mm256_mul_ps(_mm256_mul_ps(vs1, vc1), vx1), _mm256_mul_ps(_mm256_mul_ps(vs2, vc2), vx2)));
+    }
+#endif
+    for (; j < ncols; ++j) {
         float v1 = GGML_FP16_TO_FP32(x1[j]);
         float v2 = GGML_FP16_TO_FP32(x2[j]);
         dst[j] = scale1 * c1[j] * v1 + scale2 * c2[j] * v2;
     }
 }
 inline void rms_rms_add(int ncols, float scale1, float scale2, const ggml_bf16_t * x1, const ggml_bf16_t * x2, const float * c1, const float * c2, float * dst) {
-    for (int j = 0; j < ncols; ++j) {
+    int j = 0;
+#if defined(__AVX2__)
+    auto vs1 = _mm256_set1_ps(scale1);
+    auto vs2 = _mm256_set1_ps(scale2);
+    for (; j + 7 < ncols; j += 8) {
+        auto vx1 = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)(x1 + j))), 16));
+        auto vx2 = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)(x2 + j))), 16));
+        auto vc1 = _mm256_loadu_ps(c1 + j);
+        auto vc2 = _mm256_loadu_ps(c2 + j);
+        _mm256_storeu_ps(dst + j, _mm256_add_ps(_mm256_mul_ps(_mm256_mul_ps(vs1, vc1), vx1), _mm256_mul_ps(_mm256_mul_ps(vs2, vc2), vx2)));
+    }
+#endif
+    for (; j < ncols; ++j) {
         float v1 = GGML_BF16_TO_FP32(x1[j]);
         float v2 = GGML_BF16_TO_FP32(x2[j]);
         dst[j] = scale1 * c1[j] * v1 + scale2 * c2[j] * v2;
@@ -989,7 +1189,19 @@ inline void iqk_blend_row(int n, int nidx, const Data * x, const Idx * idx, Data
         b = GGML_FP32_TO_BF16(c);
     }
     if (y != x) {
-        for (int j = 0; j < n; ++j) y[j] = x[j];
+        int j = 0;
+#if defined(__AVX2__)
+        if constexpr (sizeof(Data) == 4) {
+            for (; j + 7 < n; j += 8) {
+                _mm256_storeu_ps((float *)(y + j), _mm256_loadu_ps((const float *)(x + j)));
+            }
+        } else if constexpr (sizeof(Data) == 2) {
+            for (; j + 15 < n; j += 16) {
+                _mm256_storeu_si256((__m256i *)(y + j), _mm256_loadu_si256((const __m256i *)(x + j)));
+            }
+        }
+#endif
+        for (; j < n; ++j) y[j] = x[j];
     }
     for (int j = 0; j < nidx; ++j) y[idx[j]] = b;
 }
@@ -1093,21 +1305,49 @@ void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth) {
             auto x = (const ggml_half *)((const char *)mask->data + mask->nb[1]*i1 + mask->nb[2]*i2 + mask->nb[3]*i3);
             auto y = (ggml_half *)((char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
             if (i1 < topk->ne[1]) {
-                for (int j = 0; j < n; ++j) y[j] = hinf;
+                int j = 0;
+#if defined(__AVX2__)
+                auto vhinf = _mm256_set1_epi16((int16_t)hinf);
+                for (; j + 15 < n; j += 16) _mm256_storeu_si256((__m256i *)(y + j), vhinf);
+#endif
+                for (; j < n; ++j) y[j] = hinf;
                 for (int j = 0; j < nidx; ++j) y[idx[j]] = hzero;
                 iqk_add_f16(n, x, y);
             } else {
-                for (int j = 0; j < n; ++j) y[j] = x[j];
+                int j = 0;
+#if defined(__AVX2__)
+                for (; j + 15 < n; j += 16) {
+                    _mm256_storeu_si256((__m256i *)(y + j), _mm256_loadu_si256((const __m256i *)(x + j)));
+                }
+#endif
+                for (; j < n; ++j) y[j] = x[j];
             }
         } else {
             auto x = (const float *)((const char *)mask->data + mask->nb[1]*i1 + mask->nb[2]*i2 + mask->nb[3]*i3);
             auto y = (float *)((char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
             if (i1 < topk->ne[1]) {
-                for (int j = 0; j < n; ++j) y[j] = -INFINITY;
+                int j = 0;
+#if defined(__AVX2__)
+                auto vneg_inf = _mm256_set1_ps(-INFINITY);
+                for (; j + 7 < n; j += 8) _mm256_storeu_ps(y + j, vneg_inf);
+#endif
+                for (; j < n; ++j) y[j] = -INFINITY;
                 for (int j = 0; j < nidx; ++j) y[idx[j]] = 0.0f;
-                for (int j = 0; j < n; ++j) y[j] += x[j];
+                j = 0;
+#if defined(__AVX2__)
+                for (; j + 7 < n; j += 8) {
+                    _mm256_storeu_ps(y + j, _mm256_add_ps(_mm256_loadu_ps(y + j), _mm256_loadu_ps(x + j)));
+                }
+#endif
+                for (; j < n; ++j) y[j] += x[j];
             } else {
-                for (int j = 0; j < n; ++j) y[j] = x[j];
+                int j = 0;
+#if defined(__AVX2__)
+                for (; j + 7 < n; j += 8) {
+                    _mm256_storeu_ps(y + j, _mm256_loadu_ps(x + j));
+                }
+#endif
+                for (; j < n; ++j) y[j] = x[j];
             }
         }
     }

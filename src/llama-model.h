@@ -124,6 +124,7 @@ enum e_model {
     MODEL_230B_A10B, // Minimax M2
     MODEL_235B_A22B,
     MODEL_310B_A15B,
+    MODEL_312B_A17B,
     MODEL_300B_A47B, // Ernie MoE big
     MODEL_355B_A32B,
     MODEL_397B_A17B, // Qwen-3.5-MoE
@@ -375,6 +376,9 @@ struct llama_layer {
     struct ggml_tensor * ssm_beta = nullptr;
     struct ggml_tensor * ssm_f_a = nullptr;
     struct ggml_tensor * ssm_g_a = nullptr;
+    // GLM-5.3-Flash (kimi-k3) low-rank KDA parameterization: f = f_b(f_a(x)), g = g_b(g_a(x))
+    struct ggml_tensor * ssm_f_b = nullptr;
+    struct ggml_tensor * ssm_g_b = nullptr;
 
     // mamba
     struct ggml_tensor * ssm_conv1d = nullptr;
@@ -534,6 +538,21 @@ struct llama_model {
     struct ggml_tensor * output;
     struct ggml_tensor * output_b;
     struct ggml_tensor * output_norm_enc;
+
+    // optional allowlist optimization: only these rows of the output tensor are used for the logits
+    // computation; the logits of all other rows are set to -inf in the graph
+    struct ggml_tensor * output_subset      = nullptr; // [n_embd, n_subset] copy of the allowlisted rows
+    struct ggml_tensor * output_subset_ids  = nullptr; // I32 [n_subset] original vocab ids of the subset rows
+    struct ggml_context * ctx_output_subset = nullptr; // subset weight (allocated in the split buffer when -sot)
+    ggml_backend_buffer_t buf_output_subset = nullptr;
+    struct ggml_context * ctx_output_subset_ids = nullptr; // subset ids (never split)
+    ggml_backend_buffer_t buf_output_subset_ids = nullptr;
+    struct ggml_context * ctx_output_subset_splits = nullptr; // per-device split metadata, never allocated
+    llama_split_tensor    split_output_subset;            // per-device splits when the subset lives in the split buffer
+
+    bool output_subset_host = false; // keep the full output in host memory (CUDA_Host with CUDA, CPU otherwise) once the subset is set
+    bool output_full_host   = false; // the full output tensor currently lives in host memory (its GPU buffer was freed)
+    bool output_subset_split = false; // the subset was last extracted using the split output tensor's per-device splits
     struct ggml_tensor * output_mtp = nullptr;
     struct ggml_tensor * hc_head_base = nullptr;
     struct ggml_tensor * hc_head_fn = nullptr;
@@ -557,16 +576,29 @@ struct llama_model {
     std::unique_ptr<ggml_tensor> dflash_output_ptr;
     std::unique_ptr<ggml_tensor> dflash_output_mtp_ptr;
 
+    // Device-local qwen4exp shared-MTP IO copies for cross-buffer sharing.
+    std::unique_ptr<ggml_tensor> qwen4exp_tok_embd_ptr;
+    std::unique_ptr<ggml_tensor> qwen4exp_output_ptr;
+
     llama_split_tensor split_output;
     llama_split_tensor split_output_norm;
+    llama_split_tensor split_output_mtp;
 
     std::vector<llama_layer> layers;
 
     llama_split_mode split_mode;
     int main_gpu;
-    int max_gpu = 0; // max. number of GPUs to use per layer for aplit mode "graph"
+    int max_gpu_per_split = 0; // max. number of GPUs to use per layer for aplit mode "graph"
+    float split_adjust_step_frequency = 0.5f; // < 1: legacy formula (inverted), >= 1: direct layer count
+    bool split_adjust_vram_aware = false; // use VRAM-aware selection in adjust_split (respects -ts and -sasf)
+    bool split_adjust_not_used = false; // skip adjust_split entirely, rely on formula only
+    float split_tensor_split_factor = 1.0f; // factor for proportional split (neutral: 1.0, you can test: 0.75)
+    float split_vram_free_factor = 0.0f; // factor for VRAM availability (neutral: 0.0, you can test: 0.75)
+    float split_usage_penalty_factor = 0.0f; // factor for memory usage penalty (neutral: 0.0, you can test: 0.25)
+    std::vector<float> split_vram_reserve_factor; // per-GPU VRAM reserve (<1: fraction reserved, >1: direct limit %)
     int n_gpu_layers;
-
+    int split_output_tensor = 0;  // 0=off, 1=split on all GPUs, N>1=split on top N GPUs by VRAM
+    int split_output_tensor_subset = 0; // 0=off, 1=split the allowlist output logits subset on all output GPUs, N>1=top N output GPUs (requires split_output_tensor)
     bool mtp; // use mtp if is supported by the Model
     bool swa_compress = false; // value the cache-size fit was computed with
 
@@ -623,8 +655,8 @@ struct llama_model {
 
     size_t max_nodes(int n_tokens) const {
         auto n_tensors = tensors_by_name.size();
-        if (split_mode == LLAMA_SPLIT_MODE_GRAPH && !devices.empty()) n_tensors *= devices.size();
-        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN4EXP) {
+        if (split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL && !devices.empty()) n_tensors *= devices.size();
+        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5NEXT) {
             return std::max<size_t>(n_tokens * 40, 32u * n_tensors);
         }
         //return std::max<size_t>(1024, 8*n_tensors);
@@ -636,11 +668,11 @@ struct llama_model {
     }
 
     bool is_mla_model() const {
-        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_BAILINGMOE3;
+        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_GLM5NEXT;
     }
 
     float swiglu_limit(uint32_t il, bool shared) const {
-        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && arch != LLM_ARCH_DEEPSEEK4) {
+        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && arch != LLM_ARCH_DEEPSEEK4 && arch != LLM_ARCH_GLM5NEXT) {
             return 0.0f;
         }
         return shared ? hparams.swiglu_limits_shared[il] : hparams.swiglu_limits[il];
@@ -695,6 +727,8 @@ struct llama_model {
 
     size_t cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn,
                       bool swa_compress = false, uint32_t n_ubatch = 0) const;
+
+    bool supports_swa_ring() const;
 
     void set_tensor_overrides(const llama_model_params& params);
 

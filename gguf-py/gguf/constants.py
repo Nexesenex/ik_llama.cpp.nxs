@@ -353,6 +353,8 @@ class MODEL_TENSOR(IntEnum):
     SSM_A                = auto()
     SSM_D                = auto()
     SSM_OUT              = auto()
+    SSM_ALPHA            = auto()
+    SSM_BETA             = auto()
     ATTN_Q_A             = auto()
     ATTN_Q_B             = auto()
     ATTN_KV_A_MQA        = auto()
@@ -582,6 +584,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_A:                "blk.{bid}.ssm_a",
     MODEL_TENSOR.SSM_D:                "blk.{bid}.ssm_d",
     MODEL_TENSOR.SSM_OUT:              "blk.{bid}.ssm_out",
+    MODEL_TENSOR.SSM_ALPHA:            "blk.{bid}.ssm_alpha",
+    MODEL_TENSOR.SSM_BETA:             "blk.{bid}.ssm_beta",
     MODEL_TENSOR.ATTN_Q_A:             "blk.{bid}.attn_q_a",
     MODEL_TENSOR.ATTN_Q_B:             "blk.{bid}.attn_q_b",
     MODEL_TENSOR.ATTN_KV_A_MQA:        "blk.{bid}.attn_kv_a_mqa",
@@ -1998,6 +2002,7 @@ class GGMLQuantizationType(IntEnum):
     IQ4_K     = 139
     IQ5_K     = 140
     IQ6_K     = 141
+    Q6_1      = 142
     IQ4_KS    = 144
     IQ2_KS    = 145
     IQ4_KSS   = 146
@@ -2032,6 +2037,7 @@ class GGMLQuantizationType(IntEnum):
     IQ1_M_R4  = 229
     BF16_R16  = 230
     Q6_0_R4   = 233
+    Q6_1_R4   = 234
     IQ2_BN_R4 = 335
     IQ2_K_R4  = 337
     IQ3_K_R4  = 338
@@ -2101,6 +2107,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ4_KS        = 145 #except 1d tensors
     MOSTLY_IQ3_KL        = 146 #except 1d tensors
     MOSTLY_IQ2_KS        = 147 #except 1d tensors
+    MOSTLY_Q6_1          = 181 #except 1d tensors
     MOSTLY_IQ4_KSS       = 148 #except 1d tensors
     MOSTLY_Q8_KV         = 149 #except 1d tensors
     MOSTLY_IQ5_KS        = 150 #except 1d tensors
@@ -2108,6 +2115,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ3_KT        = 152 #except 1d tensors
     MOSTLY_IQ4_KT        = 153 #except 1d tensors
     MOSTLY_IQ3_KS        = 154 #except 1d tensors
+    MOSTLY_Q6_1_R4       = 336 #except 1d tensors
     MOSTLY_IQ2_KL        = 155 #except 1d tensors
     MOSTLY_IQ1_KT        = 156 #except 1d tensors
 
@@ -2139,6 +2147,52 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ5_KS_R4     = 350 #except 1d tensors
     MOSTLY_Q8_KV_R8      = 398 #except 1d tensors
     MOSTLY_Q8_K_R8       = 399 #except 1d tensors
+
+    MOSTLY_Q4_0_M          = 900   # except 1d tensors
+    MOSTLY_Q4_1_M          = 901   # except 1d tensors
+    MOSTLY_Q5_0_M          = 902   # except 1d tensors
+    MOSTLY_Q5_1_M          = 903   # except 1d tensors
+    MOSTLY_Q6_0_M          = 904   # except 1d tensors
+    MOSTLY_Q8_0_M          = 905   # except 1d tensors
+
+    MOSTLY_Q4_0_L          = 910   # except 1d tensors
+    MOSTLY_Q4_1_L          = 911   # except 1d tensors
+    MOSTLY_Q5_0_L          = 912   # except 1d tensors
+    MOSTLY_Q5_1_L          = 913   # except 1d tensors
+    MOSTLY_Q6_0_L          = 914   # except 1d tensors
+    MOSTLY_Q8_0_L          = 915   # except 1d tensors
+
+    MOSTLY_Q4_0_XL         = 920   # except 1d tensors
+    MOSTLY_Q4_1_XL         = 921   # except 1d tensors
+    MOSTLY_Q5_0_XL         = 922   # except 1d tensors
+    MOSTLY_Q5_1_XL         = 923   # except 1d tensors
+    MOSTLY_Q6_0_XL         = 924   # except 1d tensors
+    MOSTLY_Q8_0_XL         = 925   # except 1d tensors
+
+    MOSTLY_Q4_0_XXL        = 930   # except 1d tensors
+    MOSTLY_Q4_1_XXL        = 931   # except 1d tensors
+    MOSTLY_Q5_0_XXL        = 932   # except 1d tensors
+    MOSTLY_Q5_1_XXL        = 933   # except 1d tensors
+    MOSTLY_Q6_0_XXL        = 934   # except 1d tensors
+    MOSTLY_Q8_0_XXL        = 935   # except 1d tensors
+
+    MOSTLY_Q4_1_S          = 951   # except 1d tensors
+    MOSTLY_Q5_0_S          = 952   # except 1d tensors
+    MOSTLY_Q5_1_S          = 953   # except 1d tensors
+    MOSTLY_Q6_0_S          = 954   # except 1d tensors
+    MOSTLY_Q8_0_S          = 955   # except 1d tensors
+
+    MOSTLY_Q4_1_XS         = 961   # except 1d tensors
+    MOSTLY_Q5_0_XS         = 962   # except 1d tensors
+    MOSTLY_Q5_1_XS         = 963   # except 1d tensors
+    MOSTLY_Q6_0_XS         = 964   # except 1d tensors
+    MOSTLY_Q8_0_XS         = 965   # except 1d tensors
+
+    MOSTLY_Q4_1_XXS        = 971   # except 1d tensors
+    MOSTLY_Q5_0_XXS        = 972   # except 1d tensors
+    MOSTLY_Q5_1_XXS        = 973   # except 1d tensors
+    MOSTLY_Q6_0_XXS        = 974   # except 1d tensors
+    MOSTLY_Q8_0_XXS        = 975   # except 1d tensors
 
     GUESSED              = 1024  # not specified in the model file
 
@@ -2223,6 +2277,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.Q8_1_X4     : (  32,   36),
     GGMLQuantizationType.Q8_2_X4     : (  32,   36),
     GGMLQuantizationType.Q6_0        : (  32,   26),
+    GGMLQuantizationType.Q6_1        : (  32,   28),
     GGMLQuantizationType.IQ1_BN      : (  64,   13),
     GGMLQuantizationType.IQ2_BN      : (  64,   16),
     GGMLQuantizationType.Q8_K64      : (  64,   68),
@@ -2265,6 +2320,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ1_M_R4    : (  32,    7),
     GGMLQuantizationType.BF16_R16    : (   1,    2),
     GGMLQuantizationType.Q6_0_R4     : (  32,   26),
+    GGMLQuantizationType.Q6_1_R4     : (  32,   28),
     GGMLQuantizationType.IQ2_BN_R4   : (  64,   16),
     GGMLQuantizationType.IQ2_K_R4    : ( 256,   76),
     GGMLQuantizationType.IQ3_K_R4    : ( 256,  110),

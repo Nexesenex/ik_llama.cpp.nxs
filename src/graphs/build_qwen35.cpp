@@ -25,7 +25,7 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         delta_net delta(lctx, batch);
 
         ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
-        ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp) ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = (n_tokens > 1) ? build_inp_out_ids() : nullptr;
         ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
         lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
@@ -64,6 +64,12 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
             inpL = cur;
         }
 
+        if (lctx.cparams.mtp) {
+            struct ggml_tensor * mtp_hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
+            cb(mtp_hidden, "result_mtp_embd", -1);
+            ggml_set_output(mtp_hidden);
+        }
+
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
         cb(cur, "result_output", -1);
     }
@@ -96,7 +102,7 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         delta_net delta(lctx, batch);
 
         ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
-        ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp) ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = (n_tokens > 1) ? build_inp_out_ids() : nullptr;
         ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
         lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
@@ -128,6 +134,12 @@ ggml_cgraph * llm_build_context::build_qwen35() {
             cb(cur, "l_out", il);
 
             inpL = cur;
+        }
+
+        if (lctx.cparams.mtp) {
+            struct ggml_tensor * mtp_hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
+            cb(mtp_hidden, "result_mtp_embd", -1);
+            ggml_set_output(mtp_hidden);
         }
 
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
@@ -171,13 +183,9 @@ struct ggml_tensor * llm_build_context::build_qwen35moe_mtp(
     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
 
     cur = build_std_attention(gf, mtp_layer.attn_norm, cur,
-            inp_pos, nullptr, nullptr,
+            inp_pos, inp_out_ids, nullptr,
             KQ_mask, nullptr, nullptr,
             kq_scale, 0.0f, 0, il, true, false, true, false, true, nullptr);
-
-    if (inp_out_ids) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-    }
 
     cur = llm_build_std_moe_ffn(ctx0, lctx, mtp_layer.ffn_norm, cur,
             mtp_layer.ffn_gate_inp,  nullptr,
@@ -195,8 +203,6 @@ struct ggml_tensor * llm_build_context::build_qwen35moe_mtp(
 
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);
-
-    cb(cur, "result_norm", -1);
 
     cur = build_output(lctx, ctx0, cur, model.output_mtp, mtp_layer.nextn.shared_head_norm, cb);
     cb(cur, "result_output", -1);

@@ -24,10 +24,21 @@
 #include <cerrno>
 #include <chrono>
 #include <string>
+#include <cstdarg>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
+#include <io.h>
+#else
+#include <unistd.h>
 #endif
+
+// forward declarations
+static std::string get_cli_cmd(int argc, char ** argv);
+static void tinylog_printf(const char * fmt, ...);
+static bool g_tinylog = false;
+static int g_argc = 0;
+static char ** g_argv = nullptr;
 
 // Public C API for hot-swap (defined in src/llama.cpp)
 extern "C" bool llama_reload_changed_tensors(struct llama_context * ctx);
@@ -532,7 +543,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
 
         if (i == 0) {
             const float t_total = std::chrono::duration<float>(t_end - t_start).count();
-            fprintf(stderr, "%s: %.2f seconds per pass - ETA ", __func__, t_total);
+            fprintf(stderr, "%s: estimated %.2f seconds per pass - approximate ETA ", __func__, t_total);
             int total_seconds = (int)(t_total * n_chunk);
             if (total_seconds >= 60*60) {
                 fprintf(stderr, "%d hours ", total_seconds / (60*60));
@@ -560,13 +571,13 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
         }
         // perplexity is e^(average negative log-likelihood)
         if (params.ppl_output_type == 0) {
-            printf("[%d]%.4lf,", i + 1, std::exp(nll / count));
+            tinylog_printf("[%d]%.4lf,", i + 1, std::exp(nll / count));
         } else {
-            printf("%8d  %.4lf\n", i*params.ppl_stride, std::exp(nll / count));
+            tinylog_printf("%8d  %.4lf\n", i*params.ppl_stride, std::exp(nll / count));
         }
         fflush(stdout);
     }
-    printf("\n");
+    tinylog_printf("\n");
 
     return {tokens, std::exp(nll / count), logit_history, prob_history};
 }
@@ -728,7 +739,7 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
             llama_synchronize(ctx);
             const auto t_end = std::chrono::high_resolution_clock::now();
             const float t_total = std::chrono::duration<float>(t_end - t_start).count();
-            fprintf(stderr, "%s: %.2f seconds per pass - ETA ", __func__, t_total);
+            fprintf(stderr, "%s: estimated %.2f seconds per pass - approximate ETA ", __func__, t_total);
             int total_seconds = (int)(t_total*n_chunk/n_seq);
             if (total_seconds >= 60*60) {
                 fprintf(stderr, "%d hours ", total_seconds / (60*60));
@@ -756,19 +767,19 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
 
             // perplexity is e^(average negative log-likelihood)
             if (params.ppl_output_type == 0) {
-                printf("[%d]%.4lf,", i + seq + 1, std::exp(nll / count));
+                tinylog_printf("[%d]%.4lf,", i + seq + 1, std::exp(nll / count));
             } else {
                 double av = nll/count;
                 double av2 = nll2/count - av*av;
                 if (av2 > 0) av2 = sqrt(av2/(count-1));
-                printf("%8d  %.4lf  %4lf  %4lf\n", i*n_ctx, std::exp(nll / count), av, av2);
+                tinylog_printf("%8d  %.4lf  %4lf  %4lf\n", i*n_ctx, std::exp(nll / count), av, av2);
             }
         }
         fflush(stdout);
 
         logits.clear();
     }
-    printf("\n");
+    tinylog_printf("\n");
 
     nll2 /= count;
     nll /= count;
@@ -776,9 +787,9 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     nll2 -= nll * nll;
     if (nll2 > 0) {
         nll2 = sqrt(nll2/(count-1));
-        printf("Final estimate: PPL over %d chunks for n_ctx=%d = %.4lf +/- %.5lf\n", n_chunk, n_ctx, ppl, nll2*ppl);
+        tinylog_printf("Final estimate: PPL over %d chunks for n_ctx=%d = %.4lf +/- %.5lf\n", n_chunk, n_ctx, ppl, nll2*ppl);
     } else {
-        printf("Unexpected negative standard deviation of log(prob)\n");
+        tinylog_printf("Unexpected negative standard deviation of log(prob)\n");
     }
 
     llama_batch_free(batch);
@@ -1916,7 +1927,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
 
         if (i == 0) {
             const float t_total = std::chrono::duration<float>(t_end - t_start).count();
-            fprintf(stderr, "%s: %.2f seconds per pass - ETA ", __func__, t_total);
+            fprintf(stderr, "%s: estimated %.2f seconds per pass - approximate ETA ", __func__, t_total);
             int total_seconds = (int)(t_total * n_chunk);
             if (total_seconds >= 60*60) {
                 fprintf(stderr, "%d hours ", total_seconds / (60*60));
@@ -2066,7 +2077,616 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
 
 }
 
+static std::string get_cli_cmd(int argc, char ** argv) {
+    std::string cmd;
+    for (int i = 0; i < argc; ++i) {
+        const std::string arg(argv[i]);
+        if (arg == "--minilog" || arg == "--tinylog") {
+            continue;
+        }
+        if (!cmd.empty()) {
+            cmd += ' ';
+        }
+        if (i > 0 && (arg == "-m" || arg == "--model" || arg == "-f" || arg == "--file")) {
+            if (i + 1 < argc) {
+                cmd += arg + ' ';
+                const std::string path(argv[++i]);
+                const auto pos = path.find_last_of("/\\");
+                cmd += (pos == std::string::npos) ? path : path.substr(pos + 1);
+            } else {
+                cmd += arg;
+            }
+        } else {
+            cmd += arg;
+        }
+    }
+    return cmd;
+}
+
+static void tinylog_init(void) {
+    if (!g_tinylog) {
+        return;
+    }
+    llama_log_set([](ggml_log_level, const char *, void *) {}, nullptr);
+    fflush(stdout);
+#ifdef _MSC_VER
+    FILE * nul;
+    freopen_s(&nul, "NUL", "w", stdout);
+#else
+    freopen("/dev/null", "w", stdout);
+#endif
+}
+
+static void tinylog_printf(const char * fmt, ...) {
+    if (!g_tinylog) {
+        va_list args;
+        va_start(args, fmt);
+        vprintf(fmt, args);
+        va_end(args);
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+#ifdef _MSC_VER
+    FILE * f = fopen("CONOUT$", "w");
+    if (!f) { f = fopen("CON", "w"); }
+    if (f) {
+        vfprintf(f, fmt, args);
+        fclose(f);
+    }
+#else
+    FILE * f = fopen("/dev/tty", "w");
+    if (f) {
+        vfprintf(f, fmt, args);
+        fclose(f);
+    } else {
+        vfprintf(stderr, fmt, args);
+    }
+#endif
+    va_end(args);
+}
+
+static void tinylog_print_timings(struct llama_context * ctx) {
+    if (!g_tinylog) {
+        llama_print_timings(ctx);
+        return;
+    }
+    const llama_timings timings = llama_get_timings(ctx);
+    tinylog_printf("\n");
+    tinylog_printf("llama_print_timings:        load time = %10.2f ms\n",      timings.t_load_ms);
+    if (timings.n_sample) {
+        tinylog_printf("llama_print_timings:      sample time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
+                timings.t_sample_ms, timings.n_sample, timings.t_sample_ms / timings.n_sample, 1e3 / timings.t_sample_ms * timings.n_sample);
+    }
+    if (timings.n_p_eval) {
+        tinylog_printf("llama_print_timings: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
+                timings.t_p_eval_ms, timings.n_p_eval, timings.t_p_eval_ms / timings.n_p_eval, 1e3 / timings.t_p_eval_ms * timings.n_p_eval);
+    }
+    if (timings.n_eval) {
+        tinylog_printf("llama_print_timings:        eval time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
+                timings.t_eval_ms, timings.n_eval, timings.t_eval_ms / timings.n_eval, 1e3 / timings.t_eval_ms * timings.n_eval);
+    }
+    tinylog_printf("llama_print_timings:       total time = %10.2f ms / %5d tokens\n", (timings.t_end_ms - timings.t_start_ms), (timings.n_p_eval + timings.n_eval));
+}
+
+// Test type for a ppl run (see --ppl-run-params mode=).
+enum ppl_run_mode {
+    PPL_RUN_DEFAULT    = 0, // use the global mode flags (-sw, -wg, -mc, -kl)
+    PPL_RUN_PPL        = 1,
+    PPL_RUN_HELLASWAG  = 2,
+    PPL_RUN_WINOGRANDE = 3,
+    PPL_RUN_MC         = 4,
+    PPL_RUN_KL         = 5,
+};
+
+// Runtime overrides for an additional perplexity run (see --ppl-run-params).
+struct ppl_run_spec {
+    int32_t n_ctx         = -1; // context size, -1 = keep the previous run's value
+    int32_t n_expert_used = -1; // expert_used_count, -1 = keep the previous run's value
+    std::string file;           // data file for this run, empty = keep the base prompt
+    bool file_is_binary  = false; // read the data file in binary mode (from -bf/--binary-file)
+    int mode = PPL_RUN_DEFAULT; // test type for this run
+    std::string cache_type_k;   // KV cache data type for K, empty = keep the previous run's value
+    std::string cache_type_v;   // KV cache data type for V, empty = keep the previous run's value
+    int k_hadamard = -1;        // Hadamard transform for K-cache, -1 = keep the previous run's value
+    int v_hadamard = -1;        // Hadamard transform for V-cache, -1 = keep the previous run's value
+    std::string type_k_first;   // KV cache data type for the first n_k_first layers of K
+    int32_t n_k_first = -2;     // number of first K layers with type_k_first, -2 = keep the previous run's value
+    std::string type_k_last;    // KV cache data type for the last n_k_last layers of K
+    int32_t n_k_last = -2;      // number of last K layers with type_k_last, -2 = keep the previous run's value
+    std::string type_v_first;   // KV cache data type for the first n_v_first layers of V
+    int32_t n_v_first = -2;     // number of first V layers with type_v_first, -2 = keep the previous run's value
+    std::string type_v_last;    // KV cache data type for the last n_v_last layers of V
+    int32_t n_v_last = -2;      // number of last V layers with type_v_last, -2 = keep the previous run's value
+    bool ser_set = false;       // true when an explicit ser= override is present
+    int   ser_min_experts   = -1; // SER single-pair min experts (legacy)
+    float ser_thresh_experts = 0; // SER single-pair threshold (legacy)
+    int   ser_n_tiers       = 0;  // SER cascade tier count, 0 = single pair
+    int   ser_min_experts_tiers[GGML_MAX_SER_TIERS]   = { 0 };
+    float ser_thresh_experts_tiers[GGML_MAX_SER_TIERS] = { 0.0f };
+};
+
+// Parses a ser= override value: "off" (or "0") disables SER, "c,t" is the
+// single pair, "c,t;c,t;..." is the cascade (>= 2 tiers). Fills the run spec.
+static bool parse_ser_override(const std::string & value, ppl_run_spec & run) {
+    if (value == "off" || value == "none" || value == "0") {
+        run.ser_set = true;
+        run.ser_min_experts   = -1;
+        run.ser_thresh_experts = 0;
+        run.ser_n_tiers = 0;
+        return true;
+    }
+    if (value.find(';') != std::string::npos) {
+        const auto parts = string_split<std::string>(value, ';');
+        if (parts.size() < 2 || parts.size() > GGML_MAX_SER_TIERS) {
+            fprintf(stderr, "%s: --ppl-run-params ser: cascade needs 2..%d tiers, got '%s'\n", __func__, GGML_MAX_SER_TIERS, value.c_str());
+            return false;
+        }
+        run.ser_set = true;
+        run.ser_n_tiers = (int) parts.size();
+        run.ser_min_experts   = -1;
+        run.ser_thresh_experts = 0;
+        for (size_t k = 0; k < parts.size(); ++k) {
+            const auto tier = string_split<std::string>(parts[k], ',');
+            if (tier.size() != 2) {
+                fprintf(stderr, "%s: --ppl-run-params ser: invalid tier '%s' (expected c,t)\n", __func__, parts[k].c_str());
+                return false;
+            }
+            try {
+                run.ser_min_experts_tiers[k]   = std::stoi(tier[0]);
+                run.ser_thresh_experts_tiers[k] = std::stof(tier[1]);
+            } catch (...) {
+                fprintf(stderr, "%s: --ppl-run-params ser: invalid tier '%s' (expected c,t)\n", __func__, parts[k].c_str());
+                return false;
+            }
+            if (run.ser_min_experts_tiers[k] <= 0 || run.ser_thresh_experts_tiers[k] <= 0) {
+                fprintf(stderr, "%s: --ppl-run-params ser: tier c and t must be > 0, got '%s'\n", __func__, parts[k].c_str());
+                return false;
+            }
+        }
+        return true;
+    }
+    const auto values = string_split<std::string>(value, ',');
+    if (values.size() != 2) {
+        fprintf(stderr, "%s: --ppl-run-params ser: expected 'c,t' or 'c,t;c,t;...' or 'off', got '%s'\n", __func__, value.c_str());
+        return false;
+    }
+    try {
+        run.ser_min_experts   = std::stoi(values[0]);
+        run.ser_thresh_experts = std::stof(values[1]);
+    } catch (...) {
+        fprintf(stderr, "%s: --ppl-run-params ser: invalid pair '%s' (expected c,t)\n", __func__, value.c_str());
+        return false;
+    }
+    if (run.ser_min_experts <= 0 || run.ser_thresh_experts <= 0) {
+        fprintf(stderr, "%s: --ppl-run-params ser: c and t must be > 0, got '%s'\n", __func__, value.c_str());
+        return false;
+    }
+    run.ser_set = true;
+    run.ser_n_tiers = 0;
+    return true;
+}
+
+// Parses a --ppl-run-params value given as a copy-paste of the actual llama.cpp
+// CLI flags, e.g. "-ser 7,0.03;6,0.06;5,0.1" or "-c 4096 -ctk q8_0 -khad" or
+// "-bf arc.bin". Flags that take a value consume the next whitespace-separated
+// token; the boolean flags (-khad, -vhad, --hellaswag, ...) take none. Supports
+// the same overrides as the legacy "key=value" list: ctx, experts (via -okv
+// <arch>.expert_used_count=int:N), file, mode, k_cache, v_cache, k_hadamard,
+// v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last, ser.
+static bool parse_ppl_run_spec_cli(const std::string & spec, ppl_run_spec & run) {
+    const auto valid_cache_type = [](const std::string & s) {
+        return s == "f32" || s == "f16" || s == "bf16" || s == "q8_0" || s == "q4_0" ||
+               s == "q4_1" || s == "iq4_nl" || s == "q5_0" || s == "q5_1" || s == "q6_0" ||
+               s == "q6_1" || s == "q8_KV";
+    };
+    const auto parse_type_n = [&](const std::string & flag, const std::string & value, std::string & type, int32_t & n) {
+        const auto p = string_split<std::string>(value, ',');
+        if (p.size() != 2) {
+            fprintf(stderr, "%s: --ppl-run-params %s must be in the form TYPE,N, got '%s'\n", __func__, flag.c_str(), value.c_str());
+            return false;
+        }
+        if (!valid_cache_type(p[0])) {
+            fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, flag.c_str(), p[0].c_str());
+            return false;
+        }
+        try {
+            n = std::stoi(p[1]);
+        } catch (...) {
+            fprintf(stderr, "%s: --ppl-run-params %s: invalid layer count '%s'\n", __func__, flag.c_str(), p[1].c_str());
+            return false;
+        }
+        type = p[0];
+        return true;
+    };
+
+    // split on whitespace, skipping empty tokens (double spaces, tabs)
+    std::vector<std::string> tokens;
+    {
+        const auto raw = string_split<std::string>(spec, ' ');
+        for (const auto & t : raw) {
+            if (!t.empty()) {
+                tokens.push_back(t);
+            }
+        }
+    }
+
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        const std::string & arg = tokens[i];
+        auto need_value = [&](std::string & out) -> bool {
+            if (i + 1 >= tokens.size()) {
+                fprintf(stderr, "%s: --ppl-run-params: missing value for '%s'\n", __func__, arg.c_str());
+                return false;
+            }
+            out = tokens[++i];
+            return true;
+        };
+
+        std::string value;
+        if (arg == "-c" || arg == "--ctx-size") {
+            if (!need_value(value)) return false;
+            try {
+                run.n_ctx = std::stoi(value);
+            } catch (...) {
+                fprintf(stderr, "%s: --ppl-run-params -c: invalid context size '%s'\n", __func__, value.c_str());
+                return false;
+            }
+            if (run.n_ctx <= 0) {
+                fprintf(stderr, "%s: --ppl-run-params -c: must be > 0, got '%s'\n", __func__, value.c_str());
+                return false;
+            }
+        } else if (arg == "-f" || arg == "--file") {
+            if (!need_value(value)) return false;
+            std::ifstream file(value);
+            if (!file) {
+                fprintf(stderr, "%s: --ppl-run-params failed to open file '%s'\n", __func__, value.c_str());
+                return false;
+            }
+            run.file = value;
+            run.file_is_binary = false;
+        } else if (arg == "-bf" || arg == "--binary-file") {
+            if (!need_value(value)) return false;
+            std::ifstream file(value, std::ios::binary);
+            if (!file) {
+                fprintf(stderr, "%s: --ppl-run-params failed to open binary file '%s'\n", __func__, value.c_str());
+                return false;
+            }
+            run.file = value;
+            run.file_is_binary = true;
+        } else if (arg == "-ctk" || arg == "--cache-type-k") {
+            if (!need_value(value)) return false;
+            if (!valid_cache_type(value)) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+            run.cache_type_k = value;
+        } else if (arg == "-ctv" || arg == "--cache-type-v") {
+            if (!need_value(value)) return false;
+            if (!valid_cache_type(value)) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+            run.cache_type_v = value;
+        } else if (arg == "-khad" || arg == "--k-cache-hadamard") {
+            run.k_hadamard = 1;
+        } else if (arg == "-vhad" || arg == "--v-cache-hadamard") {
+            run.v_hadamard = 1;
+        } else if (arg == "-ctk-first" || arg == "--cache-type-k-first") {
+            if (!need_value(value)) return false;
+            if (!parse_type_n(arg, value, run.type_k_first, run.n_k_first)) return false;
+        } else if (arg == "-ctk-last" || arg == "--cache-type-k-last") {
+            if (!need_value(value)) return false;
+            if (!parse_type_n(arg, value, run.type_k_last, run.n_k_last)) return false;
+        } else if (arg == "-ctv-first" || arg == "--cache-type-v-first") {
+            if (!need_value(value)) return false;
+            if (!parse_type_n(arg, value, run.type_v_first, run.n_v_first)) return false;
+        } else if (arg == "-ctv-last" || arg == "--cache-type-v-last") {
+            if (!need_value(value)) return false;
+            if (!parse_type_n(arg, value, run.type_v_last, run.n_v_last)) return false;
+        } else if (arg == "-ser" || arg == "--smart-expert-reduction") {
+            if (!need_value(value)) return false;
+            if (!parse_ser_override(value, run)) return false;
+        } else if (arg == "--hellaswag") {
+            run.mode = PPL_RUN_HELLASWAG;
+        } else if (arg == "--winogrande") {
+            run.mode = PPL_RUN_WINOGRANDE;
+        } else if (arg == "--multiple-choice") {
+            run.mode = PPL_RUN_MC;
+        } else if (arg == "--kl-divergence") {
+            run.mode = PPL_RUN_KL;
+        } else if (arg == "-okv" || arg == "--override-kv") {
+            // only the expert_used_count override is supported here
+            if (!need_value(value)) return false;
+            const auto eq = value.find('=');
+            if (eq == std::string::npos) {
+                fprintf(stderr, "%s: --ppl-run-params %s: malformed override '%s' (expected <arch>.expert_used_count=int:N)\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+            const std::string key = value.substr(0, eq);
+            const std::string val = value.substr(eq + 1);
+            const std::string suffix = "expert_used_count";
+            const bool is_exp = key.size() >= suffix.size() + 1 &&
+                key.compare(key.size() - suffix.size(), suffix.size(), suffix) == 0;
+            if (!is_exp || val.rfind("int:", 0) != 0) {
+                fprintf(stderr, "%s: --ppl-run-params %s: only '<arch>.expert_used_count=int:N' is supported, got '%s'\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+            try {
+                run.n_expert_used = std::stoi(val.substr(4));
+            } catch (...) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid expert_used_count '%s'\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+            if (run.n_expert_used <= 0) {
+                fprintf(stderr, "%s: --ppl-run-params %s: expert_used_count must be > 0, got '%s'\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+        } else {
+            fprintf(stderr, "%s: unknown --ppl-run-params flag '%s' (supported: -c/--ctx-size, -f/--file, -bf/--binary-file, -ctk/--cache-type-k, -ctv/--cache-type-v, -khad/--k-cache-hadamard, -vhad/--v-cache-hadamard, -ctk-first, -ctk-last, -ctv-first, -ctv-last, -ser/--smart-expert-reduction, --hellaswag, --winogrande, --multiple-choice, --kl-divergence, -okv/--override-kv <arch>.expert_used_count=int:N)\n", __func__, arg.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+
+// Parses a "key=value,key=value" run spec. Supported keys: ctx, experts, file, mode,
+// k_cache, v_cache, k_hadamard, v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last, ser.
+static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
+    // a spec that starts with a dash is a copy-paste of the actual llama.cpp CLI
+    // flags (e.g. "-ser 7,0.03;6,0.06;5,0.1"); otherwise it's the legacy
+    // "key=value,key=value" list
+    {
+        const size_t first = spec.find_first_not_of(" \t");
+        if (first != std::string::npos && spec[first] == '-') {
+            return parse_ppl_run_spec_cli(spec, run);
+        }
+    }
+    // join continuation parts into the previous entry so that values containing a
+    // comma (e.g. "ctk_first=q8_0,16") survive the comma split of the spec
+    std::vector<std::string> entries;
+    {
+        const auto parts = string_split<std::string>(spec, ',');
+        for (const auto & part : parts) {
+            if (part.find('=') == std::string::npos && !entries.empty()) {
+                entries.back() += "," + part;
+            } else {
+                entries.push_back(part);
+            }
+        }
+    }
+    for (const auto & part : entries) {
+        const auto eq = part.find('=');
+        if (eq == std::string::npos || eq == 0 || eq + 1 == part.size()) {
+            fprintf(stderr, "%s: invalid --ppl-run-params entry '%s' (expected key=value)\n", __func__, part.c_str());
+            return false;
+        }
+        const std::string key   = part.substr(0, eq);
+        const std::string value = part.substr(eq + 1);
+
+        // valid KV cache data types (see kv_cache_type_from_str in common.cpp)
+        const auto valid_cache_type = [](const std::string & s) {
+            return s == "f32" || s == "f16" || s == "bf16" || s == "q8_0" || s == "q4_0" ||
+                   s == "q4_1" || s == "iq4_nl" || s == "q5_0" || s == "q5_1" || s == "q6_0" ||
+                   s == "q6_1" || s == "q8_KV";
+        };
+
+        if (key == "file") {
+            std::ifstream file(value);
+            if (!file) {
+                fprintf(stderr, "%s: --ppl-run-params failed to open file '%s'\n", __func__, value.c_str());
+                return false;
+            }
+            run.file = value;
+            continue;
+        }
+        if (key == "mode") {
+            if (value == "ppl") {
+                run.mode = PPL_RUN_PPL;
+            } else if (value == "hellaswag" || value == "hs") {
+                run.mode = PPL_RUN_HELLASWAG;
+            } else if (value == "winogrande" || value == "wg") {
+                run.mode = PPL_RUN_WINOGRANDE;
+            } else if (value == "mc" || value == "multiple_choice" || value == "multiple-choice") {
+                run.mode = PPL_RUN_MC;
+            } else if (value == "kl" || value == "kl_divergence" || value == "kl-divergence") {
+                run.mode = PPL_RUN_KL;
+            } else {
+                fprintf(stderr, "%s: unknown --ppl-run-params mode '%s' (supported: ppl, hellaswag, winogrande, mc, kl)\n", __func__, value.c_str());
+                return false;
+            }
+            continue;
+        }
+        if (key == "k_cache" || key == "cache_type_k" || key == "ctk") {
+            if (!valid_cache_type(value)) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, key.c_str(), value.c_str());
+                return false;
+            }
+            run.cache_type_k = value;
+            continue;
+        }
+        if (key == "v_cache" || key == "cache_type_v" || key == "ctv") {
+            if (!valid_cache_type(value)) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, key.c_str(), value.c_str());
+                return false;
+            }
+            run.cache_type_v = value;
+            continue;
+        }
+        if (key == "ser" || key == "ser_experts") {
+            if (!parse_ser_override(value, run)) {
+                return false;
+            }
+            continue;
+        }
+        if (key == "k_hadamard" || key == "khad") {
+            if (value != "0" && value != "1" && value != "true" && value != "false") {
+                fprintf(stderr, "%s: --ppl-run-params %s must be 0 or 1, got '%s'\n", __func__, key.c_str(), value.c_str());
+                return false;
+            }
+            run.k_hadamard = (value == "1" || value == "true") ? 1 : 0;
+            continue;
+        }
+        if (key == "v_hadamard" || key == "vhad") {
+            if (value != "0" && value != "1" && value != "true" && value != "false") {
+                fprintf(stderr, "%s: --ppl-run-params %s must be 0 or 1, got '%s'\n", __func__, key.c_str(), value.c_str());
+                return false;
+            }
+            run.v_hadamard = (value == "1" || value == "true") ? 1 : 0;
+            continue;
+        }
+
+        // TYPE,N keys (e.g. "ctk-first=q8_0,16"): cache type for the first/last N layers
+        const auto parse_type_n = [&](const std::string & k, std::string & type, int32_t & n) {
+            const auto p = string_split(value, ",");
+            if (p.size() != 2) {
+                fprintf(stderr, "%s: --ppl-run-params %s must be in the form TYPE,N, got '%s'\n", __func__, k.c_str(), value.c_str());
+                return false;
+            }
+            if (!valid_cache_type(p[0])) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, k.c_str(), p[0].c_str());
+                return false;
+            }
+            try {
+                n = std::stoi(p[1]);
+            } catch (...) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid layer count '%s'\n", __func__, k.c_str(), p[1].c_str());
+                return false;
+            }
+            type = p[0];
+            return true;
+        };
+        if (key == "ctk_first" || key == "ctk-first" || key == "cache_type_k_first") {
+            if (!parse_type_n(key, run.type_k_first, run.n_k_first)) return false;
+            continue;
+        }
+        if (key == "ctk_last" || key == "ctk-last" || key == "cache_type_k_last") {
+            if (!parse_type_n(key, run.type_k_last, run.n_k_last)) return false;
+            continue;
+        }
+        if (key == "ctv_first" || key == "ctv-first" || key == "cache_type_v_first") {
+            if (!parse_type_n(key, run.type_v_first, run.n_v_first)) return false;
+            continue;
+        }
+        if (key == "ctv_last" || key == "ctv-last" || key == "cache_type_v_last") {
+            if (!parse_type_n(key, run.type_v_last, run.n_v_last)) return false;
+            continue;
+        }
+
+        int val = 0;
+        try {
+            val = std::stoi(value);
+        } catch (...) {
+            fprintf(stderr, "%s: invalid --ppl-run-params value '%s' for key '%s'\n", __func__, value.c_str(), key.c_str());
+            return false;
+        }
+        if (key == "ctx" || key == "n_ctx") {
+            if (val <= 0) {
+                fprintf(stderr, "%s: --ppl-run-params ctx must be > 0, got %d\n", __func__, val);
+                return false;
+            }
+            run.n_ctx = val;
+        } else if (key == "experts" || key == "expert_used_count") {
+            if (val <= 0) {
+                fprintf(stderr, "%s: --ppl-run-params experts must be > 0, got %d\n", __func__, val);
+                return false;
+            }
+            run.n_expert_used = val;
+        } else {
+            fprintf(stderr, "%s: unknown --ppl-run-params key '%s' (supported: ctx, experts, file, mode, k_cache, v_cache, k_hadamard, v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last, ser)\n", __func__, key.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+
+// Resolves the effective test type for a run: an explicit mode= override wins,
+// otherwise the global mode flags decide.
+static int resolve_ppl_mode(const ppl_run_spec & run, const gpt_params & params) {
+    if (run.mode != PPL_RUN_DEFAULT) return run.mode;
+    if (params.hellaswag)       return PPL_RUN_HELLASWAG;
+    if (params.winogrande)      return PPL_RUN_WINOGRANDE;
+    if (params.multiple_choice) return PPL_RUN_MC;
+    if (params.kl_divergence)   return PPL_RUN_KL;
+    return PPL_RUN_PPL;
+}
+
+// Runs the selected test type for one run.
+static void run_ppl_test(llama_context * ctx, const gpt_params & params, int mode, const int32_t n_ctx, results_perplexity & results) {
+    // SER expert-usage accounting: enabled only when smart expert reduction is
+    // active, so the counting hooks inside llama_decode() cost nothing otherwise.
+    const bool ser_active = (params.min_experts > 0 && params.thresh_experts > 0) || params.ser_n_tiers >= 2;
+    llama_context_set_count_experts_used(ctx, ser_active);
+    llama_context_reset_experts_used(ctx);
+
+    switch (mode) {
+        case PPL_RUN_PPL:        results = perplexity(ctx, params, n_ctx); break;
+        case PPL_RUN_HELLASWAG:  hellaswag_score(ctx, params); break;
+        case PPL_RUN_WINOGRANDE: winogrande_score(ctx, params); break;
+        case PPL_RUN_MC:         multiple_choice_score(ctx, params); break;
+        case PPL_RUN_KL:         kl_divergence(ctx, params); break;
+        default: GGML_ASSERT(false); break;
+    }
+
+    if (ser_active) {
+        uint64_t n_experts_used  = 0;
+        uint64_t n_expert_slots  = 0;
+        llama_context_get_experts_used(ctx, &n_experts_used, &n_expert_slots);
+        if (n_expert_slots > 0) {
+            const double avg = (double) n_experts_used / (double) n_expert_slots;
+            fprintf(stderr, "%s: average experts used per token: %.4f (%llu experts over %llu token-layer slots, configured top-k %u)\n",
+                    __func__, avg, (unsigned long long) n_experts_used, (unsigned long long) n_expert_slots,
+                    llama_n_expert_used(llama_get_model(ctx)));
+        } else {
+            fprintf(stderr, "%s: no expert routing tensors evaluated (model has no MoE layers?)\n", __func__);
+        }
+    }
+}
+
+// Applies the context-size adjustments perplexity requires before the context is
+// created (parallel sequences for small contexts, batch capping and the strided
+// perplexity context bump). n_ctx is the base user-specified context size.
+static void adjust_ppl_ctx_params(gpt_params & params, int32_t n_ctx, int32_t n_batch_orig, int mode) {
+    if (mode == PPL_RUN_PPL) {
+        const int32_t n_seq = std::max(1, n_batch_orig / n_ctx);
+        const int32_t n_kv = n_seq * n_ctx;
+        params.n_parallel = n_seq;
+        params.n_ctx      = n_kv;
+        params.n_batch    = std::min(n_batch_orig, n_kv);
+    } else {
+        params.n_ctx   = n_ctx;
+        params.n_batch = std::min(n_batch_orig, n_ctx);
+        if (mode == PPL_RUN_KL) {
+            params.n_parallel = 1;
+        } else {
+            // ensure there's at least enough seq_ids for HellaSwag
+            params.n_parallel = std::max(4, params.n_parallel);
+        }
+    }
+    if (params.ppl_stride > 0) {
+        fprintf(stderr, "Will perform strided perplexity calculation -> adjusting context size from %d to %d\n",
+                params.n_ctx, params.n_ctx + params.ppl_stride/2);
+        params.n_ctx += params.ppl_stride/2;
+    }
+}
+
 int main(int argc, char ** argv) {
+    g_argc = argc;
+    g_argv = argv;
+
+    // scan for --tinylog and remove it before gpt_params_parse
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--tinylog") == 0) {
+            g_tinylog = true;
+            for (int j = i; j < argc - 1; ++j) {
+                argv[j] = argv[j + 1];
+            }
+            argv[--argc] = nullptr;
+            g_argc = argc;
+            break;
+        }
+    }
+    tinylog_init();
+
     gpt_params params;
 
     params.n_ctx = 512;
@@ -2077,6 +2697,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    common_params_minilog(params);
+
     const int32_t n_ctx = params.n_ctx;
 
     if (n_ctx <= 0) {
@@ -2084,31 +2706,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    const bool ppl = !params.hellaswag && !params.winogrande && !params.multiple_choice && !params.kl_divergence;
+    const ppl_run_spec base_run; // base run uses the global mode flags
 
-    if (ppl) {
-        const int32_t n_seq = std::max(1, params.n_batch / n_ctx);
-        const int32_t n_kv = n_seq * n_ctx;
+    const int base_mode = resolve_ppl_mode(base_run, params);
 
-        params.n_parallel = n_seq;
-        params.n_ctx      = n_kv;
+    const int32_t n_batch_orig = params.n_batch;
 
-        params.n_batch = std::min(params.n_batch, n_kv);
-    } else {
-        params.n_batch = std::min(params.n_batch, params.n_ctx);
-        if (params.kl_divergence) {
-            params.n_parallel = 1;
-        } else {
-            // ensure there's at least enough seq_ids for HellaSwag
-            params.n_parallel = std::max(4, params.n_parallel);
-        }
-    }
-
-    if (params.ppl_stride > 0) {
-        fprintf(stderr, "Will perform strided perplexity calculation -> adjusting context size from %d to %d\n",
-                params.n_ctx, params.n_ctx + params.ppl_stride/2);
-        params.n_ctx += params.ppl_stride/2;
-    }
+    adjust_ppl_ctx_params(params, n_ctx, n_batch_orig, base_mode);
 
     print_build_info();
 
@@ -2177,109 +2781,370 @@ int main(int argc, char ** argv) {
         hotswap_write_status(hotswap_stat, "computing", hotswap_iter, hotswap_seq);
     }
 
-    while (true) {
-        struct results_perplexity results;
-        if (params.hellaswag) {
-            hellaswag_score(ctx, params);
-        } else if (params.winogrande) {
-            winogrande_score(ctx, params);
-        } else if (params.multiple_choice) {
-            multiple_choice_score(ctx, params);
-        } else if (params.kl_divergence) {
-            kl_divergence(ctx, params);
-        } else {
-            results = perplexity(ctx, params, n_ctx);
+    // Build the list of runs: the base run from the main CLI parameters plus one
+    // run per --ppl-run-params override. All runs share the already loaded model;
+    // the context is recreated only when a run changes the context size.
+    std::vector<ppl_run_spec> runs;
+    runs.push_back(ppl_run_spec());
+    for (const auto & spec : params.ppl_run_params) {
+        ppl_run_spec run;
+        if (!parse_ppl_run_spec(spec, run)) {
+            fprintf(stderr, "%s: error: invalid --ppl-run-params: '%s'\n", __func__, spec.c_str());
+            llama_free(ctx);
+            llama_free_model(model);
+            llama_backend_free();
+            return 1;
+        }
+        runs.push_back(run);
+    }
+
+    const size_t n_runs = runs.size();
+    if (n_runs > 1) {
+        fprintf(stderr, "%s: will run %zu test runs in this process\n", __func__, n_runs);
+    }
+
+    int32_t  cur_n_ctx        = n_ctx; // context size used by the current context
+    int      cur_mode         = base_mode; // test type used by the current context
+    uint32_t cur_n_expert_used = llama_n_expert_used(model); // experts used by the current model
+
+    // KV cache settings used by the current context
+    std::string cur_cache_type_k = params.cache_type_k;
+    std::string cur_cache_type_v = params.cache_type_v;
+    bool        cur_k_hadamard   = params.k_cache_hadamard;
+    bool        cur_v_hadamard   = params.v_cache_hadamard;
+
+    // per-layer KV cache overrides used by the current context
+    std::string cur_type_k_first = params.type_k_first;
+    std::string cur_type_k_last  = params.type_k_last;
+    std::string cur_type_v_first = params.type_v_first;
+    std::string cur_type_v_last  = params.type_v_last;
+    int32_t     cur_n_k_first    = params.n_k_first;
+    int32_t     cur_n_k_last     = params.n_k_last;
+    int32_t     cur_n_v_first    = params.n_v_first;
+    int32_t     cur_n_v_last     = params.n_v_last;
+
+    // smart expert reduction settings used by the current context
+    int   cur_ser_min_experts   = params.min_experts;
+    float cur_ser_thresh_experts = params.thresh_experts;
+    int   cur_ser_n_tiers       = params.ser_n_tiers;
+    int   cur_ser_min_experts_tiers[GGML_MAX_SER_TIERS];
+    float cur_ser_thresh_experts_tiers[GGML_MAX_SER_TIERS];
+    for (int i = 0; i < GGML_MAX_SER_TIERS; ++i) {
+        cur_ser_min_experts_tiers[i]    = params.ser_min_experts[i];
+        cur_ser_thresh_experts_tiers[i] = params.ser_thresh_experts[i];
+    }
+
+    // base prompt (from -f/-bf/--prompt), restored for runs that don't specify a file
+    const std::string base_prompt       = params.prompt;
+    const std::string base_prompt_file  = params.prompt_file;
+    const bool        base_prompt_binary = params.prompt_is_binary;
+
+    for (size_t irun = 0; irun < n_runs; ++irun) {
+        const ppl_run_spec & run = runs[irun];
+
+        // the effective test type for this run
+        const int this_mode = run.mode != PPL_RUN_DEFAULT ? run.mode : base_mode;
+
+        // the KV cache settings for this run (overrides the base settings)
+        const std::string this_cache_type_k = run.cache_type_k.empty() ? cur_cache_type_k : run.cache_type_k;
+        const std::string this_cache_type_v = run.cache_type_v.empty() ? cur_cache_type_v : run.cache_type_v;
+        const bool        this_k_hadamard   = run.k_hadamard < 0 ? cur_k_hadamard : run.k_hadamard != 0;
+        const bool        this_v_hadamard   = run.v_hadamard < 0 ? cur_v_hadamard : run.v_hadamard != 0;
+        const std::string this_type_k_first = run.n_k_first < -1 ? cur_type_k_first : run.type_k_first;
+        const std::string this_type_k_last  = run.n_k_last  < -1 ? cur_type_k_last  : run.type_k_last;
+        const std::string this_type_v_first = run.n_v_first < -1 ? cur_type_v_first : run.type_v_first;
+        const std::string this_type_v_last  = run.n_v_last  < -1 ? cur_type_v_last  : run.type_v_last;
+        const int32_t     this_n_k_first    = run.n_k_first < -1 ? cur_n_k_first : run.n_k_first;
+        const int32_t     this_n_k_last     = run.n_k_last  < -1 ? cur_n_k_last  : run.n_k_last;
+        const int32_t     this_n_v_first    = run.n_v_first < -1 ? cur_n_v_first : run.n_v_first;
+        const int32_t     this_n_v_last     = run.n_v_last  < -1 ? cur_n_v_last  : run.n_v_last;
+
+        // restore the base prompt, then load a data file for this run, if any
+        params.prompt           = base_prompt;
+        params.prompt_file      = base_prompt_file;
+        params.prompt_is_binary = base_prompt_binary;
+        if (!run.file.empty()) {
+            const bool is_binary = run.file_is_binary || this_mode == PPL_RUN_MC;
+            std::ifstream file(run.file.c_str(), is_binary ? std::ios::binary : std::ios::in);
+            if (!file) {
+                fprintf(stderr, "%s: error: run %zu/%zu: failed to open file '%s'\n",
+                        __func__, irun + 1, n_runs, run.file.c_str());
+                break;
+            }
+            std::ostringstream ss;
+            ss << file.rdbuf();
+            params.prompt = ss.str();
+            if (!is_binary && !params.prompt.empty() && params.prompt.back() == '\n') {
+                params.prompt.pop_back();
+            }
+            params.prompt_file      = run.file;
+            params.prompt_is_binary = is_binary;
+            fprintf(stderr, "%s: run %zu/%zu: loaded data file '%s' (%zu bytes, mode = %d)\n",
+                    __func__, irun + 1, n_runs, run.file.c_str(), params.prompt.size(), this_mode);
         }
 
-        llama_print_timings(ctx);
-        write_logfile(ctx, params, model, results);
+        // override the number of experts used for this run; the model stays loaded
+        if (run.n_expert_used > 0 && run.n_expert_used != (int32_t) cur_n_expert_used) {
+            if (!llama_model_set_n_expert_used(model, run.n_expert_used)) {
+                fprintf(stderr, "%s: error: failed to set expert_used_count to %d (n_expert = %u)\n",
+                        __func__, run.n_expert_used, llama_n_expert(model));
+                break;
+            }
+            cur_n_expert_used = run.n_expert_used;
+            fprintf(stderr, "%s: run %zu/%zu: expert_used_count set to %d\n", __func__, irun + 1, n_runs, run.n_expert_used);
+        }
 
-        if (hotswap_signal_mode) {
-            fprintf(stderr, "%s: hot-swap iteration %d finished, waiting for the next command\n", __func__, hotswap_iter);
-            fflush(stdout);
-            fflush(stderr);
-            hotswap_write_status(hotswap_stat, "done", hotswap_iter, hotswap_seq);
-
-            bool terminate = false;
-            while (true) {
-                std::string cmd;
-                int seq = -1;
-                if (!hotswap_read_command(hotswap_ctrl, cmd, seq)) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                    continue;
-                }
-                if (seq >= 0 && seq <= hotswap_seq) {
-                    fprintf(stderr, "%s: ignoring stale hot-swap command '%s' (seq %d <= %d)\n",
-                            __func__, cmd.c_str(), seq, hotswap_seq);
-                    continue;
-                }
-                if (seq >= 0) {
-                    hotswap_seq = seq;
-                }
-                fprintf(stderr, "%s: hot-swap command received: %s\n", __func__, cmd.c_str());
-                if (cmd == "exit" || cmd == "quit" || cmd == "stop") {
-                    terminate = true;
-                    break;
-                }
-                if (cmd == "reload") {
-                    if (llama_reload_changed_tensors(ctx)) {
+        // override the smart expert reduction settings for this run; the context stays
+        // loaded, llama_context_set_ser() updates cparams and invalidates the cached graph
+        if (run.ser_set) {
+            bool changed = run.ser_min_experts != cur_ser_min_experts ||
+                           run.ser_thresh_experts != cur_ser_thresh_experts ||
+                           run.ser_n_tiers != cur_ser_n_tiers;
+            if (!changed && run.ser_n_tiers >= 2) {
+                for (int i = 0; i < run.ser_n_tiers; ++i) {
+                    if (run.ser_min_experts_tiers[i]    != cur_ser_min_experts_tiers[i] ||
+                        run.ser_thresh_experts_tiers[i] != cur_ser_thresh_experts_tiers[i]) {
+                        changed = true;
                         break;
                     }
-                    fprintf(stderr, "%s: hot-swap reload requested, but no tensor has changed on disk\n", __func__);
-                    fflush(stderr);
-                    hotswap_write_status(hotswap_stat, "reload_failed", hotswap_iter, hotswap_seq);
-                    continue;
                 }
-                if (cmd == "compute") {
-                    break; // recompute without reloading
-                }
-                fprintf(stderr, "%s: unknown hot-swap command '%s' ignored\n", __func__, cmd.c_str());
-                fflush(stderr);
             }
-            if (terminate) {
-                fprintf(stderr, "%s: hot-swap exit requested, terminating\n", __func__);
+            if (changed) {
+                llama_context_set_ser(ctx, run.ser_min_experts, run.ser_thresh_experts,
+                        run.ser_n_tiers, run.ser_min_experts_tiers, run.ser_thresh_experts_tiers);
+                cur_ser_min_experts    = run.ser_min_experts;
+                cur_ser_thresh_experts = run.ser_thresh_experts;
+                cur_ser_n_tiers        = run.ser_n_tiers;
+                for (int i = 0; i < GGML_MAX_SER_TIERS; ++i) {
+                    cur_ser_min_experts_tiers[i]    = run.ser_min_experts_tiers[i];
+                    cur_ser_thresh_experts_tiers[i] = run.ser_thresh_experts_tiers[i];
+                }
+            }
+            // mirror the effective SER state into params so run_ppl_test() accounts
+            // experts correctly and a recreated context picks up the override
+            params.min_experts   = cur_ser_min_experts;
+            params.thresh_experts = cur_ser_thresh_experts;
+            params.ser_n_tiers   = cur_ser_n_tiers;
+            for (int i = 0; i < GGML_MAX_SER_TIERS; ++i) {
+                params.ser_min_experts[i]    = cur_ser_min_experts_tiers[i];
+                params.ser_thresh_experts[i] = cur_ser_thresh_experts_tiers[i];
+            }
+            if (run.ser_n_tiers >= 2) {
+                std::string ser;
+                for (int i = 0; i < run.ser_n_tiers; ++i) {
+                    if (i > 0) {
+                        ser += ";";
+                    }
+                    ser += std::to_string(run.ser_min_experts_tiers[i]) + "," + std::to_string(run.ser_thresh_experts_tiers[i]);
+                }
+                fprintf(stderr, "%s: run %zu/%zu: ser set to %s\n", __func__, irun + 1, n_runs, ser.c_str());
+            } else if (run.ser_min_experts > 0) {
+                fprintf(stderr, "%s: run %zu/%zu: ser set to %d,%g\n", __func__, irun + 1, n_runs,
+                        run.ser_min_experts, (double) run.ser_thresh_experts);
+            } else {
+                fprintf(stderr, "%s: run %zu/%zu: ser disabled\n", __func__, irun + 1, n_runs);
+            }
+        }
+
+        // the base context size this run is computed with
+        const int32_t this_n_ctx = run.n_ctx > 0 ? run.n_ctx : cur_n_ctx;
+
+        // recreate the context when the context size, the test type or the KV cache
+        // settings change (the per-mode context sizing differs, e.g. ppl expands the
+        // context into n_seq parallel sequences while the other tests use the context
+        // as-is; the KV cache type/Hadamard are fixed at context creation)
+        if (this_n_ctx != cur_n_ctx || this_mode != cur_mode ||
+            this_cache_type_k != cur_cache_type_k || this_cache_type_v != cur_cache_type_v ||
+            this_k_hadamard != cur_k_hadamard || this_v_hadamard != cur_v_hadamard ||
+            this_type_k_first != cur_type_k_first || this_type_k_last != cur_type_k_last ||
+            this_type_v_first != cur_type_v_first || this_type_v_last != cur_type_v_last ||
+            this_n_k_first != cur_n_k_first || this_n_k_last != cur_n_k_last ||
+            this_n_v_first != cur_n_v_first || this_n_v_last != cur_n_v_last) {
+            fprintf(stderr, "%s: run %zu/%zu: recreating context with n_ctx = %d, mode = %d, ctk = %s, ctv = %s, khad = %d, vhad = %d, ctkl1 = %s/%d, ctkl2 = %s/%d, ctvl1 = %s/%d, ctvl2 = %s/%d\n",
+                    __func__, irun + 1, n_runs, this_n_ctx, this_mode,
+                    this_cache_type_k.c_str(), this_cache_type_v.c_str(), this_k_hadamard, this_v_hadamard,
+                    this_type_k_first.c_str(), this_n_k_first,
+                    this_type_k_last.c_str(),  this_n_k_last,
+                    this_type_v_first.c_str(), this_n_v_first,
+                    this_type_v_last.c_str(),  this_n_v_last);
+            llama_free(ctx);
+            ctx = nullptr;
+            adjust_ppl_ctx_params(params, this_n_ctx, n_batch_orig, this_mode);
+            // apply this run's KV cache settings for context creation
+            const std::string saved_ctk = params.cache_type_k;
+            const std::string saved_ctv = params.cache_type_v;
+            const bool        saved_kh  = params.k_cache_hadamard;
+            const bool        saved_vh  = params.v_cache_hadamard;
+            const std::string saved_tkf = params.type_k_first;
+            const std::string saved_tkl = params.type_k_last;
+            const std::string saved_tvf = params.type_v_first;
+            const std::string saved_tvl = params.type_v_last;
+            const int32_t     saved_nkf = params.n_k_first;
+            const int32_t     saved_nkl = params.n_k_last;
+            const int32_t     saved_nvf = params.n_v_first;
+            const int32_t     saved_nvl = params.n_v_last;
+            params.cache_type_k   = this_cache_type_k;
+            params.cache_type_v   = this_cache_type_v;
+            params.k_cache_hadamard = this_k_hadamard;
+            params.v_cache_hadamard = this_v_hadamard;
+            params.type_k_first = this_type_k_first;
+            params.type_k_last  = this_type_k_last;
+            params.type_v_first = this_type_v_first;
+            params.type_v_last  = this_type_v_last;
+            params.n_k_first    = this_n_k_first;
+            params.n_k_last     = this_n_k_last;
+            params.n_v_first    = this_n_v_first;
+            params.n_v_last     = this_n_v_last;
+            ctx = common_create_context(model, params);
+            params.cache_type_k   = saved_ctk;
+            params.cache_type_v   = saved_ctv;
+            params.k_cache_hadamard = saved_kh;
+            params.v_cache_hadamard = saved_vh;
+            params.type_k_first = saved_tkf;
+            params.type_k_last  = saved_tkl;
+            params.type_v_first = saved_tvf;
+            params.type_v_last  = saved_tvl;
+            params.n_k_first    = saved_nkf;
+            params.n_k_last     = saved_nkl;
+            params.n_v_first    = saved_nvf;
+            params.n_v_last     = saved_nvl;
+            if (ctx == NULL) {
+                fprintf(stderr, "%s: error: failed to create context with n_ctx = %d\n", __func__, this_n_ctx);
+                break;
+            }
+            if (!params.lora_init_without_apply) {
+                llama_lora_adapters_apply(ctx, llama_init.lora_adapters);
+            }
+            cur_n_ctx  = this_n_ctx;
+            cur_mode   = this_mode;
+            cur_cache_type_k = this_cache_type_k;
+            cur_cache_type_v = this_cache_type_v;
+            cur_k_hadamard   = this_k_hadamard;
+            cur_v_hadamard   = this_v_hadamard;
+            cur_type_k_first = this_type_k_first;
+            cur_type_k_last  = this_type_k_last;
+            cur_type_v_first = this_type_v_first;
+            cur_type_v_last  = this_type_v_last;
+            cur_n_k_first    = this_n_k_first;
+            cur_n_k_last     = this_n_k_last;
+            cur_n_v_first    = this_n_v_first;
+            cur_n_v_last     = this_n_v_last;
+        }
+
+        // -ppl-run reuse the same context, so reset the timing accumulators to report
+        // per-run numbers (like the hot-swap path does); the base run keeps its own
+        // full-context timings
+        if (irun > 0) {
+            llama_reset_timings(ctx);
+        }
+
+        bool terminate_process = false;
+        while (true) {
+            struct results_perplexity results;
+            run_ppl_test(ctx, params, this_mode, this_n_ctx, results);
+
+            tinylog_print_timings(ctx);
+            // the base run is the only one that shows the CLI command line; the
+            // -ppl-run overrides re-use the same CLI, so a per-run repeat is noise
+            if (irun == 0) {
+                tinylog_printf("CLI used : (%s)\n", get_cli_cmd(g_argc, g_argv).c_str());
+            }
+            write_logfile(ctx, params, model, results);
+
+            if (hotswap_signal_mode) {
+                fprintf(stderr, "%s: hot-swap iteration %d finished, waiting for the next command\n", __func__, hotswap_iter);
                 fflush(stdout);
                 fflush(stderr);
-                hotswap_write_status(hotswap_stat, "exiting", hotswap_iter, hotswap_seq);
-                break;
-            }
+                hotswap_write_status(hotswap_stat, "done", hotswap_iter, hotswap_seq);
 
-            hotswap_iter++;
-            llama_reset_timings(ctx); // per-iteration timings, like separate runs would report
-            hotswap_write_status(hotswap_stat, "computing", hotswap_iter, hotswap_seq);
-            continue;
-        }
-
-        if (pre_script) {
-            fprintf(stderr, "%s: executing pre-reload script: %s\n", __func__, pre_script);
-#ifdef _WIN32
-            FILE * fp = _popen(pre_script, "r");
-#else
-            FILE * fp = popen(pre_script, "r");
-#endif
-            if (fp) {
-                char buf[256];
-                while (fgets(buf, sizeof(buf), fp)) {
-                    size_t len = strlen(buf);
-                    if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
-                    fprintf(stderr, "%s: [pre-reload] %s\n", __func__, buf);
+                bool terminate = false;
+                while (true) {
+                    std::string cmd;
+                    int seq = -1;
+                    if (!hotswap_read_command(hotswap_ctrl, cmd, seq)) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                        continue;
+                    }
+                    if (seq >= 0 && seq <= hotswap_seq) {
+                        fprintf(stderr, "%s: ignoring stale hot-swap command '%s' (seq %d <= %d)\n",
+                                __func__, cmd.c_str(), seq, hotswap_seq);
+                        continue;
+                    }
+                    if (seq >= 0) {
+                        hotswap_seq = seq;
+                    }
+                    fprintf(stderr, "%s: hot-swap command received: %s\n", __func__, cmd.c_str());
+                    if (cmd == "exit" || cmd == "quit" || cmd == "stop") {
+                        terminate = true;
+                        break;
+                    }
+                    if (cmd == "reload") {
+                        if (llama_reload_changed_tensors(ctx)) {
+                            break;
+                        }
+                        fprintf(stderr, "%s: hot-swap reload requested, but no tensor has changed on disk\n", __func__);
+                        fflush(stderr);
+                        hotswap_write_status(hotswap_stat, "reload_failed", hotswap_iter, hotswap_seq);
+                        continue;
+                    }
+                    if (cmd == "compute") {
+                        break; // recompute without reloading
+                    }
+                    fprintf(stderr, "%s: unknown hot-swap command '%s' ignored\n", __func__, cmd.c_str());
+                    fflush(stderr);
                 }
-#ifdef _WIN32
-                _pclose(fp);
-#else
-                pclose(fp);
-#endif
-            } else {
-                fprintf(stderr, "%s: failed to execute pre-reload script: %s\n", __func__, pre_script);
-            }
-        }
+                if (terminate) {
+                    fprintf(stderr, "%s: hot-swap exit requested, terminating\n", __func__);
+                    fflush(stdout);
+                    fflush(stderr);
+                    hotswap_write_status(hotswap_stat, "exiting", hotswap_iter, hotswap_seq);
+                    terminate_process = true;
+                    break;
+                }
 
-        if (hotswap_env) {
-            if (!llama_reload_changed_tensors(ctx)) {
+                hotswap_iter++;
+                llama_reset_timings(ctx); // per-iteration timings, like separate runs would report
+                hotswap_write_status(hotswap_stat, "computing", hotswap_iter, hotswap_seq);
+                continue;
+            }
+            if (terminate_process) {
                 break;
             }
-        } else {
-            break;
+
+            if (pre_script) {
+                fprintf(stderr, "%s: executing pre-reload script: %s\n", __func__, pre_script);
+#ifdef _WIN32
+                FILE * fp = _popen(pre_script, "r");
+#else
+                FILE * fp = popen(pre_script, "r");
+#endif
+                if (fp) {
+                    char buf[256];
+                    while (fgets(buf, sizeof(buf), fp)) {
+                        size_t len = strlen(buf);
+                        if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
+                        fprintf(stderr, "%s: [pre-reload] %s\n", __func__, buf);
+                    }
+#ifdef _WIN32
+                    _pclose(fp);
+#else
+                    pclose(fp);
+#endif
+                } else {
+                    fprintf(stderr, "%s: failed to execute pre-reload script: %s\n", __func__, pre_script);
+                }
+            }
+
+            if (hotswap_env) {
+                if (!llama_reload_changed_tensors(ctx)) {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        if (terminate_process) {
+            break; // hot-swap exit requested, stop all runs
         }
     }
 

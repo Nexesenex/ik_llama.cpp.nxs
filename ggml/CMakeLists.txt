@@ -58,6 +58,15 @@ option(GGML_NATIVE "ggml: enable -march=native flag"     ${GGML_NATIVE_DEFAULT})
 option(GGML_LTO    "ggml: enable link time optimization" OFF)
 option(GGML_CCACHE "ggml: use ccache if available"       ON)
 
+# When building with clang-cl (MSVC SimulateId), CMake applies MSVC defaults:
+# /O2 for Release instead of -O3, and frame-pointer heuristics differ from
+# native clang. Tune for this hand-tuned kernel-heavy codebase.
+if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    # clang-cl defaults GGML_LTO to ON. LLD (the default linker for clang-cl)
+    # supports LTO via CMake's IPO layer (/GL + /LTCG).
+    set(GGML_LTO ON CACHE BOOL "ggml: enable link time optimization" FORCE)
+endif()
+
 # debug
 option(GGML_ALL_WARNINGS           "ggml: enable all compiler warnings"                   ON)
 option(GGML_ALL_WARNINGS_3RD_PARTY "ggml: enable all compiler warnings in 3rd party libs" OFF)
@@ -83,6 +92,9 @@ option(GGML_CPU_HBM     "ggml: use memkind for CPU HBM" OFF)
 option(GGML_AVX         "ggml: enable AVX"              ${INS_ENB})
 option(GGML_AVX2        "ggml: enable AVX2"             ${INS_ENB})
 option(GGML_AVXVNNI     "ggml: enable AVX-VNNI"         OFF)
+option(GGML_AVXVNNIINT8 "ggml: enable AVX-VNNI-INT8"    OFF)
+option(GGML_AVX_NE_CONVERT "ggml: enable AVX-NE-CONVERT"  OFF)
+option(GGML_AVXIFMA     "ggml: enable AVX-IFMA"         OFF)
 option(GGML_AVX512      "ggml: enable AVX512"           OFF)
 option(GGML_AVX512_VBMI "ggml: enable AVX512-VBMI"      OFF)
 option(GGML_AVX512_VNNI "ggml: enable AVX512-VNNI"      OFF)
@@ -137,6 +149,8 @@ set   (GGML_CUDA_FUSION  "1" CACHE STRING   "ggml: enable/disable fusion")
 set   (GGML_CUDA_COMPRESSION_MODE "size" CACHE STRING
                                             "ggml: cuda link binary compression mode; requires cuda 12.8+")
 set_property(CACHE GGML_CUDA_COMPRESSION_MODE PROPERTY STRINGS "none;speed;balance;size")
+
+option(LLAMA_CUDA_ENABLE_UNIFIED_MEMORY     "llama: enable to avoid OOM in Full Offload"      OFF)
 
 option(GGML_IQK_FLASH_ATTENTION             "ggml: enable the IQK FlashAttention CPU kernels" ON)
 option(GGML_IQK_FA_ALL_QUANTS               "ggml: compile all quants for IQK FlashAttention" ON)

@@ -98,6 +98,9 @@ typedef sycl::half2 ggml_half2;
 #define QI6_0 (QK6_0 / (4 * QR6_0))
 #define QR6_0 2
 
+#define QI6_1 (QK6_1 / (4 * QR6_1))
+#define QR6_1 2
+
 #define QI8_0 (QK8_0 / (4 * QR8_0))
 #define QR8_0 1
 
@@ -229,6 +232,14 @@ typedef struct {
     uint8_t qs[QK6_0*2]; // nibbles / quants
 } block_q6_0_r4;
 static_assert(sizeof(block_q6_0_r4) == 4*sizeof(ggml_half) + QK6_0*2 + QK6_0, "wrong q6_0_r4 block size/padding");
+
+#define QK6_1 32
+typedef struct {
+    GGML_SCALE_TYPE1(m, dm);
+    uint8_t qh[QK6_1/4]; // 5+6-th bit of quants
+    uint8_t qs[QK6_1/2]; // nibbles / quants
+} block_q6_1;
+static_assert(sizeof(block_q6_1) == 2*sizeof(ggml_half) + QK6_1/2 + QK6_1/4, "wrong q6_1 block size/padding");
 
 #define QK8_0 32
 typedef struct {
@@ -570,6 +581,8 @@ static_assert(sizeof(block_iq1_bn) == 13, "wrong iq1_bn block size/padding");
 // Bitnet and TriLM - implemented as 2.0 bpw
 //
 #define QK_IQ2BN 64
+#define QI2_BN (QK_IQ2BN / (4*QR2_BN))
+#define QR2_BN 8
 typedef struct {
     uint8_t qs[QK_IQ2BN/4];
 } block_iq2_bn;

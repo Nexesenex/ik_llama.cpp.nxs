@@ -215,6 +215,8 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ2_KL        = 155, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ1_KT        = 156, // except 1d tensors
                                                 //
+        LLAMA_FTYPE_MOSTLY_Q6_1          = 180, // except 1d tensors
+                                                //
         LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q5_0_R4       = 208, // except 1d tensors
@@ -281,7 +283,7 @@ extern "C" {
         LLAMA_SPLIT_MODE_NONE    = 0, // single GPU
         LLAMA_SPLIT_MODE_LAYER   = 1, // split layers and KV across GPUs
         LLAMA_SPLIT_MODE_ATTN    = 2, // splits self-attention computations across GPUs
-        LLAMA_SPLIT_MODE_GRAPH   = 3, // splits computations across GPUs
+        LLAMA_SPLIT_MODE_TENSOR_PARALLEL   = 3, // splits computations across GPUs
     };
 
     enum llama_mtp_op_type {
@@ -374,7 +376,14 @@ extern "C" {
         // LLAMA_SPLIT_ROW: the GPU that is used for small tensors and intermediate results
         // LLAMA_SPLIT_LAYER: ignored
         int32_t main_gpu;
-        int32_t max_gpu;
+        int32_t max_gpu_per_split;
+        float split_adjust_step_frequency;
+        bool split_adjust_vram_aware;
+        bool split_adjust_not_used;
+        float split_tensor_split_factor;
+        float split_vram_free_factor;
+        float split_usage_penalty_factor;
+        const float * split_vram_reserve_factor;
         int32_t ncmoe;
 
         enum ggml_type type_k;
@@ -431,6 +440,9 @@ extern "C" {
         bool merge_up_gate_exps;  // if true, merge ffn_up_exps and ffn_gate_exps tensors into a single, contiguous tensor
         bool mtp;           // if true, load MTP layers if present
         bool dry_run;       // skip loading tensors
+        bool output_subset_host; // if true and the output logits subset is set, keep the full output tensor in host memory (CUDA_Host with CUDA, CPU otherwise) and free its GPU buffer
+        int split_output_tensor;  // 0=off, 1=split on all GPUs, N>1=split on top N GPUs by VRAM
+        int split_output_tensor_subset; // 0=off, 1=split the allowlist output logits subset on all output GPUs, N>1=top N output GPUs (requires split_output_tensor)
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
         bool defer_ple;        // keep the per-layer token embedding on the file instead of resident in memory (Linux only)
@@ -497,17 +509,28 @@ extern "C" {
         bool dsa;               // enable GLM DSA sparse attention (off by default) [EXPERIMENTAL]
         bool fused_idx_topk;    // enable the fused indexer topk op (off by default) [EXPERIMENTAL]
         bool swa_compress;      // allocate sliding-window layers at window size instead of n_ctx (off by default) [EXPERIMENTAL]
+        bool dsv4_cache_cpu;    // keep the DeepSeek-V4 compressed-attention K caches (CSA/HCA) in host memory [EXPERIMENTAL]
+        bool dsv4_lid_cache_cpu; // also keep the DeepSeek-V4 indexer (LID) K cache in host memory [EXPERIMENTAL]
         int  dsa_top_k;         // DSA top-k override (<0 => model's configured indexer_top_k) [EXPERIMENTAL]
         int  min_experts;
         float thresh_experts;
+        // smart expert reduction (SER) cascade: >=2 tiers of (min_experts, thresh)
+        // applied per token, scanned from the most conservative (largest min) down;
+        // the last tier's min is the absolute floor. 0 tiers = single-pair mode
+        // controlled by min_experts/thresh_experts above.
+        int   ser_n_tiers;
+        int   ser_min_experts[GGML_MAX_SER_TIERS];
+        float ser_thresh_experts[GGML_MAX_SER_TIERS];
         bool only_active_experts;
         bool prefetch_experts;  // if true, stream mmap'd MoE expert weights into the page cache (Linux only)
         int  prefetch_experts_threads; // number of expert prefetch workers (<=0 = auto)
         bool k_cache_hadamard;  // if true, apply Hadamard transform to K-cache
         bool v_cache_hadamard;  // if true, apply Hadamard transform to V-cache (needs FA)
-        bool split_mode_graph_scheduling; // if true, force split mode graph scheduling
+        bool split_mode_tensor_parallel_scheduling; // if true, force split mode tensor parallel scheduling
         //bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
         bool scheduler_async;   // if true, with split mode "graph" graph evaluation will be done using multiple threads
+        int  sched_max_copies;   // max number of graph parallel copies (default: from GGML_SCHED_MAX_COPIES)
+        bool threadpool;         // if true, use a persistent threadpool for CPU graph compute (instead of OpenMP fork-join)
         bool mtp;   // Activate MTP if supported
         enum llama_mtp_op_type mtp_op_type;
 
@@ -519,6 +542,11 @@ extern "C" {
         void *              offload_policy;
         void *              cuda_params;
         int32_t             dflash_query_capacity; // internal DFlash query capacity override
+
+        // Shark GPU clock elevation callback (Windows only, personal use)
+        // Called with true when TG starts (n_tokens <= 8), false when TG stops
+        void (*shark_callback)(bool start, void * user_data);
+        void *              shark_callback_data;
     };
 
     // model quantization parameters
@@ -544,15 +572,19 @@ extern "C" {
         bool only_copy;                      // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
         bool pure;                           // quantize all tensors to the default type
         bool keep_split;                     // quantize to the same number of shards
+        bool skip_first_shard;               // Do not output the first shard (assumed metadata only, not containing tensors)
         bool ignore_imatrix_rules;           // If set to true, the built-in rules for refusing to quantize into certain quants without imatrix are ignored
         bool only_repack;                    // Only repack tensors
         bool dry_run;                        //
         bool partial_requant;                // quantize only missing split files in the split quantized .gguf destination directory
+        bool skip_missing_splits;            // tolerate split files missing in the source (their tensors are expected to already exist quantized in the destination)
+        bool cuda_quantize;                  // use CUDA for the bit-exact legacy block quants (currently Q8_0, Q4_0)
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
         void * custom_quants;                // pointer to vector containing custom quantization rules
         void * repack_pattern;               // pointer to a vector containing regexes to be used for matching tensor names. Can be null
         struct quantize_user_data * user_data; // so we can pass extra data to the quantization functions
+        const char * virtual_map;              // path to an existing fully quantized model to use as the base tensor source
     } llama_model_quantize_params;
 
     // grammar types
@@ -616,6 +648,10 @@ extern "C" {
 
     LLAMA_API int64_t llama_time_us(void);
 
+    LLAMA_API int64_t llama_get_start_loading_time_us(void);
+
+    LLAMA_API int64_t llama_get_start_ctx_time_us(void);
+
     LLAMA_API size_t llama_max_devices(void);
 
     LLAMA_API bool llama_supports_mmap       (void);
@@ -645,7 +681,57 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_embd     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_inp(const struct llama_model* model);
 
+    // Restrict the output logits computation to a subset of vocab rows (allowlist optimization).
+    // ids must be sorted ascending and in [0, llama_n_vocab(model)). The logits of all other rows
+    // are set to -inf in the graph, so they can never be sampled. ids == NULL or n_ids <= 0
+    // disables the subset. When split_output_tensor_subset is set the subset weight is distributed
+    // across the same GPUs as a split output tensor (-sot). Returns 0 on success, -1 on invalid ids.
+    LLAMA_API int32_t llama_model_set_output_subset(struct llama_model * model, const int32_t * ids, int32_t n_ids);
+
     LLAMA_API int32_t llama_n_layer    (const struct llama_model * model);
+
+    // Number of experts per MoE layer (0 for non-MoE models)
+    LLAMA_API uint32_t llama_n_expert   (const struct llama_model * model);
+
+    // Number of experts used per token in MoE layers
+    LLAMA_API uint32_t llama_n_expert_used(const struct llama_model * model);
+
+    // Override the number of experts used per token in MoE layers at runtime.
+    // This allows e.g. benchmarking different expert_used_count values on an
+    // already loaded model without reloading it. The graph builder picks up the
+    // new value on the next decode. Returns false if the model has no expert
+    // layers or the requested count is outside the valid range [1, n_expert].
+    LLAMA_API bool     llama_model_set_n_expert_used(struct llama_model * model, uint32_t n_expert_used);
+
+    // Enable or disable SER expert-usage accounting on a context.
+    // When enabled, each llama_decode() counts, per token, how many of the
+    // selected top-k experts are actually kept (smart expert reduction), and
+    // accumulates the totals inside the context.
+    LLAMA_API void llama_context_set_count_experts_used(struct llama_context * ctx, bool enable);
+
+    // Reset the SER expert-usage counters accumulated on the context.
+    LLAMA_API void llama_context_reset_experts_used(struct llama_context * ctx);
+
+    // Query the SER expert-usage counters accumulated on the context.
+    // Returns the total number of kept experts across all counted tokens and
+    // the total number of counted (token, MoE layer) pairs. The average number
+    // of experts used per token is n_experts_used / n_expert_slots.
+    LLAMA_API void llama_context_get_experts_used(const struct llama_context * ctx, uint64_t * n_experts_used, uint64_t * n_expert_slots);
+
+    // Update the smart expert reduction (SER) settings of an already created
+    // context, without recreating it. The graph builder picks the new values up
+    // on the next decode (the cached reusable graph, if any, is invalidated).
+    // Legacy single-pair mode uses min_experts/thresh_experts (ser_n_tiers == 0);
+    // cascade mode uses ser_n_tiers >= 2 with the per-tier arrays. Pass
+    // ser_n_tiers == 0 and min_experts <= 0 to disable SER. This allows e.g.
+    // comparing different -ser settings on an already loaded model.
+    LLAMA_API void llama_context_set_ser(
+            struct llama_context * ctx,
+            int                   min_experts,
+            float                 thresh_experts,
+            int                   ser_n_tiers,
+            const int           * ser_min_experts,
+            const float         * ser_thresh_experts);
 
     // Compat
     LLAMA_API bool        llama_vocab_get_add_bos(const struct llama_vocab * vocab);
@@ -710,6 +796,14 @@ extern "C" {
     // Returns true if the model is openPangu (conv-only recurrent state that rides the spec-rollback checkpoint)
     LLAMA_API bool llama_model_is_openpangu(const struct llama_model * model);
 
+    // Returns true if any KV layer is compacted (--swa-compress). Such a cache holds only the
+    // live sliding window, so it cannot be rewound below that window and callers that would
+    // trim it must restore a context checkpoint instead.
+    LLAMA_API bool llama_kv_cache_is_compacted(const struct llama_context * ctx);
+
+    // Lowest position a compacted cache can still be rewound to; 0 when every rewind is possible.
+    LLAMA_API llama_pos llama_kv_cache_swa_rewind_floor(const struct llama_context * ctx);
+
     // Returns true if the model is a Gemma 4 MTP assistant (external frozen-KV speculative drafter)
     LLAMA_API bool llama_model_is_gemma4_mtp_assistant(const struct llama_model * model);
 
@@ -718,10 +812,11 @@ extern "C" {
     LLAMA_API bool llama_model_is_qwen35_family(const struct llama_model * model);
 
     LLAMA_API bool llama_model_is_qwen4exp(const struct llama_model * model);
+    LLAMA_API bool llama_model_share_qwen4exp_mtp_tensors(struct llama_model * draft_model, const struct llama_model * target_model);
 
     LLAMA_API bool llama_is_gemma4_mtp_file(const char * path);
 
-    LLAMA_API bool llama_model_is_split_mode_graph(const struct llama_model * model);
+    LLAMA_API bool llama_model_is_split_mode_tensor_parallel(const struct llama_model * model);
 
     // Returns false for models whose KV cache cannot be re-positioned after the fact
     // (K-shift / context shift / self-extend), e.g. openPangu's latent cache.
@@ -737,10 +832,13 @@ extern "C" {
     LLAMA_API const char * llama_model_arch_string(const struct llama_model * model);
 
     // Returns 0 on success
+    // tensor_ids is an optional, 0-terminated list of split file indices to load from a split
+    // source model. When nullptr, all split files are loaded (normal behavior).
     LLAMA_API uint32_t llama_model_quantize(
             const char * fname_inp,
             const char * fname_out,
-            const llama_model_quantize_params * params);
+            const llama_model_quantize_params * params,
+            const size_t * tensor_ids);
 
     // Load a LoRA adapter from file
     // The loaded adapter will be associated to the given model, and will be free when the model is deleted
@@ -893,6 +991,8 @@ extern "C" {
                     llama_seq_id   seq_id,
                        llama_pos   p0,
                        llama_pos   p1);
+
+    LLAMA_API bool llama_kv_self_is_swa_ring(const struct llama_context * ctx);
 
     // Copy all tokens that belong to the specified sequence to another sequence
     // Note that this does not allocate extra KV cache memory - it simply assigns the tokens to the new sequence
@@ -1123,8 +1223,43 @@ extern "C" {
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
 
+    // Attach a threadpool to the context for inference
+    // `threadpool` is used for generation (single token)
+    // `threadpool_batch` is used for prompt and batch processing (multiple tokens)
+    LLAMA_API void llama_attach_threadpool(struct llama_context * ctx, ggml_threadpool_t threadpool, ggml_threadpool_t threadpool_batch);
+
+    // Detach the threadpool from the context
+    LLAMA_API void llama_detach_threadpool(struct llama_context * ctx);
+
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
+
+    // Stop shark GPU clock elevation (Windows only, personal use)
+    LLAMA_API void llama_shark_stop(struct llama_context * ctx);
+
+    // Enable/disable the in-process NVAPI poller (Windows only, personal use).
+    // Disabled by default; --poller-nvapi turns it on. Safe to call before any decode.
+    LLAMA_API void llama_nvapi_poller_set_enabled(bool enabled);
+
+    // Set the in-process NVAPI poller interval(s) in ms (--poller-nvapi N[,N,...]).
+    // One value applies to every WDDM GPU; a comma list maps positionally
+    // (WDDM slot order, same mapping as --poller-warmup-fma). Applies to the next start; a
+    // running poller keeps its current interval.
+    LLAMA_API void llama_nvapi_poller_set_interval(const int * intervals, int n);
+
+    // Set the temperature thresholds (Celsius) at which the NVAPI poller pauses
+    // (pause_celsius) and resumes (resume_celsius) polling per card (0 = disabled).
+    LLAMA_API void llama_nvapi_poller_set_temp_limits(int pause_celsius, int resume_celsius);
+
+    // Enable/disable monitor-only mode: the NVAPI poller only tracks per-card
+    // temperatures (publishing hot_state, which the --poller-warmup-fma heartbeat warmup
+    // consumes as its skip mask) and performs no NVAPI burst or CUDA ping.
+    LLAMA_API void llama_nvapi_poller_set_monitor_only(bool monitor_only);
+
+    // Check via NVAPI whether no physical NVIDIA GPU exceeds the given temperature
+    // limit in Celsius. Returns true when all GPUs are within the limit, or when
+    // NVAPI is unavailable (fail-open). Windows only, personal use.
+    LLAMA_API bool llama_nvapi_gpu_temp_ok(int limit_celsius);
 
     // Wait until all computations are finished
     // This is automatically done when using one of the functions below to obtain the computation results

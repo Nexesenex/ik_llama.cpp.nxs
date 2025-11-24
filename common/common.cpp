@@ -9,13 +9,19 @@
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #endif
 
+#if defined(GGML_USE_CUDA)
+#include "ggml-cuda.h"
+#endif
+
 #include "common.h"
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
+#include "ggml.h"
 #include "llama-vocab.h"
 #include "llama.h"
 #include "chat.h"
 #include "json-schema-to-grammar.h"
+#include "iqk_mul_mat.h"
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
@@ -87,6 +93,96 @@
 #  include "ggml-rpc.h"
 #endif
 using json = nlohmann::ordered_json;
+
+// Shark GPU clock elevation callback (Windows only)
+// Uses a lightweight GPU poller instead of gpushark
+#if defined(_WIN32) && defined(GGML_USE_CUDA)
+static std::string g_shark_path = "gpu_poller.exe";
+static std::vector<std::string> g_shark_args;
+static std::vector<int> g_shark_interval_ms; // per-WDDM-GPU (--shark N[,N,...]); set from --shark
+static int g_shark_temp_limit  = 85;
+static bool g_shark_temp_ok    = true; // decided once at setup, off the decode path
+static HANDLE g_shark_process = nullptr;
+
+static bool check_gpu_temp_ok() {
+    // Use NVAPI (in-process) instead of spawning nvidia-smi. Fail-open.
+    return llama_nvapi_gpu_temp_ok(g_shark_temp_limit);
+}
+
+static void common_shark_callback(bool start, void * user_data) {
+    (void)user_data;
+    if (start) {
+        // Temp guard was decided once at setup (g_shark_temp_ok); nothing
+        // to check on the decode thread.
+        if (!g_shark_temp_ok) {
+            return;
+        }
+        // Launch lightweight GPU poller
+        if (g_shark_process != nullptr) {
+            return; // already running
+        }
+        // Check if file exists
+        DWORD attrs = GetFileAttributesA(g_shark_path.c_str());
+        if (attrs == INVALID_FILE_ATTRIBUTES) {
+            fprintf(stderr, "shark: GPU poller not found at %s\n", g_shark_path.c_str());
+            return;
+        }
+
+        // Build command line
+        std::string cmd = "\"" + g_shark_path + "\"";
+        for (const auto & arg : g_shark_args) {
+            cmd += " " + arg;
+        }
+        // Pass the --shark N interval unless the user already set one via --shark-arg
+        bool has_interval = false;
+        for (const auto & arg : g_shark_args) {
+            if (arg.rfind("--interval", 0) == 0) {
+                has_interval = true;
+                break;
+            }
+        }
+        if (!has_interval) {
+            cmd += " --interval ";
+            for (size_t k = 0; k < g_shark_interval_ms.size(); ++k) {
+                if (k > 0) cmd += ",";
+                cmd += std::to_string(g_shark_interval_ms[k]);
+            }
+        }
+
+        STARTUPINFOA si = { sizeof(si) };
+        PROCESS_INFORMATION pi;
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE; // run hidden
+
+        if (CreateProcessA(
+                nullptr,
+                (LPSTR)cmd.c_str(),
+                nullptr, nullptr, FALSE,
+                CREATE_NO_WINDOW | DETACHED_PROCESS,
+                nullptr, nullptr, &si, &pi)) {
+            g_shark_process = pi.hProcess;
+            CloseHandle(pi.hThread);
+            fprintf(stderr, "shark: launched GPU poller (pid=%d)\n", pi.dwProcessId);
+        } else {
+            fprintf(stderr, "shark: failed to launch GPU poller (error=%lu)\n", GetLastError());
+        }
+    } else {
+        // Stop GPU poller
+        if (g_shark_process != nullptr) {
+            if (TerminateProcess(g_shark_process, 0)) {
+                fprintf(stderr, "shark: terminated GPU poller\n");
+            }
+            CloseHandle(g_shark_process);
+            g_shark_process = nullptr;
+        }
+    }
+}
+#else
+static void common_shark_callback(bool start, void * user_data) {
+    (void)start;
+    (void)user_data;
+}
+#endif
 
 common_time_meas::common_time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
 
@@ -420,11 +516,47 @@ int32_t cpu_get_num_physical_cores() {
     if (result == 0) {
         return num_physical_cores;
     }
-#elif defined(_WIN32)
-    //TODO: Implement
+#elif defined(_WIN32) && (_WIN32_WINNT >= 0x0601) && !defined(__MINGW64__) // windows 7 and later
+    // TODO: windows + arm64 + mingw64
+    unsigned int n_threads_win = std::thread::hardware_concurrency();
+    unsigned int default_threads = n_threads_win > 0 ? (n_threads_win <= 4 ? n_threads_win : n_threads_win / 2) : 4;
+
+    DWORD buffer_size = 0;
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &buffer_size)) {
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+            return default_threads;
+        }
+    }
+
+    std::vector<char> buffer(buffer_size);
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data()), &buffer_size)) {
+        return default_threads;
+    }
+
+    int32_t num_physical_cores = 0;
+    int32_t num_logical_cores  = 0;
+    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data());
+    while (buffer_size > 0) {
+        if (info->Relationship == RelationProcessorCore) {
+            num_physical_cores += 1;
+            num_logical_cores  += info->Processor.GroupCount;
+        }
+        buffer_size -= info->Size;
+        info = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(reinterpret_cast<char*>(info) + info->Size);
+    }
+
+    if (num_physical_cores > 0) {
+        return num_physical_cores;
+    }
+    return default_threads;
 #endif
     unsigned int n_threads = std::thread::hardware_concurrency();
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
+}
+
+int32_t cpu_get_num_logical_cores() {
+    unsigned int n_threads = std::thread::hardware_concurrency();
+    return n_threads > 0 ? (int32_t)n_threads : 1;
 }
 
 #if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
@@ -525,6 +657,8 @@ common_checkpoint_eviction common_checkpoint_eviction_from_name(const std::strin
         return COMMON_CHECKPOINT_EVICTION_FIFO;
     } else if (format == "variance") {
         return COMMON_CHECKPOINT_EVICTION_VARIANCE;
+    } else if (format == "streamlined") {
+        return COMMON_CHECKPOINT_EVICTION_STREAMLINED;
     } else {
         return COMMON_CHECKPOINT_EVICTION_AUTO;
     }
@@ -718,12 +852,69 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
     const std::string arg_prefix = "--";
     common_params_sampling & sparams = params.sparams;
 
+    // expand --key=value into --key value so value-taking handlers (CHECK_ARG) just work
+    std::vector<std::string> args_store;
+    std::vector<char *> args_ptrs;
+    args_store.reserve(argc + 4);
+    args_ptrs.reserve(argc + 4);
+    args_store.emplace_back(argv[0]);
+    for (int k = 1; k < argc; k++) {
+        std::string a = argv[k];
+        if (a.compare(0, arg_prefix.size(), arg_prefix) == 0) {
+            const size_t eq = a.find('=');
+            if (eq != std::string::npos) {
+                args_store.push_back(a.substr(0, eq));
+                args_store.push_back(a.substr(eq + 1));
+                continue;
+            }
+        }
+        args_store.push_back(a);
+    }
+    for (auto & s : args_store) {
+        args_ptrs.push_back(s.data());
+    }
+    argc = (int) args_ptrs.size();
+    argv = args_ptrs.data();
+
+    // honor -iu/--ignore-unknown regardless of position: an unknown flag must
+    // not throw just because -iu comes after it on the command line
+    for (int k = 1; k < argc; k++) {
+        const std::string a = argv[k];
+        if (a == "-iu" || a == "--ignore-unknown" || a == "--ignore_unknown") {
+            params.ignore_unknown = true;
+            break;
+        }
+    }
+
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
+
+        // a commented line (batch files etc.): REM, rem or # as the first non-space/tab
+        // character of the first argument marks the whole command line as a comment, so it
+        // must neither be executed nor rejected as unknown - skip the remaining arguments
+        if (i == 1) {
+            const size_t ns = arg.find_first_not_of(" \t");
+            if (ns != std::string::npos &&
+                (arg[ns] == '#' || arg.compare(ns, 3, "REM") == 0 || arg.compare(ns, 3, "rem") == 0)) {
+                fprintf(stderr, "warning: skipping commented line: %s", argv[i]);
+                for (int j = i + 1; j < argc; j++) {
+                    fprintf(stderr, " %s", argv[j]);
+                }
+                fprintf(stderr, "\n");
+                break;
+            }
+        }
+
         if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
             std::replace(arg.begin(), arg.end(), '_', '-');
         }
         if (!gpt_params_find_arg(argc, argv, arg, params, i, invalid_param)) {
+            if (params.ignore_unknown) {
+                // never consume the following token: it may be a positional or
+                // another flag, not this flag's value
+                fprintf(stderr, "warning: ignoring unknown argument: %s\n", argv[i]);
+                continue;
+            }
             throw std::invalid_argument("error: unknown argument: " + arg);
         }
         if (invalid_param) {
@@ -817,6 +1008,7 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
     get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
     get_env("LLAMA_ARG_V_CACHE_HADAMARD", params.v_cache_hadamard);
+    get_env("LLAMA_ARG_TOKEN_GENERATION_SPEED_LIMIT", params.token_generation_speed_limit);
 
 }
 
@@ -833,6 +1025,7 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
     } catch (const std::invalid_argument & ex) {
         fprintf(stderr, "%s\n", ex.what());
         params = params_org;
+        params.error_message = ex.what();
         return false;
     }
 
@@ -851,6 +1044,10 @@ bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tens
                 buft_list[ggml_backend_buft_name(buft)] = buft;
             }
         }
+#if defined(GGML_USE_CUDA)
+        buft_list[ggml_backend_buft_name(ggml_backend_cuda_host_buffer_type())]    = ggml_backend_cuda_host_buffer_type();
+        buft_list[ggml_backend_buft_name(ggml_backend_cuda_split_buffer_type(nullptr))] = ggml_backend_cuda_split_buffer_type(nullptr);
+#endif
     }
     for (const auto & override : string_split<std::string>(value, ',')) {
         std::string::size_type pos = override.find('=');
@@ -1111,6 +1308,25 @@ static common_speculative_stage_params common_speculative_stage_from_arg(const s
 
 #define CHECK_ARG if (++i >= argc) { invalid_param = true; return true; }
 
+// Defaults for the bare --poller-warmup-fma / --poller-ping-fma-amplitude / --poller-activity-fma / --poller-warmup-mma /
+// --poller-activity-mma flags (no value). Mirrored in ggml-cuda.cu (GGML_CUDA_POLLER_WARMUP_FMA_DEFAULT /
+// GGML_CUDA_POLLER_PING_FMA_AMPLITUDE_DEFAULT / GGML_CUDA_POLLER_ACTIVITY_FMA_DEFAULT /
+// GGML_CUDA_POLLER_WARMUP_MMA_DEFAULT / GGML_CUDA_POLLER_ACTIVITY_MMA_DEFAULT).
+static constexpr int GGML_POLLER_WARMUP_FMA_DEFAULT      = 32768;
+static constexpr int GGML_POLLER_PING_FMA_AMPLITUDE_DEFAULT = 8192;
+static constexpr int GGML_POLLER_ACTIVITY_FMA_DEFAULT = 8192;
+static constexpr int GGML_POLLER_WARMUP_MMA_DEFAULT    = 8192;
+static constexpr int GGML_POLLER_ACTIVITY_MMA_DEFAULT   = 8192;
+static constexpr int GGML_POLLER_WARMUP_MEM_BURSTS_DEFAULT  = 1;
+static constexpr int GGML_POLLER_ACTIVITY_MEM_BURSTS_DEFAULT = 1;
+static constexpr int GGML_POLLER_WARMUP_INTERVAL_DEFAULT   = 1;
+static constexpr int GGML_POLLER_WARMUP_START_DEFAULT      = 2;
+static constexpr float GGML_POLLER_FMA_OCCUPANCY_DEFAULT    = 50.0f;
+static constexpr float GGML_POLLER_MMA_OCCUPANCY_DEFAULT    = 50.0f;
+static constexpr float GGML_POLLER_MEM_OCCUPANCY_DEFAULT    = 25.0f;
+static constexpr int GGML_POLLER_PING_MEM_AMPLITUDE_DEFAULT = 1;
+static constexpr int GGML_POLLER_PING_MMA_AMPLITUDE_DEFAULT = 8192;
+
 bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_params & params, int & i, bool & invalid_param) {
     const char split_delim = ',';
 
@@ -1161,6 +1377,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         if (params.speculative.n_threads_batch <= 0) {
             params.speculative.n_threads_batch = std::thread::hardware_concurrency();
         }
+        return true;
+    }
+    if (arg == "-gbtt" || arg == "--ggml-batch-thread-threshold") {
+        CHECK_ARG
+        params.ggml_batch_thread_thresh = argv[i];
         return true;
     }
     if (arg == "-p" || arg == "--prompt") {
@@ -1240,9 +1461,23 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.n_predict = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "-tgsl" || arg == "--token-generation-speed-limit") {
+        CHECK_ARG
+        params.token_generation_speed_limit = std::stof(argv[i]);
+        if (params.token_generation_speed_limit < 0) {
+            invalid_param = true;
+            return true;
+        }
+        return true;
+    }
     if (arg == "--top-k") {
         CHECK_ARG
         sparams.top_k = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "-mc" || arg == "--max-candidates") {
+        CHECK_ARG
+        sparams.max_candidates = std::stoi(argv[i]);
         return true;
     }
     if (arg == "-c" || arg == "--ctx-size") {
@@ -1452,6 +1687,20 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--top-n-sigma") {
         CHECK_ARG
         sparams.top_n_sigma = std::stof(argv[i]);
+        return true;
+    }
+    if (arg == "-eostp" || arg == "--eos-token-probability") {
+        CHECK_ARG
+        sparams.eos_token_probability = std::max(0.0f, std::stof(argv[i]));
+        return true;
+    }
+    if (arg == "-seosgt" || arg == "--special-eosg-token") {
+        CHECK_ARG
+        for (const auto & token : string_split<std::string>(argv[i], ',')) {
+            if (!token.empty()) {
+                sparams.special_eosg_tokens.push_back(token);
+            }
+        }
         return true;
     }
 
@@ -1974,10 +2223,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-rcache" || arg == "--rope-cache") {
-        fprintf(stderr, "=================================================================================\n");
-        fprintf(stderr, "  -rcache, --rope-cache is no longer supported\n");
-        fprintf(stderr, "=================================================================================\n");
-        //params.rope_cache = true;
+        params.rope_cache = true;
         return true;
     }
     if (arg == "-gr" || arg == "--graph-reuse") {
@@ -1990,12 +2236,37 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-ser" || arg == "--smart-expert-reduction") {
         CHECK_ARG
-        auto values = string_split_pairs<int,float>(argv[i], ',');
-        if (values.size() == 1) {
-            params.min_experts    = values.front().first;
-            params.thresh_experts = values.front().second;
+        // cascade syntax: "c,t;c,t;..." (>=2 tiers) - comma between count and
+        // threshold, semicolon between tiers. Single-pair syntax: "c,t".
+        const std::string val = argv[i];
+        if (val.find(';') != std::string::npos) {
+            auto parts = string_split(val, ';');
+            if (parts.size() < 2 || parts.size() > GGML_MAX_SER_TIERS) {
+                invalid_param = true;
+                return true;
+            }
+            params.ser_n_tiers = (int) parts.size();
+            for (size_t k = 0; k < parts.size(); ++k) {
+                auto tier = string_split(parts[k], ',');
+                if (tier.size() != 2) {
+                    invalid_param = true;
+                    return true;
+                }
+                params.ser_min_experts[k]   = std::stoi(tier[0]);
+                params.ser_thresh_experts[k] = std::stof(tier[1]);
+                if (params.ser_min_experts[k] <= 0 || params.ser_thresh_experts[k] <= 0) {
+                    invalid_param = true;
+                    return true;
+                }
+            }
         } else {
-            invalid_param = true;
+            auto values = string_split_pairs<int,float>(argv[i], ',');
+            if (values.size() == 1) {
+                params.min_experts    = values.front().first;
+                params.thresh_experts = values.front().second;
+            } else {
+                invalid_param = true;
+            }
         }
         return true;
     }
@@ -2033,9 +2304,56 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
 #endif // GGML_USE_CUDA_SYCL_VULKAN
         return true;
     }
-    else if (arg == "--max-gpu") {
+    else if (arg == "--max-gpu-per-split" || arg == "--max-gpu" ||  arg == "-mgps") {
         CHECK_ARG
-        params.max_gpu = std::stoi(argv[i]);
+        params.max_gpu_per_split = std::stoi(argv[i]);
+        return true;
+    }
+    else if (arg == "--split-adjust-step-frequency" || arg == "-sasf") {
+        CHECK_ARG
+        params.split_adjust_step_frequency = std::stof(argv[i]);
+        return true;
+    }
+    else if (arg == "--split-tensor-split-factor" || arg == "-stpf") {
+        CHECK_ARG
+        params.split_tensor_split_factor = std::stof(argv[i]);
+        return true;
+    }
+    else if (arg == "--split-vram-free-factor" || arg == "-svff") {
+        CHECK_ARG
+        params.split_vram_free_factor = std::stof(argv[i]);
+        return true;
+    }
+    else if (arg == "--split-usage-penalty-factor" || arg == "-supf") {
+        CHECK_ARG
+        params.split_usage_penalty_factor = std::stof(argv[i]);
+        return true;
+    }
+    else if (arg == "--split-vram-reserve-factor" || arg == "-svrf") {
+        CHECK_ARG
+        std::string arg_next = argv[i];
+        const std::regex regex{ R"([,/]+)" };
+        std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
+        std::vector<std::string> split_arg{ it, {} };
+        if (split_arg.size() >= llama_max_devices()) {
+            invalid_param = true;
+            return true;
+        }
+        for (size_t i = 0; i < llama_max_devices(); ++i) {
+            if (i < split_arg.size()) {
+                params.split_vram_reserve_factor[i] = std::stof(split_arg[i]);
+            } else {
+                params.split_vram_reserve_factor[i] = 0.0f;
+            }
+        }
+        return true;
+    }
+    else if (arg == "--split-adjust-vram-aware" || arg == "-sava") {
+        params.split_adjust_vram_aware = true;
+        return true;
+    }
+    else if (arg == "--split-adjust-not-used" || arg == "-sanu") {
+        params.split_adjust_not_used = true;
         return true;
     }
     if (arg == "-sm" || arg == "--split-mode") {
@@ -2050,8 +2368,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         else if (arg_next == "attn") {
             params.split_mode = LLAMA_SPLIT_MODE_ATTN;
         }
-        else if (arg_next == "graph") {
-            params.split_mode = LLAMA_SPLIT_MODE_GRAPH;
+        else if (arg_next == "tenpar" || arg_next == "graph") {
+            params.split_mode = LLAMA_SPLIT_MODE_TENSOR_PARALLEL;
         }
         else {
             invalid_param = true;
@@ -2138,6 +2456,468 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cuda_params = argv[i];
         return true;
     }
+    if (arg == "--shark") {
+        // Optional value: --shark N or N,N,... sets the external poller
+        // interval(s) in ms. Single value applies to every WDDM GPU; a comma
+        // list maps positionally. Bare --shark applies the default 25 ms to
+        // every WDDM GPU.
+        params.shark_enable = true;
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.shark_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.shark_interval_ms) {
+                if (v < 1) {
+                    fprintf(stderr, "error: --shark intervals must be >= 1 ms\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.shark_interval_ms = {25};
+        }
+        return true;
+    }
+    if (arg == "-p-nv" || arg == "--poller-nvapi" || arg == "-piranha") {
+        // Optional value: --poller-nvapi N or N,N,... sets the in-process NVAPI
+        // poller interval(s) in ms (same per-GPU mapping as --shark). A 0 in
+        // the list disables polling on that GPU; --poller-nvapi 0 disables the
+        // poller entirely. Bare --poller-nvapi applies the default 50 ms to every
+        // WDDM GPU.
+        params.poller_nvapi_enable = true;
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_nvapi_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_nvapi_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-nvapi intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.poller_nvapi_interval_ms = {50};
+        }
+        return true;
+    }
+    if (arg == "-p-temps" || arg == "--poller-temps" || arg == "-pt") {
+        // --poller-temps N,N: per-card heat protection thresholds in Celsius.
+        // First value = pause temp, second = resume temp. A single value N sets
+        // pause = N with resume = N - 10°C hysteresis. Bare --poller-temps keeps
+        // the defaults (85,75); 0 disables heat protection.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_temps = string_split<int>(argv[i+1], ',');
+            if (params.poller_temps.size() > 2) {
+                fprintf(stderr, "error: --poller-temps accepts at most 2 values: pause,resume (e.g. --poller-temps 85,75)\n");
+                invalid_param = true;
+            }
+            for (int v : params.poller_temps) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-temps values must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_temps = {85, 75};
+        }
+        return true;
+    }
+    if (arg == "-p-warm-fma" || arg == "--poller-warmup-fma" || arg == "-orca") {
+        // Optional value: --poller-warmup-fma FMA1,FMA2,... sets the per-GPU FMA chain
+        // length (positional, 0 disables a GPU). Bare --poller-warmup-fma applies the
+        // default 32768 FMA to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_warmup_fma_strength = string_split<int>(argv[i+1], ',');
+            if (params.poller_warmup_fma_strength.empty()) {
+                fprintf(stderr, "error: --poller-warmup-fma requires at least one FMA length, e.g. --poller-warmup-fma 262144,393216\n");
+                invalid_param = true;
+            }
+            i++;
+        } else {
+            params.poller_warmup_fma_strength = {GGML_POLLER_WARMUP_FMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-fma-a" || arg == "--poller-ping-fma-amplitude" || arg == "-orca-ping") {
+        // Optional value: --poller-ping-fma-amplitude FMA1,FMA2,... sets the per-GPU FMA ping
+        // strength (positional, 0 disables a GPU). Bare --poller-ping-fma-amplitude applies
+        // the default 8192 to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_fma_amplitude = string_split<int>(argv[i+1], ',');
+            if (params.poller_ping_fma_amplitude.empty()) {
+                fprintf(stderr, "error: --poller-ping-fma-amplitude requires at least one FMA length, e.g. --poller-ping-fma-amplitude 8192,98304\n");
+                invalid_param = true;
+            }
+            i++;
+        } else {
+            params.poller_ping_fma_amplitude = {GGML_POLLER_PING_FMA_AMPLITUDE_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-mma-a" || arg == "--poller-ping-mma-amplitude" || arg == "-kraken-ping") {
+        // Optional value: --poller-ping-mma-amplitude MMA1,MMA2,... sets the per-GPU tensor-core
+        // (HMMA) ping strength for the autonomous --poller-ping-mma thread (positional, 0 disables
+        // a GPU). Bare --poller-ping-mma-amplitude applies the default 8192 to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_mma_amplitude = string_split<int>(argv[i+1], ',');
+            if (params.poller_ping_mma_amplitude.empty()) {
+                fprintf(stderr, "error: --poller-ping-mma-amplitude requires at least one MMA length, e.g. --poller-ping-mma-amplitude 8192,16384\n");
+                invalid_param = true;
+            }
+            i++;
+        } else {
+            params.poller_ping_mma_amplitude = {GGML_POLLER_PING_MMA_AMPLITUDE_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-warm-mem" || arg == "--poller-warmup-mem" || arg == "-cobra") {
+        // Optional value: --poller-warmup-mem N1,N2,... per-WDDM-GPU burst count (number of 2 MiB
+        // passes over the companion buffer per TG batch, 0 = off for a GPU). Bare --poller-warmup-mem
+        // applies the default 1 burst to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_warmup_mem_bursts = string_split<int>(argv[i+1], ',');
+            if (params.poller_warmup_mem_bursts.empty()) {
+                fprintf(stderr, "error: --poller-warmup-mem requires at least one burst count, e.g. --poller-warmup-mem 4,8\n");
+                invalid_param = true;
+            }
+            for (int v : params.poller_warmup_mem_bursts) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-warmup-mem burst counts must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_warmup_mem_bursts = {GGML_POLLER_WARMUP_MEM_BURSTS_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-act-fma" || arg == "--poller-activity-fma" || arg == "-fisherman") {
+        // --poller-activity-fma FMA1,FMA2,...: per-WDDM-GPU FMA chain length for the
+        // decode-solicited probe (0 = off for a GPU). Bare --poller-activity-fma applies the
+        // default 8192 to every WDDM GPU. Decoupled from --shark/--poller-warmup-fma/--poller-nvapi.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_activity_fma_strength = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_activity_fma_strength) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-activity-fma FMA lengths must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_activity_fma_strength = {GGML_POLLER_ACTIVITY_FMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-warm-mma" || arg == "--poller-warmup-mma" || arg == "-kraken") {
+        // --poller-warmup-mma MMA1,MMA2,...: per-WDDM-GPU HMMA chain length for the
+        // tensor-core warmup (0 = off for a GPU). Bare --poller-warmup-mma applies the
+        // default 8192 to every WDDM GPU. Same cadence as --poller-warmup-fma (every TG
+        // batch), but tensor-core MMA gives a much denser pulse per ms.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_warmup_mma_strength = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_warmup_mma_strength) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-warmup-mma MMA lengths must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_warmup_mma_strength = {GGML_POLLER_WARMUP_MMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-warm-i" || arg == "--poller-warmup-interval" || arg == "-warmstream") {
+        // --poller-warmup-interval N[,N,...]: per-WDDM-GPU token interval between warmup bursts.
+        // Applies to all three warmup functions (mma, fma, mem): each GPU fires its burst on
+        // every N-th TG batch instead of every batch. Single value broadcasts to every WDDM GPU
+        // (bare --poller-warmup-interval = 1 = every batch); more values map positionally;
+        // missing values use the default.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_warmup_interval = string_split<int>(argv[i+1], ',');
+            if (params.poller_warmup_interval.empty()) {
+                fprintf(stderr, "error: --poller-warmup-interval requires at least one interval, e.g. --poller-warmup-interval 4,2\n");
+                invalid_param = true;
+            }
+            for (int v : params.poller_warmup_interval) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-warmup-interval intervals must be >= 0 (0 = never fire)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_warmup_interval = {GGML_POLLER_WARMUP_INTERVAL_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-warm-s" || arg == "--poller-warmup-start" || arg == "-streamsource") {
+        // --poller-warmup-start N[,N,...]: per-WDDM-GPU first TG token at which the warmup
+        // burst fires. Applies to all three warmup functions (mma, fma, mem): each GPU's burst
+        // first fires on the N-th TG batch (token) of a phase. Single value broadcasts to every
+        // WDDM GPU (bare --poller-warmup-start = 2 = fire on the second TG token, the historical
+        // skip-first-batch behavior); more values map positionally; missing values use the
+        // default. 0 = never fire on that GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_warmup_start = string_split<int>(argv[i+1], ',');
+            if (params.poller_warmup_start.empty()) {
+                fprintf(stderr, "error: --poller-warmup-start requires at least one token, e.g. --poller-warmup-start 4,2\n");
+                invalid_param = true;
+            }
+            for (int v : params.poller_warmup_start) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-warmup-start tokens must be >= 0 (0 = never fire)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_warmup_start = {GGML_POLLER_WARMUP_START_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-fma-o" || arg == "--poller-fma-occupancy" || arg == "-fishpit") {
+        // --poller-fma-occupancy N[,N,...]: per-WDDM-GPU occupancy % of the poller FMA
+        // kernels, direct 0..100: 0 = disabled (no burst), 100 = full grid. Scales the
+        // burst grid so fewer SMs are engaged during the pulse, leaving more room for
+        // the real TG compute. Single value broadcasts to every WDDM GPU (bare
+        // --poller-fma-occupancy = 50, the default); more values map positionally;
+        // missing values use the default. Applies to warmup, activity and ping. When
+        // any FMA poller is used without this flag, the default 50 applies.
+        if (i + 1 < argc && argv[i+1] != nullptr && (isdigit(argv[i+1][0]) || argv[i+1][0] == '.')) {
+            params.poller_fma_occupancy = string_split<float>(argv[i+1], ',');
+            if (params.poller_fma_occupancy.empty()) {
+                fprintf(stderr, "error: --poller-fma-occupancy requires at least one value, e.g. --poller-fma-occupancy 25,50\n");
+                invalid_param = true;
+            }
+            for (float v : params.poller_fma_occupancy) {
+                if (v < 0.0f || v > 100.0f) {
+                    fprintf(stderr, "error: --poller-fma-occupancy values must be 0..100 (0 = disabled)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_fma_occupancy = {GGML_POLLER_FMA_OCCUPANCY_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-mma-o" || arg == "--poller-mma-occupancy" || arg == "-abyss") {
+        // --poller-mma-occupancy N[,N,...]: per-WDDM-GPU occupancy % of the poller MMA
+        // kernels, direct 0..100: 0 = disabled (no burst), 100 = full grid. Scales the
+        // burst grid so fewer SMs / tensor-core warps are engaged during the pulse,
+        // leaving more room for the real TG compute. Single value broadcasts to every
+        // WDDM GPU (bare --poller-mma-occupancy = 50, the default); more values map
+        // positionally; missing values use the default. Applies to warmup, activity and
+        // ping. When any MMA poller is used without this flag, the default 50 applies.
+        if (i + 1 < argc && argv[i+1] != nullptr && (isdigit(argv[i+1][0]) || argv[i+1][0] == '.')) {
+            params.poller_mma_occupancy = string_split<float>(argv[i+1], ',');
+            if (params.poller_mma_occupancy.empty()) {
+                fprintf(stderr, "error: --poller-mma-occupancy requires at least one value, e.g. --poller-mma-occupancy 25,50\n");
+                invalid_param = true;
+            }
+            for (float v : params.poller_mma_occupancy) {
+                if (v < 0.0f || v > 100.0f) {
+                    fprintf(stderr, "error: --poller-mma-occupancy values must be 0..100 (0 = disabled)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_mma_occupancy = {GGML_POLLER_MMA_OCCUPANCY_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-mem-o" || arg == "--poller-mem-occupancy" || arg == "-snakepit") {
+        // --poller-mem-occupancy N[,N,...]: per-WDDM-GPU L2 occupancy % of the poller mem
+        // companion, direct 0..100: 0 = disabled (no burst), 100 = full 2 MiB buffer.
+        // Scales the slots streamed per pass (the L2 footprint, then multiplied by the
+        // burst count) so it leaves more L2 for the real TG compute. Single value
+        // broadcasts to every WDDM GPU (bare --poller-mem-occupancy = 25, the default);
+        // more values map positionally; missing values use the default. Applies to
+        // warmup, activity and ping. When any mem poller is used without this flag, the
+        // default 25 applies.
+        if (i + 1 < argc && argv[i+1] != nullptr && (isdigit(argv[i+1][0]) || argv[i+1][0] == '.')) {
+            params.poller_mem_occupancy = string_split<float>(argv[i+1], ',');
+            if (params.poller_mem_occupancy.empty()) {
+                fprintf(stderr, "error: --poller-mem-occupancy requires at least one value, e.g. --poller-mem-occupancy 12,25\n");
+                invalid_param = true;
+            }
+            for (float v : params.poller_mem_occupancy) {
+                if (v < 0.0f || v > 100.0f) {
+                    fprintf(stderr, "error: --poller-mem-occupancy values must be 0..100 (0 = disabled)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_mem_occupancy = {GGML_POLLER_MEM_OCCUPANCY_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-act-mma" || arg == "--poller-activity-mma" || arg == "-harpoon") {
+        // --poller-activity-mma MMA1,MMA2,...: per-WDDM-GPU HMMA chain length for the
+        // decode-solicited tensor-core probe (0 = off for a GPU). Bare --poller-activity-mma
+        // applies the default 8192 to every WDDM GPU. Like --poller-activity-fma but for
+        // tensor cores: fires only when the GPU actually gets compute in the TG
+        // batch, with a far denser pulse per ms.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_activity_mma_strength = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_activity_mma_strength) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-activity-mma MMA lengths must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_activity_mma_strength = {GGML_POLLER_ACTIVITY_MMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-act-mem" || arg == "--poller-activity-mem" || arg == "-spear") {
+        // --poller-activity-mem N1,N2,...: per-WDDM-GPU burst count (number of 2 MiB passes) for the
+        // decode-solicited mem-clock burst (0 = off for a GPU). Bare --poller-activity-mem applies
+        // the default 1 burst to every WDDM GPU. Like --poller-activity-fma but for the mem
+        // companion: fires only when the GPU actually gets compute in the TG batch.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_activity_mem_bursts = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_activity_mem_bursts) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-activity-mem burst counts must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_activity_mem_bursts = {GGML_POLLER_ACTIVITY_MEM_BURSTS_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-sync" || arg == "--poller-sync" || arg == "-hb") {
+        // --poller-sync N,N,...: per-device event record+sync interval(s) in ms (0 = off
+        // for a GPU). Bare --poller-sync applies the default 25 ms to every WDDM GPU.
+        // Decoupled from --shark/--poller-warmup-fma/--poller-nvapi.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_sync_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_sync_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-sync intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.poller_sync_interval_ms = {25};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-mem" || arg == "--poller-ping-mem" || arg == "-barracuda") {
+        // --poller-ping-mem N or N,N,...: autonomous mem-clock stream. Single value
+        // applies to every WDDM GPU; a comma list maps positionally (0 = off
+        // for that GPU). Bare --poller-ping-mem applies the default 200 ms to every
+        // WDDM GPU. Decoupled from --shark/--poller-warmup-fma/--poller-nvapi (no NVAPI).
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_mem_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_ping_mem_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-ping-mem intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.poller_ping_mem_interval_ms = {200};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-mem-a" || arg == "--poller-ping-mem-amplitude" || arg == "-cobra-ping") {
+        // Optional value: --poller-ping-mem-amplitude N1,N2,... sets the per-GPU number of 2 MiB
+        // passes (bursts) for each autonomous mem-clock ping (--poller-ping-mem); 0 disables a GPU.
+        // Bare --poller-ping-mem-amplitude applies the default 1 burst to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_mem_amplitude = string_split<int>(argv[i+1], ',');
+            if (params.poller_ping_mem_amplitude.empty()) {
+                fprintf(stderr, "error: --poller-ping-mem-amplitude requires at least one burst count, e.g. --poller-ping-mem-amplitude 4,8\n");
+                invalid_param = true;
+            }
+            for (int v : params.poller_ping_mem_amplitude) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-ping-mem-amplitude burst counts must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_ping_mem_amplitude = {GGML_POLLER_PING_MEM_AMPLITUDE_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-fma" || arg == "--poller-ping-fma" || arg == "-perch") {
+        // --poller-ping-fma N or N,N,...: autonomous FMA ping (core-clock FMA half). Same
+        // per-GPU mapping as --poller-ping-mem (0 = off for that GPU). Bare --poller-ping-fma
+        // applies the default 100 ms to every WDDM GPU. Decoupled from the pollers.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_fma_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_ping_fma_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-ping-fma intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.poller_ping_fma_interval_ms = {100};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-mma" || arg == "--poller-ping-mma" || arg == "-megalodon") {
+        // --poller-ping-mma N or N,N,...: autonomous tensor-core (HMMA) ping (core-clock MMA
+        // half). Same per-GPU mapping as --poller-ping-fma (0 = off for that GPU); shares the
+        // same ping thread. Bare --poller-ping-mma applies the default 100 ms to every WDDM
+        // GPU. Decoupled from the pollers.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_mma_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_ping_mma_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-ping-mma intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.poller_ping_mma_interval_ms = {100};
+        }
+        return true;
+    }
+    if (arg == "--shark-path") {
+        CHECK_ARG
+        params.shark_path = argv[i];
+        return true;
+    }
+    if (arg == "--shark-arg") {
+        CHECK_ARG
+        params.shark_args.push_back(argv[i]);
+        return true;
+    }
     if (arg == "-mtp" || arg == "--multi-token-prediction") {
         throw common_speculative_legacy_option_error(arg,
             "--spec-type mtp:n_max=1,p_min=0.0");
@@ -2218,6 +2998,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.use_mmap = false;
         return true;
     }
+    if (arg == "-rtr16p" || arg == "--run-time-repack-16-path") {
+        iqk_set_r16_path(true);
+        return true;
+    }
     if (arg == "-thp" || arg == "--transparent-huge-pages") {
         params.use_thp = true;
         return true;
@@ -2238,16 +3022,61 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.k_cache_hadamard = true;
         return true;
     }
+    if (arg == "-dsv4cc" || arg == "--dsv4-cache-cpu") {
+        params.dsv4_cache_cpu = true;
+        return true;
+    }
+    if (arg == "-dsv4lcc" || arg == "--dsv4-lid-cache-cpu") {
+        params.dsv4_lid_cache_cpu = true;
+        return true;
+    }
     if (arg == "-vhad" || arg == "--v-cache-hadamard") {
         params.v_cache_hadamard = true;
         return true;
     }
-    if (arg == "-smgs" || arg == "--split-mode-graph-scheduling") {
-        params.split_mode_graph_scheduling = true;
+    if (arg == "-smtps" || arg == "-smgs" || arg == "--split-mode-tensor-parallel-scheduling"|| arg == "--split-mode-graph-scheduling") {
+        params.split_mode_tensor_parallel_scheduling = true;
+        return true;
+    }
+    if (arg == "-sot" || arg == "--split-output-tensor") {
+        if (i + 1 < argc && argv[i + 1][0] != '-') {
+            ++i;
+            try {
+                params.split_output_tensor = std::max(1, std::stoi(argv[i]));
+            } catch (...) {
+                invalid_param = true;
+                return true;
+            }
+        } else {
+            params.split_output_tensor = 1;
+        }
+        return true;
+    }
+    if (arg == "-sot-s" || arg == "--split-output-tensor-subset") {
+        if (i + 1 < argc && argv[i + 1][0] != '-') {
+            ++i;
+            try {
+                params.split_output_tensor_subset = std::max(1, std::stoi(argv[i]));
+            } catch (...) {
+                invalid_param = true;
+                return true;
+            }
+        } else {
+            params.split_output_tensor_subset = -1; // follow -sot
+        }
+        return true;
+    }
+    if (arg == "-soh" || arg == "--output-subset-host") {
+        params.output_subset_host = true;
         return true;
     }
     if (arg == "-sas" || arg == "--scheduler-async") {
         params.scheduler_async = true;
+        return true;
+    }
+    if (arg == "-smc" || arg == "--sched-max-copies") {
+        CHECK_ARG
+        params.sched_max_copies = std::atoi(argv[i]);
         return true;
     }
     if (arg == "-fdn" || arg == "--fused-delta-net") {
@@ -2342,12 +3171,44 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         if (params.allow_rules.size() == 0) {
             params.allow_rules.push_back({});
         }
-        params.allow_rules.back().push_back(argparse_allowlist_unicode_rule(argv[i]));
+        // multiple rules can be given in a single argument, separated by ';'
+        for (const auto& subarg : string_split(std::string(argv[i]), ';')) {
+            if (!subarg.empty()) {
+                for (auto& rule : argparse_allowlist_unicode_rules(subarg)) {
+                    params.allow_rules.back().push_back(rule);
+                }
+            }
+        }
+        return true;
+    }
+    if (arg == "--disallowlist-unicode-rule") {
+        CHECK_ARG
+        // multiple rules can be given in a single argument, separated by ';'
+        for (const auto& subarg : string_split(std::string(argv[i]), ';')) {
+            if (!subarg.empty()) {
+                for (auto& rule : argparse_allowlist_unicode_rules(subarg)) {
+                    params.disallow_rules.push_back(rule);
+                }
+            }
+        }
         return true;
     }
     if (arg == "--allowlist-pieces") {
         CHECK_ARG
         params.allow_pieces.push_back(argv[i]);
+        return true;
+    }
+    if (arg == "--disallowlist-pieces") {
+        CHECK_ARG
+        params.disallow_pieces.push_back(argv[i]);
+        return true;
+    }
+    if (arg == "--disallowlist-em-dash") {
+        params.disallow_emdash = true;
+        return true;
+    }
+    if (arg == "--allowlist-subset") {
+        params.allow_subset = true;
         return true;
     }
     if (arg == "--allowlist-keyword") {
@@ -2405,6 +3266,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.ppl_output_type = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "-ppl-run" || arg == "--ppl-run-params") {
+        CHECK_ARG
+        params.ppl_run_params.push_back(argv[i]);
+        return true;
+    }
     if (arg == "-ptc" || arg == "--print-token-count") {
         CHECK_ARG
         params.n_print = std::stoi(argv[i]);
@@ -2453,6 +3319,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.penalize_nl = true;
         return true;
     }
+    if (arg == "-nsaq" || arg == "--no-space-after-quote") {
+        sparams.no_space_after_quote = true;
+        return true;
+    }
+    if (arg == "-bsaq" || arg == "--boost-space-after-quote") {
+        CHECK_ARG
+        sparams.boost_space_after_quote = std::stof(argv[i]);
+        return true;
+    }
     if (arg == "-l" || arg == "--logit-bias") {
         CHECK_ARG
         std::stringstream ss(argv[i]);
@@ -2484,6 +3359,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-dr" || arg == "--dry-run") {
         params.dry_run = true;
+        return true;
+    }
+    if (arg == "-iu" || arg == "--ignore-unknown") {
+        params.ignore_unknown = true;
         return true;
     }
     if (arg == "--in-prefix-bos") {
@@ -2856,6 +3735,19 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.ctx_checkpoint_eviction= common_checkpoint_eviction_from_name(std::string(argv[i]));
         return true;
     }
+    if (arg == "-ctx-ckpt-ig" || arg == "--ctx-checkpoints-interval-gating") {
+        params.ctx_checkpoints_interval_gating = true;
+        return true;
+    }
+    if (arg == "-ctx-ckpt-mi" || arg == "--ctx-checkpoints-minimal-interval") {
+        CHECK_ARG
+        params.ctx_checkpoints_minimal_interval = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "-ctx-ckpt-ip" || arg == "--ctx-checkpoints-interval-progressive") {
+        params.ctx_checkpoints_interval_progressive = true;
+        return true;
+    }
     if (arg == "-cram" || arg == "--cache-ram") {
         CHECK_ARG
         params.cache_ram_mib = std::stoi(argv[i]);
@@ -2952,6 +3844,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.warmup = false;
         return true;
     }
+    if (arg == "-tp" || arg == "--threadpool") {
+        params.threadpool = true;
+        return true;
+    }
     if (arg == "-wb" || arg == "--warmup-batch") {
         params.batch_warmup = true;
         return true;
@@ -2966,6 +3862,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--minilog") {
         params.minilog = true;
+        return true;
+    }
+    if (arg == "--dumplog") {
+        params.dumplog = true;
         return true;
     }
 
@@ -3042,6 +3942,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --version",              "show version and build info" });
     options.push_back({ "*",           "-v,    --verbose",              "print verbose information" });
     options.push_back({ "*",           "       --minilog",              "print important information" });
+    options.push_back({ "*",           "       --dumplog",              "dump prompt/logs to stderr" });
     options.push_back({ "*",           "       --verbosity N",          "set specific verbosity level (default: %d)", params.verbosity });
     options.push_back({ "*",           "       --verbose-prompt",       "print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false" });
     options.push_back({ "*",           "-dr,   --dry-run",       "skip loading tensors in the files"});
@@ -3051,6 +3952,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-t,    --threads N",            "number of threads to use during generation (default: %d)", params.n_threads });
     options.push_back({ "*",           "-tb,   --threads-batch N",      "number of threads to use during batch and prompt processing (default: same as --threads)" });
     options.push_back({ "multi-modality", "-tm,   --threads-mtmd N",    "number of threads to use during multimodal image processing (default: same as --threads-batch)" });
+    options.push_back({ "*",           "-gbtt, --ggml-batch-thread-threshold EXPR",
+                                                                        "OpenMP barrier threshold: \">N\", \"<N\", \">=N\", \"<=N\", \"==N\" (default: %s)", params.ggml_batch_thread_thresh.c_str() });
     options.push_back({ "speculative", "-td,   --threads-draft N",      "number of threads to use during generation (default: same as --threads)" });
     options.push_back({ "speculative", "-tbd,  --threads-batch-draft N",
                                                                         "number of threads to use during batch and prompt processing (default: same as --threads-draft)" });
@@ -3067,11 +3970,15 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-ctx-ckpt N, --ctx-checkpoints N",           "max number of context checkpoints to create per slot (default: %d)",params.ctx_checkpoints_n});
     options.push_back({ "*",           "-ctx-ckpt-i N, --ctx-checkpoints-interval N",  "minimum number of tokens between each context checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_interval});
     options.push_back({ "*",           "-ctx-ckpt-t N, --ctx-checkpoints-tolerance N", "the number of tokens before the full prompt to create the checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_tolerance});
-    options.push_back({ "*",           "-ctx-ckpt-e NAME, --ctx-checkpoints-eviction NAME", "Eviction strategy for checkpoint. Accepts fifo, variance and auto. Auto defaults to variance. Variance preserves coverage and maintains uniform interval.  (default: variance)" });
+    options.push_back({ "*",           "-ctx-ckpt-e NAME, --ctx-checkpoints-eviction NAME", "Eviction strategy for checkpoint. Accepts fifo, variance, streamlined and auto. Auto defaults to variance. Variance preserves coverage and maintains uniform interval. Streamlined evicts the checkpoint in the tightest cluster.  (default: variance)" });
+    options.push_back({ "*",           "-ctx-ckpt-ig, --ctx-checkpoints-interval-gating", "Gate ALL checkpoint creation paths (PP-end, release, tolerance) through the interval check. Prevents checkpoint bursts from short follow-up tasks. (default: disabled)" });
+    options.push_back({ "*",           "-ctx-ckpt-mi N, --ctx-checkpoints-minimal-interval N", "minimum pos_max gap between consecutive checkpoints. Skips creation if within N of the last one. (default: %d, 0 = disabled)", params.ctx_checkpoints_minimal_interval });
+    options.push_back({ "*",           "-ctx-ckpt-ip, --ctx-checkpoints-interval-progressive",  "enable progressive checkpoint intervals. Requires --ctx-checkpoints N to be a multiple of eight. Intervals per eighth: 50%%, 75%%, 100%%, 100%%, 100%%, 100%%, 125%%, 150%%." });
     options.push_back({ "*",           "-cram, --cache-ram N",          "set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)",params.cache_ram_mib });
     options.push_back({ "*",           "-crs,  --cache-ram-similarity N",           "minimum fraction of a cached entry that must match the new prompt for that entry to be reusable (default: %.2f).",params.cache_ram_similarity });
     options.push_back({ "*",           "-cram-n-min N, --cache-ram-n-min N",           "minimum number of the cached tokens that triggers prompt cache (default: %d).", params.cache_ram_n_min });
     options.push_back({ "*",           "-n,    --predict N",            "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)", params.n_predict });
+    options.push_back({ "*",           "-tgsl, --token-generation-speed-limit N", "limit token generation speed to N tokens per second (approx, 0.25s quantum, 0 = disabled, default: %.1f)", (double)params.token_generation_speed_limit });
     options.push_back({ "*",           "-b,    --batch-size N",         "logical maximum batch size (default: %d)", params.n_batch });
     options.push_back({ "*",           "-ub,   --ubatch-size N",        "physical maximum batch size (default: %d)", params.n_ubatch });
     options.push_back({ "*",           "       --keep N",               "number of tokens to keep from the initial prompt (default: %d, -1 = all)", params.n_keep });
@@ -3088,20 +3995,26 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-ger,  --grouped-expert-routing", "enable grouped expert routing (default: %s)", params.grouped_expert_routing ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disable fused mul-multi_add (default: %s)", params.fused_mmad ? "enabled" : "disabled" });
-    //options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
     options.push_back({ "*",           "-gr, --graph-reuse",            "enable graph reuse (default: %s)", params.graph_reuse ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-gr, --no-graph-reuse",      "disable graph reuse (default: %s)", !params.graph_reuse ? "enabled" : "disabled" });
-    options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
+    options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction, single pair c,t or cascade c,t;c,t;... (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",         "-muge,  --merge-up-gate-experts","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
+    options.push_back({ "*",         "-dsv4cc, --dsv4-cache-cpu",      "Keep DeepSeek-V4 compressed-attention K caches (CSA/HCA) in host memory (default: %d)", params.dsv4_cache_cpu});
+    options.push_back({ "*",         "-dsv4lcc, --dsv4-lid-cache-cpu", "Also keep the DeepSeek-V4 indexer (LID) K cache in host memory (default: %d)", params.dsv4_lid_cache_cpu});
     options.push_back({ "*",         "-vhad,  --v-cache-hadamard",     "Use Hadamard transform for V-cache (default: %d)", params.v_cache_hadamard});
     options.push_back({ "*",         "-smf16, --split-mode-f16",       "Use f16 for data exchange between GPUs (default: %d)", true});
     options.push_back({ "*",         "-smf32, --split-mode-f32",       "Use f32 for data exchange between GPUs (default: %d)", false});
     options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f16"});
     options.push_back({ "*",         "-gap, --graph-attn-precision",    "Flash-attn precision under -sm graph (default: %s)", "f16"});
-    options.push_back({ "*",         "-smgs, --split-mode-graph-scheduling", "Force Split Mode Graph Scheduling (default: %d)", params.split_mode_graph_scheduling});
+    options.push_back({ "*",         "-smtps, -smgs, --split-mode-tensor-parallel-scheduling, --split-mode-graph-scheduling,", "Force Split Mode Tensor Parallel (Graph) Scheduling (default: %d)", params.split_mode_tensor_parallel_scheduling});
+    options.push_back({ "*",         "-sot, --split-output-tensor [N]", "Split output tensor (no arg=all GPUs, N=top N GPUs by VRAM) (default: %d)", params.split_output_tensor});
+    options.push_back({ "*",         "-sot-s, --split-output-tensor-subset [N]", "Split the allowlist output logits subset across the output GPUs (no arg=follow -sot, 1=all output GPUs, N>1=top N output GPUs; requires -sot) (default: %d)", params.split_output_tensor_subset});
+    options.push_back({ "*",         "-soh,  --output-subset-host",            "Keep the full output tensor in host memory (CUDA_Host with CUDA, CPU otherwise) and free its GPU buffer once the allowlist output logits subset is set (requires --allowlist-subset) (default: %d)", params.output_subset_host});
     options.push_back({ "*",         "-sas,  --scheduler-async",        "Async evaluation of compute graphs (default: %d)", params.scheduler_async});
+    options.push_back({ "*",         "-smc,  --sched-max-copies,",      "Max graph parallel copies (default: %d)", params.sched_max_copies});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
                                                                         "in conversation mode, this will be used as system prompt\n"
@@ -3140,9 +4053,14 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --sampling-seq SEQUENCE",
                                                                         "simplified sequence for samplers that will be used (default: %s)", sampler_type_chars.c_str() });
     options.push_back({ "*",           "       --ignore-eos",           "ignore end of stream token and continue generating (implies --logit-bias EOS-inf)" });
+    options.push_back({ "*",           "       --eos-token-probability N", "scales the probability of the EOS/EOG tokens (default: %.1f, 1.0 = no change, 0.0 = EOG tokens effectively disabled)", (double)sparams.eos_token_probability });
+    options.push_back({ "*",           "       --special-eosg-token STR",  "stop generation when STR is found in the generated text (acts like an EOG/EOS token; comma-separated list, e.g. -seosgt '<,[,('; can be repeated)" });
     options.push_back({ "*",           "       --penalize-nl",          "penalize newline tokens (default: %s)", sparams.penalize_nl ? "true" : "false" });
+    options.push_back({ "*",           "-nsaq, --no-space-after-quote", "contextual rule: while inside an open \" quote, disallow tokens that begin with a space (e.g. \" You -> \"You)" });
+    options.push_back({ "*",         "-bsaq N, --boost-space-after-quote N", "contextual rule: while inside an open \" quote, boost logits of tokens that begin with a space (e.g. \"You -> \" You) (default: %.1f)", (double)sparams.boost_space_after_quote });
     options.push_back({ "*",           "       --temp N",               "temperature (default: %.1f)", (double)sparams.temp });
     options.push_back({ "*",           "       --top-k N",              "top-k sampling (default: %d, 0 = disabled)", sparams.top_k });
+    options.push_back({ "*",           "       --max-candidates N",     "max candidates to keep as prefilter (default: %d, 0 = disabled)", sparams.max_candidates });
     options.push_back({ "*",           "       --top-p N",              "top-p sampling (default: %.1f, 1.0 = disabled)", (double)sparams.top_p });
     options.push_back({ "*",           "       --min-p N",              "min-p sampling (default: %.1f, 0.0 = disabled)", (double)sparams.min_p });
     options.push_back({ "*",           "       --tfs N",                "tail free sampling, parameter z (default: %.1f, 1.0 = disabled)", (double)sparams.tfs_z });
@@ -3173,11 +4091,22 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --banned-n",             "number of tokens banned in the phrase during rewind. -1 means all tokens: (default: %d)",params.banned_n });
     options.push_back({ "*",           "       --allowlist-unicode-rule",
                                                                         "rule for allowlisting unicode script and/or codepoints. disabled without any rule. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
-                                                                        "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n" });
+                                                                        "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n"
+                                                                        "multiple rules can be specified in one argument, separated by `;`\n"
+                                                                        "named subsets: `ideographic` (han, hiragana, katakana, hangul, bopomofo, yi, tangut, nushu), `indic` (devanagari, bengali, gujarati, gurmukhi, kannada, malayalam, oriya, tamil, telugu, sinhala), `persic` (arabic, old_persian, avestan, inscriptional_pahlavi, psalter_pahlavi, manichaean, sogdian, old_sogdian, chorasmian), `semitic` (hebrew, arabic, syriac, samaritan, mandaic, ethiopic, phoenician, imperial_aramaic, old_south_arabian, old_north_arabian, ugaritic, hatran, palmyrene, nabataean, elymaic), `caucasian` (armenian, georgian, caucasian_albanian), `african` (adlam, bamum, bassa_vah, coptic, egyptian_hieroglyphs, ethiopic, garay, medefaidrin, mende_kikakui, meroitic_cursive, meroitic_hieroglyphs, nko, tifinagh, vai), `amerindian` (canadian_aboriginal, cherokee, osage), `austronesian` (balinese, batak, buginese, buhid, cham, hanunoo, javanese, kawi, makasar, rejang, sundanese, tagalog, tagbanwa), `mesopotamic` (cuneiform, old_persian, ugaritic, hatran, imperial_aramaic), `turko_mongol` (old_turkic, mongolian, soyombo, phags_pa), `finno_ugric_uralic` (old_hungarian), `ancient_european` (linear_a, linear_b, cypro_minoan, cypriot, anatolian_hieroglyphs, carian, lycian, lydian, old_italic, runic, ogham, glagolitic, old_hungarian, gothic), `southeast_asian` (thai, lao, khmer, myanmar, tibetan, tai_le, tai_tham, tai_viet, new_tai_lue), `latin_diacritics_viet` (Vietnamese accented latin), `latin_diacritics_western` (Western European accented latin), `latin_diacritics` (union of both), `exotic` (union of all named subsets: every indigenous writing system outside the latin/greek/cyrillic world)\n" });
+    options.push_back({ "*",           "       --disallowlist-unicode-rule",
+                                                                        "rule for disallowing unicode script and/or codepoints. tokens whose non-common codepoints match a rule are banned.\n"
+                                                                        "takes precedence over --allowlist-unicode-rule and --allowlist-pieces. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
+                                                                        "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n"
+                                                                        "multiple rules can be specified in one argument, separated by `;`\n"
+                                                                        "named subsets: `ideographic` (han, hiragana, katakana, hangul, bopomofo, yi, tangut, nushu), `indic` (devanagari, bengali, gujarati, gurmukhi, kannada, malayalam, oriya, tamil, telugu, sinhala), `persic` (arabic, old_persian, avestan, inscriptional_pahlavi, psalter_pahlavi, manichaean, sogdian, old_sogdian, chorasmian), `semitic` (hebrew, arabic, syriac, samaritan, mandaic, ethiopic, phoenician, imperial_aramaic, old_south_arabian, old_north_arabian, ugaritic, hatran, palmyrene, nabataean, elymaic), `caucasian` (armenian, georgian, caucasian_albanian), `african` (adlam, bamum, bassa_vah, coptic, egyptian_hieroglyphs, ethiopic, garay, medefaidrin, mende_kikakui, meroitic_cursive, meroitic_hieroglyphs, nko, tifinagh, vai), `amerindian` (canadian_aboriginal, cherokee, osage), `austronesian` (balinese, batak, buginese, buhid, cham, hanunoo, javanese, kawi, makasar, rejang, sundanese, tagalog, tagbanwa), `mesopotamic` (cuneiform, old_persian, ugaritic, hatran, imperial_aramaic), `turko_mongol` (old_turkic, mongolian, soyombo, phags_pa), `finno_ugric_uralic` (old_hungarian), `ancient_european` (linear_a, linear_b, cypro_minoan, cypriot, anatolian_hieroglyphs, carian, lycian, lydian, old_italic, runic, ogham, glagolitic, old_hungarian, gothic), `southeast_asian` (thai, lao, khmer, myanmar, tibetan, tai_le, tai_tham, tai_viet, new_tai_lue), `latin_diacritics_viet` (Vietnamese accented latin), `latin_diacritics_western` (Western European accented latin), `latin_diacritics` (union of both), `exotic` (union of all named subsets: every indigenous writing system outside the latin/greek/cyrillic world)\n" });
     options.push_back({ "*",           "       --allowlist-pieces",     "allowlist each token in argument. inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule" });
+    options.push_back({ "*",           "       --disallowlist-pieces",    "disallow each token in argument. takes precedence over the allowlist. ';' separates entries; each entry is a comma-separated token-id list or a text piece, tokenized like --allowlist-pieces" });
+    options.push_back({ "*",           "       --disallowlist-em-dash",   "automatically disallow every token containing U+2014 (em-dash), U+2013 (en-dash), the space+hyphen sequence or a run of 2+ hyphens. model-agnostic, no id list needed" });
     options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
     options.push_back({ "*",           "       --allowlist-keyword-delay",
                                                                         "# tokens to delay matching for the first keyword (default: %zu)", params.allow_kw_delay });
+    options.push_back({ "*",           "       --allowlist-subset",     "restrict the output logits computation to the allowed vocab rows (Option A). requires at least one --allowlist-unicode-rule, --disallowlist-unicode-rule, --disallowlist-pieces or --disallowlist-em-dash" });
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
@@ -3275,6 +4204,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "perplexity",  "       --ppl-stride N",         "stride for perplexity calculation (default: %d)", params.ppl_stride });
     options.push_back({ "perplexity",  "       --ppl-output-type {0,1}",
                                                                         "output type for perplexity calculation (default: %d)", params.ppl_output_type });
+    options.push_back({ "perplexity",  "   -ppl-run, --ppl-run-params S", "additional test run on the same loaded model (repeatable); S is either a copy-paste of the actual llama.cpp CLI flags, e.g. \"-ser 7,0.03;6,0.06;5,0.1\" or \"-c 4096 -ctk q8_0 -khad\" or \"-bf arc.bin\" (supported flags: -c/--ctx-size, -f/--file, -bf/--binary-file, -ctk/--cache-type-k, -ctv/--cache-type-v, -khad/--k-cache-hadamard, -vhad/--v-cache-hadamard, -ctk-first, -ctk-last, -ctv-first, -ctv-last, -ser/--smart-expert-reduction, --hellaswag, --winogrande, --multiple-choice, --kl-divergence, -okv <arch>.expert_used_count=int:N), or a comma-separated \"key=value\" list, e.g. \"ctx=4096,experts=8\" or \"file=french.txt\" or \"file=arc.bin,mode=mc\" or \"ctk=q8_0,ctv=q8_0,khad=1,vhad=1\" or \"ser=8,0.25;7,0.2;6,0.15\" (keys: ctx, experts, file, mode, k_cache/ctk, v_cache/ctv, k_hadamard/khad, v_hadamard/vhad, ctk_first, ctk_last, ctv_first, ctv_last, ser; the first/last keys take TYPE,N layer ranges; ser takes the -ser syntax or \"off\")" });
 
     options.push_back({ "parallel" });
     options.push_back({ "*",           "-dt,   --defrag-thold N",       "KV cache defragmentation threshold (default: %.1f, < 0 - disabled)", (double)params.defrag_thold });
@@ -3299,6 +4229,29 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
     options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
+    options.push_back({ "win32",       "--shark [N[,N,...]]",                "enable GPU clock elevation via external gpu_poller.exe (interval(s) in ms, per-WDDM-GPU; bare = 25 ms, default off)" });
+    options.push_back({ "win32",       "-p-nv, --poller-nvapi [N[,N,...]] (alias -piranha)",              "in-process NVAPI poller: temps + P-state forcing + skip mask (per-WDDM-GPU interval(s) ms, 0 = off for a GPU; bare = 50 ms, default off)" });
+    options.push_back({ "win32",       "-p-temps, --poller-temps [PAUSE[,RESUME]] (alias -pt)", "per-card heat protection thresholds in C (pause at PAUSE, resume below RESUME; single N = resume N-10; bare = 85,75; default off)" });
+    options.push_back({ "win32",       "-p-warm-fma, --poller-warmup-fma [FMA1,FMA2,...] (alias -orca)",            "enable CUDA heartbeat warmup with per-GPU FMA length (non-TCC order, 0 disables a GPU; bare = 32768, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "-p-warm-mma, --poller-warmup-mma [MMA1,MMA2,...] (alias -kraken)",          "tensor-core warmup like --poller-warmup-fma but with HMMA (~1000x FLOPs per instruction, denser pulse; 0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "-p-warm-i, --poller-warmup-interval [N1,N2,...] (alias -warmstream)",      "per-GPU token interval between warmup bursts, applies to all three warmups (mma/fma/mem): each GPU fires on every N-th TG batch (0 disables a GPU; bare = 1 = every batch, default)" });
+    options.push_back({ "win32",       "-p-warm-s, --poller-warmup-start [N1,N2,...] (alias -streamsource)",     "per-GPU first TG token at which the warmup burst fires, applies to all three warmups (mma/fma/mem): each GPU first fires on the N-th TG batch of a phase (0 never fires; bare = 2 = second token, default)" });
+    options.push_back({ "win32",       "-p-fma-o, --poller-fma-occupancy [N1,N2,...] (alias -fishpit)",      "per-GPU occupancy % of the poller FMA kernels, direct 0..100 (0 = disabled, 100 = full grid): scales the burst grid so fewer SMs are engaged during the pulse, leaving more room for TG compute (bare = 50, default; missing = default 50 whenever any FMA poller is used; applies to warmup/activity/ping)" });
+    options.push_back({ "win32",       "-p-mma-o, --poller-mma-occupancy [N1,N2,...] (alias -abyss)",       "per-GPU occupancy % of the poller MMA kernels, direct 0..100 (0 = disabled, 100 = full grid): scales the burst grid so fewer SMs / tensor-core warps are engaged during the pulse (bare = 50, default; missing = default 50 whenever any MMA poller is used; applies to warmup/activity/ping)" });
+    options.push_back({ "win32",       "-p-mem-o, --poller-mem-occupancy [N1,N2,...] (alias -snakepit)",     "per-GPU L2 occupancy % of the poller mem companion, direct 0..100 (0 = disabled, 100 = full 2 MiB buffer): scales the slots streamed per pass (the L2 footprint, multiplied by the burst count) so it leaves more L2 for TG compute (bare = 25, default; missing = default 25 whenever any mem poller is used; applies to warmup/activity/ping)" });
+    options.push_back({ "win32",       "-p-ping-fma-a, --poller-ping-fma-amplitude [FMA1,FMA2,...] (alias -orca-ping)",       "per-GPU FMA ping strength for --poller-ping-fma, shorter than the warmup (0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "-p-ping-mma-a, --poller-ping-mma-amplitude [MMA1,MMA2,...] (alias -kraken-ping)",     "per-GPU MMA ping strength for --poller-ping-mma, tensor-core half of the ping (~1000x FLOPs per instruction, denser pulse; 0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "-p-warm-mem, --poller-warmup-mem [N1,N2,...] (alias -cobra)",           "decode-gated mem-clock companion: mem-only burst at every TG batch (per-WDDM-GPU number of 2 MiB passes, 0 = off for a GPU; bare = 1, default off)" });
+    options.push_back({ "win32",       "-p-act-fma, --poller-activity-fma [FMA1,FMA2,...] (alias -fisherman)",       "decode-solicited FMA probe: short burst when a GPU is actually given work in the TG batch (per-WDDM-GPU FMA length, 0 = off for a GPU; bare = 8192, default off)" });
+    options.push_back({ "win32",       "-p-act-mma, --poller-activity-mma [MMA1,MMA2,...] (alias -harpoon)",          "decode-solicited HMMA probe like --poller-activity-fma but on tensor cores (~1000x FLOPs per instruction, denser pulse; per-WDDM-GPU length, 0 = off for a GPU; bare = 8192, default off)" });
+    options.push_back({ "win32",       "-p-act-mem, --poller-activity-mem [N1,N2,...] (alias -spear)",       "decode-solicited mem burst like --poller-activity-fma but for the mem clock (per-WDDM-GPU 2 MiB burst count, 0 = off for a GPU; bare = 1, default off)" });
+    options.push_back({ "win32",       "-p-sync, --poller-sync [N[,N,...]] (alias -hb)",                  "per-device event record+sync every N ms (cheap WDDM keep-alive, 0 = off for a GPU; bare = 25 ms, default off)" });
+    options.push_back({ "win32",       "-p-ping-mem, --poller-ping-mem [N[,N,...]] (alias -barracuda)",             "autonomous mem-clock stream on WDDM GPUs (per-GPU interval(s) ms, 0 = off for a GPU; bare = 200 ms, default off)" });
+    options.push_back({ "win32",       "-p-ping-mem-a, --poller-ping-mem-amplitude [N1,N2,...] (alias -cobra-ping)",        "per-GPU number of 2 MiB bursts for each --poller-ping-mem cycle (0 = off for a GPU; bare = 1, default off)" });
+    options.push_back({ "win32",       "-p-ping-fma, --poller-ping-fma [N[,N,...]] (alias -perch)",                "autonomous FMA ping on WDDM GPUs (per-GPU interval(s) ms, core-clock FMA half, 0 = off for a GPU; bare = 100 ms, default off)" });
+    options.push_back({ "win32",       "-p-ping-mma, --poller-ping-mma [N[,N,...]] (alias -megalodon)",               "autonomous tensor-core (HMMA) ping on WDDM GPUs (per-GPU interval(s) ms, core-clock MMA half sharing the --poller-ping-fma thread, 0 = off for a GPU; bare = 100 ms, default off)" });
+    options.push_back({ "win32",       "--shark-path PATH",             "path to gpu_poller executable (default: %s)", params.shark_path.c_str() });
+    options.push_back({ "win32",       "--shark-arg ARG",               "additional argument passed to gpu_poller (can be repeated)" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
@@ -3306,6 +4259,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "       --no-mmap",              "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
     options.push_back({ "*",           "-rtr,   --run-time-repack",      "repack tensors if interleaved variant is available"});
+    options.push_back({ "*",           "-rtr16p, --run-time-repack-16-path", "enable Q8_K_R16 path on VNNI256 (30% faster IQ4_XS)"});
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
@@ -3333,7 +4287,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "-sm,   --split-mode SPLIT_MODE",
                                                                         "how to split the model across multiple GPUs, one of:\n"
                                                                         "  - none: use one GPU only\n"
-                                                                        "  - graph: split model tensors and computation graph across GPUs\n"
+                                                                        "  - tenpar / graph: split model tensors and computation graph in parallel across GPUs\n"
                                                                         "  - layer (default): split layers and KV across GPUs\n" });
         options.push_back({ "*",           "-ts,   --tensor-split SPLIT",
                                                                         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1" });
@@ -3348,7 +4302,14 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                          "do not offload only active experts" });
         options.push_back({ "*",           "-mg,   --main-gpu i",       "the GPU to use for the model (with split-mode = none),\n"
                                                                         "or for intermediate results and KV (with split-mode = row) (default: %d)", params.main_gpu });
-        options.push_back({ "*",           "--max-gpu i",               "max. number of GPUs to use at a time with split mode 'graph', (default: %d)", params.max_gpu });
+        options.push_back({ "*",           "-mgps, --max-gpu, --max-gpu-per-split i",        "max. number of GPUs to use at a time with split mode 'tensor parallel', (default: %d)", params.max_gpu_per_split });
+        options.push_back({ "*",           "-sasf, --split-adjust-step-frequency f", "adjust every N layers (<1: legacy formula with 1/N, >=1: direct N) (default: %.1f)", params.split_adjust_step_frequency });
+        options.push_back({ "*",           "-sava, --split-adjust-vram-aware", "use VRAM-aware selection in adjust_split (respects -ts and -sasf) (default: %s)", params.split_adjust_vram_aware ? "true" : "false" });
+        options.push_back({ "*",           "-sanu, --split-adjust-not-used", "skip adjust_split entirely, rely on formula only (default: %s)", params.split_adjust_not_used ? "true" : "false" });
+        options.push_back({ "*",           "-stpf, --split-tensor-split-factor f", "factor for proportional split (neutral: 1.0, you can test: 0.75)", params.split_tensor_split_factor });
+        options.push_back({ "*",           "-svff, --split-vram-free-factor f", "factor for VRAM availability (neutral: 0.0, you can test: 0.75)", params.split_vram_free_factor });
+        options.push_back({ "*",           "-supf, --split-usage-penalty-factor f", "factor for memory usage penalty (neutral: 0.0, you can test: 0.25)", params.split_usage_penalty_factor });
+        options.push_back({ "*",           "-svrf, --split-vram-reserve-factor LIST", "per-GPU VRAM reserve factors, comma-separated (<1: fraction reserved, >1: direct limit %%%, default: 0 = 12.5%%/6.25%% auto)" });
     }
 
     options.push_back({ "model" });
@@ -3423,6 +4384,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "bench",   "        --sweep-memory",         "report RSS high-water and sampled VRAM delta" });
     }
     options.push_back({ "bench",       "-wb,    --warmup-batch",         "run a warmup batch before measurement" });
+    options.push_back({ "*",          "--threadpool",              "use a persistent threadpool for CPU graph compute instead of OpenMP fork-join" });
     options.push_back({ "bench",       "       --output-format FORMAT",  "output format: table, jsonl, or csv (default: table)" });
 
     options.push_back({ "server" });
@@ -3512,6 +4474,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         printf("%s\n", desc.substr(start).c_str());
     }
     printf("\n");
+    if (!params.error_message.empty()) {
+        fprintf(stderr, "%s\n", params.error_message.c_str());
+    }
 }
 
 std::string gpt_params_get_system_info(const gpt_params & params) {
@@ -3524,9 +4489,106 @@ std::string gpt_params_get_system_info(const gpt_params & params) {
     if (params.n_threads_mtmd != -1) {
         os << " (n_threads_mtmd = " << params.n_threads_mtmd << ")";
     }
+#if defined(_WIN32) && (_WIN32_WINNT >= 0x0601) && !defined(__MINGW64__) // windows 7 and later
+    // TODO: windows + arm64 + mingw64
+    DWORD logicalProcessorCount = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    os << " / " << logicalProcessorCount << " | " << llama_print_system_info();
+#else
     os << " / " << std::thread::hardware_concurrency() << " | " << llama_print_system_info();
+#endif
 
     return os.str();
+}
+
+static void common_minilog_callback(ggml_log_level level, const char * text, void * user_data) {
+    (void) user_data;
+    // never suppress warnings or errors (CONT carries no level: still filter it, error
+    // continuations rarely match the load-table patterns below)
+    if (level >= GGML_LOG_LEVEL_WARN && level != GGML_LOG_LEVEL_CONT) {
+        LOG_TEE("%s", text);
+        return;
+    }
+    const char * skip_patterns[] = {
+        "Setting default device in layer",
+        "llama_model_loader: Dumping metadata",
+        "llama_model_loader: - kv  ",
+        "validate_override:",
+        "load: printing all EOG",
+        "load:   - ",
+        "load: special tokens cache",
+        "load: special_",
+        "load: token to piece cache",
+        "llm_load_print_meta:",
+        "print_info:",
+        "------------------- Layer sizes",
+        "-------------------------------",
+        // "llm_load_tensors:",
+        "==========================",
+        "merging up/gate in layer",
+        "concatenating up/gate experts weight in layer",
+        "model has unused ",
+        "Setting default ",
+        "buffer type overriden to CPU",
+    };
+    for (const char * pat : skip_patterns) {
+        if (strstr(text, pat) != nullptr) {
+            return;
+        }
+    }
+    int i = 0;
+    while (text[i] == ' ' || text[i] == '\t') {
+        i++;
+    }
+    // anchored at line start: only the load-table lines begin with these words,
+    // error text merely mentioning them elsewhere still shows
+    const char * skip_prefixes[] = {
+        "Layer ",
+        "Tensor ",
+        "GPU ",
+    };
+    for (const char * pat : skip_prefixes) {
+        if (strncmp(text + i, pat, strlen(pat)) == 0) {
+            return;
+        }
+    }
+    if (text[i] == ',' || text[i] == '(' || text[i] == ')'|| (text[i] >= '0' && text[i] <= '9')) {
+        return;
+    }
+    LOG_TEE("%s", text);
+}
+
+void common_params_minilog(const gpt_params & params) {
+    if (params.minilog) {
+        llama_log_set(common_minilog_callback, nullptr);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// token generation speed limiter (approximate, 0.25s quantum for fluid streaming)
+// ----------------------------------------------------------------------------
+void common_token_rate_limiter::consume(int n) {
+    if (tps <= 0.0 || n <= 0) {
+        return;
+    }
+    if (t_start_us == 0) {
+        t_start_us = ggml_time_us();
+        n_tokens = 0;
+    }
+    for (int k = 0; k < n; ++k) {
+        ++n_tokens;
+        const double expected_us = n_tokens * 1e6 / tps;
+        const int64_t now = ggml_time_us();
+        const int64_t elapsed = now - t_start_us;
+        int64_t need = (int64_t) expected_us - elapsed;
+        if (need > 0) {
+            // sleep in up to 250 ms chunks so the limiter is updated every 0.25s
+            while (need > 0) {
+                const int64_t chunk = std::min<int64_t>(need, 250'000);
+                std::this_thread::sleep_for(std::chrono::microseconds(chunk));
+                need -= chunk;
+            }
+        }
+    }
 }
 
 //
@@ -4044,6 +5106,47 @@ std::string fs_get_cache_file(const std::string & filename) {
 }
 
 
+struct llama_context * common_create_context(struct llama_model * model, const gpt_params & params) {
+    auto cparams = common_context_params_to_llama(params);
+
+    llama_context * lctx = llama_init_from_model(model, cparams);
+    if (lctx == NULL) {
+        fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params.model.c_str());
+        return nullptr;
+    }
+
+    for (auto [op, on_off] : params.offload_policy) {
+        llama_set_offload_policy(lctx, op, on_off);
+    }
+
+    if (!params.control_vectors.empty()) {
+        LOG("================ Control vectors are being used to affect the model output!\n");
+        const int32_t layer_start = params.control_vector_layer_start <= 0 ? 1 : params.control_vector_layer_start;
+        const int32_t layer_end   = params.control_vector_layer_end   <= 0 ? llama_n_layer(model) : params.control_vector_layer_end;
+
+        const auto cvec = llama_control_vector_load(params.control_vectors);
+        if (cvec.n_embd == -1) {
+            fprintf(stderr, "%s: error: failed to load control vectors\n", __func__);
+            llama_free(lctx);
+            return nullptr;
+        }
+
+        const int err = llama_control_vector_apply(lctx,
+                                                   cvec.data.data(),
+                                                   cvec.data.size(),
+                                                   cvec.n_embd,
+                                                   layer_start,
+                                                   layer_end);
+        if (err) {
+            fprintf(stderr, "%s: error: failed to apply control vectors\n", __func__);
+            llama_free(lctx);
+            return nullptr;
+        }
+    }
+
+    return lctx;
+}
+
 struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     llama_init_result iparams;
 
@@ -4051,6 +5154,7 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
 
     llama_model * model = nullptr;
 
+    ggml_set_batch_thread_threshold(params.ggml_batch_thread_thresh.c_str());
     if (!params.hf_repo.empty() && !params.hf_file.empty()) {
         model = llama_load_model_from_hf(params.hf_repo.c_str(), params.hf_file.c_str(), params.model.c_str(), params.hf_token.c_str(), mparams);
     } else if (!params.model_url.empty()) {
@@ -4074,39 +5178,10 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
 
     auto cparams = common_context_params_to_llama(params);
 
-    llama_context * lctx = llama_init_from_model(model, cparams);
+    llama_context * lctx = common_create_context(model, params);
     if (lctx == NULL) {
-        fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params.model.c_str());
         llama_free_model(model);
         return iparams;
-    }
-
-    for (auto [op, on_off] : params.offload_policy) {
-        llama_set_offload_policy(lctx, op, on_off);
-    }
-
-    if (!params.control_vectors.empty()) {
-        if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
-        if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_n_layer(model);
-
-        const auto cvec = llama_control_vector_load(params.control_vectors);
-        if (cvec.n_embd == -1) {
-            llama_free(lctx);
-            llama_free_model(model);
-            return iparams;
-        }
-
-        int err = llama_control_vector_apply(lctx,
-                                             cvec.data.data(),
-                                             cvec.data.size(),
-                                             cvec.n_embd,
-                                             params.control_vector_layer_start,
-                                             params.control_vector_layer_end);
-        if (err) {
-            llama_free(lctx);
-            llama_free_model(model);
-            return iparams;
-        }
     }
 
     // load and optionally apply lora adapters
@@ -4212,6 +5287,9 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
     if (s == "q6_0") {
         return GGML_TYPE_Q6_0;
     }
+    if (s == "q6_1") {
+        return GGML_TYPE_Q6_1;
+    }
     if (s == "q8_KV") {
         return GGML_TYPE_Q8_KV;
     }
@@ -4244,6 +5322,100 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     auto mparams = llama_model_default_params();
     mparams.devices = params.devices.c_str();
 
+#if defined(GGML_USE_CUDA)
+    // Apply --poller-warmup-fma / --poller-ping-fma-amplitude per-GPU FMA arrays BEFORE the FMA warmup is
+    // enabled in the context params below, so set_poller_warmup_fma(true) logs the effective
+    // values (previously it logged the defaults because the sync tickle ran first).
+    if (!params.poller_warmup_fma_strength.empty()) {
+        ggml_backend_cuda_set_poller_warmup_fma_strength(params.poller_warmup_fma_strength.data(), params.poller_warmup_fma_strength.size());
+    }
+    if (!params.poller_ping_fma_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_fma_amplitude(params.poller_ping_fma_amplitude.data(), params.poller_ping_fma_amplitude.size());
+    }
+    if (!params.poller_ping_mma_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_mma_amplitude(params.poller_ping_mma_amplitude.data(), params.poller_ping_mma_amplitude.size());
+    }
+    if (!params.poller_ping_mem_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_mem_amplitude(params.poller_ping_mem_amplitude.data(), params.poller_ping_mem_amplitude.size());
+    }
+    // Apply --poller-sync per-GPU intervals (the event-tickle cuda-param was removed in favor of
+    // this flag). poller-sync: per-device event record+sync interval(s) in ms (0 = off).
+    // Decoupled from shark/poller-warmup-fma/poller-nvapi: it only runs the lightweight tickle
+    // thread, it does not enable the heartbeat warmup (that is --poller-warmup-fma's job).
+    if (!params.poller_sync_interval_ms.empty()) {
+        ggml_backend_cuda_set_poller_sync(params.poller_sync_interval_ms.data(), (int) params.poller_sync_interval_ms.size());
+    }
+    // Parse pinmem from cuda_params early, before model loading
+    if (!params.cuda_params.empty()) {
+        size_t pos_pinmem = params.cuda_params.find("pinmem=");
+        if (pos_pinmem != std::string::npos) {
+            size_t start = pos_pinmem + 7;
+            size_t end = params.cuda_params.find(",", start);
+            std::string pinmem_str = params.cuda_params.substr(start, end - start);
+            if (!pinmem_str.empty()) {
+                try {
+                    int pinmem_val = std::stoi(pinmem_str);
+                    ggml_backend_cuda_set_pinmem(pinmem_val);
+                } catch (...) {
+                    // Invalid value, keep default
+                }
+            }
+        }
+        // Parse pindev from cuda_params
+        size_t pos_pindev = params.cuda_params.find("pindev=");
+        if (pos_pindev != std::string::npos) {
+            size_t start = pos_pindev + 7;
+            size_t end = params.cuda_params.find(",", start);
+            std::string pindev_str = params.cuda_params.substr(start, end - start);
+            if (!pindev_str.empty()) {
+                try {
+                    int pindev_val = std::stoi(pindev_str);
+                    ggml_backend_cuda_set_pindev(pindev_val);
+                } catch (...) {
+                    // Invalid value, keep default
+                }
+            }
+        }
+        // Parse pinamount from cuda_params (GiB float)
+        size_t pos_pinamount = params.cuda_params.find("pinamount=");
+        if (pos_pinamount != std::string::npos) {
+            size_t start = pos_pinamount + 10;
+            size_t end = params.cuda_params.find(",", start);
+            std::string pinamount_str = params.cuda_params.substr(start, end - start);
+            if (!pinamount_str.empty()) {
+                try {
+                    float pinamount_val = std::stof(pinamount_str);
+                    ggml_backend_cuda_set_pinamount(pinamount_val);
+                } catch (...) {
+                    // Invalid value, keep default
+                }
+            }
+        }
+    }
+    // Apply --poller-warmup-fma / --poller-ping-fma-amplitude per-GPU FMA arrays BEFORE the FMA warmup is
+    // enabled in the context params below, so set_poller_warmup_fma(true) logs the effective
+    // values (previously it logged the defaults because the sync tickle ran first).
+    if (!params.poller_warmup_fma_strength.empty()) {
+        ggml_backend_cuda_set_poller_warmup_fma_strength(params.poller_warmup_fma_strength.data(), params.poller_warmup_fma_strength.size());
+    }
+    if (!params.poller_ping_fma_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_fma_amplitude(params.poller_ping_fma_amplitude.data(), params.poller_ping_fma_amplitude.size());
+    }
+    if (!params.poller_ping_mma_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_mma_amplitude(params.poller_ping_mma_amplitude.data(), params.poller_ping_mma_amplitude.size());
+    }
+    if (!params.poller_ping_mem_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_mem_amplitude(params.poller_ping_mem_amplitude.data(), params.poller_ping_mem_amplitude.size());
+    }
+    // Apply --poller-sync per-GPU intervals (the event-tickle cuda-param was removed in favor of
+    // this flag). poller-sync: per-device event record+sync interval(s) in ms (0 = off).
+    // Decoupled from shark/poller-warmup-fma/poller-nvapi: it only runs the lightweight tickle
+    // thread, it does not enable the heartbeat warmup (that is --poller-warmup-fma's job).
+    if (!params.poller_sync_interval_ms.empty()) {
+        ggml_backend_cuda_set_poller_sync(params.poller_sync_interval_ms.data(), (int) params.poller_sync_interval_ms.size());
+    }
+#endif
+
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
     }
@@ -4251,7 +5423,14 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.dry_run         = params.dry_run;
     mparams.rpc_servers     = params.rpc_servers.c_str();
     mparams.main_gpu        = params.main_gpu;
-    mparams.max_gpu         = params.max_gpu;
+    mparams.max_gpu_per_split = params.max_gpu_per_split;
+    mparams.split_adjust_step_frequency = params.split_adjust_step_frequency;
+    mparams.split_adjust_vram_aware = params.split_adjust_vram_aware;
+    mparams.split_adjust_not_used = params.split_adjust_not_used;
+    mparams.split_tensor_split_factor = params.split_tensor_split_factor;
+    mparams.split_vram_free_factor = params.split_vram_free_factor;
+    mparams.split_usage_penalty_factor = params.split_usage_penalty_factor;
+    mparams.split_vram_reserve_factor = params.split_vram_reserve_factor;
     mparams.ncmoe           = params.ncmoe;
     mparams.fit             = params.fit;
     mparams.fit_margin      = params.fit_margin;
@@ -4280,6 +5459,17 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
     mparams.repack_tensors  = params.repack_tensors;
+    mparams.split_output_tensor = params.split_output_tensor;
+    mparams.split_output_tensor_subset = params.split_output_tensor_subset < 0 ? params.split_output_tensor : params.split_output_tensor_subset;
+    if (params.split_output_tensor_subset != 0 && params.split_output_tensor == 0) {
+        LLAMA_LOG_WARN("gpt_params: -sot-s requires -sot, disabling the output logits subset split\n");
+        mparams.split_output_tensor_subset = 0;
+    }
+    mparams.output_subset_host = params.output_subset_host;
+    if (params.output_subset_host && !params.allow_subset) {
+        LLAMA_LOG_WARN("gpt_params: -soh requires the allowlist output logits subset, ignoring -soh (pass --allowlist-subset)\n");
+        mparams.output_subset_host = false;
+    }
     mparams.use_thp         = params.use_thp;
     mparams.validate_quants = params.validate_quants;
     mparams.merge_qkv       = params.merge_qkv;
@@ -4372,12 +5562,21 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.swa_compress      = params.swa_compress;
     cparams.dsa_top_k         = params.dsa_top_k;
     cparams.k_cache_hadamard  = params.k_cache_hadamard;
+    cparams.dsv4_cache_cpu    = params.dsv4_cache_cpu;
+    cparams.dsv4_lid_cache_cpu = params.dsv4_lid_cache_cpu;
     cparams.v_cache_hadamard  = params.v_cache_hadamard;
-    cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
+    cparams.split_mode_tensor_parallel_scheduling = params.split_mode_tensor_parallel_scheduling;
     //cparams.split_mode_f16    = params.split_mode_f16;
     cparams.scheduler_async   = params.scheduler_async;
+    cparams.sched_max_copies  = params.sched_max_copies;
+    cparams.threadpool        = params.threadpool;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
+    cparams.ser_n_tiers       = params.ser_n_tiers;
+    for (int i = 0; i < GGML_MAX_SER_TIERS; ++i) {
+        cparams.ser_min_experts[i]   = params.ser_min_experts[i];
+        cparams.ser_thresh_experts[i] = params.ser_thresh_experts[i];
+    }
     cparams.only_active_experts = params.only_active_exps;
     cparams.prefetch_experts  = params.prefetch_experts;
     cparams.prefetch_experts_threads = params.prefetch_experts_threads;
@@ -4409,7 +5608,160 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     }
 
     if (!params.offload_policy.empty()) cparams.offload_policy = (void *)&params.offload_policy;
-    if (!params.cuda_params.empty()) cparams.cuda_params = (void *)params.cuda_params.data();
+    if (!params.cuda_params.empty()) {
+        cparams.cuda_params = (void *)params.cuda_params.data();
+#if defined(GGML_USE_CUDA)
+        // Set CUDA_SCALE_LAUNCH_QUEUES before buffer type init (must be called before ggml_backend_cuda_buffer_type)
+        size_t pos = params.cuda_params.find("cslq=");
+        if (pos != std::string::npos) {
+            size_t start = pos + 5;
+            size_t end = params.cuda_params.find(",", start);
+            std::string cslq = params.cuda_params.substr(start, end - start);
+            if (!cslq.empty()) {
+                ggml_backend_cuda_set_cslq(cslq.c_str());
+            }
+        }
+#endif
+    }
+
+    // Legacy GPU clock elevation via external gpu_poller.exe (Windows only, --shark)
+    // In-process NVAPI poller is independent and gated by --poller-nvapi.
+#if defined(_WIN32) && defined(GGML_USE_CUDA)
+    if (params.shark_enable) {
+        g_shark_path = params.shark_path;
+        g_shark_args = params.shark_args;
+        g_shark_interval_ms = params.shark_interval_ms;
+        g_shark_temp_limit  = params.shark_temp_limit;
+        // Decide the temp guard once here, before any decode: keeps the
+        // NVAPI query off the token-generation path entirely.
+        g_shark_temp_ok = check_gpu_temp_ok();
+        if (!g_shark_temp_ok) {
+            fprintf(stderr, "shark: GPU temperature too high, not launching poller\n");
+        }
+        cparams.shark_callback = common_shark_callback;
+        cparams.shark_callback_data = nullptr; // uses globals
+    }
+    // Resolve --poller-temps into (pause, resume). Empty => defaults 85,75; a
+    // single value N => pause = N, resume = N - 10 (hysteresis); two values =>
+    // pause,resume verbatim. A 0 pause temp disables heat protection.
+    int poller_pause_temp  = 85;
+    int poller_resume_temp = 75;
+    if (params.poller_temps.size() == 1) {
+        poller_pause_temp  = params.poller_temps[0];
+        poller_resume_temp = params.poller_temps[0] - 10;
+    } else if (params.poller_temps.size() >= 2) {
+        poller_pause_temp  = params.poller_temps[0];
+        poller_resume_temp = params.poller_temps[1];
+    }
+    if (params.poller_nvapi_enable) {
+        llama_nvapi_poller_set_interval(params.poller_nvapi_interval_ms.data(), (int) params.poller_nvapi_interval_ms.size());
+        // Per-card heat protection thresholds (--poller-temps): the poller
+        // self-pauses to protect the cards during long generations.
+        llama_nvapi_poller_set_temp_limits(poller_pause_temp, poller_resume_temp);
+        llama_nvapi_poller_set_monitor_only(false);
+        bool any = false;
+        for (int v : params.poller_nvapi_interval_ms) {
+            if (v > 0) any = true;
+        }
+        if (any) {
+            llama_nvapi_poller_set_enabled(true);
+        } else {
+            // --poller-nvapi 0: all intervals off, poller disabled.
+            llama_nvapi_poller_set_enabled(false);
+            fprintf(stderr, "poller-nvapi: all intervals are 0, poller disabled\n");
+        }
+    } else if (!params.poller_warmup_fma_strength.empty() || !params.poller_warmup_mma_strength.empty() || !params.poller_activity_mma_strength.empty() ||
+               !params.poller_activity_fma_strength.empty() || !params.poller_warmup_mem_bursts.empty() ||
+               !params.poller_activity_mem_bursts.empty() || !params.poller_ping_mem_amplitude.empty() || !params.poller_ping_mma_amplitude.empty() ||
+               !params.poller_sync_interval_ms.empty() || !params.poller_ping_mem_interval_ms.empty() || !params.poller_ping_fma_interval_ms.empty() ||
+               !params.poller_ping_mma_interval_ms.empty()) {
+        // Clock-elevation flags without --poller-nvapi: run the poller in monitor-only
+        // mode so the warmup / probe / tickle / ping threads consume the published
+        // per-card heat state as their skip mask (every launch path honors
+        // ggml_cuda_poller_skip: warmup-fma, warmup-mma, warmup-mem, activity-fma,
+        // activity-mma, poller-sync, and the ping-mem/ping-fma ping threads).
+        llama_nvapi_poller_set_interval(params.poller_nvapi_interval_ms.data(), (int) params.poller_nvapi_interval_ms.size());
+        llama_nvapi_poller_set_temp_limits(poller_pause_temp, poller_resume_temp);
+        llama_nvapi_poller_set_monitor_only(true);
+        llama_nvapi_poller_set_enabled(true);
+    }
+    if (!params.poller_warmup_fma_strength.empty()) {
+        // Enable the CUDA heartbeat warmup (--poller-warmup-fma). Decoupled from --poller-sync: that flag
+        // only drives the event tickle, this alone starts the FMA warmup.
+        ggml_backend_cuda_set_poller_warmup_fma(true); // logs each WDDM GPU with its effective FMA
+    }
+    if (!params.poller_warmup_interval.empty()) {
+        // Token interval between warmup bursts (--poller-warmup-interval). Applies to all three
+        // warmups (mma/fma/mem): each GPU fires on every N-th TG batch instead of every batch.
+        ggml_backend_cuda_set_poller_warmup_interval(params.poller_warmup_interval.data(), (int) params.poller_warmup_interval.size());
+    }
+    if (!params.poller_warmup_start.empty()) {
+        // First TG token at which the warmup burst fires (--poller-warmup-start). Applies to all
+        // three warmups (mma/fma/mem): each GPU first fires on the N-th TG batch of a phase.
+        ggml_backend_cuda_set_poller_warmup_start(params.poller_warmup_start.data(), (int) params.poller_warmup_start.size());
+    }
+    if (!params.poller_warmup_fma_strength.empty() || !params.poller_activity_fma_strength.empty() || !params.poller_ping_fma_interval_ms.empty()) {
+        // Occupancy % of the poller FMA kernels (--poller-fma-occupancy): direct percentage
+        // 0..100 (0 = disabled, 100 = full grid). Any FMA poller (warmup / activity / ping)
+        // uses the default 50 unless the flag is given explicitly.
+        ggml_backend_cuda_set_poller_fma_occupancy(params.poller_fma_occupancy.data(), (int) params.poller_fma_occupancy.size(), GGML_POLLER_FMA_OCCUPANCY_DEFAULT);
+    }
+    if (!params.poller_warmup_mma_strength.empty() || !params.poller_activity_mma_strength.empty() || !params.poller_ping_mma_interval_ms.empty()) {
+        // Occupancy % of the poller MMA kernels (--poller-mma-occupancy): direct percentage
+        // 0..100 (0 = disabled, 100 = full grid). Any MMA poller (warmup / activity / ping)
+        // uses the default 50 unless the flag is given explicitly.
+        ggml_backend_cuda_set_poller_mma_occupancy(params.poller_mma_occupancy.data(), (int) params.poller_mma_occupancy.size(), GGML_POLLER_MMA_OCCUPANCY_DEFAULT);
+    }
+    if (!params.poller_warmup_mem_bursts.empty() || !params.poller_activity_mem_bursts.empty() || !params.poller_ping_mem_interval_ms.empty()) {
+        // L2 occupancy % of the poller mem companion (--poller-mem-occupancy): direct
+        // percentage 0..100 (0 = disabled, 100 = full 2 MiB buffer). Any mem poller
+        // (warmup / activity / ping) uses the default 25 unless the flag is given explicitly.
+        ggml_backend_cuda_set_poller_mem_occupancy(params.poller_mem_occupancy.data(), (int) params.poller_mem_occupancy.size(), GGML_POLLER_MEM_OCCUPANCY_DEFAULT);
+    }
+    if (!params.poller_warmup_mem_bursts.empty()) {
+        // Decode-gated mem-clock companion (--poller-warmup-mem): fires the mem burst on each
+        // enabled WDDM GPU at every TG batch, mirroring the warmup-fma cadence.
+        ggml_backend_cuda_set_poller_warmup_mem(params.poller_warmup_mem_bursts.data(), (int) params.poller_warmup_mem_bursts.size());
+    }
+    if (!params.poller_activity_fma_strength.empty()) {
+        // Decode-solicited FMA probe (--poller-activity-fma): fires a short burst on each
+        // WDDM GPU that actually receives compute in the current TG batch.
+        ggml_backend_cuda_set_poller_activity_fma(params.poller_activity_fma_strength.data(), (int) params.poller_activity_fma_strength.size());
+    }
+    if (!params.poller_warmup_mma_strength.empty()) {
+        // Tensor-core HMMA warmup (--poller-warmup-mma): same decode-gated cadence as --poller-warmup-fma
+        // but with tensor-core MMA instructions (~1000x FLOPs per instruction), so
+        // the same wall-clock burst is a far denser power pulse. Pre-Volta cards
+        // fall back to scalar FFMA inside the kernel.
+        ggml_backend_cuda_set_poller_warmup_mma(params.poller_warmup_mma_strength.data(), (int) params.poller_warmup_mma_strength.size());
+    }
+    if (!params.poller_activity_mma_strength.empty()) {
+        // Decode-solicited HMMA probe (--poller-activity-mma): fires a short tensor-core burst
+        // on each WDDM GPU that actually receives compute in the current TG batch
+        // (like --poller-activity-fma, but ~1000x denser per ms).
+        ggml_backend_cuda_set_poller_activity_mma(params.poller_activity_mma_strength.data(), (int) params.poller_activity_mma_strength.size());
+    }
+    if (!params.poller_activity_mem_bursts.empty()) {
+        // Decode-solicited mem burst (--poller-activity-mem): fires a short mem-clock burst on each
+        // WDDM GPU that actually receives compute in the current TG batch (mem companion to
+        // --poller-activity-fma).
+        ggml_backend_cuda_set_poller_activity_mem(params.poller_activity_mem_bursts.data(), (int) params.poller_activity_mem_bursts.size());
+    }
+    if (!params.poller_ping_mem_interval_ms.empty()) {
+        // Autonomous mem-clock stream (--poller-ping-mem). Decoupled from --poller-nvapi: that
+        // poller only does NVAPI temps + P-state forcing, this supplies the load.
+        ggml_backend_cuda_set_poller_ping_mem(params.poller_ping_mem_interval_ms.data(), (int) params.poller_ping_mem_interval_ms.size());
+    }
+    if (!params.poller_ping_fma_interval_ms.empty()) {
+        // Autonomous FMA ping (--poller-ping-fma), the core-clock FMA half of the ping load.
+        ggml_backend_cuda_set_poller_ping_fma(params.poller_ping_fma_interval_ms.data(), (int) params.poller_ping_fma_interval_ms.size());
+    }
+    if (!params.poller_ping_mma_interval_ms.empty()) {
+        // Autonomous tensor-core (HMMA) ping (--poller-ping-mma), the core-clock MMA half of
+        // the ping load; shares the --poller-ping-fma thread.
+        ggml_backend_cuda_set_poller_ping_mma(params.poller_ping_mma_interval_ms.data(), (int) params.poller_ping_mma_interval_ms.size());
+    }
+#endif
 
     return cparams;
 }
@@ -4851,6 +6203,249 @@ std::vector<llama_token> common_tokenize(
     bool   parse_special){
 
     return llama_tokenize(vocab, text, add_special, parse_special);
+}
+
+std::vector<float> common_allowlist_set_bias(
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & rules) {
+    const int32_t n_vocab = (int32_t) vocab_pieces.size();
+    std::vector<float> biases(n_vocab);
+
+    std::vector<uint32_t> cpts;
+    std::vector<std::string> scripts;
+    for (int32_t id = 0; id < n_vocab; ++id) {
+        const size_t n_cpt = llama_fill_from_utf8((void *) &vocab_pieces[id], &cpts, &scripts);
+        float bias = -INFINITY;
+
+        // each codepoint must be found in at least one rule
+        for (size_t j = 0; j < n_cpt; ++j) {
+            bool in_rule = false;
+            for (const auto & rule: rules) {
+                const bool in_range = (std::get<0>(rule) <= cpts[j]) && (cpts[j] <= std::get<1>(rule));
+                in_rule = in_range && ((std::get<2>(rule) == "*") || std::get<2>(rule) == scripts[j]);
+                if (in_rule) {
+                    // earlier rule has higher priority
+                    bias = std::max(bias, std::get<3>(rule));
+                    break;
+                }
+            }
+            if (!in_rule) {
+                if ((scripts[j] == "common") || (scripts[j] == "inherited")) {
+                    // for common or inherited codepoints (e.g. whitespace), defer to other codepoints in the token
+                    continue;
+                }
+
+                // to shadow realm
+                bias = -INFINITY;
+                break;
+            }
+        }
+        biases[id] = bias;
+    }
+    return biases;
+}
+
+std::vector<bool> common_disallowlist_banned_ids(
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & rules) {
+    const int32_t n_vocab = (int32_t) vocab_pieces.size();
+    std::vector<bool> banned(n_vocab, false);
+
+    std::vector<uint32_t> cpts;
+    std::vector<std::string> scripts;
+    for (int32_t id = 0; id < n_vocab; ++id) {
+        const size_t n_cpt = llama_fill_from_utf8((void *) &vocab_pieces[id], &cpts, &scripts);
+        for (size_t j = 0; j < n_cpt; ++j) {
+            // common/inherited codepoints (e.g. whitespace) never trigger a ban on their own
+            if ((scripts[j] == "common") || (scripts[j] == "inherited")) {
+                continue;
+            }
+            for (const auto & rule: rules) {
+                const bool in_range = (std::get<0>(rule) <= cpts[j]) && (cpts[j] <= std::get<1>(rule));
+                if (in_range && ((std::get<2>(rule) == "*") || std::get<2>(rule) == scripts[j])) {
+                    banned[id] = true;
+                    break;
+                }
+            }
+            if (banned[id]) {
+                break;
+            }
+        }
+    }
+    return banned;
+}
+
+std::vector<bool> common_disallow_emdash_banned_ids(
+        const std::vector<std::string> & vocab_pieces) {
+    const int32_t n_vocab = (int32_t) vocab_pieces.size();
+    std::vector<bool> banned(n_vocab, false);
+
+    std::vector<uint32_t> cpts;
+    std::vector<std::string> scripts;  // unused, required by the fill call
+    for (int32_t id = 0; id < n_vocab; ++id) {
+        // raw codepoint scan, script-blind on purpose: U+2014/U+2013 are 'common' script and
+        // common codepoints never trigger rule bans, so no unicode rule can reach these tokens.
+        // lone bytes decode to U+FFFD and never match, so byte-fallback tokens are untouched.
+        // the space+hyphen pair looks at the previous codepoint, which also spares the lone
+        // '-' token and mid-word hyphens (only space-led hyphen phrases are banned).
+        // runs of 2+ hyphens are dividers/separators/arrows (only the lone '-' survives)
+        llama_fill_from_utf8((void *) &vocab_pieces[id], &cpts, &scripts);
+        for (size_t k = 0, hyphen_run = 0; k < cpts.size(); ++k) {
+            if (cpts[k] == 0x2014 || cpts[k] == 0x2013 ||
+                (cpts[k] == 0x002D && k > 0 && cpts[k - 1] == 0x0020)) {
+                banned[id] = true;
+                break;
+            }
+            // runs of 3+ hyphens (---, ----, ...): dividers and separators; '--' survives
+            hyphen_run = (cpts[k] == 0x002D) ? hyphen_run + 1 : 0;
+            if (hyphen_run >= 2) {
+                banned[id] = true;
+                break;
+            }
+        }
+    }
+    return banned;
+}
+
+std::vector<llama_token> common_disallow_piece_ids(
+        const struct llama_model * model,
+        const std::string & piece) {
+    std::vector<llama_token> ids;
+    const int32_t n_vocab = llama_n_vocab(model);
+    // ';' separates independent entries (copy-pasted tokens); each entry is either a
+    // comma-separated token-id list (plain integers in vocabulary range, whitespace ignored)
+    // or a single text piece, tokenized like --allowlist-pieces (';' segments are used verbatim,
+    // so leading/trailing spaces stay significant)
+    for (const auto & seg : string_split(piece, ';')) {
+        if (seg.empty()) {
+            continue;
+        }
+        std::vector<llama_token> seg_ids;
+        bool all_ids = true;
+        for (const auto & part : string_split(seg, ',')) {
+            const auto num = string_strip(part);
+            if (num.empty() || !std::all_of(num.begin(), num.end(), [](char c) { return std::isdigit((unsigned char) c); })) {
+                all_ids = false;
+                break;
+            }
+            try {
+                const unsigned long id = std::stoul(num);
+                if (id >= (unsigned long) n_vocab) {
+                    all_ids = false;
+                    break;
+                }
+                seg_ids.push_back((llama_token) id);
+            } catch (const std::exception &) {
+                all_ids = false;
+                break;
+            }
+        }
+        if (all_ids && !seg_ids.empty()) {
+            ids.insert(ids.end(), seg_ids.begin(), seg_ids.end());
+        } else {
+            const auto tokens = common_tokenize(model, seg, false, true);
+            ids.insert(ids.end(), tokens.begin(), tokens.end());
+        }
+    }
+    return ids;
+}
+
+void common_log_disallow_pieces(
+        const struct llama_model * model,
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::string> & disallow_pieces) {
+    // escape non-ASCII bytes: raw UTF-8 pieces render as mojibake on non-UTF-8 log sinks
+    const auto escape = [](const std::string & piece) {
+        std::string out;
+        for (const unsigned char c : piece) {
+            if (c >= 0x20 && c < 0x7F && c != '\'' && c != '\\') {
+                out += (char) c;
+            } else {
+                char buf[5];
+                snprintf(buf, sizeof(buf), "\\x%02X", c);
+                out += buf;
+            }
+        }
+        return out;
+    };
+    const int32_t n_vocab = (int32_t) vocab_pieces.size();
+    for (const auto & piece : disallow_pieces) {
+        std::string detail;
+        for (const auto token : common_disallow_piece_ids(model, piece)) {
+            if (token < 0 || token >= n_vocab) {
+                continue;
+            }
+            if (!detail.empty()) {
+                detail += ", ";
+            }
+            detail += std::to_string(token) + " '" + escape(vocab_pieces[(size_t) token]) + "'";
+        }
+        LLAMA_LOG_INFO("%s: --disallowlist-pieces '%s' bans %s\n",
+                __func__, escape(piece).c_str(), detail.empty() ? "(nothing)" : detail.c_str());
+    }
+}
+
+std::vector<int32_t> common_allowlist_union_ids(
+        const struct llama_model * model,
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> & rules,
+        const std::vector<std::string> & allow_pieces,
+        const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & disallow_rules,
+        const std::vector<std::string> & disallow_pieces,
+        bool disallow_emdash) {
+    const int32_t n_vocab = (int32_t) vocab_pieces.size();
+    // without allow rules everything starts allowed; with allow rules only the union is allowed
+    std::vector<bool> allowed(n_vocab, rules.empty());
+
+    for (const auto & piece: allow_pieces) {
+        for (const auto token: common_tokenize(model, piece, false, true)) {
+            if (token >= 0 && token < n_vocab) {
+                allowed[token] = true;
+            }
+        }
+    }
+    for (const auto & set: rules) {
+        const auto biases = common_allowlist_set_bias(vocab_pieces, set);
+        for (int32_t id = 0; id < n_vocab; ++id) {
+            if (biases[id] != -INFINITY) {
+                allowed[id] = true;
+            }
+        }
+    }
+
+    // disallow wins: subtract every disallowed row from the union
+    if (!disallow_rules.empty()) {
+        const auto banned = common_disallowlist_banned_ids(vocab_pieces, disallow_rules);
+        for (int32_t id = 0; id < n_vocab; ++id) {
+            if (banned[id]) {
+                allowed[id] = false;
+            }
+        }
+    }
+    for (const auto & piece: disallow_pieces) {
+        for (const auto token: common_disallow_piece_ids(model, piece)) {
+            if (token >= 0 && token < n_vocab) {
+                allowed[token] = false;
+            }
+        }
+    }
+    if (disallow_emdash) {
+        const auto emdash_banned = common_disallow_emdash_banned_ids(vocab_pieces);
+        for (int32_t id = 0; id < n_vocab; ++id) {
+            if (emdash_banned[id]) {
+                allowed[id] = false;
+            }
+        }
+    }
+
+    std::vector<int32_t> ids;
+    ids.reserve(n_vocab);
+    for (int32_t id = 0; id < n_vocab; ++id) {
+        if (allowed[id]) {
+            ids.push_back(id);
+        }
+    }
+    return ids;
 }
 
 std::string common_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
@@ -5311,6 +6906,11 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "dry_multiplier: %.1f # default: 0.0\n", sparams.dry_multiplier);
     fprintf(stream, "dry_penalty_last_n: %d # default: -1 (0 = disable, -1 = context size)\n", sparams.dry_penalty_last_n);
     fprintf(stream, "escape: %s # default: false\n", params.escape ? "true" : "false");
+    fprintf(stream, "eos_token_probability: %f # default: 1.0\n", sparams.eos_token_probability);
+    fprintf(stream, "special_eosg_token: %s # default: \n", sparams.special_eosg_tokens.empty() ? "\"\"" : sparams.special_eosg_tokens.front().c_str());
+    for (size_t i = 1; i < sparams.special_eosg_tokens.size(); i++) {
+        fprintf(stream, "  - %s\n", sparams.special_eosg_tokens[i].c_str());
+    }
     fprintf(stream, "file: # never logged, see prompt instead. Can still be specified for input.\n");
     fprintf(stream, "frequency_penalty: %f # default: 0.0 \n", sparams.penalty_freq);
     yaml_dump_string_multiline(stream, "grammar", sparams.grammar.grammar.c_str());
@@ -5352,7 +6952,17 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     }
     fprintf(stream, "lora_init_without_apply: %s # default: false\n", params.lora_init_without_apply ? "true" : "false");
     fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
-    fprintf(stream, "max_gpu: %d # default: 0\n", params.max_gpu);
+    fprintf(stream, "max_gpu_per_split: %d # default: 0\n", params.max_gpu_per_split);
+    fprintf(stream, "split_adjust_step_frequency: %.1f # default: 0.5 (<1: legacy formula, >=1: direct layer count)\n", params.split_adjust_step_frequency);
+    fprintf(stream, "split_adjust_vram_aware: %s # default: false\n", params.split_adjust_vram_aware ? "true" : "false");
+    fprintf(stream, "split_adjust_not_used: %s # default: false\n", params.split_adjust_not_used ? "true" : "false");
+    fprintf(stream, "split_tensor_split_factor: %.1f # default: 1.0 (neutral), ventilation: 2.0\n", params.split_tensor_split_factor);
+    fprintf(stream, "split_vram_free_factor: %.1f # default: 0.0 (neutral), ventilation: 0.6\n", params.split_vram_free_factor);
+    fprintf(stream, "split_usage_penalty_factor: %.1f # default: 0.0 (neutral), ventilation: 1.0\n", params.split_usage_penalty_factor);
+    {
+        const std::vector<float> svrf_vector(params.split_vram_reserve_factor, params.split_vram_reserve_factor + llama_max_devices());
+        yaml_dump_vector_float(stream, "split_vram_reserve_factor", svrf_vector);
+    }
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
     fprintf(stream, "fit: %d # default: false\n", params.fit);
     fprintf(stream, "fit_margin: %d # default: 0\n", params.fit_margin);
@@ -5373,6 +6983,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "n_probs: %d # only used by server binary, default: 0\n", sparams.n_probs);
     fprintf(stream, "no_mmap: %s # default: false\n", !params.use_mmap ? "true" : "false");
     fprintf(stream, "repack: %s # default: false\n", params.repack_tensors ? "true" : "false");
+    fprintf(stream, "r16_path: %s # default: false\n", iqk_get_r16_path() ? "true" : "false");
     fprintf(stream, "use_thp: %s # default: false\n", params.use_thp ? "true" : "false");
     fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");
     fprintf(stream, "merge_qkv: %s # default: false\n", params.merge_qkv ? "true" : "false");
@@ -5383,8 +6994,13 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "prefetch_experts_threads: %d # default: 0 (auto)\n", params.prefetch_experts_threads);
     fprintf(stream, "max_extra_alloc: %d # default: 256\n", params.max_extra_alloc_MiB);
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
+    fprintf(stream, "no_space_after_quote: %s # default: false\n", sparams.no_space_after_quote ? "true" : "false");
+    fprintf(stream, "boost_space_after_quote: %f # default: 0.0\n", sparams.boost_space_after_quote);
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
     fprintf(stream, "ppl_stride: %d # default: 0\n", params.ppl_stride);
+    for (const auto & spec : params.ppl_run_params) {
+        fprintf(stream, "ppl_run_params: %s\n", spec.c_str());
+    }
     fprintf(stream, "presence_penalty: %f # default: 0.0\n", sparams.penalty_present);
     yaml_dump_string_multiline(stream, "prompt", params.prompt.c_str());
     fprintf(stream, "prompt_cache: %s\n", params.path_prompt_cache.c_str());
@@ -5420,11 +7036,23 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "graph_reuse: %s # default: false\n", params.graph_reuse ? "true" : "false");
     fprintf(stream, "k_cache_hadamard: %s # default: false\n", params.k_cache_hadamard ? "true" : "false");
     fprintf(stream, "v_cache_hadamard: %s # default: false\n", params.v_cache_hadamard ? "true" : "false");
-    fprintf(stream, "split_mode_graph_scheduling: %s # default: false\n", params.split_mode_graph_scheduling ? "true" : "false");
+    fprintf(stream, "split_mode_tensor_parallel_scheduling: %s # default: false\n", params.split_mode_tensor_parallel_scheduling ? "true" : "false");
+    fprintf(stream, "split_output_tensor: %d # default: 0 (0=off, 1=all GPUs, N>1=top N GPUs)\n", params.split_output_tensor);
+    fprintf(stream, "split_output_tensor: %s # default: false\n", params.split_output_tensor ? "true" : "false");
+    fprintf(stream, "split_output_tensor_subset: %d # default: 0 (0=off, 1=all output GPUs, N>1=top N output GPUs)\n", params.split_output_tensor_subset);
+    fprintf(stream, "output_subset_host: %d # default: 0 (keep the full output tensor in host memory once the output logits subset is set)\n", params.output_subset_host);
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");
-    fprintf(stream, "ser: %d,%g # default: -1,0\n", params.min_experts, params.thresh_experts);
+    if (params.ser_n_tiers >= 2) {
+        fprintf(stream, "ser:");
+        for (int i = 0; i < params.ser_n_tiers; ++i) {
+            fprintf(stream, "%s%d,%g", i > 0 ? ";" : " ", params.ser_min_experts[i], (double) params.ser_thresh_experts[i]);
+        }
+        fprintf(stream, " # default: -1,0\n");
+    } else {
+        fprintf(stream, "ser: %d,%g # default: -1,0\n", params.min_experts, params.thresh_experts);
+    }
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 
     const std::vector<float> tensor_split_vector(params.tensor_split, params.tensor_split + llama_max_devices());
@@ -5455,9 +7083,15 @@ std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_ru
     float bias = subs.size() == 1 ? 0 : std::stof(subs[1]);
 
     subs = string_split(subs[0], ",");
-    std::string script = std::all_of(subs.back().begin(), subs.back().end(), [](char c) {
-        return std::isalpha(c);
-    }) ? string_lower(subs.back()) : "*";
+    // a script or subset name is a field of letters/digits/underscores that contains at least one
+    // letter (e.g. 'latin_diacritics_viet', 'old_south_arabian'); a pure codepoint range such as
+    // '192..591' or '0..127' stays numeric and gets script "*"
+    std::string script = "*";
+    const auto & name = subs.back();
+    if (std::any_of(name.begin(), name.end(), [](char c) { return std::isalpha(c); }) &&
+        std::all_of(name.begin(), name.end(), [](char c) { return std::isalnum(c) || c == '_'; })) {
+        script = string_lower(name);
+    }
     if (script == "ascii") {
         return { 0x000000, 0x00007F, "*", bias };
     }
@@ -5475,6 +7109,112 @@ std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_ru
     }
 
     return { std::min(first, last), std::max(first, last), script, bias };
+}
+
+// named script subsets, expandable in allowlist/disallowlist rules
+static const std::map<std::string, std::vector<std::string>> unicode_script_subsets = {
+    // languages written with ideograms/logographs (CJK and related)
+    { "ideographic", { "han", "hiragana", "katakana", "hangul", "bopomofo", "yi", "tangut", "nushu" } },
+    // modern Indic (South Asian, Brahmic-derived) scripts
+    { "indic", { "devanagari", "bengali", "gujarati", "gurmukhi", "kannada", "malayalam", "oriya", "tamil", "telugu", "sinhala" } },
+    // Persian/Iranian scripts (incl. Arabic script, used for modern Farsi/Dari/Urdu)
+    { "persic", { "arabic", "old_persian", "avestan", "inscriptional_pahlavi", "psalter_pahlavi", "manichaean", "sogdian", "old_sogdian", "chorasmian" } },
+    // Semitic language scripts: Hebrew, Arabic, the Aramaic/Syriac family, Ethiopic (Ge'ez/Amharic/
+    // Tigrinya), and the ancient Semitic scripts. note: `arabic` overlaps with `persic`.
+    { "semitic", { "hebrew", "arabic", "syriac", "samaritan", "mandaic", "ethiopic", "phoenician", "imperial_aramaic", "old_south_arabian", "old_north_arabian", "ugaritic", "hatran", "palmyrene", "nabataean", "elymaic" } },
+    // Caucasian scripts with indigenous writing systems (not transliterated into latin/cyrillic/greek:
+    // Abkhaz, Chechen, Ossetian, etc. use cyrillic and are excluded)
+    { "caucasian", { "armenian", "georgian", "caucasian_albanian" } },
+    // African scripts with indigenous writing systems (the numerous African languages written with
+    // latin/arabic/cyrillic are excluded). `ethiopic` overlaps with `semitic`.
+    { "african", { "adlam", "bamum", "bassa_vah", "coptic", "egyptian_hieroglyphs", "ethiopic", "garay", "medefaidrin", "mende_kikakui", "meroitic_cursive", "meroitic_hieroglyphs", "nko", "tifinagh", "vai" } },
+    // Indigenous scripts of the Americas (most native American languages use latin and are excluded;
+    // Mayan hieroglyphs are not encoded in Unicode)
+    { "amerindian", { "canadian_aboriginal", "cherokee", "osage" } },
+    // Austronesian scripts of insular Southeast Asia and the Pacific (Oceania): the many Austronesian
+    // languages written with latin (Malay, Tagalog, Hawaiian, Maori, etc.) are excluded
+    { "austronesian", { "balinese", "batak", "buginese", "buhid", "cham", "hanunoo", "javanese", "kawi", "makasar", "rejang", "sundanese", "tagalog", "tagbanwa" } },
+    // scripts of mainland Southeast Asia and the Himalayas: the Tai-Kadai scripts (thai, lao,
+    // tai_le, tai_tham, tai_viet, new_tai_lue), Khmer, Burmese (myanmar) and Tibetan
+    { "southeast_asian", { "thai", "lao", "khmer", "myanmar", "tibetan",
+                           "tai_le", "tai_tham", "tai_viet", "new_tai_lue" } },
+    // cuneiform and other scripts of ancient Mesopotamia
+    { "mesopotamic", { "cuneiform", "old_persian", "ugaritic", "hatran", "imperial_aramaic" } },
+    // indigenous scripts of the Turkic and Mongolic peoples, predating their latinisation/cyrillisation:
+    // the Orkhon runes of the Gokturks and the classical Mongolian script (plus Soyombo and Phags-pa,
+    // invented for the Mongol empire). modern Turkic languages (Turkish, Uyghur, Kazakh, etc.) write
+    // in latin/cyrillic/arabic scripts and are covered elsewhere.
+    { "turko_mongol", { "old_turkic", "mongolian", "soyombo", "phags_pa" } },
+    // indigenous scripts of the Finno-Ugric/Uralic peoples, predating their latinisation/cyrillisation:
+    // the Hungarian runes are the only one (Finnish, Estonian, Sami and the Russian Uralic languages
+    // — Mordvin, Mari, Udmurt, Komi, Khanty, Mansi, Nenets — write in latin/cyrillic).
+    { "finno_ugric_uralic", { "old_hungarian" } },
+    // ancient European scripts predating the adoption of greek/latin/cyrillic: the Aegean scripts
+    // (Linear A/B, Cypriot syllabary), the Anatolian scripts (Carian, Lycian, Lydian, Luwian
+    // hieroglyphs), Old Italic (Etruscan/Oscan/Umbrian), Germanic runes, Irish Ogham, Old Church
+    // Slavonic Glagolitic, Hungarian runes (overlaps finno_ugric_uralic) and the Gothic alphabet.
+    { "ancient_european", { "linear_a", "linear_b", "cypro_minoan", "cypriot", "anatolian_hieroglyphs",
+                            "carian", "lycian", "lydian", "old_italic", "runic", "ogham",
+                            "glagolitic", "old_hungarian", "gothic" } },
+    // every script covered by the other named subsets: the union of ideographic, indic, persic,
+    // semitic, caucasian, african, amerindian, austronesian, southeast_asian, mesopotamic,
+    // turko_mongol, finno_ugric_uralic and ancient_european (deduplicated).
+    // effectively "all indigenous writing systems outside the latin/greek/cyrillic world".
+    { "exotic", { "han", "hiragana", "katakana", "hangul", "bopomofo", "yi", "tangut", "nushu",
+                  "devanagari", "bengali", "gujarati", "gurmukhi", "kannada", "malayalam", "oriya", "tamil", "telugu", "sinhala",
+                  "arabic", "old_persian", "avestan", "inscriptional_pahlavi", "psalter_pahlavi", "manichaean", "sogdian", "old_sogdian", "chorasmian",
+                  "hebrew", "syriac", "samaritan", "mandaic", "ethiopic", "phoenician", "imperial_aramaic", "old_south_arabian", "old_north_arabian", "ugaritic", "hatran", "palmyrene", "nabataean", "elymaic",
+                  "armenian", "georgian", "caucasian_albanian",
+                  "adlam", "bamum", "bassa_vah", "coptic", "egyptian_hieroglyphs", "garay", "medefaidrin", "mende_kikakui", "meroitic_cursive", "meroitic_hieroglyphs", "nko", "tifinagh", "vai",
+                  "canadian_aboriginal", "cherokee", "osage",
+                  "balinese", "batak", "buginese", "buhid", "cham", "hanunoo", "javanese", "kawi", "makasar", "rejang", "sundanese", "tagalog", "tagbanwa",
+                  "thai", "lao", "khmer", "myanmar", "tibetan", "tai_le", "tai_tham", "tai_viet", "new_tai_lue",
+                  "cuneiform",
+                  "old_turkic", "mongolian", "soyombo", "phags_pa",
+                  "old_hungarian",
+                  "linear_a", "linear_b", "cypro_minoan", "cypriot", "anatolian_hieroglyphs", "carian", "lycian", "lydian", "old_italic", "runic", "ogham", "glagolitic", "gothic" } },
+};
+
+// named codepoint-range subsets: like unicode_script_subsets, but for ranges of codepoints
+// within a single script (e.g. the accented letters of `latin`), which script names cannot
+// express. each entry is (first, last, script): a codepoint matches if it falls in the range
+// and belongs to the script (or any script, if the script is "*").
+static const std::map<std::string, std::vector<std::tuple<uint32_t, uint32_t, std::string>>> unicode_range_subsets = {
+    // precomposed Vietnamese letters: the entire Latin Extended Additional block is a contiguous
+    // range of accented latin codepoints (a, a-macron-breve-tone, o-u circumflex/tone, etc.)
+    { "latin_diacritics_viet", { { 0x1E00, 0x1EFF, "latin" } } },
+    // precomposed Western European letters: the accented half of Latin-1 Supplement (U+00C0-U+00FF),
+    // excluding the two math symbols U+00D7 (multiplication) and U+00F7 (division)
+    { "latin_diacritics_western", { { 0x00C0, 0x00D6, "latin" }, { 0x00D8, 0x00FF, "latin" } } },
+    // all accented latin letters: the union of latin_diacritics_viet and latin_diacritics_western
+    { "latin_diacritics", { { 0x00C0, 0x00D6, "latin" }, { 0x00D8, 0x00FF, "latin" }, { 0x1E00, 0x1EFF, "latin" } } },
+};
+
+std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> argparse_allowlist_unicode_rules(std::string argstr) {
+    // parse a single rule, expanding a named script subset into one rule per component script
+    auto rule = argparse_allowlist_unicode_rule(argstr);
+
+    const auto subset = unicode_script_subsets.find(std::get<2>(rule));
+    if (subset == unicode_script_subsets.end()) {
+        const auto rsubset = unicode_range_subsets.find(std::get<2>(rule));
+        if (rsubset == unicode_range_subsets.end()) {
+            return { std::move(rule) };
+        }
+
+        std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> rules;
+        rules.reserve(rsubset->second.size());
+        for (const auto & [first, last, script] : rsubset->second) {
+            rules.emplace_back(first, last, script, std::get<3>(rule));
+        }
+        return rules;
+    }
+
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> rules;
+    rules.reserve(subset->second.size());
+    for (const auto& s : subset->second) {
+        rules.emplace_back(std::get<0>(rule), std::get<1>(rule), s, std::get<3>(rule));
+    }
+    return rules;
 }
 
 void argparse_expiring_logit_bias(const std::string& content, common_params_sampling& sparams) {

@@ -187,6 +187,8 @@ int main(int argc, char ** argv) {
 
     LOG_TEE("%s: build = %d (%s)\n",      __func__, LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
     LOG_TEE("%s: built with %s for %s\n", __func__, LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+    LOG_TEE("%s: branch = %s\n",           __func__, LLAMA_BUILD_BRANCH);
+    LOG_TEE("%s: date   = %s\n",           __func__, LLAMA_BUILD_DATE);
 
     if (params.seed == LLAMA_DEFAULT_SEED) {
         params.seed = time(NULL);
@@ -197,6 +199,10 @@ int main(int argc, char ** argv) {
     std::mt19937 rng(params.seed);
 
     LOG("%s: llama backend init\n", __func__);
+    common_params_minilog(params);
+    if (params.token_generation_speed_limit > 0) {
+        LOG_TEE("%s: token generation speed limit: %.2f tokens/s (approx, 0.25s quantum)\n", __func__, params.token_generation_speed_limit);
+    }
     llama_backend_init();
     llama_numa_init(params.numa);
 
@@ -464,7 +470,13 @@ int main(int argc, char ** argv) {
         }
 
         // remove any "future" tokens that we might have inherited from the previous session
-        llama_kv_cache_seq_rm(ctx, -1, n_matching_session_tokens, -1);
+        if (!llama_kv_cache_seq_rm(ctx, -1, n_matching_session_tokens, -1)) {
+            LOG_TEE("%s: cannot trim the session to %zu tokens; reprocessing the prompt\n",
+                    __func__, n_matching_session_tokens);
+            llama_kv_cache_clear(ctx);
+            n_matching_session_tokens = 0;
+            session_tokens.clear();
+        }
     }
 
     LOGLN(
@@ -638,6 +650,9 @@ int main(int argc, char ** argv) {
     double t_token_generation_ms = 0.0;
     int n_prompt_tokens_processed = 0;
     int n_decoded = 0;
+
+    common_token_rate_limiter tgsl;
+    tgsl.init(params.token_generation_speed_limit);
 
     // the first thing we will do is to output the prompt, so set color accordingly
     console::set_display(console::prompt);
@@ -938,9 +953,11 @@ int main(int argc, char ** argv) {
             // optionally save the session on first sample (for faster prompt loading next time)
             if (!path_session.empty() && need_to_save_session && !params.prompt_cache_ro) {
                 need_to_save_session = false;
-                llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
-
-                LOG("saved session to %s\n", path_session.c_str());
+                if (llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size())) {
+                    LOG("saved session to %s\n", path_session.c_str());
+                } else {
+                    LOG_TEE("%s: warning: failed to save session to %s\n", __func__, path_session.c_str());
+                }
             }
 
             const int n_predict_budget = n_remain < 0 ? std::numeric_limits<int>::max() : n_remain;
@@ -1224,7 +1241,16 @@ int main(int argc, char ** argv) {
                 }
 
                 fflush(stdout);
+
+                // token generation speed limiter: fluid pacing, updated every 0.25s
+                if (emitted_generated) {
+                    tgsl.consume(1);
+                }
             }
+        }
+        // when display is disabled, still throttle generation (non-fluid batch path)
+        if (emitted_generated && !(input_echo && display)) {
+            tgsl.consume((int) emitted.size());
         }
 
         // reset color to default if there is no pending user input
@@ -1366,7 +1392,11 @@ int main(int argc, char ** argv) {
 
         // end of generation
         if (emitted_hit_eog && !(params.interactive)) {
-            LOG_TEE(" [end of text]\n");
+            if (ctx_sampling->special_eosg_hit) {
+                LOG_TEE(" [end of text: special EOG string '%s' found]\n", ctx_sampling->special_eosg_matched.c_str());
+            } else {
+                LOG_TEE(" [end of text]\n");
+            }
             break;
         }
 
@@ -1378,9 +1408,20 @@ int main(int argc, char ** argv) {
         }
     }
 
+    // end of generation - log the stop reason in normal inference mode
+    if (!params.interactive && !emitted_hit_eog && params.n_predict != -2) {
+        if (is_antiprompt) {
+            LOG_TEE("\nmain: generation stopped: reverse prompt found\n");
+        } else if (n_remain == 0) {
+            LOG_TEE("\nmain: generation stopped: reached the maximum number of tokens (n_predict = %d)\n", params.n_predict);
+        }
+    }
+
     if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
         LOG_TEE("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
-        llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
+        if (!llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size())) {
+            LOG_TEE("%s: warning: failed to save session to %s\n", __func__, path_session.c_str());
+        }
     }
 
     if (n_decoded > 0) {

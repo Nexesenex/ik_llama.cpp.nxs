@@ -13,7 +13,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
     // position embeddings
     struct ggml_tensor * inp_pos = build_inp_pos();
 
-    auto rope_cache = model.split_mode != LLAMA_SPLIT_MODE_GRAPH && cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
+    auto rope_cache = model.split_mode != LLAMA_SPLIT_MODE_TENSOR_PARALLEL && cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
@@ -34,7 +34,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
         struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
         // output token IDs (for last layer cropping)
-        struct ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp) ? build_inp_out_ids() : nullptr;
+        struct ggml_tensor * inp_out_ids = (n_tokens > 1) ? build_inp_out_ids() : nullptr;
 
         float kq_scale = 1.0f/sqrtf(float(n_embd_head));
 
@@ -60,6 +60,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
                         model.layers[il].wq, model.layers[il].bq,
                         model.layers[il].wk, model.layers[il].bk,
                         model.layers[il].wv, model.layers[il].bv,
+                        model.layers[il].wkv, model.layers[il].bkv,
                         model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0.f, il);
 
                 // apply RoPE
@@ -318,6 +319,7 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
                 mtp_layer.wq, mtp_layer.bq,
                 mtp_layer.wk, mtp_layer.bk,
                 mtp_layer.wv, mtp_layer.bv,
+                nullptr, nullptr,
                 mtp_layer.attn_q_norm, mtp_layer.attn_k_norm,
                 0.f, il);
         Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
