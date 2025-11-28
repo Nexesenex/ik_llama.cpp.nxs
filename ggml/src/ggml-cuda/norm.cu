@@ -619,7 +619,7 @@ void ggml_cuda_op_fused_add_add_rms_norm(ggml_backend_cuda_context & ctx,
     //GGML_ASSERT(ggml_are_same_shape(add->src[0], src0));
     //GGML_ASSERT(add->src[0]->type == GGML_TYPE_F32);
     //GGML_ASSERT(add->src[1]->type == GGML_TYPE_F32);
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    // GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     GGML_ASSERT(src0->ne[0] == src1->ne[0]);
