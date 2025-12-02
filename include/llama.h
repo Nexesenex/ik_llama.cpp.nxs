@@ -655,9 +655,7 @@ extern "C" {
     LLAMA_API uint32_t llama_model_quantize(
             const char * fname_inp,
             const char * fname_out,
-            const llama_model_quantize_params * params,
-            const uint16_t n_split,
-            const size_t * tensor_ids);
+            const llama_model_quantize_params * params);
 
     // Load a LoRA adapter from file
     // The loaded adapter will be associated to the given model, and will be free when the model is deleted

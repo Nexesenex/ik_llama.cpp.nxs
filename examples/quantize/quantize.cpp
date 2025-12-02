@@ -15,9 +15,6 @@
 #include <unordered_map>
 #include <fstream>
 #include <cmath>
-#include <algorithm>
-#include <cctype>
-#include <regex>
 
 struct quant_option {
     std::string name;
@@ -154,7 +151,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--keep-split] [--override-kv] [--individual-tensors LIST] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--keep-split] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -168,7 +165,6 @@ static void usage(const char * executable) {
     printf("  --custom-q regex1=type1,regex2=type2...: use this to specify custom quantization type rules.\n\n");
     printf("  --repack Repack all tensors to the corresponding _r4/8 variant if available.\n\n");
     printf("  --repack-pattern Comma separated list of regexs to use for matching tensor names to be repacked.\n\n");
-    printf("  --individual-tensors LIST: Comma-separated list of split IDs (integers >= 2). Requires --keep-split to be set. Example: --individual-tensors 2,5,1094 will produce tensor_ids = {1,4,1093}.\n\n");
     printf("Additional specific tensor quantization types used in the custom quant scheme 'CQS (default is Q2_K):\n");
     printf("      --attn-q-type ggml_type: use this ggml_type for the attn_q.weight tensor.\n");
     printf("      --attn-k-type ggml_type: use this ggml_type for the attn_k.weight tensor.\n");
@@ -337,14 +333,6 @@ static bool parse_custom_quants(const std::string& arg, std::vector<CustomQ>& cu
     return true;
 }
 
-static std::string trim_str(const std::string & s) {
-    size_t start = 0;
-    while (start < s.size() && std::isspace((unsigned char)s[start])) start++;
-    size_t end = s.size();
-    while (end > start && std::isspace((unsigned char)s[end-1])) end--;
-    return s.substr(start, end - start);
-}
-
 int main(int argc, char ** argv) {
     if (argc < 3) {
         usage(argv[0]);
@@ -361,10 +349,6 @@ int main(int argc, char ** argv) {
     std::vector<std::string> repack_patterns;
 
     bool hide_imatrix = false;
-
-    // NEW: store the parsed individual-tensors list as integers (1-based for now)
-    bool individual_tensors_specified = false;
-    std::vector<int> individual_tensors_list; // holds original (1-based) ids parsed from CLI
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -480,29 +464,6 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--keep-split") == 0) {
             params.keep_split = true;
-        } else if (strcmp(argv[arg_idx], "--individual-tensors") == 0) {
-            // parse a comma-separated list from the next arg
-            if (arg_idx < argc-1) {
-                auto items = string_split<std::string>(argv[++arg_idx], ',');
-                for (auto & item : items) {
-                    auto s = trim_str(item);
-                    if (s.empty()) continue;
-                    try {
-                        int v = std::stoi(s);
-                        if (v < 2) {
-                            fprintf(stderr, "%s: invalid individual tensor id '%s' (must be >= 2)\n", __func__, s.c_str());
-                            usage(argv[0]);
-                        }
-                        individual_tensors_list.push_back(v);
-                    } catch (const std::exception & e) {
-                        fprintf(stderr, "%s: invalid individual tensor id '%s' (%s)\n", __func__, s.c_str(), e.what());
-                        usage(argv[0]);
-                    }
-                }
-                individual_tensors_specified = true;
-            } else {
-                usage(argv[0]);
-            }
         } else {
             usage(argv[0]);
         }
@@ -510,18 +471,6 @@ int main(int argc, char ** argv) {
 
     if (!repack_patterns.empty()) {
         params.repack_pattern = &repack_patterns;
-    }
-
-    // enforce requirement: if --individual-tensors specified, require --keep-split
-    if (individual_tensors_specified && !params.keep_split) {
-        fprintf(stderr, "%s: --individual-tensors requires --keep-split to be set\n", argv[0]);
-        usage(argv[0]);
-    }
-
-    // NEW: --individual-tensors is mandatory (per user's request)
-    if (!individual_tensors_specified) {
-        fprintf(stderr, "%s: missing required option --individual-tensors\n", argv[0]);
-        usage(argv[0]);
     }
 
     if (argc - arg_idx < 2) {
@@ -678,60 +627,11 @@ int main(int argc, char ** argv) {
 
     int64_t t_quantize_us = 0;
 
-    // prepare tensor_ids vector
-    std::vector<size_t> tensor_ids_vec;
-    {
-        // Since --individual-tensors is mandatory (enforced above), build tensor_ids_vec from individual_tensors_list
-        // dedupe and sort original 1-based ids
-        std::sort(individual_tensors_list.begin(), individual_tensors_list.end());
-        individual_tensors_list.erase(std::unique(individual_tensors_list.begin(), individual_tensors_list.end()), individual_tensors_list.end());
-
-        for (int v : individual_tensors_list) {
-            // subtract 1 (convert to zero-based)
-            int zero_based = v - 1;
-            if (zero_based <= 0) continue; // should not happen because v >= 2 was enforced
-            tensor_ids_vec.push_back(static_cast<size_t>(zero_based));
-        }
-
-        if (tensor_ids_vec.empty()) {
-            fprintf(stderr, "%s: --individual-tensors resulted in an empty list\n", argv[0]);
-            usage(argv[0]);
-        }
-
-        tensor_ids_vec.push_back(static_cast<size_t>(0)); // Add 0 at the end, which is used for llama_model_loader to know when to end processing
-    }
-
-    // obtain the chunks count (previously hardcoded 1097) from the input filename.
-    // Expected filename ending: -xxxxx-of-yyyyy.gguf  (e.g. ...-00001-of-01097.gguf)
-    int n_chunks = 0;
-    {
-        std::smatch m;
-        // regex that captures the yyyyy (total chunks) group, anchored to .gguf end
-        std::regex re("-\\d+-of-(\\d+)\\.gguf$");
-        if (std::regex_search(fname_inp, m, re) && m.size() > 1) {
-            const std::string y_str = m[1].str();
-            try {
-                n_chunks = std::stoi(y_str); // removes leading zeros automatically
-                if (n_chunks <= 0) {
-                    fprintf(stderr, "%s: parsed invalid chunk count '%s' from filename '%s'\n", __func__, y_str.c_str(), fname_inp.c_str());
-                    return 1;
-                }
-            } catch (const std::exception & e) {
-                fprintf(stderr, "%s: failed to parse chunk count '%s' from filename '%s' (%s)\n", __func__, y_str.c_str(), fname_inp.c_str(), e.what());
-                return 1;
-            }
-        } else {
-            fprintf(stderr, "%s: expected input filename to contain -<split>-of-<total>.gguf pattern (e.g. ...-00001-of-01097.gguf)\n", argv[0]);
-            return 1;
-        }
-    }
-
     // load the model
     {
         const int64_t t_start_us = llama_time_us();
 
-        // Pass the parsed n_chunks and the tensor ids buffer
-        if (llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), &params, n_chunks, tensor_ids_vec.data())) {
+        if (llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), &params)) {
             fprintf(stderr, "%s: failed to quantize model from '%s'\n", __func__, fname_inp.c_str());
             return 1;
         }

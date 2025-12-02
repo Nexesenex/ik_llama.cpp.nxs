@@ -61,7 +61,6 @@ struct llama_model_loader {
 
         llama_tensor_weight(const llama_file * file, uint16_t idx, const char * name, const struct gguf_context * gguf_ctx, ggml_tensor * tensor) : idx(idx), tensor(tensor) {
             const int tensor_idx = gguf_find_tensor(gguf_ctx, name);
-            // LLAMA_LOG_INFO("Thireus - 35 - name: %s, tensor_idx: %d\n", name, tensor_idx);
             offs = gguf_get_data_offset(gguf_ctx) + gguf_get_tensor_offset(gguf_ctx, tensor_idx);
 
             if (offs + ggml_nbytes(tensor) < offs || offs + ggml_nbytes(tensor) > file->size()) {
@@ -82,7 +81,7 @@ struct llama_model_loader {
 
     llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp, bool merge_qkv,
             const llama_model_kv_override * param_overrides_p,
-            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p, const size_t * tensor_ids);
+            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
 
     ~llama_model_loader();
 
@@ -158,7 +157,7 @@ struct llama_model_loader {
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
 
     // for backwards compatibility, does not support ggml-backend
-    void load_data_for(struct ggml_tensor * cur, const size_t _idx) const;
+    void load_data_for(struct ggml_tensor * cur) const;
 
     size_t size_done = 0;
     size_t size_data = 0;

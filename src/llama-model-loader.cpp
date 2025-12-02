@@ -206,9 +206,7 @@ namespace GGUFMeta {
 llama_model_loader::llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors,
         bool repack_tensors, bool use_thp, bool merge_qkv,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p, const size_t * tensor_ids) {
-    if (!tensor_ids) return; // or throw
-
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -284,14 +282,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, bool use_mmap,
         }
 
         char split_path[PATH_MAX] = {0};
-        // THIREUS
-        for (const size_t *p = tensor_ids; *p != 0; ++p) {
-            size_t id = *p;
-            if (id > std::numeric_limits<uint16_t>::max()) {
-                // handle overflow: clamp, log, or throw
-                throw std::out_of_range("tensor id doesn't fit in uint16_t");
-            }
-            uint16_t idx = static_cast<uint16_t>(id);
+        for (idx = 1; idx < n_split; idx++) {
             llama_split_path(split_path, sizeof(split_path), split_prefix, idx, n_split);
 
             struct gguf_init_params split_params = {
@@ -317,12 +308,12 @@ llama_model_loader::llama_model_loader(const std::string & fname, bool use_mmap,
         get_key(llm_kv(LLM_KV_SPLIT_TENSORS_COUNT), n_tensors);
 
         // sanity check
-        // {
-        //     const int n_tensors_loaded = (int) weights.size();
-        //     if (n_tensors != n_tensors_loaded) {
-        //         throw std::runtime_error(format("corrupted model: %d tensors expected but %d found", n_tensors, n_tensors_loaded));
-        //     }
-        // }
+        {
+            const int n_tensors_loaded = (int) weights.size();
+            if (n_tensors != n_tensors_loaded) {
+                throw std::runtime_error(format("corrupted model: %d tensors expected but %d found", n_tensors, n_tensors_loaded));
+            }
+        }
 
         LLAMA_LOG_INFO("%s: additional %d GGUFs metadata loaded.\n",  __func__, n_split - 1);
     }
@@ -860,43 +851,27 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
 }
 
 // for backwards compatibility, does not support ggml-backend
-void llama_model_loader::load_data_for(struct ggml_tensor * cur, const size_t _idx) const {
-    // LLAMA_LOG_INFO("Thireus - 48\n");
+void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     const auto & w = require_weight(ggml_get_name(cur));
-    // LLAMA_LOG_INFO("Thireus - 49\n");
 
     if (use_mmap) {
-        // LLAMA_LOG_INFO("Thireus - 49.1 - _idx: %d\n", _idx);
-        const auto & mapping = mappings.at(_idx);
-        // LLAMA_LOG_INFO("Thireus - 49.2\n");
+        const auto & mapping = mappings.at(w.idx);
         if (cur->data == nullptr) {
-            // LLAMA_LOG_INFO("Thireus - 49.3\n");
             cur->data = (uint8_t *)mapping->addr() + w.offs;
-            // LLAMA_LOG_INFO("Thireus - 49.4\n");
         } else {
             memcpy(cur->data, (uint8_t *)mapping->addr() + w.offs, ggml_nbytes(cur));
-            // LLAMA_LOG_INFO("Thireus - 49.5\n");
         }
     } else {
-        // LLAMA_LOG_INFO("Thireus - 50\n");
         GGML_ASSERT(cur->data != nullptr);
-        // LLAMA_LOG_INFO("Thireus - 51\n");
         GGML_ASSERT(w.idx < files.size());
-        // LLAMA_LOG_INFO("Thireus - 52\n");
-        const auto & file = files.at(_idx);
-        // LLAMA_LOG_INFO("Thireus - 53\n");
+        const auto & file = files.at(w.idx);
         file->seek(w.offs, SEEK_SET);
-        // LLAMA_LOG_INFO("Thireus - 54\n");
         file->read_raw(cur->data, ggml_nbytes(cur));
-        // LLAMA_LOG_INFO("Thireus - 55\n");
     }
 
-    // LLAMA_LOG_INFO("Thireus - 56\n");
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
-        // LLAMA_LOG_INFO("Thireus - 57\n");
         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
     }
-    // LLAMA_LOG_INFO("Thireus - 58\n");
 }
 
 // Returns false if cancelled by progress_callback
