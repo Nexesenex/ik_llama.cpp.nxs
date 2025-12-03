@@ -208,4 +208,76 @@ Contributions in form of pull requests, issue submissions (bug reports, feature 
 
 ## License
 
-MIT
+- [subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
+- [server](example/server/README.md)
+- [GBNF grammars](grammars/README.md)
+
+#### Development documentation
+
+- [How to build](docs/build.md)
+- [Running on Docker](docs/docker.md)
+- [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
+- [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
+
+#### Seminal papers and background on the models
+
+If your issue is with model generation quality, then please at least scan the following links and papers to understand the limitations of LLaMA models. This is especially important when choosing an appropriate model size and appreciating both the significant and subtle differences between LLaMA models and ChatGPT:
+- LLaMA:
+    - [Introducing LLaMA: A foundational, 65-billion-parameter large language model](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/)
+    - [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971)
+- GPT-3
+    - [Language Models are Few-Shot Learners](https://arxiv.org/abs/2005.14165)
+- GPT-3.5 / InstructGPT / ChatGPT:
+    - [Aligning language models to follow instructions](https://openai.com/research/instruction-following)
+    - [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155)
+
+## XCFramework
+The XCFramework is a precompiled version of the library for iOS, visionOS, tvOS,
+and macOS. It can be used in Swift projects without the need to compile the
+library from source. For example:
+```swift
+// swift-tools-version: 5.10
+// The swift-tools-version declares the minimum version of Swift required to build this package.
+
+import PackageDescription
+
+let package = Package(
+    name: "MyLlamaPackage",
+    targets: [
+        .executableTarget(
+            name: "MyLlamaPackage",
+            dependencies: [
+                "LlamaFramework"
+            ]),
+        .binaryTarget(
+            name: "LlamaFramework",
+            url: "https://github.com/ggml-org/llama.cpp/releases/download/b5046/llama-b5046-xcframework.zip",
+            checksum: "c19be78b5f00d8d29a25da41042cb7afa094cbf6280a225abe614b03b20029ab"
+        )
+    ]
+)
+```
+The above example is using an intermediate build `b5046` of the library. This can be modified
+to use a different version by changing the URL and checksum.
+
+## Completions
+Command-line completion is available for some environments.
+
+#### Bash Completion
+```bash
+$ build/bin/llama-cli --completion-bash > ~/.llama-completion.bash
+$ source ~/.llama-completion.bash
+```
+Optionally this can be added to your `.bashrc` or `.bash_profile` to load it
+automatically. For example:
+```console
+$ echo "source ~/.llama-completion.bash" >> ~/.bashrc
+```
+
+## Dependencies
+
+- [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
+- [stb-image](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
+- [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
+- [miniaudio.h](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
+- [subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
