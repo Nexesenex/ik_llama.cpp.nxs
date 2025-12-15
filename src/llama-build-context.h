@@ -84,6 +84,7 @@ struct llm_build_context {
     const bool rope_cache;
     const bool k_cache_hadamard;
     const bool split_mode_graph_scheduling;
+    const bool split_output_tensor;
     const int  min_experts;
     const float thresh_experts;
 
