@@ -4099,6 +4099,7 @@ struct llama_context_params llama_context_default_params() {
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
         /*.k_cache_hadamard            =*/ false,
+        /*.split_output_tensor         =*/ false,
         /*.split_mode_graph_scheduling =*/ false,
         // /*.split_mode_f16              =*/ true,
         /*.scheduler_async             =*/ false,
@@ -4466,6 +4467,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.rope_cache       = params.rope_cache;
     cparams.graph_reuse      = params.graph_reuse;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
+    cparams.split_output_tensor = params.split_output_tensor;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
     //cparams.split_mode_f16   = params.split_mode_f16;
     cparams.scheduler_async  = params.scheduler_async;
@@ -4574,6 +4576,7 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: rope_cache    = %d\n",     __func__, cparams.rope_cache);
     LLAMA_LOG_INFO("%s: graph_reuse   = %d\n",     __func__, cparams.graph_reuse);
     LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);
+    LLAMA_LOG_INFO("%s: split_output_tensor = %d\n",   __func__, cparams.split_output_tensor);
     LLAMA_LOG_INFO("%s: split_mode_graph_scheduling = %d\n",   __func__, cparams.split_mode_graph_scheduling);
     //LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
     LLAMA_LOG_INFO("%s: reduce_type   = %s\n",     __func__, ggml_type_name(cparams.reduce_type));
