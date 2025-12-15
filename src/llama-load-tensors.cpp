@@ -4,7 +4,6 @@
 #include "llama-model.h"
 #include "ggml.h"
 
-
 #include <set>
 #include <map>
 #include <array>
@@ -386,7 +385,10 @@ void create_tensors_helper::create_std_ffn(int i, const LLM_TN & tn, llama_layer
 
 bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    create_embd_output(tn, n_embd, n_vocab, true, false); //true);
+    // if (cparams.split_output_tensor == 1) {
+    create_embd_output(tn, n_embd, n_vocab, true, true);
+    // } else (create_embd_output(tn, n_embd, n_vocab, true, false); //true);;
+		
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -1841,7 +1843,9 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
     GGML_ASSERT(hparams.n_expert > 0 && "n_expert must be > 0 for GLM4_MOE MoE layers");
     GGML_ASSERT(hparams.n_expert_used > 0 && "n_expert_used must be > 0 for GLM4_MOE MoE layers");
 
-    create_embd_output(tn, n_embd, n_vocab, true, false); //true);
+    // if (cparams.split_output_tensor == 1) {
+    create_embd_output(tn, n_embd, n_vocab, true, true);
+    // } else (create_embd_output(tn, n_embd, n_vocab, true, false); //true);;
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);

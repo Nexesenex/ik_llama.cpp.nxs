@@ -444,6 +444,7 @@ extern "C" {
         bool only_active_experts;
         bool k_cache_hadamard;  // if true, apply Hadamard transfrom to K-cache
         bool split_mode_graph_scheduling; // if true, force split mode graph scheduling
+        bool split_output_tensor; // if true, force split the output tensor in split mode graph
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
