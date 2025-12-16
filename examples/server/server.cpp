@@ -283,14 +283,14 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
         return;
     }
 
-    LOG_INFO("request", {
-        {"remote_addr", req.remote_addr},
-        {"remote_port", req.remote_port},
-        {"status",      res.status},
-        {"method",      req.method},
-        {"path",        req.path},
-        {"params",      req.params},
-    });
+    // LOG_INFO("request", {
+        // {"remote_addr", req.remote_addr},
+        // {"remote_port", req.remote_port},
+        // {"status",      res.status},
+        // {"method",      req.method},
+        // {"path",        req.path},
+        // {"params",      req.params},
+    // });
 
     LOG_VERBOSE("request", {
         {"request",  req.body},
