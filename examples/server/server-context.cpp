@@ -2042,6 +2042,7 @@ void server_context::process_single_task(server_task&& task) {
         for (auto& slot : slots) {
             if (slot.id_task == task.id_target) {
                 slot.release();
+                slot.print_timings();
                 break;
             }
         }
@@ -2611,7 +2612,7 @@ void server_context::release_slots()
             slot.command = SLOT_COMMAND_NONE;
             slot.t_last_used = ggml_time_us();
 
-            LOG_INFO("slot released", {
+            LOG_VERBOSE("slot released", {
                 {"id_slot",         slot.id},
                 {"id_task",         slot.id_task},
                 {"n_ctx",           n_ctx},
@@ -2636,7 +2637,7 @@ bool server_context::slots_idle(){
         }
 
         if (all_idle) {
-            LOG_INFO("all slots are idle", {});
+            LOG_VERBOSE("all slots are idle", {});
             if (system_prompt.empty() && clean_kv_cache) {
                 kv_cache_clear();
             }
@@ -3190,7 +3191,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         slot.do_checkpoint = true;
                         break;
                     }
-                    
+
                 }
                 LOG_VERBOSE("prompt processing progress", {
                     {"id_slot",  slot.id},
@@ -3199,6 +3200,15 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     {"n_tokens", batch.n_tokens},
                     {"progress", (float)slot.n_prompt_tokens_processed / slot.n_prompt_tokens},
                     });
+
+                LOG_INFO("PP", {
+                    // {"id_slot",  slot.id},
+                    {"n_past",   slot.n_past},
+                    // {"n_ctx",    n_ctx},
+                    // {"n_tokens", batch.n_tokens},
+                    {"total", slot.n_prompt_tokens},
+                    {"%_past", (float) slot.n_past / slot.n_prompt_tokens * 100},
+                });
 
                 // entire prompt has been processed - start decoding new tokens
                 if (slot.n_past_prompt == slot.n_prompt_tokens) {
