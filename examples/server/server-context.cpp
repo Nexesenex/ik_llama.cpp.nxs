@@ -546,6 +546,10 @@ void server_slot::reset() {
     oai_resp_message_id.clear();
     oai_resp_fc_id.clear();
 
+    t_start_batch_100 = 0;
+    n_prompt_tokens_processed_log = 0;
+    t_last_pp_log = 0;
+
     task.reset();
 }
 
@@ -627,7 +631,8 @@ void server_slot::release() {
     if (state == SLOT_STATE_PROCESSING) {
         if (t_start_process_prompt > 0 && t_prompt_processing == 0) {
             t_prompt_processing = (ggml_time_us() - t_start_process_prompt) / 1e3;
-            n_prompt_tokens_processed = n_past;
+            // n_prompt_tokens_processed = n_past;
+            n_prompt_tokens_processed_log = n_past;
         }
         t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
         command = SLOT_COMMAND_RELEASE;
@@ -2852,6 +2857,7 @@ void server_context::process_single_task(server_task&& task) {
         for (auto& slot : slots) {
             if (slot.id_task == task.id_target) {
                 slot.release();
+                slot.print_timings();
                 break;
             }
         }
@@ -3432,7 +3438,7 @@ void server_context::release_slots()
             slot.command = SLOT_COMMAND_NONE;
             slot.t_last_used = ggml_time_us();
 
-            LOG_INFO("slot released", {
+            LOG_VERBOSE("slot released", {
                 {"id_slot",         slot.id},
                 {"id_task",         slot.id_task},
                 {"n_ctx",           n_ctx},
@@ -3457,7 +3463,7 @@ bool server_context::slots_idle(){
         }
 
         if (all_idle) {
-            LOG_INFO("all slots are idle", {});
+            LOG_VERBOSE("all slots are idle", {});
             if (system_prompt.empty() && clean_kv_cache) {
                 kv_cache_clear();
             }
@@ -3844,8 +3850,8 @@ bool server_context::create_checkpoint(server_slot & slot) {
         auto & cur = slot.server_cached_prompt.checkpoints.emplace_back();
         server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), checkpoint_pos_min, pos_max, slot.n_past_offset);
 
-        SLT_WRN(slot, "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, took %.2f ms)\n",
-            (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024,
+        SLT_WRN(slot, "created context checkpoint %d of %d (timestamp=%lld, pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, took %.2f ms)\n",
+            (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, (int64_t)time(nullptr), cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024,
             (ggml_time_us() - t_start) / 1000.0);
     }
     return do_checkpoint;
@@ -3880,6 +3886,9 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
 
                     slot.t_start_process_prompt = ggml_time_us();
                     slot.t_start_generation = 0;
+                    slot.n_past_start = slot.n_past;
+                    slot.n_ptp_start = slot.n_past;
+                    slot.n_prompt_tokens_processed_log = 0;
 
                     if (slot.infill) {
                         const bool add_bos = llama_should_add_bos_token(model);
@@ -4062,6 +4071,15 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     apply_checkpoint(slot);
                     slot.n_prompt_tokens_cache = slot.n_past_prompt;
                     slot.n_prompt_tokens_processed = 0;
+                    slot.n_prompt_tokens_processed_log = 0;
+                    slot.t_start_process_prompt = ggml_time_us();
+                    LOG_INFO("PP_INIT", {
+                        {"n_past",   slot.n_past},
+                        {"n_ctx",    n_ctx},
+                        {"n_tokens", batch.n_tokens},
+                        {"n_ptp",   slot.n_prompt_tokens_processed},
+                        {"Tot",   slot.n_prompt_tokens - slot.n_past_start},
+                    });
                 }
 
                 if (slot.embedding) {
@@ -4115,7 +4133,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     common_sampler_reset(slot.ctx_sampling);
                 }
 
-                LOG_INFO("kv cache rm [p0, end)", {
+                LOG_VERBOSE("kv cache rm [p0, end)", {
                     { "id_slot", slot.id },
                     { "id_task", slot.id_task },
                     { "p0",      p0 }
@@ -4155,8 +4173,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     slot.n_prompt_tokens_processed += n_tokens_out;
                     slot.image_just_processed = true; // do not checkpoint right after an image chunk
                 }
-
-
 
                 int32_t slot_npast = slot.n_past_se > 0 ? slot.n_past_se : slot.n_past;
 
@@ -4201,13 +4217,51 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                 slot.prompt_batch_i0 = prompt_batch_i0;
                 slot.prompt_batch_i1 = batch.n_tokens;
 
-                LOG_VERBOSE("prompt processing progress", {
-                    {"id_slot",  slot.id},
-                    {"n_past",   slot.n_past},
-                    {"n_ctx",    n_ctx},
-                    {"n_tokens", batch.n_tokens},
-                    {"progress", (float)slot.n_prompt_tokens_processed / slot.n_prompt_tokens},
+                // LOG_INFO("prompt processing progress", {
+                    // {"id_slot",  slot.id},
+                    // {"n_past",   slot.n_past},
+                    // {"n_ctx",    n_ctx},
+                    // {"n_tokens", batch.n_tokens},
+                    // {"progress", (float)slot.n_prompt_tokens_processed / slot.n_prompt_tokens},
+                    // });
+
+                // LOG_INFO("PPB", {
+                    // {"id_slot",  slot.id},
+                    // {"n_past",   slot.n_past},
+                    // {"n_ctx",    n_ctx},
+                    // {"n_tokens", batch.n_tokens},
+                    // {"total", slot.n_prompt_tokens},
+                    // {"%_past", [](float v) { char b[16]; snprintf(b,sizeof(b),"%.2f",v); return std::string(b); }((float)slot.n_past/slot.n_prompt_tokens*100)},
+                // });
+
+                const int64_t t_current = ggml_time_us();
+                const int32_t n_new_tokens = slot.n_prompt_tokens - slot.n_past_start;
+                const int32_t n_processed_total = (slot.n_prompt_tokens_processed - batch.n_tokens) - slot.n_past_start;
+                const int32_t n_since_last_log = (slot.n_prompt_tokens_processed - batch.n_tokens) - slot.n_prompt_tokens_processed_log;
+
+                const double t_elapsed = t_current - slot.t_start_process_prompt;
+                const double t_since_last = slot.t_last_pp_log > 0 ? (t_current - slot.t_last_pp_log) : t_elapsed;
+
+                const double lb_pp_tok_per_sec = (n_since_last_log > 0 && t_since_last > 0) ? 
+                    (n_since_last_log * 1e6 / t_since_last) : 0;
+                const double cur_pp_tok_per_sec = (n_processed_total > 0 && t_elapsed > 0) ? 
+                    (n_processed_total * 1e6 / t_elapsed) : 0;
+                // const double cur_pp_tok_per_sec = n_processed_total * 1e6 / (t_current - slot.t_start_process_prompt);
+
+                slot.n_prompt_tokens_processed_log = slot.n_prompt_tokens_processed - batch.n_tokens;
+                slot.t_last_pp_log = t_current;
+
+                if ((slot.n_prompt_tokens_processed - batch.n_tokens) >1) {
+                    LOG_INFO("PP", {
+                        // {"n_ptp",   slot.n_ptp_start + slot.n_prompt_tokens_processed - batch.n_tokens},
+                        {"n_past",   slot.n_past - batch.n_tokens},
+                        {"Tot", n_new_tokens},
+                        // {"%_P", [&n_processed_total, &n_new_tokens]() { char buf[16]; snprintf(buf, sizeof(buf), "%.2f", (double)n_processed_total / n_new_tokens * 100); return std::string(buf); }()},
+                        {"%_P", [](float v) { char b[16]; snprintf(b,sizeof(b),"%.2f",v); return std::string(b); }((float)(slot.n_past - batch.n_tokens)/slot.n_prompt_tokens*100)},
+                        {"LB t/s",    std::round(lb_pp_tok_per_sec * 100) / 100},
+                        {"CurPP t/s",    std::round(cur_pp_tok_per_sec * 100) / 100},
                     });
+                }
 
                 // entire prompt has been processed - start decoding new tokens
                 if (slot.n_past_prompt == slot.n_prompt_tokens) {
@@ -4446,6 +4500,23 @@ void server_context::send_token_results(completion_token_outputs& results, serve
             release_slot_after_final_response(slot);
             released = true;
             break;
+
+            // const int last_n_tokens = (slot.n_decoded % 100 == 0) ? 100 : (slot.n_decoded % 100);
+            // const double last_tok_per_sec = last_n_tokens * 1e6 / ((slot.t_start_generation + slot.t_token_generation * 1e3) - slot.t_start_batch_100);
+            // const double cur_tg_tok_per_sec = slot.n_decoded * 1e6 / (slot.t_token_generation * 1e3);
+            // LOG_INFO("TG_OK", {
+                // {"n_p",   slot.n_past},
+                // {"n_ctx",    n_ctx},
+                // {"Dec", slot.n_decoded},
+                // {"L" + std::to_string(last_n_tokens) + " tok/s",    std::round(last_tok_per_sec * 100) / 100},
+                // {"TotCurTG t/s",    std::round(cur_tg_tok_per_sec * 100) / 100},
+                // });
+                // send_final_response(slot);
+                // slot.release();
+                // slot.print_timings();
+                // metrics.on_prediction(slot);
+                // slot.released = true;
+                // break;
         }
         if (n > 0 && count >= n) {
             break;
@@ -4453,6 +4524,16 @@ void server_context::send_token_results(completion_token_outputs& results, serve
     }
 
     if (!released && slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
+        const int last_n_tokens = (slot.n_decoded % 100 == 0) ? 100 : (slot.n_decoded % 100);
+        const double last_tok_per_sec = last_n_tokens * 1e6 / ((slot.t_start_generation + slot.t_token_generation * 1e3) - slot.t_start_batch_100);
+        const double cur_tg_tok_per_sec = slot.n_decoded * 1e6 / (slot.t_token_generation * 1e3);
+        LOG_INFO("TG_OK", {
+            {"n_p",   slot.n_past},
+            {"n_ctx",    n_ctx},
+            {"Dec", slot.n_decoded},
+            {"L" + std::to_string(last_n_tokens) + " tok/s",    std::round(last_tok_per_sec * 100) / 100},
+            {"TotCurTG t/s",    std::round(cur_tg_tok_per_sec * 100) / 100},
+            });
         send_final_response(slot);
         release_slot_after_final_response(slot);
     }
@@ -4844,8 +4925,17 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             if (slot.n_decoded == 1) {
                 slot.t_start_generation = ggml_time_us();
+                slot.t_start_batch_100 = slot.t_start_generation;
                 slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
                 metrics.on_prompt_eval(slot);
+                const int32_t n_processed = slot.n_prompt_tokens_processed;
+                LOG_INFO("PP_OK", {
+                    {"n_p",   slot.n_past},
+                    {"n_ctx",    n_ctx},
+                    {"n_tok", n_processed},
+                    {"pp_ms",    std::round(slot.t_prompt_processing * 100) / 100},
+                    {"TotCurPP t/s",    std::round(n_processed * 1e3 / slot.t_prompt_processing * 100) / 100},
+                    });
                 // create checkpoint after prompt processing ends
                 if (params_base.ctx_checkpoints_tolerance<=0 && params_base.do_checkpoint) {
                     create_checkpoint(slot);
@@ -4855,6 +4945,18 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             // create checkpoint during generation
             if (slot.n_decoded > 1) {
                 create_checkpoint_at_interval(slot);
+            }
+
+            if (slot.n_decoded % 100 == 0) {
+                const double tok_per_sec = 100.0 * 1e6 / (t_current - slot.t_start_batch_100);
+                slot.t_start_batch_100 = t_current;
+                const double cur_tg_tok_per_sec = slot.n_decoded * 1e6 / (t_current - slot.t_start_generation);
+                LOG_INFO("TG", {
+                    {"n_p",   slot.n_past},
+                    {"Dec",    slot.n_decoded},
+                    {"L100 t/s",    std::round(tok_per_sec * 100) / 100},
+                    {"CurTG t/s",    std::round(cur_tg_tok_per_sec * 100) / 100},
+                    });
             }
 
             slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
