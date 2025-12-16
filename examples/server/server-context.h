@@ -45,6 +45,8 @@ struct server_slot {
     int32_t n_past = 0;
     int32_t n_past_prompt = 0;
     int32_t n_past_offset = 0;
+    int32_t n_past_start = 0;
+    int32_t n_ptp_start = 0;
     int32_t n_decoded = 0;
     int32_t n_remaining = -1;
     int32_t n_discarded_prompt = 0;
@@ -58,6 +60,8 @@ struct server_slot {
     int32_t n_prompt_tokens = 0;
     int32_t n_prompt_tokens_cache = 0;
     int32_t n_prompt_tokens_processed = 0;
+    int32_t n_prompt_tokens_processed_log = 0;
+    int64_t t_last_pp_log = 0;
 
     json prompt; // can be either a string, array of strings or array of token ids
 
@@ -175,6 +179,7 @@ struct server_slot {
 
     int64_t t_start_process_prompt;
     int64_t t_start_generation;
+    int64_t t_start_batch_100 = 0;
 
     double t_prompt_processing; // ms
     double t_token_generation; // ms
