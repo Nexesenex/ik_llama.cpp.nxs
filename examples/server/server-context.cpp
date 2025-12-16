@@ -522,6 +522,15 @@ void server_slot::print_timings() const {
             draft_ratio, n_draft_accepted, n_draft_total
         );
     }
+
+    // LOG_INFO(buffer, {
+        // {"id_slot",             id},
+        // {"id_task",             id_task},
+        // {"t_prompt_processing", t_prompt_processing},
+        // {"t_token_generation",  t_token_generation},
+        // {"t_total",             t_prompt_processing + t_token_generation},
+        // });
+
 }
 
 void server_metrics::init() {
@@ -1739,6 +1748,7 @@ void server_context::process_single_task(server_task&& task) {
         for (auto& slot : slots) {
             if (slot.id_task == task.id_target) {
                 slot.release();
+                slot.print_timings();
                 break;
             }
         }
@@ -2060,15 +2070,15 @@ void server_context::release_slots()
             slot.command = SLOT_COMMAND_NONE;
             slot.t_last_used = ggml_time_us();
 
-            LOG_INFO("slot released", {
-                {"id_slot",         slot.id},
-                {"id_task",         slot.id_task},
-                {"n_ctx",           n_ctx},
-                {"n_past",          slot.n_past},
-                {"n_system_tokens", system_tokens.size()},
-                {"n_cache_tokens",  slot.cache_tokens.size()},
-                {"truncated",       slot.truncated}
-                });
+            // LOG_INFO("slot released", {
+                // {"id_slot",         slot.id},
+                // {"id_task",         slot.id_task},
+                // {"n_ctx",           n_ctx},
+                // {"n_past",          slot.n_past},
+                // {"n_system_tokens", system_tokens.size()},
+                // {"n_cache_tokens",  slot.cache_tokens.size()},
+                // {"truncated",       slot.truncated}
+                // });
 
             queue_tasks.notify_slot_changed();
         }
@@ -2085,7 +2095,7 @@ bool server_context::slots_idle(){
         }
 
         if (all_idle) {
-            LOG_INFO("all slots are idle", {});
+            // LOG_INFO("all slots are idle", {});
             if (system_prompt.empty() && clean_kv_cache) {
                 kv_cache_clear();
             }
@@ -2286,7 +2296,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         slot.state = SLOT_STATE_PROCESSING;
                         slot.command = SLOT_COMMAND_NONE;
                         slot.release();
-                        slot.print_timings();
+                        // slot.print_timings();
                         send_final_response(slot);
                         continue;
                     }
@@ -2444,7 +2454,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     common_sampler_reset(llama_get_model_vocab(model), slot.ctx_sampling);
                 }
 
-                LOG_INFO("kv cache rm [p0, end)", {
+                LOG_VERBOSE("kv cache rm [p0, end)", {
                     { "id_slot", slot.id },
                     { "id_task", slot.id_task },
                     { "p0",      p0 }
@@ -2511,13 +2521,23 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     slot.n_past_prompt++;
                     slot.n_past++;
                 }
-                LOG_VERBOSE("prompt processing progress", {
-                    {"id_slot",  slot.id},
+
+                // LOG_VERBOSE("prompt processing progress", {
+                    // {"id_slot",  slot.id},
+                    // {"n_past",   slot.n_past},
+                    // {"n_ctx",    n_ctx},
+                    // {"n_tokens", batch.n_tokens},
+                    // {"progress", (float)slot.n_prompt_tokens_processed / slot.n_prompt_tokens},
+                    // });
+
+                LOG_INFO("PP", {
+                    // {"id_slot",  slot.id},
                     {"n_past",   slot.n_past},
-                    {"n_ctx",    n_ctx},
-                    {"n_tokens", batch.n_tokens},
-                    {"progress", (float)slot.n_prompt_tokens_processed / slot.n_prompt_tokens},
-                    });
+                    // {"n_ctx",    n_ctx},
+                    // {"n_tokens", batch.n_tokens},
+                    {"total", slot.n_prompt_tokens},
+                    {"%_past", (float) slot.n_past / slot.n_prompt_tokens * 100},
+                });
 
                 // entire prompt has been processed - start decoding new tokens
                 if (slot.n_past_prompt == slot.n_prompt_tokens) {
@@ -2540,7 +2560,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     slot.n_decoded = 0;
                     slot.i_batch = batch.n_tokens - 1;
 
-                    LOG_VERBOSE("prompt done", {
+                    LOG_INFO("OK", {
                         {"id_slot",  slot.id},
                         {"n_past",   slot.n_past},
                         {"n_ctx",    n_ctx},
@@ -2752,7 +2772,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             if (!process_token(result, slot)) {
                 slot.release();
-                slot.print_timings();
+                // slot.print_timings();
                 send_final_response(slot);
                 metrics.on_prediction(slot);
             }
