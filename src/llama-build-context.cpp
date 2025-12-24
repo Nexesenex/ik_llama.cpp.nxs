@@ -702,6 +702,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             if (cur->ne[1] > 32 && lctx.cparams.split_mode_f16) {
                 cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
             }
+            if (cur->ne[1] > 32 && lctx.cparams.split_mode_bf16) {
+                cur = ggml_cast(ctx, cur, GGML_TYPE_BF16);
+            }
             if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1) {
                 // When the reduce op is turned off via op_params[3] == 1, we need to add each src
                 // rtaher than add the reduced add_extra result to the ffn reduced ffn result.
@@ -1197,6 +1200,9 @@ llm_expert_gating_func_type   gating_op,
                     if (shared_out->ne[1] > 32 && lctx.cparams.split_mode_f16) {
                         shared_out = ggml_cast(ctx, shared_out, GGML_TYPE_F16);
                     }
+                    if (shared_out->ne[1] > 32 && lctx.cparams.split_mode_bf16) {
+                        shared_out = ggml_cast(ctx, shared_out, GGML_TYPE_BF16);
+                    }
                     results.push_back(shared_out);
                 }
                 GGML_ASSERT(!results.empty());
@@ -1214,6 +1220,9 @@ llm_expert_gating_func_type   gating_op,
                 if (routed_out->ne[1] > 32 && lctx.cparams.split_mode_f16) {
                     auto routed_out_f16 = ggml_cast(ctx, routed_out, GGML_TYPE_F16);
                     cur = ggml_add(ctx, routed_out_f16, cur);
+                else if (routed_out->ne[1] > 32 && lctx.cparams.split_mode_bf16) {
+                    auto routed_out_f16 = ggml_cast(ctx, routed_out, GGML_TYPE_BF16);
+                    cur = ggml_add(ctx, routed_out_bf16, cur);
                 } else {
                     cur = ggml_add(ctx, routed_out, cur);
                 }
@@ -1291,6 +1300,10 @@ llm_expert_gating_func_type   gating_op,
         if (cur->ne[1] > 32 && lctx.cparams.split_mode_f16) {
             cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
             cb(cur, "ffn_out_f16", il_cb);
+        }
+        if (cur->ne[1] > 32 && lctx.cparams.split_mode_bf16) {
+            cur = ggml_cast(ctx, cur, GGML_TYPE_BF16);
+            cb(cur, "ffn_out_bf16", il_cb);
         }
         ggml_build_forward_expand(graph, cur);
         results[id] = cur;
@@ -9527,6 +9540,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 }
                 if (cur->ne[1] > 32 && lctx.cparams.split_mode_f16) {
                     cur = ggml_cast(ctx0, cur, GGML_TYPE_F16);
+                }
+                if (cur->ne[1] > 32 && lctx.cparams.split_mode_bf16) {
+                    cur = ggml_cast(ctx0, cur, GGML_TYPE_BF16);
                 }
                 ggml_build_forward_expand(gf, cur);
                 attn[id] = cur;
