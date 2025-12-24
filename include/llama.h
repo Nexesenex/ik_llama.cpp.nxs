@@ -445,8 +445,6 @@ extern "C" {
         bool k_cache_hadamard;  // if true, apply Hadamard transfrom to K-cache
         bool split_mode_graph_scheduling; // if true, force split mode graph scheduling
         bool split_output_tensor; // if true, force split the output tensor in split mode graph
-        bool split_mode_bf16;   // if true, cast intermediate results to bf16 before copying to other GPUs
-        bool split_mode_f32;    // if true, cast intermediate results to f32 before copying to other GPUs
         bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
 
         // Abort callback

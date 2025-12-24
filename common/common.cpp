@@ -1641,12 +1641,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.split_mode_f16 = true;
         return true;
     }
-    if (arg == "-smbf16" || arg == "--split-mode-bf16") {
-        params.split_mode_bf16 = true;
-        return true;
-    }
     if (arg == "-smf32" || arg == "--split-mode-f32") {
-        params.split_mode_f32 = true;
+        params.split_mode_f16 = false;
         return true;
     }
     if (arg == "--numa") {
@@ -2336,8 +2332,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard,",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
     options.push_back({ "*",         "-smf16, --split-mode-f16,",       "Use f16 for data exchange between GPUs (default: %d)", params.split_mode_f16});
-    options.push_back({ "*",         "-smbf16, --split-mode-bf16,",     "Use bf16 for data exchange between GPUs (default: %d)", params.split_mode_bf16});
-    options.push_back({ "*",         "-smf32, --split-mode-f32,",       "Use f32 for data exchange between GPUs (default: %d)", params.split_mode_f32});
+    options.push_back({ "*",         "-smf32, --split-mode-f32,",       "Use f32 for data exchange between GPUs (default: %d)", !params.split_mode_f16});
     options.push_back({ "*",         "-smgs, --split-mode-graph-scheduling,", "Force Split Mode Graph Scheduling (default: %d)", params.split_mode_graph_scheduling});
     options.push_back({ "*",         "-smgs, --split-output-tensor,"  , "Force split of the Output Tensor in Split Mode Graph (default: %d)", params.split_output_tensor});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
@@ -3404,8 +3399,6 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.k_cache_hadamard  = params.k_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
     cparams.split_output_tensor = params.split_output_tensor;
-    cparams.split_mode_bf16   = params.split_mode_bf16;
-    cparams.split_mode_f32    = params.split_mode_f32;
     cparams.split_mode_f16    = params.split_mode_f16;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
@@ -4390,8 +4383,6 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "k_cache_hadamard: %s # default: false\n", params.k_cache_hadamard ? "true" : "false");
     fprintf(stream, "split_mode_graph_scheduling: %s # default: false\n", params.split_mode_graph_scheduling ? "true" : "false");
     fprintf(stream, "split_output_tensor: %s # default: false\n", params.split_output_tensor ? "true" : "false");
-    fprintf(stream, "split_mode_bf16: %s # default: false\n", params.split_mode_bf16 ? "true" : "false");
-    fprintf(stream, "split_mode_f32: %s # default: false\n", params.split_mode_f32 ? "true" : "false");
     fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
