@@ -3182,6 +3182,7 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     }
 
     if (!params.control_vectors.empty()) {
+        LOG("================ Control vectors are being used to affect the model output!\n");
         if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
         if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_n_layer(model);
 
