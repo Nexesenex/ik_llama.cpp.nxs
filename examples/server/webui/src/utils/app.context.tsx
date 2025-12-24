@@ -133,17 +133,13 @@ export const AppContextProvider = ({
   const setPending = (convId: string, pendingMsg: PendingMessage | null) => {
     // if pendingMsg is null, remove the key from the object
     if (!pendingMsg) {
-      setTimeout(() => {
-            setPendingMessages((prev) => {
-              const newState = { ...prev };
-              delete newState[convId];
-              return newState;
-            });
-          }, 100); // Adjust delay as needed
+      setPendingMessages((prev) => {
+        const newState = { ...prev };
+        delete newState[convId];
+        return newState;
+      });
     } else {
-            setTimeout(() => {
-              setPendingMessages((prev) => ({ ...prev, [convId]: pendingMsg }));
-            }, 100);
+      setPendingMessages((prev) => ({ ...prev, [convId]: pendingMsg }));
     }
   };
 
@@ -161,6 +157,7 @@ export const AppContextProvider = ({
 
   ////////////////////////////////////////////////////////////////////////
   // public functions
+
   const isGenerating = (convId: string) => !!pendingMessages[convId];
 
   const generateMessage = async (
@@ -381,7 +378,7 @@ export const AppContextProvider = ({
     const currMsgId = now;
     
   let model_name:string='';
-    await getServerProps(BASE_URL, config.apiKey)
+    await getServerProps(BASE_URL)
     .then((props) => {
       console.debug('Server props:', props);
       model_name = props.model_name;
@@ -436,7 +433,7 @@ export const AppContextProvider = ({
       const currMsgId = now;
 
       let model_name:string='';
-      await getServerProps(BASE_URL, config.apiKey)
+      await getServerProps(BASE_URL)
       .then((props) => {
         console.debug('Server props:', props);
         model_name = props.model_name;
