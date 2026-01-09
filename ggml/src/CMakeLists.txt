@@ -1216,7 +1216,7 @@ endif()
 set(CUDA_CXX_FLAGS "")
 
 if (GGML_CUDA)
-    set(CUDA_FLAGS -use_fast_math -extended-lambda -lineinfo)
+    set(CUDA_FLAGS -use_fast_math -extended-lambda)
 	message("-- CUDA Toolkit: ${CUDAToolkit_VERSION}")
     if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
         # Options are:
