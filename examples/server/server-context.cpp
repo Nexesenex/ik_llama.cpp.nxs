@@ -2772,7 +2772,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             if (!process_token(result, slot)) {
                 slot.release();
-                // slot.print_timings();
+                slot.print_timings();
                 send_final_response(slot);
                 metrics.on_prediction(slot);
             }
