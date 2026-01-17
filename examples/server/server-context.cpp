@@ -2381,10 +2381,10 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             if ((slot.n_past + size_threshold < slot.cache_tokens.size()))
                             {
                                 LLAMA_LOG_WARN("Common part does not match fully\n");
-                                int32_t back = 4;
-                                if (prefix.second >= back && prefix.first >= back) {
-                                    print_tokens(slot.prompt_tokens, slot.cache_tokens, prefix.second - back, prefix.first - back, 30);
-                                }
+                                // int32_t back = 4;
+                                // if (prefix.second >= back && prefix.first >= back) {
+                                    // print_tokens(slot.prompt_tokens, slot.cache_tokens, prefix.second - back, prefix.first - back, 30);
+                                // }
                             }
 
                             // push the prompt into the sampling context (do not apply grammar)
