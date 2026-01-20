@@ -384,7 +384,7 @@ bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     // if (cparams.split_output_tensor == 1) {
-    create_embd_output(tn, n_embd, n_vocab, true, true);
+    create_embd_output(tn, n_embd, n_vocab, true, false);
     // } else create_embd_output(tn, n_embd, n_vocab, true, false);
 
     for (int i = 0; i < n_layer; ++i) {
@@ -1868,7 +1868,7 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
     GGML_ASSERT(hparams.n_expert_used > 0 && "n_expert_used must be > 0 for GLM4_MOE MoE layers");
 
     // if (cparams.split_output_tensor == 1) {
-    create_embd_output(tn, n_embd, n_vocab, true, true);
+    create_embd_output(tn, n_embd, n_vocab, true, false);
     // } else create_embd_output(tn, n_embd, n_vocab, true, false);
 
     for (int i = 0; i < n_layer; ++i) {
