@@ -749,6 +749,24 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
     static bool ggml_backend_cuda_buffer_type_initialized = false;
 
     if (!ggml_backend_cuda_buffer_type_initialized) {
+
+		// Set CUDA_SCALE_LAUNCH_QUEUES before any CUDA API call to improve multi-GPU pipeline parallelism performance
+		// PR: https://github.com/ggml-org/llama.cpp/pull/19042
+		if (getenv("CUDA_SCALE_LAUNCH_QUEUES") == nullptr) {
+#ifdef _WIN32
+			_putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "4x");
+#else
+			setenv("CUDA_SCALE_LAUNCH_QUEUES", "4x", 0); // don't overwrite if already set
+#endif
+
+			GGML_LOG_WARN("\n");
+			GGML_LOG_WARN("================================================================================\n");
+			GGML_LOG_WARN("  CUDA_SCALE_LAUNCH_QUEUES=4x has been enabled\n");
+			GGML_LOG_WARN("  This environment variable improves performance with multiple GPUs\n");
+			GGML_LOG_WARN("================================================================================\n");
+			GGML_LOG_WARN("\n");
+		}
+
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; i++) {
             ggml_backend_cuda_buffer_types[i] = {
                 /* .iface    = */ ggml_backend_cuda_buffer_type_interface,
