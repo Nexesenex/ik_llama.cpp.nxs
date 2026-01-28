@@ -4854,10 +4854,10 @@ struct llama_context * llama_new_context_with_model(
             bool pipeline_parallel =
                 llama_get_device_count(*model) > 1 &&
                 model->n_gpu_layers > (int)model->hparams.n_layer &&
-                model->split_mode == LLAMA_SPLIT_MODE_LAYER &&
-                // (model->split_mode == LLAMA_SPLIT_MODE_LAYER || model->split_mode == LLAMA_SPLIT_MODE_GRAPH) &&
-                // params.offload_kqv && !model->has_tensor_overrides();
-                params.offload_kqv;
+                // model->split_mode == LLAMA_SPLIT_MODE_LAYER &&
+                (model->split_mode == LLAMA_SPLIT_MODE_LAYER || model->split_mode == LLAMA_SPLIT_MODE_GRAPH) &&
+                params.offload_kqv && !model->has_tensor_overrides();
+                // params.offload_kqv;
 #ifndef GGML_USE_CUDA
             // pipeline parallelism requires support for async compute and events
             // currently this is only implemented in the CUDA backend
