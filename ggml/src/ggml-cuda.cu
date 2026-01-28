@@ -754,17 +754,13 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
 		// PR: https://github.com/ggml-org/llama.cpp/pull/19042
 		if (getenv("CUDA_SCALE_LAUNCH_QUEUES") == nullptr) {
 #ifdef _WIN32
-			_putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "4x");
+			_putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "2x");
 #else
-			setenv("CUDA_SCALE_LAUNCH_QUEUES", "4x", 0); // don't overwrite if already set
-#endif
-
-			GGML_LOG_WARN("\n");
-			GGML_LOG_WARN("================================================================================\n");
-			GGML_LOG_WARN("  CUDA_SCALE_LAUNCH_QUEUES=4x has been enabled\n");
-			GGML_LOG_WARN("  This environment variable improves performance with multiple GPUs\n");
-			GGML_LOG_WARN("================================================================================\n");
-			GGML_LOG_WARN("\n");
+			setenv("CUDA_SCALE_LAUNCH_QUEUES", "2x", 0); // don't overwrite if already set
+#endif // _WIN32
+			GGML_CUDA_LOG_WARN("==================================================================================\n");
+			GGML_CUDA_LOG_WARN("CUDA_SCALE_LAUNCH_QUEUES=2x EnVar has been enabled for increased Multi-GPUs perfs.\n");
+			GGML_CUDA_LOG_WARN("==================================================================================\n");
 		}
 
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; i++) {
