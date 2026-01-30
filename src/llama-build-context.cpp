@@ -7672,9 +7672,9 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                             }
 
                             ggml_tensor * kq = ggml_mul_mat(ctx0, kv_cache, q);
-                            if (kv_cache->ne[1] < 256) {
+                            //if (kv_cache->ne[1] < 256) {
                                 ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-                            }
+                            //}
                             cb(kq, "kq", il);
 
                             if (!pp_opt) {
@@ -7691,6 +7691,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                             }
 
                             kqv_compressed = ggml_mul_mat(ctx0, kv_cache_trans, kq);
+                            ggml_mul_mat_set_prec(kqv_compressed, GGML_PREC_F32);
                             cb(kqv_compressed, "kqv_compressed", il);
 
                             if (!pp_opt) {
