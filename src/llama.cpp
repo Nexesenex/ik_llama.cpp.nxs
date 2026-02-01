@@ -5137,10 +5137,8 @@ struct llama_context * llama_init_from_model(
             bool pipeline_parallel =
                 llama_get_device_count(*model) > 1 &&
                 model->n_gpu_layers > (int)model->hparams.n_layer &&
-                // model->split_mode == LLAMA_SPLIT_MODE_LAYER &&
-                (model->split_mode == LLAMA_SPLIT_MODE_LAYER || model->split_mode == LLAMA_SPLIT_MODE_GRAPH) &&
+                model->split_mode == LLAMA_SPLIT_MODE_LAYER &&
                 params.offload_kqv && !model->has_tensor_overrides();
-                // params.offload_kqv;
 #ifndef GGML_USE_CUDA
             // pipeline parallelism requires support for async compute and events
             // currently this is only implemented in the CUDA backend
@@ -5150,8 +5148,6 @@ struct llama_context * llama_init_from_model(
 
             if (pipeline_parallel) {
                 LLAMA_LOG_INFO("%s: pipeline parallelism enabled (n_copies=%d)\n", __func__, ggml_backend_sched_get_n_copies(ctx->sched));
-            } else {
-                LLAMA_LOG_INFO("%s: pipeline parallelism disabled (n_copies=%d)\n", __func__, ggml_backend_sched_get_n_copies(ctx->sched));
             }
 
             llama_repack_up_gate_exps(*ctx);
