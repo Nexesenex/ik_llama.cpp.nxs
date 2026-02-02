@@ -760,7 +760,7 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
 
         // Set CUDA_SCALE_LAUNCH_QUEUES before any CUDA API call to improve multi-GPU pipeline parallelism performance
         // PR: https://github.com/ggml-org/llama.cpp/pull/19042
-        if (getenv("CUDA_SCALE_LAUNCH_QUEUES") == nullptr) {
+        if (((getenv("CUDA_SCALE_LAUNCH_QUEUES") == nullptr) || (getenv("CUDA_SCALE_LAUNCH_QUEUES") == "1x")) && (device_count >= 2)) {
 #ifdef _WIN32
             _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "2x");
 #else
