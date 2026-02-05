@@ -4551,7 +4551,6 @@ struct cuda_params {
     int  offload_batch_size = GGML_CUDA_MIN_BATCH_OFFLOAD;
     int  mmq_id_thresh = 32;
     float fa_offset = 0.6931f;
-    int cslq = 0;
 #ifdef USE_CUDA_GRAPH
     bool use_cuda_graph = true;
 #else
