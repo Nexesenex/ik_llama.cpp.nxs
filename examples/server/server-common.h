@@ -13,7 +13,6 @@
 #include <string>
 #include <vector>
 #include <cinttypes>
-#include <deque>
 
 
 
@@ -225,8 +224,6 @@ struct completion_token_output {
 
     static json probs_vector_to_json(const std::vector<completion_token_output>& probs, bool post_sampling_probs);
 };
-
-using completion_token_outputs = std::deque<completion_token_output>;
 
 // convert a vector of completion_token_output to json
 json probs_vector_to_json(const llama_context* ctx, const std::vector<completion_token_output>& probs);
