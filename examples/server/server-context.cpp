@@ -1657,11 +1657,12 @@ void server_context::send_final_response(server_slot& slot) {
     res->timings = slot.get_timings();
     res->post_sampling_probs = slot.params.post_sampling_probs;
     res->oaicompat = slot.params.oaicompat;
+    res->oaicompat_model = slot.params.oaicompat_model;
     res->oaicompat_cmpl_id = slot.params.oaicompat_cmpl_id;
     res->oaicompat_msg = slot.update_chat_msg(res->oaicompat_msg_diffs);
     res->n_decoded = slot.n_decoded;
     res->n_prompt_tokens = slot.n_prompt_tokens;
-    res->oaicompat_model = slot.task->params.oaicompat_model;
+    res->oaicompat_model = slot.oaicompat_model;
     res->data = json{
         {"content",             !slot.params.stream ? slot.generated_text : ""},
         {"generated_text",      slot.generated_text},  // Always include full text for finish_reason logic
@@ -2627,9 +2628,9 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
 
                         slot.state = SLOT_STATE_PROCESSING;
                         slot.command = SLOT_COMMAND_NONE;
-                        send_final_response(slot);
                         slot.release();
                         slot.print_timings();
+                        send_final_response(slot);
                         continue;
                     }
 
@@ -2985,9 +2986,9 @@ void server_context::speculative_decoding_accept() {
 
             if (!process_token(result, slot)) {
                 // release slot because of stop condition
-                send_final_response(slot);
                 slot.release();
                 slot.print_timings();
+                send_final_response(slot);
                 metrics.on_prediction(slot);
                 break;
             }
@@ -3005,7 +3006,7 @@ void server_context::speculative_decoding_accept() {
 
 bool server_context::accept_special_token(const server_slot& slot, const  llama_token token) {
     return params_base.special || slot.sparams.preserved_tokens.find(token) != slot.sparams.preserved_tokens.end();
-}
+};
 
 
 void server_context::send_token_results(completion_token_outputs& results, server_slot& slot, int32_t n) {
@@ -3014,9 +3015,9 @@ void server_context::send_token_results(completion_token_outputs& results, serve
         bool has_next = process_token(it, slot);
         count++;
         if (!has_next) {
-            send_final_response(slot);
             slot.release();
             slot.print_timings();
+            send_final_response(slot);
             metrics.on_prediction(slot);
             break;
         }
