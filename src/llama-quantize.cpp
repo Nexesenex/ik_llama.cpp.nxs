@@ -896,7 +896,7 @@ static llama_ftype repacked_ftype(llama_ftype ftype) {
     return ftype;
 }
 
-static void llama_model_quantize_internal(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
+static void llama_model_quantize_internal(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params, const uint16_t n_split, const size_t * tensor_ids) {
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
 
@@ -1009,7 +1009,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         kv_overrides = v->data();
     }
     llama_model_loader ml(fname_inp, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
-            /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false, kv_overrides, nullptr);
+            /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false, kv_overrides, nullptr, tensor_ids);
     ml.init_mappings(false); // no prefetching
 
     llama_model model;
@@ -1147,14 +1147,14 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     std::vector<no_init<uint8_t>> work;
     std::vector<no_init<float>> f32_conv_buf;
 
-    uint16_t n_split = 1;
+    uint16_t n_outupts = 1;
     // Assume split index is continuous
     if (params->keep_split) {
         for (int i = 0; i < ml.n_tensors; ++i) {
-            n_split = std::max(uint16_t(ml.get_weight(i)->idx+1), n_split);
+            n_outupts = std::max(uint16_t(ml.get_weight(i)->idx+1), n_outupts);
         }
     }
-    std::vector<gguf_context*> ctx_outs(n_split, NULL);
+    std::vector<gguf_context*> ctx_outs(n_outupts, NULL);
     ctx_outs[0] = ctx_out;
 
     // populate the original tensors so we get an initial meta data
@@ -1170,10 +1170,11 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     // Set split info if needed
     if (n_split > 1) {
-        for (size_t i = 0; i < ctx_outs.size(); ++i) {
+        for (int k = 0; k < ml.n_tensors + 1; ++k) {
+            size_t i = (k == 0) ? 0 : tensor_ids[k - 1];
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_NO).c_str(), i);
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), n_split);
-            gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), ml.n_tensors);
+            gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), n_split - 1);
         }
     }
 
@@ -1208,8 +1209,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     const auto tn = LLM_TN(model.arch);
     new_ofstream(0);
-    for (int i = 0; i < ml.n_tensors; ++i) {
-        auto weight = ml.get_weight(i);
+    for (size_t k = 0; k < ml.n_tensors; ++k) {
+        auto weight = ml.get_weight(k);
         struct ggml_tensor * tensor = weight->tensor;
         if (weight->idx != cur_split && params->keep_split) {
             close_ofstream();
@@ -1224,7 +1225,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
             tensor->data = read_data.data();
         }
-        ml.load_data_for(tensor);
+        ml.load_data_for(tensor, k+1);
 
         LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
                ++idx, ml.n_tensors,
@@ -1523,9 +1524,11 @@ QuantizationDone:;
 uint32_t llama_model_quantize(
         const char * fname_inp,
         const char * fname_out,
-        const llama_model_quantize_params * params) {
+        const llama_model_quantize_params * params,
+        const uint16_t n_split,
+        const size_t * tensor_ids) {
     try {
-        llama_model_quantize_internal(fname_inp, fname_out, params);
+        llama_model_quantize_internal(fname_inp, fname_out, params, n_split, tensor_ids);
         return 0;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to quantize: %s\n", __func__, err.what());
