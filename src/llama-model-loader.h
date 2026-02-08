@@ -83,7 +83,7 @@ struct llama_model_loader {
     llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
             bool merge_qkv, bool merge_up_gate_exps,
             const llama_model_kv_override * param_overrides_p,
-            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p, const size_t * tensor_ids);
 
     ~llama_model_loader();
 
@@ -159,7 +159,7 @@ struct llama_model_loader {
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
 
     // for backwards compatibility, does not support ggml-backend
-    void load_data_for(struct ggml_tensor * cur) const;
+    void load_data_for(struct ggml_tensor * cur, const size_t _idx) const;
 
     size_t size_done = 0;
     size_t size_data = 0;
