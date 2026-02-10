@@ -3350,9 +3350,9 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             completion_token_output result;
             const int tok_idx = slot.i_batch - i;
 
-            // const llama_token id = common_sampler_sample(slot.ctx_sampling, ctx, tok_idx);
+            const llama_token id = common_sampler_sample(slot.ctx_sampling, ctx, tok_idx);
 
-            const llama_token id = common_sampler_sample(slot.ctx_sampling, ctx, NULL, tok_idx);
+            // const llama_token id = common_sampler_sample(slot.ctx_sampling, ctx, NULL, tok_idx);
 
             // --- START POSITIONAL BAN LOGIC ---
             // Check if we have specific bans for this exact position (slot.n_past)
