@@ -598,10 +598,10 @@ static __device__ __forceinline__ T dequantize_1_q8_0(const void * __restrict__ 
     const block_q8_0 * x = (const block_q8_0 *) vx;
 
     const int64_t ib  = i / QK8_0;
-    const int     iqs = i % QK8_0;
+    const int     idx = i % QK8_0;
 
     const T   d = x[ib].d;
-    const int q = x[ib].qs[iqs];
+    const int q = x[ib].qs[idx];
 
 #ifdef FP16_AVAILABLE
     if (std::is_same<T, half>::value) {
@@ -609,7 +609,9 @@ static __device__ __forceinline__ T dequantize_1_q8_0(const void * __restrict__ 
     }
 #endif // FP16_AVAILABLE
 
-    return ((float) d)*((float) q);
+    const float d_f = (float)d;
+    const float q_f = (float)q;
+    return d_f * q_f;
 }
 
 template <typename T>
