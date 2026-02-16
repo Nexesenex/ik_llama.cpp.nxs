@@ -520,16 +520,16 @@ template <typename T>
 static __device__ __forceinline__ T dequantize_1_q5_0(const void * __restrict__ vx, const int64_t i) {
     const block_q5_0 * x = (const block_q5_0 *) vx;
 
-    const int64_t ib    =  i          /  QK5_0;
-    const int     idq   =  i          %  QK5_0;
-    const int     iqs   =  i          % (QK5_0/2);
-    const int     shift = (i % QK5_0) / (QK5_0/2);
+    const int64_t ib    = i / QK5_0;
+    const int     idx   = i % QK5_0;
+    const int     iqs   = idx >> 1;  // idx / 2
+    const int     shift = idx & 1;   // idx % 2
 
     const T   d   = x[ib].d;
     const int ql0 = x[ib].qs[iqs];
     const int qh0 = get_int_b2(x[ib].qh, 0);
-    const int ql  = ((ql0 >> (4*shift)) & 0x0F);
-    const int qh  = ((qh0 >> idq) << 4) & 0x10;
+    const int ql  = (ql0 >> (4 * shift)) & 0x0F;
+    const int qh  = ((qh0 >> idx) << 4) & 0x10;
     const int q   = (ql | qh) - 16;
 
 #ifdef FP16_AVAILABLE
