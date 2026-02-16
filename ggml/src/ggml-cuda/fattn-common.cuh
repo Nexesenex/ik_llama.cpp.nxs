@@ -548,16 +548,16 @@ template <typename T>
 static __device__ __forceinline__ T dequantize_1_q5_1(const void * __restrict__ vx, const int64_t i) {
     const block_q5_1 * x = (const block_q5_1 *) vx;
 
-    const int64_t ib    =  i          /  QK5_1;
-    const int     idq   =  i          %  QK5_1;
-    const int     iqs   =  i          % (QK5_1/2);
-    const int     shift = (i % QK5_1) / (QK5_1/2);
+    const int64_t ib    = i / QK5_1;
+    const int     idx   = i % QK5_1;
+    const int     iqs   = idx >> 1;  // idx / 2
+    const int     shift = idx & 1;   // idx % 2
 
     const half2 dm  = x[ib].dm;
     const int   ql0 = x[ib].qs[iqs];
     const int   qh0 = get_int_b4(x[ib].qh, 0);
-    const int   ql  = ((ql0 >> (4*shift)) & 0x0F);
-    const int   qh  = ((qh0 >> idq) << 4) & 0x10;
+    const int   ql  = (ql0 >> (4 * shift)) & 0x0F;
+    const int   qh  = ((qh0 >> idx) << 4) & 0x10;
     const int   q   = (ql | qh);
 
 #ifdef FP16_AVAILABLE
@@ -566,7 +566,10 @@ static __device__ __forceinline__ T dequantize_1_q5_1(const void * __restrict__ 
     }
 #endif // FP16_AVAILABLE
 
-    return __low2float(dm)*((float) q) + __high2float(dm);
+    const float dm_low  = __low2float(dm);
+    const float dm_high = __high2float(dm);
+    const float q_f     = (float)q;
+    return dm_low * q_f + dm_high;
 }
 
 template <typename T>
