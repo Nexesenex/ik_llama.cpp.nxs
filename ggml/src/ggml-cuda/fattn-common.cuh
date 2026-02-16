@@ -570,15 +570,16 @@ template <typename T>
 static __device__ __forceinline__ T dequantize_1_q6_0(const void * __restrict__ vx, const int64_t i) {
     const block_q6_0 * x = (const block_q6_0 *) vx;
 
-    const int64_t ib    =  i  /  QK6_0;
-    const int     idq   =  i  %  QK6_0;
-    const int     iqs   =  i  % (QK6_0/2);
-    const int     shift = idq / (QK6_0/2);
-    //const int     shift = (i % QK6_0) / (QK6_0/2);
+    const int64_t ib    = i / QK6_0;
+    const int     idx   = i % QK6_0;
+    const int     iqs   = idx >> 1;  // idx / 2
+    const int     shift = idx >> 4;  // idx / 16
 
     const T   d  = x[ib].d;
-    const int ql = x[ib].qs[iqs] >> 4*shift;
-    const int qh = x[ib].qh[idq%(QK6_0/4)] >> (4*((idq/(QK6_0/4))%2) + 2*shift);
+    const int ql = x[ib].qs[iqs] >> (4 * shift);
+    const int qh_group = (idx / 8) % 2;  // (idq/(QK6_0/4))%2 where QK6_0/4=8
+    const int qh_shift = 4 * qh_group + 2 * shift;
+    const int qh = x[ib].qh[idx % 8] >> qh_shift;  // idq%(QK6_0/4) = idx % 8
     const int q  = ((ql & 0x0f) | ((qh & 0x03) << 4)) - 32;
 
 #ifdef FP16_AVAILABLE
@@ -587,7 +588,9 @@ static __device__ __forceinline__ T dequantize_1_q6_0(const void * __restrict__ 
     }
 #endif // FP16_AVAILABLE
 
-    return ((float) d)*((float) q);
+    const float d_f = (float)d;
+    const float q_f = (float)q;
+    return d_f * q_f;
 }
 
 template <typename T>
