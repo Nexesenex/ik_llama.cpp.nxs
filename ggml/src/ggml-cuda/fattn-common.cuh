@@ -477,19 +477,22 @@ template <typename T>
 static __device__ __forceinline__ T dequantize_1_iq4_nl(const void * __restrict__ vx, const int64_t i) {
     const block_iq4_nl * x = (const block_iq4_nl *) vx;
 
-    const int64_t ib    =  i           /  QK4_NL;
-    const int     iqs   =  i           % (QK4_NL/2);
-    const int     shift = (i % QK4_NL) / (QK4_NL/2);
+    const int64_t ib    = i / QK4_NL;
+    const int     idx   = i % QK4_NL;
+    const int     iqs   = idx >> 1;
+    const int     shift = idx & 1;
+
+    const uint8_t qs_byte = x[ib].qs[iqs];
+    const int     val     = (qs_byte >> (4 * shift)) & 0xf;
 
 #ifdef FP16_AVAILABLE
     if constexpr (std::is_same<T, half>::value) {
-        return x[ib].d * ((half) kvalues_iq4nl[(x[ib].qs[iqs] >> 4*(shift)) & 0xf]);
-    } else {
-        return (float)x[ib].d * ((float) kvalues_iq4nl[(x[ib].qs[iqs] >> 4*(shift)) & 0xf]);
-    }
+        return x[ib].d * ((half) kvalues_iq4nl[val]);
+    } else
 #endif
-    T result = (float)x[ib].d * ((float) kvalues_iq4nl[(x[ib].qs[iqs] >> 4*(shift)) & 0xf]);
-    return result;
+    {
+        return (float)x[ib].d * (float)kvalues_iq4nl[val];
+    }
 }
 
 template <typename T>
