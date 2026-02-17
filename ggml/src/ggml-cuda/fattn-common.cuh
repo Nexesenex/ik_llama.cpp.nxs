@@ -447,7 +447,7 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
         sum +=             __shfl_xor_sync(0xFFFFFFFF, sum,  mask, 32);
     }
 
-    const float d = amax / 127;
+    const float d = amax / 127.0f;
     int q32 = 0;
     int8_t * q8 = (int8_t *) &q32;
 
