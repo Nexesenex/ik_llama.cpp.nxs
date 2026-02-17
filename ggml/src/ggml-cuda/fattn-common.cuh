@@ -354,8 +354,9 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q8_0(
     for (int k_KQ_0 = 0; k_KQ_0 < Dk/sizeof(int); k_KQ_0 += WARP_SIZE) {
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
-        const int ib  = k_KQ / QI8_0;
-        const int iqs = k_KQ % QI8_0;
+        const int ib    = k_KQ / QI8_0;
+        const int idx   = k_KQ % QI8_0;
+        const int iqs   = idx >> 2;       // idx / 4
 
         const int v = get_int_b2(K_q8_0[ib].qs, iqs);
 
