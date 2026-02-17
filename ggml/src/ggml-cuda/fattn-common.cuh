@@ -76,8 +76,7 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q4_0(
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
         const int ib    = k_KQ /  QI8_1;
-        const int idx   = k_KQ %  QI4_0;
-        const int iqs4  = idx >> 2;       // idx / 4
+        const int iqs4  = k_KQ %  QI4_0;
         const int shift = k_KQ & (QI8_1/2);
 
         const int v = (get_int_b2(K_q4_0[ib].qs, iqs4) >> shift) & 0x0F0F0F0F;
@@ -119,8 +118,7 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q4_1(
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
         const int ib    = k_KQ /  QI8_1;
-        const int idx   = k_KQ %  QI4_1;
-        const int iqs4  = idx >> 2;       // idx / 4
+        const int iqs4  = k_KQ %  QI4_1;
         const int shift = k_KQ & (QI8_1/2);
 
         const int v = (get_int_b4(K_q4_1[ib].qs, iqs4) >> shift) & 0x0F0F0F0F;
@@ -170,8 +168,7 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_iq4_nl(
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
         const int ib    = k_KQ /  QI8_1;
-        const int idx   = k_KQ %  QI4_NL;
-        const int iqs4  = idx >> 2;       // idx / 4
+        const int iqs4  = k_KQ %  QI4_NL;
         const int shift = k_KQ & (QI8_1/2);
 
         const int v = get_one_int_from_table_16((get_int_b2(K_iq4_nl[ib].qs, iqs4) >> shift) & 0x0F0F0F0F);
@@ -212,8 +209,7 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q5_0(
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
         const int ib    = k_KQ /  QI8_1;
-        const int idx   = k_KQ %  QI5_0;
-        const int iqs4  = idx >> 2;       // idx / 4
+        const int iqs4  = k_KQ %  QI5_0;
         const int iqs8  = k_KQ %  QI8_1;
         const int shift = k_KQ & (QI8_1/2);
 
@@ -262,8 +258,7 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q5_1(
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
         const int ib    = k_KQ /  QI8_1;
-        const int idx   = k_KQ %  QI5_1;
-        const int iqs4  = idx >> 2;       // idx / 4
+        const int iqs4  = k_KQ %  QI5_1;
         const int iqs8  = k_KQ %  QI8_1;
         const int shift = k_KQ & (QI8_1/2);
 
@@ -313,8 +308,7 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q6_0(
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
         const int ib    = k_KQ /  QI8_1;
-        const int idx   = k_KQ %  QI6_0;  // 0...3
-        const int iqs4  = idx >> 2;       // idx / 4
+        const int iqs4  = k_KQ %  QI6_0;  // 0...3
         const int shift = k_KQ & (QI8_1/2);
 
         const int vh = (get_int_b2(K_q6_0[ib].qh, iqs4%2) >> (4*(iqs4/2) + shift/2)) & 0x03030303;
@@ -358,9 +352,8 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q8_0(
     for (int k_KQ_0 = 0; k_KQ_0 < Dk/sizeof(int); k_KQ_0 += WARP_SIZE) {
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
-        const int ib    = k_KQ / QI8_0;
-        const int idx   = k_KQ % QI8_0;
-        const int iqs   = idx >> 2;       // idx / 4
+        const int ib  = k_KQ / QI8_0;
+        const int iqs = k_KQ % QI8_0;
 
         const int v = get_int_b2(K_q8_0[ib].qs, iqs);
 
