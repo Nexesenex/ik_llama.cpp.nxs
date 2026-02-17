@@ -166,7 +166,8 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_iq4_nl(
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
         const int ib    = k_KQ /  QI8_1;
-        const int iqs4  = k_KQ %  QI4_NL;
+        const int idx   = k_KQ %  QI4_NL;
+        const int iqs4  = idx >> 2;       // idx / 4
         const int shift = k_KQ & (QI8_1/2);
 
         const int v = get_one_int_from_table_16((get_int_b2(K_iq4_nl[ib].qs, iqs4) >> shift) & 0x0F0F0F0F);
@@ -177,12 +178,16 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_iq4_nl(
 #ifdef FP16_AVAILABLE
         if (std::is_same<T, half>::value) {
             const half2  * Q_ds = (const half2  *) Q_ds_v;
-            sum += (T) (((half)sumi) * K_iq4_nl[ib].d * Q_ds[k_KQ_0/WARP_SIZE].x);
+            const half d = K_iq4_nl[ib].d;
+            const half q_ds_x = Q_ds[k_KQ_0/WARP_SIZE].x;
+            sum += (T) (((half)sumi) * d * q_ds_x);
         } else
 #endif // FP16_AVAILABLE
         {
             const float2 * Q_ds = (const float2 *) Q_ds_v;
-            sum += (T) ((float)sumi * __half2float(K_iq4_nl[ib].d) * Q_ds[k_KQ_0/WARP_SIZE].x);
+            const float d = __half2float(K_iq4_nl[ib].d);
+            const float q_ds_x = Q_ds[k_KQ_0/WARP_SIZE].x;
+            sum += (T) ((float)sumi * d * q_ds_x);
         }
     }
 
