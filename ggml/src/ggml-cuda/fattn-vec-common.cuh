@@ -72,13 +72,15 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q4_0(
             const half2  * Q_ds = (const half2  *) Q_ds_v;
 
             const half2 sum2 = __half2half2(K_q4_0[ib].d) * Q_ds[k_KQ_0/WARP_SIZE];
-            sum += (T) (((half) sumi)*__low2half(sum2) - __high2half(sum2) /* *8/QI8_1 == 1 */);
+            sum += (T) (((half) sumi)*__low2half(sum2) - __high2half(sum2));
         } else
 #endif // FP16_AVAILABLE
         {
             const float2 * Q_ds = (const float2 *) Q_ds_v;
-
-            sum += (T) (__half2float(K_q4_0[ib].d) * (sumi*Q_ds[k_KQ_0/WARP_SIZE].x - (8/QI8_1)*Q_ds[k_KQ_0/WARP_SIZE].y));
+            const float d = __half2float(K_q4_0[ib].d);
+            const float q_ds_x = Q_ds[k_KQ_0/WARP_SIZE].x;
+            const float q_ds_y = Q_ds[k_KQ_0/WARP_SIZE].y;
+            sum += (T) (d * (sumi*q_ds_x - (8/QI8_1)*q_ds_y));
         }
     }
 
@@ -118,11 +120,11 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q4_1(
 #endif // FP16_AVAILABLE
         {
             const float2 * Q_ds = (const float2 *) Q_ds_v;
-
-            const float sumid4d8   =  __low2float(K_q4_1[ib].dm)*Q_ds[k_KQ_0/WARP_SIZE].x * sumi;
-            const float m4s8scaled = __high2float(K_q4_1[ib].dm)*Q_ds[k_KQ_0/WARP_SIZE].y / QI8_1;
-
-            sum += (T) (sumid4d8 + m4s8scaled);
+            const float dm_low  = __low2float(K_q4_1[ib].dm);
+            const float dm_high = __high2float(K_q4_1[ib].dm);
+            const float q_ds_x  = Q_ds[k_KQ_0/WARP_SIZE].x;
+            const float q_ds_y  = Q_ds[k_KQ_0/WARP_SIZE].y;
+            sum += (T) (dm_low * q_ds_x * sumi + dm_high * q_ds_y / QI8_1);
         }
     }
 
@@ -160,12 +162,16 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_iq4_nl(
 #ifdef FP16_AVAILABLE
         if (std::is_same<T, half>::value) {
             const half2  * Q_ds = (const half2  *) Q_ds_v;
-            sum += (T) (((half)sumi) * K_iq4_nl[ib].d * Q_ds[k_KQ_0/WARP_SIZE].x);
+            const half d = K_iq4_nl[ib].d;
+            const half q_ds_x = Q_ds[k_KQ_0/WARP_SIZE].x;
+            sum += (T) (((half)sumi) * d * q_ds_x);
         } else
 #endif // FP16_AVAILABLE
         {
             const float2 * Q_ds = (const float2 *) Q_ds_v;
-            sum += (T) ((float)sumi * __half2float(K_iq4_nl[ib].d) * Q_ds[k_KQ_0/WARP_SIZE].x);
+            const float d = __half2float(K_iq4_nl[ib].d);
+            const float q_ds_x = Q_ds[k_KQ_0/WARP_SIZE].x;
+            sum += (T) ((float)sumi * d * q_ds_x);
         }
     }
 
@@ -206,13 +212,15 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q5_0(
             const half2  * Q_ds = (const half2  *) Q_ds_v;
 
             const half2 sum2 = __half2half2(K_q5_0[ib].d) * Q_ds[k_KQ_0/WARP_SIZE];
-            sum += (T) (((half) sumi)*__low2half(sum2) - __high2half(sum2)*__float2half(2.0f)) /* *16/QI8_1 == 2 */;
+            sum += (T) (((half) sumi)*__low2half(sum2) - __high2half(sum2)*__float2half(2.0f));
         } else
 #endif // FP16_AVAILABLE
         {
             const float2 * Q_ds = (const float2 *) Q_ds_v;
-
-            sum += (T) (__half2float(K_q5_0[ib].d) * (sumi*Q_ds[k_KQ_0/WARP_SIZE].x - (16/QI8_1)*Q_ds[k_KQ_0/WARP_SIZE].y));
+            const float d = __half2float(K_q5_0[ib].d);
+            const float q_ds_x = Q_ds[k_KQ_0/WARP_SIZE].x;
+            const float q_ds_y = Q_ds[k_KQ_0/WARP_SIZE].y;
+            sum += (T) (d * (sumi*q_ds_x - (16/QI8_1)*q_ds_y));
         }
     }
 
@@ -251,7 +259,6 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q5_1(
 #ifdef FP16_AVAILABLE
         if (std::is_same<T, half>::value) {
             const half2  * Q_ds = (const half2  *) Q_ds_v;
-
             const half2 d5d8_m5s8 = K_q5_1[ib].dm * Q_ds[k_KQ_0/WARP_SIZE];
             const half2 sumid5d8_m5s8scaled = d5d8_m5s8 * make_half2(sumi, 1.0f/QI8_1);
             sum += (T) (__low2half(sumid5d8_m5s8scaled) + __high2half(sumid5d8_m5s8scaled));
@@ -259,11 +266,11 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q5_1(
 #endif // FP16_AVAILABLE
         {
             const float2 * Q_ds = (const float2 *) Q_ds_v;
-
-            const float sumid5d8   =  __low2float(K_q5_1[ib].dm)*Q_ds[k_KQ_0/WARP_SIZE].x * sumi;
-            const float m5s8scaled = __high2float(K_q5_1[ib].dm)*Q_ds[k_KQ_0/WARP_SIZE].y / QI8_1;
-
-            sum += (T) (sumid5d8 + m5s8scaled);
+            const float dm_low  = __low2float(K_q5_1[ib].dm);
+            const float dm_high = __high2float(K_q5_1[ib].dm);
+            const float q_ds_x  = Q_ds[k_KQ_0/WARP_SIZE].x;
+            const float q_ds_y  = Q_ds[k_KQ_0/WARP_SIZE].y;
+            sum += (T) (dm_low * q_ds_x * sumi + dm_high * q_ds_y / QI8_1);
         }
     }
 
@@ -300,13 +307,15 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q6_0(
             const half2  * Q_ds = (const half2  *) Q_ds_v;
 
             const half2 sum2 = __half2half2(K_q6_0[ib].d) * Q_ds[k_KQ_0/WARP_SIZE];
-            sum += (T) (((half) sumi)*__low2half(sum2) - __high2half(sum2)*__float2half(4.0f)) /* *32/QI8_1 == 4 */;
+            sum += (T) (((half) sumi)*__low2half(sum2) - __high2half(sum2)*__float2half(4.0f));
         } else
 #endif // FP16_AVAILABLE
         {
             const float2 * Q_ds = (const float2 *) Q_ds_v;
-
-            sum += (T) (__half2float(K_q6_0[ib].d) * (sumi*Q_ds[k_KQ_0/WARP_SIZE].x - (32/QI8_1)*Q_ds[k_KQ_0/WARP_SIZE].y));
+            const float d = __half2float(K_q6_0[ib].d);
+            const float q_ds_x = Q_ds[k_KQ_0/WARP_SIZE].x;
+            const float q_ds_y = Q_ds[k_KQ_0/WARP_SIZE].y;
+            sum += (T) (d * (sumi*q_ds_x - (32/QI8_1)*q_ds_y));
         }
     }
 
@@ -381,8 +390,11 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_f16(
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
         const half2 K_ik = K_h2[k_KQ];
-        sum +=  __low2float(K_ik) * Q_f2[k_KQ_0/WARP_SIZE].x;
-        sum += __high2float(K_ik) * Q_f2[k_KQ_0/WARP_SIZE].y;
+        const float K_ik_low  = __low2float(K_ik);
+        const float K_ik_high = __high2float(K_ik);
+        const float2 Q_f2_val = Q_f2[k_KQ_0/WARP_SIZE];
+        sum += K_ik_low * Q_f2_val.x;
+        sum += K_ik_high * Q_f2_val.y;
     }
 
     return sum;
@@ -411,7 +423,7 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
         sum +=             __shfl_xor_sync(0xFFFFFFFF, sum,  mask, 32);
     }
 
-    const float d = amax / 127;
+    const float d = amax / 127.0f;
     int q32 = 0;
     int8_t * q8 = (int8_t *) &q32;
 
@@ -439,13 +451,14 @@ template <typename T>
 static __device__ __forceinline__ T dequantize_1_q4_0(const void * __restrict__ vx, const int64_t i) {
     const block_q4_0 * x = (const block_q4_0 *) vx;
 
-    const int64_t ib    =  i          /  QK4_0;
-    const int     iqs   =  i          % (QK4_0/2);
-    const int     shift = (i % QK4_0) / (QK4_0/2);
+    const int64_t ib    = i / QK4_0;
+    const int     idx   = i % QK4_0;
+    const int     iqs   = idx >> 1;  // idx / 2
+    const int     shift = idx & 1;   // idx % 2
 
     const T   d  = x[ib].d;
     const int q0 = x[ib].qs[iqs];
-    const int q  = ((q0 >> (4*shift)) & 0x0F) - 8;
+    const int q  = ((q0 >> (4 * shift)) & 0x0F) - 8;
 
 #ifdef FP16_AVAILABLE
     if (std::is_same<T, half>::value) {
@@ -453,39 +466,45 @@ static __device__ __forceinline__ T dequantize_1_q4_0(const void * __restrict__ 
     }
 #endif // FP16_AVAILABLE
 
-    return ((float) d)*((float) q);
+    const float d_f = (float)d;
+    const float q_f = (float)q;
+    return d_f * q_f;
 }
 
 template <typename T>
 static __device__ __forceinline__ T dequantize_1_iq4_nl(const void * __restrict__ vx, const int64_t i) {
     const block_iq4_nl * x = (const block_iq4_nl *) vx;
 
-    const int64_t ib    =  i           /  QK4_NL;
-    const int     iqs   =  i           % (QK4_NL/2);
-    const int     shift = (i % QK4_NL) / (QK4_NL/2);
+    const int64_t ib    = i / QK4_NL;
+    const int     idx   = i % QK4_NL;
+    const int     iqs   = idx >> 1;
+    const int     shift = idx & 1;
+
+    const uint8_t qs_byte = x[ib].qs[iqs];
+    const int     val     = (qs_byte >> (4 * shift)) & 0xf;
 
 #ifdef FP16_AVAILABLE
     if constexpr (std::is_same<T, half>::value) {
-        return x[ib].d * ((half) kvalues_iq4nl[(x[ib].qs[iqs] >> 4*(shift)) & 0xf]);
-    } else {
-        return (float)x[ib].d * ((float) kvalues_iq4nl[(x[ib].qs[iqs] >> 4*(shift)) & 0xf]);
-    }
+        return x[ib].d * ((half) kvalues_iq4nl[val]);
+    } else
 #endif
-    T result = (float)x[ib].d * ((float) kvalues_iq4nl[(x[ib].qs[iqs] >> 4*(shift)) & 0xf]);
-    return result;
+    {
+        return (float)x[ib].d * (float)kvalues_iq4nl[val];
+    }
 }
 
 template <typename T>
 static __device__ __forceinline__ T dequantize_1_q4_1(const void * __restrict__ vx, const int64_t i) {
     const block_q4_1 * x = (const block_q4_1 *) vx;
 
-    const int64_t ib    =  i          /  QK4_1;
-    const int     iqs   =  i          % (QK4_1/2);
-    const int     shift = (i % QK4_1) / (QK4_1/2);
+    const int64_t ib    = i / QK4_1;
+    const int     idx   = i % QK4_1;
+    const int     iqs   = idx >> 1;  // idx / 2
+    const int     shift = idx & 1;   // idx % 2
 
     const half2 dm = x[ib].dm;
     const int   q0 = x[ib].qs[iqs];
-    const int   q  = ((q0 >> (4*shift)) & 0x0F);
+    const int   q  = (q0 >> (4 * shift)) & 0x0F;
 
 #ifdef FP16_AVAILABLE
     if (std::is_same<T, half>::value) {
@@ -493,23 +512,26 @@ static __device__ __forceinline__ T dequantize_1_q4_1(const void * __restrict__ 
     }
 #endif // FP16_AVAILABLE
 
-    return __low2float(dm)*((float) q) + __high2float(dm);
+    const float dm_low  = __low2float(dm);
+    const float dm_high = __high2float(dm);
+    const float q_f     = (float)q;
+    return dm_low * q_f + dm_high;
 }
 
 template <typename T>
 static __device__ __forceinline__ T dequantize_1_q5_0(const void * __restrict__ vx, const int64_t i) {
     const block_q5_0 * x = (const block_q5_0 *) vx;
 
-    const int64_t ib    =  i          /  QK5_0;
-    const int     idq   =  i          %  QK5_0;
-    const int     iqs   =  i          % (QK5_0/2);
-    const int     shift = (i % QK5_0) / (QK5_0/2);
+    const int64_t ib    = i / QK5_0;
+    const int     idx   = i % QK5_0;
+    const int     iqs   = idx >> 1;  // idx / 2
+    const int     shift = idx & 1;   // idx % 2
 
     const T   d   = x[ib].d;
     const int ql0 = x[ib].qs[iqs];
     const int qh0 = get_int_b2(x[ib].qh, 0);
-    const int ql  = ((ql0 >> (4*shift)) & 0x0F);
-    const int qh  = ((qh0 >> idq) << 4) & 0x10;
+    const int ql  = (ql0 >> (4 * shift)) & 0x0F;
+    const int qh  = ((qh0 >> idx) << 4) & 0x10;
     const int q   = (ql | qh) - 16;
 
 #ifdef FP16_AVAILABLE
@@ -525,16 +547,16 @@ template <typename T>
 static __device__ __forceinline__ T dequantize_1_q5_1(const void * __restrict__ vx, const int64_t i) {
     const block_q5_1 * x = (const block_q5_1 *) vx;
 
-    const int64_t ib    =  i          /  QK5_1;
-    const int     idq   =  i          %  QK5_1;
-    const int     iqs   =  i          % (QK5_1/2);
-    const int     shift = (i % QK5_1) / (QK5_1/2);
+    const int64_t ib    = i / QK5_1;
+    const int     idx   = i % QK5_1;
+    const int     iqs   = idx >> 1;  // idx / 2
+    const int     shift = idx & 1;   // idx % 2
 
     const half2 dm  = x[ib].dm;
     const int   ql0 = x[ib].qs[iqs];
     const int   qh0 = get_int_b4(x[ib].qh, 0);
-    const int   ql  = ((ql0 >> (4*shift)) & 0x0F);
-    const int   qh  = ((qh0 >> idq) << 4) & 0x10;
+    const int   ql  = (ql0 >> (4 * shift)) & 0x0F;
+    const int   qh  = ((qh0 >> idx) << 4) & 0x10;
     const int   q   = (ql | qh);
 
 #ifdef FP16_AVAILABLE
@@ -543,22 +565,26 @@ static __device__ __forceinline__ T dequantize_1_q5_1(const void * __restrict__ 
     }
 #endif // FP16_AVAILABLE
 
-    return __low2float(dm)*((float) q) + __high2float(dm);
+    const float dm_low  = __low2float(dm);
+    const float dm_high = __high2float(dm);
+    const float q_f     = (float)q;
+    return dm_low * q_f + dm_high;
 }
 
 template <typename T>
 static __device__ __forceinline__ T dequantize_1_q6_0(const void * __restrict__ vx, const int64_t i) {
     const block_q6_0 * x = (const block_q6_0 *) vx;
 
-    const int64_t ib    =  i  /  QK6_0;
-    const int     idq   =  i  %  QK6_0;
-    const int     iqs   =  i  % (QK6_0/2);
-    const int     shift = idq / (QK6_0/2);
-    //const int     shift = (i % QK6_0) / (QK6_0/2);
+    const int64_t ib    = i / QK6_0;
+    const int     idx   = i % QK6_0;
+    const int     iqs   = idx >> 1;  // idx / 2
+    const int     shift = idx >> 4;  // idx / 16
 
     const T   d  = x[ib].d;
-    const int ql = x[ib].qs[iqs] >> 4*shift;
-    const int qh = x[ib].qh[idq%(QK6_0/4)] >> (4*((idq/(QK6_0/4))%2) + 2*shift);
+    const int ql = x[ib].qs[iqs] >> (4 * shift);
+    const int qh_group = (idx / 8) % 2;  // (idq/(QK6_0/4))%2 where QK6_0/4=8
+    const int qh_shift = 4 * qh_group + 2 * shift;
+    const int qh = x[ib].qh[idx % 8] >> qh_shift;  // idq%(QK6_0/4) = idx % 8
     const int q  = ((ql & 0x0f) | ((qh & 0x03) << 4)) - 32;
 
 #ifdef FP16_AVAILABLE
@@ -567,7 +593,9 @@ static __device__ __forceinline__ T dequantize_1_q6_0(const void * __restrict__ 
     }
 #endif // FP16_AVAILABLE
 
-    return ((float) d)*((float) q);
+    const float d_f = (float)d;
+    const float q_f = (float)q;
+    return d_f * q_f;
 }
 
 template <typename T>
@@ -575,10 +603,10 @@ static __device__ __forceinline__ T dequantize_1_q8_0(const void * __restrict__ 
     const block_q8_0 * x = (const block_q8_0 *) vx;
 
     const int64_t ib  = i / QK8_0;
-    const int     iqs = i % QK8_0;
+    const int     idx = i % QK8_0;
 
     const T   d = x[ib].d;
-    const int q = x[ib].qs[iqs];
+    const int q = x[ib].qs[idx];
 
 #ifdef FP16_AVAILABLE
     if (std::is_same<T, half>::value) {
@@ -586,7 +614,9 @@ static __device__ __forceinline__ T dequantize_1_q8_0(const void * __restrict__ 
     }
 #endif // FP16_AVAILABLE
 
-    return ((float) d)*((float) q);
+    const float d_f = (float)d;
+    const float q_f = (float)q;
+    return d_f * q_f;
 }
 
 template <typename T>
