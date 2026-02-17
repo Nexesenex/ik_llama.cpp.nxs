@@ -414,8 +414,11 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_f16(
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
         const half2 K_ik = K_h2[k_KQ];
-        sum +=  __low2float(K_ik) * Q_f2[k_KQ_0/WARP_SIZE].x;
-        sum += __high2float(K_ik) * Q_f2[k_KQ_0/WARP_SIZE].y;
+        const float K_ik_low  = __low2float(K_ik);
+        const float K_ik_high = __high2float(K_ik);
+        const float2 Q_f2_val = Q_f2[k_KQ_0/WARP_SIZE];
+        sum += K_ik_low * Q_f2_val.x;
+        sum += K_ik_high * Q_f2_val.y;
     }
 
     return sum;
