@@ -76,7 +76,8 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q4_0(
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
         const int ib    = k_KQ /  QI8_1;
-        const int iqs4  = k_KQ %  QI4_0;
+        const int idx   = k_KQ %  QI4_0;
+        const int iqs4  = idx >> 2;       // idx / 4
         const int shift = k_KQ & (QI8_1/2);
 
         const int v = (get_int_b2(K_q4_0[ib].qs, iqs4) >> shift) & 0x0F0F0F0F;
@@ -89,13 +90,15 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q4_0(
             const half2  * Q_ds = (const half2  *) Q_ds_v;
 
             const half2 sum2 = __half2half2(K_q4_0[ib].d) * Q_ds[k_KQ_0/WARP_SIZE];
-            sum += (T) (((half) sumi)*__low2half(sum2) - __high2half(sum2) /* *8/QI8_1 == 1 */);
+            sum += (T) (((half) sumi)*__low2half(sum2) - __high2half(sum2));
         } else
 #endif // FP16_AVAILABLE
         {
             const float2 * Q_ds = (const float2 *) Q_ds_v;
-
-            sum += (T) (__half2float(K_q4_0[ib].d) * (sumi*Q_ds[k_KQ_0/WARP_SIZE].x - (8/QI8_1)*Q_ds[k_KQ_0/WARP_SIZE].y));
+            const float d = __half2float(K_q4_0[ib].d);
+            const float q_ds_x = Q_ds[k_KQ_0/WARP_SIZE].x;
+            const float q_ds_y = Q_ds[k_KQ_0/WARP_SIZE].y;
+            sum += (T) (d * (sumi*q_ds_x - (8/QI8_1)*q_ds_y));
         }
     }
 
