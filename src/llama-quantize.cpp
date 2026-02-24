@@ -4,6 +4,7 @@
 
 #include "ggml.h"
 #include "ggml-common.h"
+#include "../common/common.h"
 
 #include "iqk/iqk_quantize.h"
 
