@@ -536,4 +536,3 @@ struct LLM_TN {
 std::string llama_model_ftype_name(llama_ftype ftype);
 
 const char * llama_model_type_name(e_model type);
-
