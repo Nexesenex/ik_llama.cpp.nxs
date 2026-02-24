@@ -4,7 +4,6 @@
 
 #include "ggml.h"
 #include "ggml-common.h"
-#include "../common/common.h"
 
 #include "iqk/iqk_quantize.h"
 
@@ -12,6 +11,8 @@
 #include <regex>
 #include <mutex>
 #include <fstream>
+#include <sys/stat.h>
+#include <errno.h>
 
 //
 // quantization
@@ -1068,10 +1069,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     const size_t align = GGUF_DEFAULT_ALIGNMENT;
 
-    if (!fs_create_directory_with_parents(fname_out)) {
-        fprintf(stderr, "Failed to create output directory for '%s'\n", fname_out.c_str());
-        exit(EXIT_FAILURE);
-    }
+    ensure_output_directory(fname_out);
 
     struct gguf_context * ctx_out = gguf_init_empty();
 
@@ -1257,10 +1255,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
         }
 
-        if (!fs_create_directory_with_parents(fname)) {
-            fprintf(stderr, "Failed to create output directory for '%s'\n", fname.c_str());
-            exit(EXIT_FAILURE);
-        }
+        ensure_output_directory(fname);
         fout = std::ofstream(fname, std::ios::binary);
         fout.exceptions(std::ofstream::failbit); // fail fast on write errors
         const size_t meta_size = gguf_get_meta_size(ctx_outs[cur_split]);

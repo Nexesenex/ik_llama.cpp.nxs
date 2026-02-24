@@ -12,6 +12,8 @@
 #include <string.h>
 #include <climits>
 #include <stdexcept>
+#include <sys/stat.h>
+#include <errno.h>
 
 #if defined(_WIN32)
     #include <windows.h>
@@ -338,10 +340,8 @@ struct split_strategy {
             char split_path[PATH_MAX] = {0};
             llama_split_path(split_path, sizeof(split_path), params.output.c_str(), i_split, n_split);
 
-            if (!fs_create_directory_with_parents(split_path)) {
-                fprintf(stderr, "Failed to create output directory for '%s'\n", split_path);
-                exit(EXIT_FAILURE);
-            }
+// ensure output directory exists
+            ensure_output_directory(split_path);
 
             // open the output file
             printf("Writing file %s ... ", split_path);
@@ -434,10 +434,8 @@ static void gguf_merge(const split_params & split_params) {
     int n_split = 1;
     int total_tensors = 0;
 
-    if (!fs_create_directory_with_parents(split_params.output)) {
-        fprintf(stderr, "Failed to create output directory for '%s'\n", split_params.output.c_str());
-        exit(EXIT_FAILURE);
-    }
+// ensure output directory exists
+    ensure_output_directory(split_params.output);
 
     // avoid overwriting existing output file
     if (std::ifstream(split_params.output.c_str())) {
