@@ -2964,7 +2964,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             common_prefix prefix_nonexact = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens, false);
                             auto n_past0 = slot.cache_tokens.get_common_prefix_exact(prompt_tokens); // token level match
                             LLAMA_LOG_INFO("======== Cache: cache_size = %d, n_past0 =  %d, n_past1 =  %d, n_past_prompt1 = %d,  n_past2 =  %d, n_past_prompt2 =  %d\n", (int32_t)slot.cache_tokens.size(), (int32_t)n_past0, (int32_t)prefix.first, (int32_t)prefix.second, (int32_t)prefix_nonexact.first, (int32_t)prefix_nonexact.second);
-                            int32_t size_threshold = 200;
+                            int32_t size_threshold = 20;
                             if (prefix.first + size_threshold < prefix_nonexact.first) {
                                 LLAMA_LOG_WARN("Common part contains missing or extra space and new line\n");
                                 prefix = prefix_nonexact;
