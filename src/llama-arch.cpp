@@ -247,3 +247,23 @@ const char * llama_model_arch_name(llm_arch arch) {
     }
     return it->second;
 }
+
+bool llm_arch_is_recurrent(const llm_arch & arch) {
+    switch (arch) {
+    case LLM_ARCH_MAMBA:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool llm_arch_is_hybrid(const llm_arch & arch) {
+    switch (arch) {
+    case LLM_ARCH_QWEN3NEXT:
+    case LLM_ARCH_QWEN35MOE:
+    case LLM_ARCH_QWEN35:
+        return true;
+    default:
+        return false;
+    }
+}
