@@ -1788,3 +1788,15 @@ const char * llama_model_type_name(e_model type) {
         default:                  return "?B";
     }
 }
+
+bool llama_model_is_recurrent(const llama_model * model) {
+    return llm_arch_is_recurrent(model->arch);
+}
+
+bool llama_model_is_hybrid(const llama_model * model) {
+    return llm_arch_is_hybrid(model->arch);
+}
+
+bool llama_model_has_recurrent(const llama_model * model) {
+    return llm_arch_is_hybrid(model->arch) || llm_arch_is_recurrent(model->arch);
+}
