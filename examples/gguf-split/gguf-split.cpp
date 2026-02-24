@@ -190,34 +190,6 @@ static void zeros(std::ofstream & file, size_t n) {
     }
 }
 
-static void ensure_output_directory(const std::string & filepath) {
-    size_t pos = filepath.find_last_of("/\\");
-    if (pos != std::string::npos) {
-        std::string dirpath = filepath.substr(0, pos);
-        if (!dirpath.empty()) {
-#if defined(_WIN32)
-            int len = MultiByteToWideChar(CP_UTF8, 0, dirpath.c_str(), -1, NULL, 0);
-            if (len > 0) {
-                std::wstring wdirpath(len, 0);
-                MultiByteToWideChar(CP_UTF8, 0, dirpath.c_str(), -1, &wdirpath[0], len);
-                if (!CreateDirectoryW(wdirpath.c_str(), NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
-                    fprintf(stderr, "Failed to create directory '%s': Win32 error %lu\n", dirpath.c_str(), GetLastError());
-                    exit(EXIT_FAILURE);
-                }
-            }
-#else
-            struct stat st;
-            if (stat(dirpath.c_str(), &st) != 0) {
-                if (mkdir(dirpath.c_str(), 0755) != 0 && errno != EEXIST) {
-                    fprintf(stderr, "Failed to create directory '%s': %s\n", dirpath.c_str(), strerror(errno));
-                    exit(EXIT_FAILURE);
-                }
-            }
-#endif
-        }
-    }
-}
-
 struct split_strategy {
     const split_params params;
     std::ifstream & f_input;
