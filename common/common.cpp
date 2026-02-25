@@ -34,7 +34,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <cctype>
 
 #if defined(__APPLE__) && defined(__MACH__)
 #include <sys/types.h>
@@ -2961,10 +2960,14 @@ std::string string_get_sortable_timestamp() {
     return std::string(timestamp_no_ns) + "." + std::string(timestamp_ns);
 }
 
+// could be improved to support more languages
 std::string string_lower(const std::string& str) {
     std::string result = str;
-    std::transform(result.begin(), result.end(), result.begin(),
-        [](unsigned char c) { return std::tolower(c); });
+    for (char& c : result) {
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<char>(c + ('a' - 'A')); 
+        }
+    }
     return result;
 }
 
