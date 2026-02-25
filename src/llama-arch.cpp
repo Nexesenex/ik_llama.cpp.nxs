@@ -260,7 +260,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     switch (arch) {
     case LLM_ARCH_QWEN3NEXT:
     case LLM_ARCH_QWEN35MOE:
-        return false;
+        return true;
     default:
         return false;
     }
