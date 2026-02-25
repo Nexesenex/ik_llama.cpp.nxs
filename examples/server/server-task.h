@@ -344,8 +344,6 @@ using server_task_result_ptr = std::unique_ptr<server_task_result>;
 struct server_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
-    llama_pos pos_min_prompt;
-    llama_pos pos_max_prompt;
 
     std::vector<uint8_t> data;
 
