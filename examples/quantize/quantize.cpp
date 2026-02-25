@@ -151,7 +151,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--keep-split] [--partial-requant] [--force-requant] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--keep-split] [--partial-requant] [--force-requant] [--prune-layers] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -177,6 +177,8 @@ static void usage(const char * executable) {
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --partial-requant, -prq: quantize only missing split files in the split quantized .gguf destination directory\n");
     printf("  --force-requant, -frq: force requantization of split files whose tensor types differ from the specified quantization type\n");
+    printf("  --prune-layers L0,L1,L2...: comma-separated list of layer numbers to prune from the model\n");
+    printf("      Advanced option to remove all tensors from the given layers\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n\n");
     printf("Note: --include-weights and --exclude-weights cannot be used together\n");
@@ -335,6 +337,32 @@ static bool parse_custom_quants(const std::string& arg, std::vector<CustomQ>& cu
     return true;
 }
 
+static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers) {
+    if (!data) {
+        fprintf(stderr, "\n%s: no layer pruning ids provided\n\n", __func__);
+        return false;
+    }
+
+    const auto block_ids = string_split<std::string>(data, ',');
+    for (const auto & block_id : block_ids) {
+        int id;
+        try {
+            id = std::stoi(block_id);
+        } catch (...) {
+            id = -1;
+        }
+        if (id < 0) {
+            fprintf(stderr, "\n%s: invalid layer id '%s'\n\n", __func__, block_id.c_str());
+            return false;
+        }
+        prune_layers.emplace_back(id);
+    }
+
+    std::sort(prune_layers.begin(), prune_layers.end());
+    prune_layers.erase(std::unique(prune_layers.begin(), prune_layers.end()), prune_layers.end());
+    return true;
+}
+
 int main(int argc, char ** argv) {
     if (argc < 3) {
         usage(argv[0]);
@@ -347,6 +375,7 @@ int main(int argc, char ** argv) {
     std::vector<std::string> included_weights, excluded_weights;
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<CustomQ> custom_quants;
+    std::vector<int> prune_layers;
 
     std::vector<std::string> repack_patterns;
 
@@ -472,6 +501,10 @@ int main(int argc, char ** argv) {
             params.partial_requant = true;
         } else if (strcmp(argv[arg_idx], "--force-requant") == 0 || strcmp(argv[arg_idx], "-frq") == 0) {
             params.force_requant = true;
+        } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
+            if (arg_idx == argc-1 || !parse_layer_prune(argv[++arg_idx], prune_layers)) {
+                usage(argv[0]);
+            }
         } else {
             usage(argv[0]);
         }
@@ -550,6 +583,16 @@ int main(int argc, char ** argv) {
     }
     if (!custom_quants.empty()) {
         params.custom_quants = &custom_quants;
+    }
+    if (!prune_layers.empty()) {
+        params.prune_layers = &prune_layers;
+    }
+
+    if (!prune_layers.empty() && params.partial_requant) {
+        fprintf(stderr, "\n==========================================================================================================\n");
+        fprintf(stderr, "Error: --prune-layers and --partial-requant cannot be used together as they are incompatible\n");
+        fprintf(stderr, "==========================================================================================================\n\n");
+        usage(argv[0]);
     }
 
     llama_backend_init();
