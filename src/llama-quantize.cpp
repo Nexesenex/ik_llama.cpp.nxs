@@ -13,6 +13,7 @@
 #include <mutex>
 #include <fstream>
 #include <filesystem>
+#include <map>
 
 //
 // quantization
@@ -39,6 +40,56 @@ static void zeros(std::ofstream & file, size_t n) {
     for (size_t i = 0; i < n; ++i) {
         file.write(&zero, 1);
     }
+}
+
+static std::string remap_layer(const std::string & orig_name, const std::vector<int> & prune, std::map<int, std::string> & mapped, int & next_id) {
+    if (prune.empty()) {
+        return orig_name;
+    }
+
+    static const std::regex pattern(R"(blk\.(\d+)\.)");
+    if (std::smatch match; std::regex_search(orig_name, match, pattern)) {
+        const int blk = std::stoi(match[1]);
+        std::string new_name = orig_name;
+
+        if (mapped.count(blk)) {
+            // Already mapped, do nothing
+        } else if (std::find(prune.begin(), prune.end(), blk) != prune.end()) {
+            mapped[blk] = "";
+        } else if (blk < prune.front()) {
+            mapped[blk] = std::to_string(blk);
+            next_id = blk + 1;
+        } else {
+            mapped[blk] = std::to_string(next_id);
+            ++next_id;
+        }
+
+        return mapped[blk].empty() ? mapped[blk] : new_name.replace(match.position(1), match.length(1), mapped[blk]);
+    }
+
+    return orig_name;
+}
+
+static std::string remap_imatrix(const std::string & orig_name, const std::map<int, std::string> & mapped) {
+    if (mapped.empty()) {
+        return orig_name;
+    }
+
+    static const std::regex pattern(R"(blk\.(\d+)\.)");
+    if (std::smatch match; std::regex_search(orig_name, match, pattern)) {
+        const std::string blk(match[1]);
+        std::string new_name = orig_name;
+
+        for (const auto & p : mapped) {
+            if (p.second == blk) {
+                LLAMA_LOG_DEBUG("(blk.%d imatrix) ", p.first);
+                return new_name.replace(match.position(1), match.length(1), std::to_string(p.first));
+            }
+        }
+        GGML_ABORT("\n%s: imatrix mapping error for %s\n", __func__, orig_name.c_str());
+    }
+
+    return orig_name;
 }
 
 static void ensure_output_directory(const std::string & filepath) {
@@ -1053,6 +1104,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     }
 
     struct quantize_state_internal qs(model, params);
+    std::vector<decltype(ml.get_weight(0))> tensors_to_process;
 
     if (params->only_copy) {
         ftype = model.ftype;
@@ -1122,8 +1174,17 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     const std::vector<std::string> * repack_pattern = nullptr;
     if (params->repack_pattern) repack_pattern = (const std::vector<std::string> *)params->repack_pattern;
 
-    for (int i = 0; i < ml.n_tensors; ++i) {
-        const struct ggml_tensor * meta = ml.get_tensor_meta(i);
+    std::vector<int> prune_list = {};
+    if (params->prune_layers) {
+        prune_list = *static_cast<const std::vector<int> *>(params->prune_layers);
+    }
+
+    std::map<int, std::string> mapped;
+    int blk_id = 0;
+    int pruned_attention_w = 0;
+
+    for (auto weight : tensors_to_process) {
+        const struct ggml_tensor * meta = weight->tensor;
 
         const std::string name = ggml_get_name(meta);
 
@@ -1154,7 +1215,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
         // TODO: avoid hardcoded tensor names - use the TN_* constants
         if (name.find("attn_v.weight")   != std::string::npos ||
-            name.find("attn_qkv.weight") != std::string::npos) {
+            name.find("attn_qkv.weight") != std::string::npos ||
+            name.find("attn_kv_b.weight")!= std::string::npos) {
             ++qs.n_attention_wv;
         } else if (name == LLM_TN(model.arch)(LLM_TENSOR_OUTPUT, "weight")) {
             qs.has_output = true;
@@ -1212,8 +1274,30 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     ctx_outs[0] = ctx_out;
 
     // populate the original tensors so we get an initial meta data
+    tensors_to_process.clear();
+    tensors_to_process.reserve(ml.n_tensors);
     for (int i = 0; i < ml.n_tensors; ++i) {
         auto weight = ml.get_weight(i);
+        struct ggml_tensor * tensor = weight->tensor;
+        const std::string name = ggml_get_name(tensor);
+        std::string remapped_name = remap_layer(name, prune_list, mapped, blk_id);
+        
+        if (remapped_name.empty()) {
+            LLAMA_LOG_DEBUG("%s: pruning tensor %s\n", __func__, name.c_str());
+            if (name.find("attn_v.weight") != std::string::npos ||
+                name.find("attn_qkv.weight") != std::string::npos ||
+                name.find("attn_kv_b.weight") != std::string::npos) {
+                pruned_attention_w++;
+            }
+            continue;
+        } else if (remapped_name != name) {
+            LLAMA_LOG_DEBUG("%s: tensor %s remapped to %s\n", __func__, name.c_str(), remapped_name.c_str());
+            ggml_set_name(tensor, remapped_name.c_str());
+        }
+        tensors_to_process.push_back(weight);
+    }
+    
+    for (auto weight : tensors_to_process) {
         uint16_t i_split = params->keep_split ? weight->idx : 0;
         struct ggml_tensor * tensor = weight->tensor;
         if (ctx_outs[i_split] == NULL) {
@@ -1221,13 +1305,27 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         }
         gguf_add_tensor(ctx_outs[i_split], tensor);
     }
+    
+    if (!prune_list.empty()) {
+        gguf_set_val_u32(ctx_out, ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), blk_id);
+    }
+
+    // keep_split requires that the weights are sorted by split index
+    if (params->keep_split) {
+        std::sort(tensors_to_process.begin(), tensors_to_process.end(), [](const auto * a, const auto * b) {
+            if (a->idx == b->idx) {
+                return a->offs < b->offs;
+            }
+            return a->idx < b->idx;
+        });
+    }
 
     // Set split info if needed
     if (n_split > 1) {
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_NO).c_str(), i);
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), n_split);
-            gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), ml.n_tensors);
+            gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), (int32_t)tensors_to_process.size());
         }
     }
 
@@ -1342,8 +1440,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     const auto tn = LLM_TN(model.arch);
     new_ofstream(0);
-    for (int i = 0; i < ml.n_tensors; ++i) {
-        auto weight = ml.get_weight(i);
+    for (auto weight : tensors_to_process) {
         struct ggml_tensor * tensor = weight->tensor;
         if (weight->idx != cur_split && params->keep_split) {
             close_ofstream();
@@ -1370,7 +1467,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         ml.load_data_for(tensor);
 
         LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
-               ++idx, ml.n_tensors,
+               ++idx, (int)tensors_to_process.size(),
                ggml_get_name(tensor),
                llama_format_tensor_shape(tensor).c_str(),
                ggml_type_name(tensor->type));
