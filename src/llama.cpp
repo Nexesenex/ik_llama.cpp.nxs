@@ -4494,6 +4494,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.kv_overrides                =*/ nullptr,
         /*.custom_quants               =*/ nullptr,
         /*.repack_pattern              =*/ nullptr,
+        /*.prune_layers                =*/ nullptr,
     };
 
     return result;
