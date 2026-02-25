@@ -1653,7 +1653,6 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
     res->final_result = false;
     res->id = slot.id_task;
     res->id_multi = slot.id_multi;
-    res->index = slot.task->index;
     res->error = false;
     res->stop = false;
     res->stream = slot.params.stream;
@@ -1725,7 +1724,6 @@ void server_context::send_final_response(server_slot& slot) {
     res->final_result = true;
     res->id = slot.id_task;
     res->id_multi = slot.id_multi;
-    res->index = slot.task->index;
     res->error = false;
     res->stop = true; // to do: set value
     res->stream = slot.params.stream;
@@ -1781,8 +1779,6 @@ void server_context::send_final_response(server_slot& slot) {
 void server_context::send_embedding(const server_slot& slot, const llama_batch& batch) {
     auto res = std::make_unique<server_task_result_embd>();
     res->id = slot.task->id;
-    res->index = slot.task->index;
-    res->server_task_result::index = slot.task->index;
     res->n_tokens = slot.prompt_tokens.size();
     res->oaicompat = slot.task->params.oaicompat;
 
