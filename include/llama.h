@@ -498,6 +498,7 @@ extern "C" {
         void * kv_overrides;                 // pointer to vector containing overrides
         void * custom_quants;                // pointer to vector containing custom quantization rules
         void * repack_pattern;               // pointer to a vector containing regexes to be used for matching tensor names. Can be null
+        void * prune_layers;                 // pointer to vector containing layer indices to prune
     } llama_model_quantize_params;
 
     // grammar types
