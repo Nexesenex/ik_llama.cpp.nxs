@@ -2209,7 +2209,13 @@ static bool llm_load_tensors(
 
     // print memory requirements
     for (ggml_backend_buffer_t buf : model.bufs) {
-        LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
+        const char * buf_name = ggml_backend_buffer_name(buf);
+        bool is_cpu = ggml_backend_buffer_get_type(buf) == ggml_backend_cpu_buffer_type();
+        if (is_cpu && strlen(buf_name) > 0 && strcmp(buf_name, "CPU") == 0) {
+            LLAMA_LOG_DEBUG("%s: %10s buffer size = %8.2f MiB\n", __func__, buf_name, ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
+        } else {
+            LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB\n", __func__, buf_name, ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
+        }
     }
 
     // populate tensors_by_name
