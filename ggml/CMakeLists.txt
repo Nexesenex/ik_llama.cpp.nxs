@@ -138,6 +138,8 @@ set   (GGML_CUDA_COMPRESSION_MODE "size" CACHE STRING
                                             "ggml: cuda link binary compression mode; requires cuda 12.8+")
 set_property(CACHE GGML_CUDA_COMPRESSION_MODE PROPERTY STRINGS "none;speed;balance;size")
 
+option(LLAMA_CUDA_ENABLE_UNIFIED_MEMORY     "llama: enable to avoid OOM in Full Offload"      OFF)
+
 set   (GGML_CUDA_COMPRESSION_MODE "size" CACHE STRING
                                             "ggml: cuda link binary compression mode; requires cuda 12.8+")
 set_property(CACHE GGML_CUDA_COMPRESSION_MODE PROPERTY STRINGS "none;speed;balance;size")
