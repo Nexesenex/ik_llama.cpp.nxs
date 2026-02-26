@@ -151,21 +151,22 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--keep-split] [--partial-requant] [--prune-layers] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--include-weights] [--exclude-weights] [--ignore-imatrix-rules] [--dry-run] [--output-tensor-type] [--token-embedding-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--ffn-gate-inp-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--prune-layers] [--override-kv] [--custom-q] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
     printf("  --imatrix file_name: use data in file_name as importance matrix for quant optimizations\n");
     printf("  --hide-imatrix: do not store imatrix details in the quantized model\n");
+    printf("  --ignore-imatrix-rules: ignore imatrix rules for quantization, so low bpw quants can be made without an imatrix.\n");
+    printf("  --dry-run: simulate the quantization of a model without actually quantizing or writing anything.\n");
     printf("  --include-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor.\n");
     printf("  --token-embedding-type ggml_type: use this ggml_type for the token_embd.weight tensor.\n\n");
-    printf("  --ffn-gate-inp-type ggml_type: use this ggml_type for the ffn_gate_inp tensors.\n\n");
-    printf("  --custom-q regex1=type1,regex2=type2...: use this to specify custom quantization type rules.\n\n");
-    printf("  --repack Repack all tensors to the corresponding _r4/8 variant if available.\n\n");
-    printf("  --repack-pattern Comma separated list of regexs to use for matching tensor names to be repacked.\n\n");
-    printf("Additional specific tensor quantization types used in the custom quant scheme 'CQS (default is Q2_K):\n");
+    printf("  --custom-q regex1=type1,regex2=type2...: use this to specify custom quantization type rules.\n");
+    printf("  --repack: Repack all tensors to the corresponding _r4/8 variant if available.\n");
+    printf("  --repack-pattern: Comma separated list of regexs to use for matching tensor names to be repacked.\n\n");
+    printf("Additional specific tensor quantization type overrides to be applied over the selected quantization scheme:\n");
     printf("      --attn-q-type ggml_type: use this ggml_type for the attn_q.weight tensor.\n");
     printf("      --attn-k-type ggml_type: use this ggml_type for the attn_k.weight tensor.\n");
     printf("      --attn-v-type ggml_type: use this ggml_type for the attn_v.weight tensor.\n");
@@ -173,7 +174,8 @@ static void usage(const char * executable) {
     printf("      --attn-output-type ggml_type: use this ggml_type for the attn_output.weight tensor.\n");
     printf("      --ffn-gate-type ggml_type: use this ggml_type for the ffn_gate tensor.\n");
     printf("      --ffn-down-type ggml_type: use this ggml_type for the ffn_down tensor.\n");
-    printf("      --ffn-up-type ggml_type: use this ggml_type for the ffn_up tensor.\n\n");
+    printf("      --ffn-up-type ggml_type: use this ggml_type for the ffn_up tensor.\n");
+    printf("      --ffn-gate-inp-type ggml_type: use this ggml_type for the ffn_gate_inp tensors.\n\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --partial-requant: quantize only missing split files in the split quantized .gguf destination directory\n");
     printf("  --prune-layers L0,L1,L2...: comma-separated list of layer numbers to prune from the model\n");
