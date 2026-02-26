@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <sstream>
+#include <iomanip>
 
 #include <stdio.h>
 #include <string.h>
@@ -191,6 +193,17 @@ static void zeros(std::ofstream & file, size_t n) {
     }
 }
 
+static void write_tensor_log(const std::string & output_path, const std::string & tensor_name, const std::string & chunk_file, bool clear = false) {
+    std::filesystem::path out_path(output_path);
+    std::string stem = out_path.stem().string();
+    std::string log_path = stem + "-tensorlist.txt";
+    
+    std::ofstream log_file(log_path, clear ? std::ios::trunc : std::ios::app);
+    if (log_file) {
+        log_file << tensor_name << " -> " << chunk_file << "\n";
+    }
+}
+
 static void ensure_output_directory(const std::string & filepath) {
     std::filesystem::path p(filepath);
     if (p.has_parent_path()) {
@@ -323,6 +336,7 @@ struct split_strategy {
             char split_path[PATH_MAX] = {0};
             llama_split_path(split_path, sizeof(split_path), params.output.c_str(), i_split, n_split);
 
+// ensure output directory exists
             ensure_output_directory(split_path);
 
             // open the output file
@@ -351,6 +365,11 @@ struct split_strategy {
                 // copy tensor from input to output file
                 copy_file_to_file(f_input, fout, offset, n_bytes);
                 zeros(fout, GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT) - n_bytes);
+
+                // log tensor to chunk mapping
+                if (!params.dry_run) {
+                    write_tensor_log(params.output, t_name, std::string(split_path));
+                }
             }
 
             printf("done\n");
@@ -391,6 +410,9 @@ static void gguf_split(const split_params & split_params) {
         exit(EXIT_FAILURE);
     }
 
+    // clear tensor log file at start of split
+    write_tensor_log(split_params.output, "", "", true);
+
     // prepare the strategy
     split_strategy strategy(split_params, f_input, ctx_gguf, ctx_meta);
     int n_split = strategy.ctx_outs.size();
@@ -415,6 +437,9 @@ static void gguf_merge(const split_params & split_params) {
             split_params.output.c_str());
     int n_split = 1;
     int total_tensors = 0;
+
+    // clear tensor log file at start of merge
+    write_tensor_log(split_params.output, "", "", true);
 
     ensure_output_directory(split_params.output);
 
@@ -560,6 +585,11 @@ static void gguf_merge(const split_params & split_params) {
             // write tensor data + padding
             fout.write((const char *)read_data.data(), n_bytes);
             zeros(fout, GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT) - n_bytes);
+
+            // log tensor to chunk mapping (all tensors go to the same output file in merge)
+            if (!split_params.dry_run) {
+                write_tensor_log(split_params.output, t_name, split_params.output);
+            }
         }
 
         gguf_free(ctx_gguf);
