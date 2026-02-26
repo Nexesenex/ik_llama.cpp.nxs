@@ -1384,6 +1384,15 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             const std::string name = ggml_get_name(tensor);
             gguf_set_tensor_type(ctx_outs[cur_split], name.c_str(), tensor->type);
             gguf_set_tensor_data(ctx_outs[cur_split], name.c_str(), tensor->data, ggml_nbytes(tensor));
+            
+            // log tensor to chunk mapping even for skipped splits
+            std::string chunk_file = fname_out;
+            if (params->keep_split) {
+                char split_path[PATH_MAX] = {0};
+                llama_split_path(split_path, sizeof(split_path), fname_out.c_str(), cur_split, n_split);
+                chunk_file = std::string(split_path);
+            }
+            write_tensor_log(fname_out, name, chunk_file);
             continue;
         }
 
