@@ -12,6 +12,8 @@
 #include <mutex>
 #include <fstream>
 #include <filesystem>
+#include <sstream>
+#include <iomanip>
 #include <map>
 
 //
@@ -38,6 +40,17 @@ static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
         file.write(&zero, 1);
+    }
+}
+
+static void write_tensor_log(const std::string & output_path, const std::string & tensor_name, const std::string & chunk_file, bool clear = false) {
+    std::filesystem::path out_path(output_path);
+    std::string stem = out_path.stem().string();
+    std::string log_path = stem + "-tensorlist.txt";
+    
+    std::ofstream log_file(log_path, clear ? std::ios::trunc : std::ios::app);
+    if (log_file) {
+        log_file << tensor_name << " -> " << chunk_file << "\n";
     }
 }
 
@@ -1115,6 +1128,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     ensure_output_directory(fname_out);
 
+    // clear tensor log file at start of quantization
+    write_tensor_log(fname_out, "", "", true);
+
     struct gguf_context * ctx_out = gguf_init_empty();
 
     // Early exit if partial_requant is enabled and output file already exists
@@ -1710,6 +1726,15 @@ QuantizationDone:;
             // write tensor data + padding
             fout.write((const char *) new_data, new_size);
             zeros(fout, GGML_PAD(new_size, align) - new_size);
+
+            // log tensor to chunk mapping
+            std::string chunk_file = fname_out;
+            if (params->keep_split) {
+                char split_path[PATH_MAX] = {0};
+                llama_split_path(split_path, sizeof(split_path), fname_out.c_str(), cur_split, n_split);
+                chunk_file = std::string(split_path);
+            }
+            write_tensor_log(fname_out, name, chunk_file);
         }
     }
     close_ofstream();
