@@ -404,37 +404,243 @@ static void gguf_split(const split_params & split_params) {
         /*.ctx      = */ &ctx_meta,
     };
 
-    std::ifstream f_input(split_params.input.c_str(), std::ios::binary);
-    if (!f_input.is_open()) {
-        fprintf(stderr, "%s:  failed to open input GGUF from %s\n", __func__, split_params.input.c_str());
-        exit(EXIT_FAILURE);
+    // First, check if the input is already a split file
+    // If so, we need to find all split files and merge them first
+    char split_prefix[PATH_MAX] = {0};
+    char split_path[PATH_MAX] = {0};
+    strncpy(split_path, split_params.input.c_str(), sizeof(split_path) - 1);
+    
+    int n_split_detect = 1;
+    
+    // Try to detect if this is a split file by reading metadata
+    struct ggml_context * ctx_meta_temp = NULL;
+    struct gguf_init_params params_temp = {
+        /*.no_alloc = */ true,
+        /*.ctx      = */ &ctx_meta_temp,
+    };
+    
+    auto * ctx_gguf_temp = gguf_init_from_file(split_params.input.c_str(), params_temp);
+    if (ctx_gguf_temp) {
+        auto key_n_split = gguf_find_key(ctx_gguf_temp, LLM_KV_SPLIT_COUNT);
+        if (key_n_split >= 0) {
+            // This is a split file, read the split count from metadata
+            n_split_detect = gguf_get_val_u16(ctx_gguf_temp, key_n_split);
+            
+            // Extract the prefix using llama_split_prefix
+            // We need to figure out which split number this file is
+            // Try different split_no values to find one that matches
+            bool found_prefix = false;
+            for (int try_split_no = 0; try_split_no < n_split_detect && !found_prefix; try_split_no++) {
+                if (llama_split_prefix(split_prefix, sizeof(split_prefix), split_path, try_split_no, n_split_detect)) {
+                    found_prefix = true;
+                    fprintf(stderr, "Detected input is a split file with %d parts, prefix: %s (split_no=%d)\n", 
+                            n_split_detect, split_prefix, try_split_no);
+                }
+            }
+            
+            if (!found_prefix) {
+                fprintf(stderr, "Warning: Could not extract prefix from split file, trying pattern-based detection...\n");
+                // Fallback to pattern-based detection
+                std::string input_str(split_params.input);
+                size_t pos = input_str.find("-of-");
+                if (pos != std::string::npos && pos > 10) {
+                    size_t before_of = pos - 1;
+                    size_t dash_pos = input_str.rfind('-', before_of);
+                    if (dash_pos != std::string::npos) {
+                        std::string after_dash = input_str.substr(dash_pos + 1, before_of - dash_pos - 1);
+                        if (after_dash.length() >= 4 && after_dash.length() <= 5) {
+                            bool is_number = true;
+                            for (char c : after_dash) {
+                                if (!isdigit(c)) {
+                                    is_number = false;
+                                    break;
+                                }
+                            }
+                            if (is_number) {
+                                std::string prefix = input_str.substr(0, dash_pos);
+                                strncpy(split_prefix, prefix.c_str(), sizeof(split_prefix) - 1);
+                                fprintf(stderr, "Using pattern-based prefix: %s\n", split_prefix);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        gguf_free(ctx_gguf_temp);
+        ggml_free(ctx_meta_temp);
     }
+    
+    if (n_split_detect > 1) {
+        // Input is already a split file - merge all splits first
+        fprintf(stderr, "Merging split input files in memory before re-splitting...\n");
+        
+        std::vector<uint8_t> read_data;
+        std::vector<ggml_context *> ctx_metas;
+        std::vector<gguf_context *> ctx_ggufs;
 
-    auto * ctx_gguf = gguf_init_from_file(split_params.input.c_str(), params);
-    if (!ctx_gguf) {
-        fprintf(stderr, "%s:  failed to load input GGUF from %s\n", __func__, split_params.input.c_str());
-        exit(EXIT_FAILURE);
+        auto * ctx_out = gguf_init_empty();
+        
+        // Read all split files
+        for (int i_split = 0; i_split < n_split_detect; i_split++) {
+            llama_split_path(split_path, sizeof(split_path), split_prefix, i_split, n_split_detect);
+            struct ggml_context * ctx_meta_file = NULL;
+
+            struct gguf_init_params file_params = {
+                /*.no_alloc = */ true,
+                /*.ctx      = */ &ctx_meta_file,
+            };
+
+            fprintf(stderr, "Reading split file %d: %s ...", i_split, split_path);
+            auto * ctx_gguf = gguf_init_from_file(split_path, file_params);
+            if (!ctx_gguf) {
+                fprintf(stderr, "\n%s:  failed to load input GGUF from %s\n", __func__, split_path);
+                exit(EXIT_FAILURE);
+            }
+            ctx_ggufs.push_back(ctx_gguf);
+            ctx_metas.push_back(ctx_meta_file);
+
+            if (i_split == 0) {
+                // Set metadata from the first split
+                gguf_set_kv(ctx_out, ctx_gguf);
+            }
+
+            auto n_tensors = gguf_get_n_tensors(ctx_gguf);
+            for (int i_tensor = 0; i_tensor < n_tensors; i_tensor++) {
+                const char * t_name = gguf_get_tensor_name(ctx_gguf, i_tensor);
+                struct ggml_tensor * t = ggml_get_tensor(ctx_meta_file, t_name);
+                gguf_add_tensor(ctx_out, t);
+            }
+
+            fprintf(stderr, " done\n");
+        }
+        
+        // Now we have all tensors in ctx_out, use it as our input
+        // We need to create a temporary file with all tensors merged
+        std::string temp_output = std::string(split_prefix) + "-temp-merged.gguf";
+        fprintf(stderr, "Creating temporary merged file: %s\n", temp_output.c_str());
+        
+        std::ofstream fout(temp_output.c_str(), std::ios::binary);
+        fout.exceptions(std::ofstream::failbit);
+        
+        // Write metadata
+        std::vector<uint8_t> meta_data(gguf_get_meta_size(ctx_out));
+        gguf_get_meta_data(ctx_out, meta_data.data());
+        fout.write((const char *)meta_data.data(), meta_data.size());
+        
+        // Write tensors from all split files
+        for (int i_split = 0; i_split < n_split_detect; i_split++) {
+            llama_split_path(split_path, sizeof(split_path), split_prefix, i_split, n_split_detect);
+            std::ifstream f_input_file(split_path, std::ios::binary);
+            if (!f_input_file.is_open()) {
+                fprintf(stderr, "Failed to open %s\n", split_path);
+                exit(EXIT_FAILURE);
+            }
+            
+            auto * ctx_gguf = ctx_ggufs[i_split];
+            auto * ctx_meta_file = ctx_metas[i_split];
+            
+            auto n_tensors = gguf_get_n_tensors(ctx_gguf);
+            for (int i_tensor = 0; i_tensor < n_tensors; i_tensor++) {
+                const char * t_name = gguf_get_tensor_name(ctx_gguf, i_tensor);
+                struct ggml_tensor * t = ggml_get_tensor(ctx_meta_file, t_name);
+                auto n_bytes = ggml_nbytes(t);
+                
+                if (read_data.size() < n_bytes) {
+                    read_data.resize(n_bytes);
+                }
+                
+                auto offset = gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i_tensor);
+                f_input_file.seekg(offset);
+                f_input_file.read((char *)read_data.data(), n_bytes);
+                
+                fout.write((const char *)read_data.data(), n_bytes);
+                zeros(fout, GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT) - n_bytes);
+            }
+            
+            f_input_file.close();
+            gguf_free(ctx_gguf);
+            ggml_free(ctx_meta_file);
+        }
+        
+        fout.close();
+        gguf_free(ctx_out);
+        
+        // Now re-split the temporary merged file
+        fprintf(stderr, "Re-splitting temporary merged file with new parameters...\n");
+        
+        // Read the temporary merged file for splitting
+        struct ggml_context * ctx_meta_re = NULL;
+        struct gguf_init_params params_re = {
+            /*.no_alloc = */ true,
+            /*.ctx      = */ &ctx_meta_re,
+        };
+        
+        std::ifstream f_input_re(temp_output.c_str(), std::ios::binary);
+        if (!f_input_re.is_open()) {
+            fprintf(stderr, "Failed to open temp file %s\n", temp_output.c_str());
+            exit(EXIT_FAILURE);
+        }
+        
+        auto * ctx_gguf_re = gguf_init_from_file(temp_output.c_str(), params_re);
+        if (!ctx_gguf_re) {
+            fprintf(stderr, "Failed to load temp file %s\n", temp_output.c_str());
+            exit(EXIT_FAILURE);
+        }
+        
+        write_tensor_log(split_params.output, "", "", true);
+        
+        split_strategy strategy(split_params, f_input_re, ctx_gguf_re, ctx_meta_re);
+        int n_split = strategy.ctx_outs.size();
+        strategy.print_info();
+        
+        if (!split_params.dry_run) {
+            strategy.write();
+        }
+        
+        gguf_free(ctx_gguf_re);
+        f_input_re.close();
+        ggml_free(ctx_meta_re);
+        
+        // Remove temporary file
+        std::filesystem::remove(temp_output);
+        
+        fprintf(stderr, "%s: %d gguf split written with a total of %d tensors.\n",
+                __func__, n_split, strategy.n_tensors);
+        
+    } else {
+        // Input is a single file (monolithic or already handled above)
+        std::ifstream f_input(split_params.input.c_str(), std::ios::binary);
+        if (!f_input.is_open()) {
+            fprintf(stderr, "%s:  failed to open input GGUF from %s\n", __func__, split_params.input.c_str());
+            exit(EXIT_FAILURE);
+        }
+
+        auto * ctx_gguf = gguf_init_from_file(split_params.input.c_str(), params);
+        if (!ctx_gguf) {
+            fprintf(stderr, "%s:  failed to load input GGUF from %s\n", __func__, split_params.input.c_str());
+            exit(EXIT_FAILURE);
+        }
+
+        // clear tensor log file at start of split
+        write_tensor_log(split_params.output, "", "", true);
+
+        // prepare the strategy
+        split_strategy strategy(split_params, f_input, ctx_gguf, ctx_meta);
+        int n_split = strategy.ctx_outs.size();
+        strategy.print_info();
+
+        if (!split_params.dry_run) {
+            // write all output splits
+            strategy.write();
+        }
+
+        // done, clean up
+        gguf_free(ctx_gguf);
+        f_input.close();
+
+        fprintf(stderr, "%s: %d gguf split written with a total of %d tensors.\n",
+                __func__, n_split, strategy.n_tensors);
     }
-
-    // clear tensor log file at start of split
-    write_tensor_log(split_params.output, "", "", true);
-
-    // prepare the strategy
-    split_strategy strategy(split_params, f_input, ctx_gguf, ctx_meta);
-    int n_split = strategy.ctx_outs.size();
-    strategy.print_info();
-
-    if (!split_params.dry_run) {
-        // write all output splits
-        strategy.write();
-    }
-
-    // done, clean up
-    gguf_free(ctx_gguf);
-    f_input.close();
-
-    fprintf(stderr, "%s: %d gguf split written with a total of %d tensors.\n",
-            __func__, n_split, strategy.n_tensors);
 }
 
 static void gguf_merge(const split_params & split_params) {
