@@ -329,11 +329,20 @@ split_strategy(const split_params & params,
 
     void print_info() {
         printf("n_split: %ld\n", ctx_outs.size());
-        int i_split = 0;
-        for (auto & ctx_out : ctx_outs) {
-            int n_tensors_out = gguf_get_n_tensors(ctx_out);
-            printf("split %05d: n_tensors = %d\n", i_split + 1, n_tensors_out);
-            i_split++;
+        int n_splits = ctx_outs.size();
+        int i = 0;
+        while (i < n_splits) {
+            int n_tensors_out = gguf_get_n_tensors(ctx_outs[i]);
+            int j = i + 1;
+            while (j < n_splits && gguf_get_n_tensors(ctx_outs[j]) == n_tensors_out) {
+                j++;
+            }
+            if (j - i > 1) {
+                printf("split %05d to split %05d: n_tensors = %d\n", i + 1, j, n_tensors_out);
+            } else {
+                printf("split %05d: n_tensors = %d\n", i + 1, n_tensors_out);
+            }
+            i = j;
         }
     }
 
