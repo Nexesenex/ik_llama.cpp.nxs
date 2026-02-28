@@ -149,6 +149,7 @@ struct server_slot {
 
     int64_t t_start_process_prompt;
     int64_t t_start_generation;
+    int64_t t_start_batch_100 = 0;
 
     double t_prompt_processing; // ms
     double t_token_generation; // ms
