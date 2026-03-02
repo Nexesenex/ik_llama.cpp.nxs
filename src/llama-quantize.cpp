@@ -1137,7 +1137,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     if (params->partial_requant && !params->keep_split) {
         std::ifstream test_file(fname_out);
         if (test_file) {
-            LLAMA_LOG_INFO("%s: output file %s exists, skipping\n", __func__, fname_out.c_str());
+            LLAMA_LOG_DEBUG("%s: output file %s exists, skipping\n", __func__, fname_out.c_str());
             gguf_free(ctx_out);
             return;
         }
