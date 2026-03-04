@@ -2027,9 +2027,10 @@ static bool llm_load_tensors(
         model.buft_layer[i] = llama_default_buffer_type_cpu(true);
     }
 
-    if (int device_count = model.devices.size(); device_count > 1) {
+if (int device_count = model.devices.size(); device_count > 1) {
         bool all_zero = tensor_split == nullptr || std::all_of(tensor_split, tensor_split + device_count, [](float x) { return x == 0.0f; });
         std::vector<float> splits(device_count);
+        model.user_provided_tensor_split = !all_zero;
         if (all_zero) {
             // default split, by free memory
             for (int i = 0; i < device_count; ++i) {
@@ -2051,6 +2052,7 @@ static bool llm_load_tensors(
         model.splits = std::move(splits);
     } else {
         model.splits = { 1.0f };
+        model.user_provided_tensor_split = false;
     }
 
     int device_count = model.splits.size();
