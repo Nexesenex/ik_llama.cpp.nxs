@@ -997,7 +997,15 @@ static bool llama_kv_cache_init(
     }
     if (split_cache) {
         LLAMA_LOG_INFO("%s: KV cache size per device:\n", __func__);
-        for (int i = 0; i < int(mem_split.size()); ++i) printf("    Device %d:  %g MiB\n", i, mem_split[i]/1024./1024.);
+        size_t total_kv_size = 0;
+        for (auto & mem : mem_split) total_kv_size += mem;
+        float last_split = 0;
+        for (int i = 0; i < int(model.splits.size()); ++i) {
+            float ratio = model.splits[i] - last_split;
+            size_t kv_per_device = (size_t)(total_kv_size * ratio);
+            LLAMA_LOG_INFO("    Device %d:  %g MiB\n", i, kv_per_device/1024./1024.);
+            last_split = model.splits[i];
+        }
     }
 
 #if 0
