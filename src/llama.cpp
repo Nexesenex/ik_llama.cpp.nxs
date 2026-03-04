@@ -2224,6 +2224,11 @@ static bool llm_load_tensors(
         int main_gpu,
         int max_gpu_per_split,
         float split_adjust_step_frequency,
+        bool split_adjust_vram_aware,
+        bool split_adjust_not_used,
+        float split_tensor_split_factor,
+        float split_vram_free_factor,
+        float split_usage_penalty_factor,
         const float * tensor_split,
         ggml_type cache_type_k,
         ggml_type cache_type_v,
@@ -2293,6 +2298,11 @@ static bool llm_load_tensors(
     model.main_gpu     = main_gpu;
     model.max_gpu_per_split      = max_gpu_per_split;
     model.split_adjust_step_frequency = split_adjust_step_frequency;
+    model.split_adjust_vram_aware = split_adjust_vram_aware;
+    model.split_adjust_not_used = split_adjust_not_used;
+    model.split_tensor_split_factor = split_tensor_split_factor;
+    model.split_vram_free_factor = split_vram_free_factor;
+    model.split_usage_penalty_factor = split_usage_penalty_factor;
     model.n_gpu_layers = n_gpu_layers;
     model.mtp          = mtp;
 
@@ -2945,6 +2955,11 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             params.main_gpu,
             params.max_gpu_per_split, 
             params.split_adjust_step_frequency,
+            params.split_adjust_vram_aware,
+            params.split_adjust_not_used,
+            params.split_tensor_split_factor,
+            params.split_vram_free_factor,
+            params.split_usage_penalty_factor,
             params.tensor_split,
             params.type_k,
             params.type_v,
@@ -4951,6 +4966,11 @@ struct llama_model_params llama_model_default_params() {
         /*.main_gpu                    =*/ 0,
         /*.max_gpu_per_split           =*/ 0,
         /*.split_adjust_step_frequency =*/ 0.5f,
+        /*.split_adjust_vram_aware     =*/ false,
+        /*.split_adjust_not_used       =*/ false,
+        /*.split_tensor_split_factor   =*/ 1.0f,
+        /*.split_vram_free_factor      =*/ 0.0f,
+        /*.split_usage_penalty_factor  =*/ 0.0f,
         /*.ncmoe                       =*/ 0,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
