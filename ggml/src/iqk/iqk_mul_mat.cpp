@@ -153,11 +153,25 @@ struct MulMat {
                 if (gate_b) {
                     auto b = gate_b + ix;
                     auto x = this_info.dst_row(ky);
-                    for (int j = 0; j < this_nrc_x; ++j) x[j] += b[j];
+                    int j = 0;
+#if defined(__AVX2__)
+                    for (; j + 7 < this_nrc_x; j += 8) {
+                        _mm256_storeu_ps(x + j, _mm256_add_ps(_mm256_loadu_ps(x + j), _mm256_loadu_ps(b + j)));
+                    }
+#endif
+                    for (; j < this_nrc_x; ++j) x[j] += b[j];
                 }
                 activate(op, this_nrc_x, this_info.dst_row(ky), tmp + ky*xstep);
                 if (limit > 1e-6f) {
-                    for (int j = 0; j < this_nrc_x; ++j) tmp[ky*xstep + j] = std::min(tmp[ky*xstep + j], limit);
+                    int j = 0;
+                    auto pt = tmp + ky*xstep;
+#if defined(__AVX2__)
+                    auto vlimit = _mm256_set1_ps(limit);
+                    for (; j + 7 < this_nrc_x; j += 8) {
+                        _mm256_storeu_ps(pt + j, _mm256_min_ps(_mm256_loadu_ps(pt + j), vlimit));
+                    }
+#endif
+                    for (; j < this_nrc_x; ++j) pt[j] = std::min(pt[j], limit);
                 }
             }
             func(n, (const void *)((const char *)vx_up + ix*bx), bx, this_info, this_nrc_x);
@@ -165,14 +179,40 @@ struct MulMat {
                 auto result = this_info.dst_row(ky);
                 if (up_b) {
                     auto b = up_b + ix;
-                    for (int j = 0; j < this_nrc_x; ++j) result[j] += b[j];
+                    int j = 0;
+#if defined(__AVX2__)
+                    for (; j + 7 < this_nrc_x; j += 8) {
+                        _mm256_storeu_ps(result + j, _mm256_add_ps(_mm256_loadu_ps(result + j), _mm256_loadu_ps(b + j)));
+                    }
+#endif
+                    for (; j < this_nrc_x; ++j) result[j] += b[j];
                 }
                 if (op == GGML_UNARY_OP_SWIGLU_OAI) {
                     clamp_oai(this_nrc_x, result);
                 } else if (limit > 1e-6f) {
-                    for (int j = 0; j < this_nrc_x; ++j) result[j] = std::max(-limit, std::min(limit, result[j]));
+                    int j = 0;
+#if defined(__AVX2__)
+                    auto vlimit = _mm256_set1_ps(limit);
+                    auto vneg_limit = _mm256_set1_ps(-limit);
+                    for (; j + 7 < this_nrc_x; j += 8) {
+                        auto v = _mm256_loadu_ps(result + j);
+                        v = _mm256_min_ps(v, vlimit);
+                        v = _mm256_max_ps(v, vneg_limit);
+                        _mm256_storeu_ps(result + j, v);
+                    }
+#endif
+                    for (; j < this_nrc_x; ++j) result[j] = std::max(-limit, std::min(limit, result[j]));
                 }
-                for (int j = 0; j < this_nrc_x; ++j) result[j] *= tmp[ky*xstep + j];
+                {
+                    auto pt = tmp + ky*xstep;
+                    int j = 0;
+#if defined(__AVX2__)
+                    for (; j + 7 < this_nrc_x; j += 8) {
+                        _mm256_storeu_ps(result + j, _mm256_mul_ps(_mm256_loadu_ps(result + j), _mm256_loadu_ps(pt + j)));
+                    }
+#endif
+                    for (; j < this_nrc_x; ++j) result[j] *= pt[j];
+                }
             }
         };
         if (func16 && nrc_y >= 16) {
@@ -1066,39 +1106,40 @@ constexpr float k_swiglu_oai_alpha = 1.702f;
 constexpr float k_swiglu_oai_limit = 7.f;
 
 void MulMat::swiglu_oai(int n, const float * x, float * y) {
-//    int i = 0;
-//#if defined __AVX512F__ && defined __AVX512DQ__
-//    {
-//        auto max = _mm512_set1_ps(k_swiglu_oai_limit);
-//        auto alpha = _mm512_set1_ps(-k_swiglu_oai_alpha);
-//        for (; i + 15 < n; i += 16) {
-//            auto xc = v_clamp_max(_mm512_loadu_ps(x + i), max);
-//            _mm512_storeu_ps(y + i, v_silu_oai(xc, alpha));
-//        }
-//    }
-//#endif
-//#if defined __AVX2__ && defined __FMA__
-//    if (i + 7 < n) {
-//        auto max = _mm256_set1_ps(k_swiglu_oai_limit);
-//        auto alpha = _mm256_set1_ps(-k_swiglu_oai_alpha);
-//        for (; i + 7 < n; i += 8) {
-//            auto xc = v_clamp_max(_mm256_loadu_ps(x + i), max);
-//            _mm256_storeu_ps(y + i, v_silu_oai(xc, alpha));
-//        }
-//    }
-//#endif
-//    for (; i < n; ++i) {
-//        auto xi = std::min(x[i], k_swiglu_oai_limit);
-//        y[i] = xi / (1.0f + expf(-xi * k_swiglu_oai_alpha));
-//    }
-    for (int i = 0; i < n; ++i) {
+    int i = 0;
+#if defined __AVX2__
+    if (i + 7 < n) {
+        auto max = _mm256_set1_ps(k_swiglu_oai_limit);
+        auto alpha = _mm256_set1_ps(-k_swiglu_oai_alpha);
+        for (; i + 7 < n; i += 8) {
+            auto xc = v_clamp_max(_mm256_loadu_ps(x + i), max);
+            _mm256_storeu_ps(y + i, v_silu_oai(xc, alpha));
+        }
+    }
+#endif
+    for (; i < n; ++i) {
         auto xi = std::min(x[i], k_swiglu_oai_limit);
         y[i] = xi / (1.0f + expf(-xi * k_swiglu_oai_alpha));
     }
 }
 
 void MulMat::clamp_oai(int n, float * x) {
-    for (int i = 0; i < n; ++i) x[i] = 1.f + std::max(std::min(x[i], k_swiglu_oai_limit), -k_swiglu_oai_limit);
+    int i = 0;
+#if defined __AVX2__
+    if (i + 7 < n) {
+        auto limit = _mm256_set1_ps(k_swiglu_oai_limit);
+        auto neg_limit = _mm256_set1_ps(-k_swiglu_oai_limit);
+        auto one = _mm256_set1_ps(1.f);
+        for (; i + 7 < n; i += 8) {
+            auto xi = _mm256_loadu_ps(x + i);
+            auto upper_clamped = v_clamp_max(xi, limit);
+            auto mask = _mm256_cmp_ps(xi, neg_limit, _CMP_LT_OQ);
+            auto both_clamped = _mm256_blendv_ps(upper_clamped, neg_limit, mask);
+            _mm256_storeu_ps(x + i, _mm256_add_ps(one, both_clamped));
+        }
+    }
+#endif
+    for (; i < n; ++i) x[i] = 1.f + std::max(std::min(x[i], k_swiglu_oai_limit), -k_swiglu_oai_limit);
 }
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
@@ -1148,37 +1189,6 @@ void MulMat::gelu(int n, const float * x, float * y) {
     for (; i < n; ++i) y[i] = 0.5f*x[i]*(1.0f + tanhf(SQRT_2_OVER_PI*x[i]*(1.0f + GELU_COEF_A*x[i]*x[i])));
 }
 
-//void MulMat::swiglu_oai(int n, const float * x, float * y) {
-//    int i = 0;
-//#if defined __AVX512F__ && defined __AVX512DQ__
-//    {
-//        auto limit = _mm512_set1_ps(k_swiglu_oai_limit);
-//        auto alpha = _mm512_set1_ps(k_swiglu_oai_alpha);
-//        for (; i + 15 < n; i += 16) {
-//            auto xi = _mm512_loadu_ps(x + i);
-//            auto mask = _mm512_cmp
-//
-//        }
-//        __m512 c1 = _mm512_set1_ps(GELU_COEF_A);
-//        __m512 c2 = _mm512_set1_ps(2.f*SQRT_2_OVER_PI);
-//        for (; i + 15 < n; i += 16) _mm512_storeu_ps(y + i, v_gelu(_mm512_loadu_ps(x + i), c1, c2));
-//    }
-//#endif
-//#if defined __AVX2__ && defined __FMA__
-//    if (i + 7 < n) {
-//        __m256 c1 = _mm256_set1_ps(GELU_COEF_A);
-//        __m256 c2 = _mm256_set1_ps(2.f*SQRT_2_OVER_PI);
-//        for (; i + 7 < n; i += 8) _mm256_storeu_ps(y + i, v_gelu(_mm256_loadu_ps(x + i), c1, c2));
-//
-//    }
-//#endif
-//    for (; i < n; ++i) {
-//        auto xi = std::min(x[i], k_swiglu_oai_limit);
-//        y[i] = xi / (1.0f + expf(-xi * k_swiglu_oai_alpha));
-//    }
-//}
-
-
 void MulMat::silu(int n, const float * x, float * y) {
     int i = 0;
 #if defined __AVX512F__ && defined __AVX512DQ__
@@ -1191,7 +1201,16 @@ void MulMat::silu(int n, const float * x, float * y) {
 }
 
 void MulMat::relu(int n, const float * x, float * y) {
-    for (int j = 0; j < n; ++j) y[j] = x[j] > 0 ? x[j] : 0;
+    int i = 0;
+#if defined __AVX2__
+    if (i + 7 < n) {
+        for (; i + 7 < n; i += 8) {
+            auto xm = _mm256_loadu_ps(x + i);
+            _mm256_storeu_ps(y + i, _mm256_max_ps(xm, _mm256_setzero_ps()));
+        }
+    }
+#endif
+    for (; i < n; ++i) y[i] = x[i] > 0 ? x[i] : 0;
 }
 
 #endif
@@ -1595,9 +1614,7 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
         const int out_token_stride = head_dim * n_heads;
 
         float * state = state_out + state_head_offset;
-        for (int i = 0; i < head_dim * head_dim; ++i) {
-            state[i] = state_in[state_head_offset + i];
-        }
+        std::memcpy(state, state_in + state_head_offset, head_dim*head_dim*sizeof(float));
 
         for (int t = 0; t < n_tokens; ++t) {
             const float * q_t = q_data + qkv_head_offset_kq + t * qkv_token_stride;
@@ -1673,6 +1690,33 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
                 }
             }
 #else
+#ifdef __AVX2__
+            // v_prime = state^T*k and out_val = state^T*q are FP32 matvecs sharing the same state loads.
+            // Process a tile of 8 row-groups per column pass so the 8+8 accumulators fit in the 16 AVX
+            // registers (no spilling), while each state element is still read exactly once over all tiles.
+            const int n_groups = head_dim / 8;
+            for (int g0 = 0; g0 < n_groups; g0 += 8) {
+                const int ng = n_groups - g0 < 8 ? n_groups - g0 : 8;
+                __m256 vp_acc[8], ov_acc[8];
+                for (int gi = 0; gi < ng; ++gi) {
+                    vp_acc[gi] = _mm256_setzero_ps();
+                    ov_acc[gi] = _mm256_setzero_ps();
+                }
+                for (int col = 0; col < head_dim; ++col) {
+                    const __m256 vk = _mm256_set1_ps(k_t[col]);
+                    const __m256 vq = _mm256_set1_ps(q_t[col]);
+                    for (int gi = 0; gi < ng; ++gi) {
+                        const __m256 vs = _mm256_loadu_ps(state + g0*8 + 8*gi + col*head_dim);
+                        vp_acc[gi] = _mm256_fmadd_ps(vs, vk, vp_acc[gi]);
+                        ov_acc[gi] = _mm256_fmadd_ps(vs, vq, ov_acc[gi]);
+                    }
+                }
+                for (int gi = 0; gi < ng; ++gi) {
+                    _mm256_storeu_ps(v_prime + g0*8 + 8*gi, vp_acc[gi]);
+                    _mm256_storeu_ps(out_val  + g0*8 + 8*gi, ov_acc[gi]);
+                }
+            }
+#else
             std::memset(v_prime, 0, head_dim*sizeof(float));
             std::memset(out_val, 0, head_dim*sizeof(float));
             for (int col = 0; col < head_dim; ++col) {
@@ -1684,11 +1728,29 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
                     out_val[row] += s * q_col;
                 }
             }
+#endif
+#endif
+#ifdef __AVX2__
+            auto c1 = _mm256_set1_ps(beta_val);
+            auto c2 = _mm256_set1_ps(beta_val*decay);
+            auto c3 = _mm256_set1_ps(decay*scale);
+            auto c4 = _mm256_set1_ps(attn_score);
+            for (int row = 0; row < head_dim; row += 8) {
+                auto v   = _mm256_loadu_ps(v_t + row);
+                auto vp  = _mm256_loadu_ps(v_prime + row);
+                auto vn  = _mm256_sub_ps(_mm256_mul_ps(v, c1), _mm256_mul_ps(vp, c2));
+                _mm256_storeu_ps(v_new_buf + row, vn);
+                auto ov   = _mm256_loadu_ps(out_val + row);
+                auto oval = _mm256_fmadd_ps(vn, c4, _mm256_mul_ps(ov, c3));
+                _mm256_storeu_ps(out_t + row, oval);
+            }
+#else
             for (int row = 0; row < head_dim; ++row) {
                 const float v_new = v_t[row] * beta_val - v_prime[row] * beta_val * decay;
                 v_new_buf[row] = v_new;
                 out_t[row] = out_val[row] * decay * scale + v_new * attn_score;
             }
+#endif
 
 #ifdef __AVX2__
             auto vd = _mm256_set1_ps(decay);
@@ -1716,7 +1778,6 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
                     state[row + col * head_dim] = fminf(fmaxf(s, -1e6f), 1e6f);
                 }
             }
-#endif
 #endif
 
             if (saved_steps && t + 1 < n_tokens) {
@@ -1775,9 +1836,14 @@ size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth)
     }
     return 0;
 }
-// TODO: SIMDify
 inline void iqk_f16_to_f32(int n, const ggml_fp16_t * x, float * y) {
-    for (int i = 0; i < n; ++i) {
+    int i = 0;
+#if defined(__AVX2__) && defined(__F16C__)
+    for (; i + 7 < n; i += 8) {
+        _mm256_storeu_ps(y + i, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i))));
+    }
+#endif
+    for (; i < n; ++i) {
         y[i] = GGML_FP16_TO_FP32(x[i]);
     }
 }
@@ -2183,13 +2249,29 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
                 iqk_f16_to_f32(n_this_thread, (const ggml_fp16_t *)this_m + first, score_th);
             }
             auto kq_i = kq_th;
-            for (int i = 0; i < int(q->ne[1]); ++i) {
-                float wi = this_w[i];
-                for (int j = 0; j < n_this_thread; ++j) {
-                    float relu = kq_i[j] > 0.0f ? kq_i[j] : 0.0f;
-                    score_th[j] += wi * relu;
+#ifdef __AVX2__
+            if (n_this_thread % 8 == 0) {
+                auto vzero = _mm256_setzero_ps();
+                for (int i = 0; i < int(q->ne[1]); ++i) {
+                    auto vw = _mm256_set1_ps(this_w[i]);
+                    for (int j = 0; j < n_this_thread; j += 8) {
+                        auto relu = _mm256_max_ps(vzero, _mm256_loadu_ps(kq_i + j));
+                        auto acc  = _mm256_fmadd_ps(vw, relu, _mm256_loadu_ps(score_th + j));
+                        _mm256_storeu_ps(score_th + j, acc);
+                    }
+                    kq_i += n_this_thread;
                 }
-                kq_i += n_this_thread;
+            } else
+#endif
+            {
+                for (int i = 0; i < int(q->ne[1]); ++i) {
+                    float wi = this_w[i];
+                    for (int j = 0; j < n_this_thread; ++j) {
+                        float relu = kq_i[j] > 0.0f ? kq_i[j] : 0.0f;
+                        score_th[j] += wi * relu;
+                    }
+                    kq_i += n_this_thread;
+                }
             }
         }
         barrier(barrier_data);

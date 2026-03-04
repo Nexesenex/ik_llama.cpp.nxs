@@ -5400,12 +5400,27 @@ void dequantize_row_q4_0_r8(const block_iq4_nl_r8 * x, float * y, int64_t k) {
     for (int ib = 0; ib < nb; ++ib) {
         for (int k = 0; k < 8; ++k) {
             float scale = GGML_FP16_TO_FP32(x[ib].d[k]);
+#ifdef __AVX2__
+            // out[4*l+i+ 0] = scale*((qs[32*l+4*k+i] & 0xf) - 8)   low nibbles
+            // out[4*l+i+16] = scale*((qs[32*l+4*k+i] >> 4) - 8)   high nibbles
+            const uint32_t * q32 = (const uint32_t *)(x[ib].qs + 4*k);
+            __m128i s0 = _mm_set_epi32(q32[24], q32[16], q32[8], q32[0]);
+            __m256i a0 = _mm256_cvtepu8_epi32(s0);
+            __m256i a1 = _mm256_cvtepu8_epi32(_mm_srli_si128(s0, 8));
+            __m256 vscale = _mm256_set1_ps(scale);
+            float * out = yk[k] + QK4_0*ib;
+            _mm256_storeu_ps(out +  0, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_and_si256(a0, _mm256_set1_epi32(0xf)), _mm256_set1_epi32(8)))));
+            _mm256_storeu_ps(out +  8, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_and_si256(a1, _mm256_set1_epi32(0xf)), _mm256_set1_epi32(8)))));
+            _mm256_storeu_ps(out + 16, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_srli_epi32(a0, 4), _mm256_set1_epi32(8)))));
+            _mm256_storeu_ps(out + 24, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_srli_epi32(a1, 4), _mm256_set1_epi32(8)))));
+#else
             for (int l = 0; l < 4; ++l) {
                 for (int i = 0; i < 4; ++i) {
                     yk[k][QK4_0*ib+4*l+i+ 0] = scale * ((x[ib].qs[32*l+4*k+i] & 0xf) - 8);
                     yk[k][QK4_0*ib+4*l+i+16] = scale * ((x[ib].qs[32*l+4*k+i] >>  4) - 8);
                 }
             }
+#endif
         }
     }
 }
@@ -5503,10 +5518,26 @@ void dequantize_row_q8_0_r8(const block_q8_0_r8 * x, float * y, int64_t k) {
     for (int ib = 0; ib < nb; ++ib) {
         for (int k = 0; k < 8; ++k) {
             float scale = GGML_FP16_TO_FP32(x[ib].d[k]);
+#ifdef __AVX2__
+            // out[4*l+i+0]   = scale*qs[32*l+4*k+i]      (16 bytes, l-major)
+            // out[4*l+i+16]  = scale*qs[32*l+4*k+i+128]  (16 bytes, l-major)
+            // the dwords at offsets 4*k + {0,32,64,96} are exactly out bytes 0..15
+            const uint32_t * q32 = (const uint32_t *)(x[ib].qs + 4*k);
+            __m128i s0 = _mm_set_epi32(q32[24], q32[16], q32[8], q32[0]);
+            const uint32_t * q32h = (const uint32_t *)(x[ib].qs + 4*k + 128);
+            __m128i s1 = _mm_set_epi32(q32h[24], q32h[16], q32h[8], q32h[0]);
+            __m256 vscale = _mm256_set1_ps(scale);
+            float * out = yk[k] + QK8_0*ib;
+            _mm256_storeu_ps(out +  0, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(s0))));
+            _mm256_storeu_ps(out +  8, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(s0, 8)))));
+            _mm256_storeu_ps(out + 16, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(s1))));
+            _mm256_storeu_ps(out + 24, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(s1, 8)))));
+#else
             for (int l = 0; l < 4; ++l) for (int i = 0; i < 4; ++i) {
                 yk[k][QK8_0*ib+4*l+i+ 0] = scale * x[ib].qs[32*l+4*k+i+  0];
                 yk[k][QK8_0*ib+4*l+i+16] = scale * x[ib].qs[32*l+4*k+i+128];
             }
+#endif
         }
     }
 }
