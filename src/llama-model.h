@@ -444,6 +444,7 @@ struct llama_model {
     ggml_backend_buffer_type_t default_buffer_type_offload(int device) const;
 
     std::vector<float> splits;
+    std::vector<float> kv_splits; // KV cache split ratios, if provided
     ggml_backend_buffer_type_t split_buft = nullptr;
 };
 
