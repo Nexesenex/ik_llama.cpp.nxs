@@ -1443,6 +1443,29 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.split_adjust_step_frequency = std::stof(argv[i]);
         return true;
     }
+    else if (arg == "--split-tensor-split-factor" || arg == "-stpf") {
+        CHECK_ARG
+        params.split_tensor_split_factor = std::stof(argv[i]);
+        return true;
+    }
+    else if (arg == "--split-vram-free-factor" || arg == "-svff") {
+        CHECK_ARG
+        params.split_vram_free_factor = std::stof(argv[i]);
+        return true;
+    }
+    else if (arg == "--split-usage-penalty-factor" || arg == "-supf") {
+        CHECK_ARG
+        params.split_usage_penalty_factor = std::stof(argv[i]);
+        return true;
+    }
+    else if (arg == "--split-adjust-vram-aware" || arg == "-sava") {
+        params.split_adjust_vram_aware = true;
+        return true;
+    }
+    else if (arg == "--split-adjust-not-used" || arg == "-sanu") {
+        params.split_adjust_not_used = true;
+        return true;
+    }
     if (arg == "--split-mode" || arg == "-sm") {
         CHECK_ARG
         std::string arg_next = argv[i];
@@ -2825,6 +2848,11 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "or for intermediate results and KV (with split-mode = row) (default: %d)", params.main_gpu });
         options.push_back({ "*",           "-mgps, --max-gpu-per-split i",        "max. number of GPUs to use at a time with split mode 'tensor parallel', (default: %d)", params.max_gpu_per_split });
         options.push_back({ "*",           "-sasf, --split-adjust-step-frequency f", "adjust every N layers (<1: legacy formula with 1/N, >=1: direct N) (default: %.1f)", params.split_adjust_step_frequency });
+        options.push_back({ "*",           "-sava, --split-adjust-vram-aware", "use VRAM-aware selection in adjust_split (respects -ts and -sasf) (default: %s)", params.split_adjust_vram_aware ? "true" : "false" });
+        options.push_back({ "*",           "-sanu, --split-adjust-not-used", "skip adjust_split entirely, rely on formula only (default: %s)", params.split_adjust_not_used ? "true" : "false" });
+        options.push_back({ "*",           "-stpf, --split-tensor-split-factor f", "factor for proportional split (neutral: 1.0, you can test: 0.75)", params.split_tensor_split_factor });
+        options.push_back({ "*",           "-svff, --split-vram-free-factor f", "factor for VRAM availability (neutral: 0.0, you can test: 0.75)", params.split_vram_free_factor });
+        options.push_back({ "*",           "-supf, --split-usage-penalty-factor f", "factor for memory usage penalty (neutral: 0.0, you can test: 0.25)", params.split_usage_penalty_factor });
     }
 
     options.push_back({ "model" });
@@ -3711,6 +3739,11 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.main_gpu        = params.main_gpu;
     mparams.max_gpu_per_split = params.max_gpu_per_split;
     mparams.split_adjust_step_frequency = params.split_adjust_step_frequency;
+    mparams.split_adjust_vram_aware = params.split_adjust_vram_aware;
+    mparams.split_adjust_not_used = params.split_adjust_not_used;
+    mparams.split_tensor_split_factor = params.split_tensor_split_factor;
+    mparams.split_vram_free_factor = params.split_vram_free_factor;
+    mparams.split_usage_penalty_factor = params.split_usage_penalty_factor;
     mparams.ncmoe           = params.ncmoe;
     mparams.fit             = params.fit;
     mparams.fit_margin      = params.fit_margin;
@@ -4833,6 +4866,11 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
     fprintf(stream, "max_gpu_per_split: %d # default: 0\n", params.max_gpu_per_split);
     fprintf(stream, "split_adjust_step_frequency: %.1f # default: 0.5 (<1: legacy formula, >=1: direct layer count)\n", params.split_adjust_step_frequency);
+    fprintf(stream, "split_adjust_vram_aware: %s # default: false\n", params.split_adjust_vram_aware ? "true" : "false");
+    fprintf(stream, "split_adjust_not_used: %s # default: false\n", params.split_adjust_not_used ? "true" : "false");
+    fprintf(stream, "split_tensor_split_factor: %.1f # default: 1.0 (neutral), ventilation: 2.0\n", params.split_tensor_split_factor);
+    fprintf(stream, "split_vram_free_factor: %.1f # default: 0.0 (neutral), ventilation: 0.6\n", params.split_vram_free_factor);
+    fprintf(stream, "split_usage_penalty_factor: %.1f # default: 0.0 (neutral), ventilation: 1.0\n", params.split_usage_penalty_factor);
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
     fprintf(stream, "fit: %d # default: false\n", params.fit);
     fprintf(stream, "fit_margin: %d # default: 0\n", params.fit_margin);

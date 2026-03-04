@@ -372,6 +372,11 @@ extern "C" {
         int32_t main_gpu;
         int32_t max_gpu_per_split;
         float split_adjust_step_frequency;
+        bool split_adjust_vram_aware;
+        bool split_adjust_not_used;
+        float split_tensor_split_factor;
+        float split_vram_free_factor;
+        float split_usage_penalty_factor;
         int32_t ncmoe;
 
         enum ggml_type type_k;
