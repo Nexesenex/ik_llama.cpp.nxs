@@ -1016,18 +1016,32 @@ constexpr float k_swiglu_oai_alpha = 1.702f;
 constexpr float k_swiglu_oai_limit = 7.f;
 
 void MulMat::swiglu_oai(int n, const float * x, float * y) {
-    int i = 0;
-#if defined __AVX2__ && defined __FMA__
-    if (i + 7 < n) {
-        auto max = _mm256_set1_ps(k_swiglu_oai_limit);
-        auto alpha = _mm256_set1_ps(-k_swiglu_oai_alpha);
-        for (; i + 7 < n; i += 8) {
-            auto xc = v_clamp_max(_mm256_loadu_ps(x + i), max);
-            _mm256_storeu_ps(y + i, v_silu_oai(xc, alpha));
-        }
-    }
-#endif
-    for (; i < n; ++i) {
+//    int i = 0;
+//#if defined __AVX512F__ && defined __AVX512DQ__
+//    {
+//        auto max = _mm512_set1_ps(k_swiglu_oai_limit);
+//        auto alpha = _mm512_set1_ps(-k_swiglu_oai_alpha);
+//        for (; i + 15 < n; i += 16) {
+//            auto xc = v_clamp_max(_mm512_loadu_ps(x + i), max);
+//            _mm512_storeu_ps(y + i, v_silu_oai(xc, alpha));
+//        }
+//    }
+//#endif
+//#if defined __AVX2__ && defined __FMA__
+//    if (i + 7 < n) {
+//        auto max = _mm256_set1_ps(k_swiglu_oai_limit);
+//        auto alpha = _mm256_set1_ps(-k_swiglu_oai_alpha);
+//        for (; i + 7 < n; i += 8) {
+//            auto xc = v_clamp_max(_mm256_loadu_ps(x + i), max);
+//            _mm256_storeu_ps(y + i, v_silu_oai(xc, alpha));
+//        }
+//    }
+//#endif
+//    for (; i < n; ++i) {
+//        auto xi = std::min(x[i], k_swiglu_oai_limit);
+//        y[i] = xi / (1.0f + expf(-xi * k_swiglu_oai_alpha));
+//    }
+    for (int i = 0; i < n; ++i) {
         auto xi = std::min(x[i], k_swiglu_oai_limit);
         y[i] = xi / (1.0f + expf(-xi * k_swiglu_oai_alpha));
     }
@@ -1083,6 +1097,37 @@ void MulMat::gelu(int n, const float * x, float * y) {
 #endif
     for (; i < n; ++i) y[i] = 0.5f*x[i]*(1.0f + tanhf(SQRT_2_OVER_PI*x[i]*(1.0f + GELU_COEF_A*x[i]*x[i])));
 }
+
+//void MulMat::swiglu_oai(int n, const float * x, float * y) {
+//    int i = 0;
+//#if defined __AVX512F__ && defined __AVX512DQ__
+//    {
+//        auto limit = _mm512_set1_ps(k_swiglu_oai_limit);
+//        auto alpha = _mm512_set1_ps(k_swiglu_oai_alpha);
+//        for (; i + 15 < n; i += 16) {
+//            auto xi = _mm512_loadu_ps(x + i);
+//            auto mask = _mm512_cmp
+//
+//        }
+//        __m512 c1 = _mm512_set1_ps(GELU_COEF_A);
+//        __m512 c2 = _mm512_set1_ps(2.f*SQRT_2_OVER_PI);
+//        for (; i + 15 < n; i += 16) _mm512_storeu_ps(y + i, v_gelu(_mm512_loadu_ps(x + i), c1, c2));
+//    }
+//#endif
+//#if defined __AVX2__ && defined __FMA__
+//    if (i + 7 < n) {
+//        __m256 c1 = _mm256_set1_ps(GELU_COEF_A);
+//        __m256 c2 = _mm256_set1_ps(2.f*SQRT_2_OVER_PI);
+//        for (; i + 7 < n; i += 8) _mm256_storeu_ps(y + i, v_gelu(_mm256_loadu_ps(x + i), c1, c2));
+//
+//    }
+//#endif
+//    for (; i < n; ++i) {
+//        auto xi = std::min(x[i], k_swiglu_oai_limit);
+//        y[i] = xi / (1.0f + expf(-xi * k_swiglu_oai_alpha));
+//    }
+//}
+
 
 void MulMat::silu(int n, const float * x, float * y) {
     int i = 0;
