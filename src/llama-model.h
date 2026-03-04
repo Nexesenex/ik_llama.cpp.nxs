@@ -420,6 +420,11 @@ struct llama_model {
     int main_gpu;
     int max_gpu_per_split = 0; // max. number of GPUs to use per layer for aplit mode "graph"
     float split_adjust_step_frequency = 0.5f; // < 1: legacy formula (inverted), >= 1: direct layer count
+    bool split_adjust_vram_aware = false; // use VRAM-aware selection in adjust_split (respects -ts and -sasf)
+    bool split_adjust_not_used = false; // skip adjust_split entirely, rely on formula only
+    float split_tensor_split_factor = 1.0f; // factor for proportional split (neutral: 1.0, you can test: 0.75)
+    float split_vram_free_factor = 0.0f; // factor for VRAM availability (neutral: 0.0, you can test: 0.75)
+    float split_usage_penalty_factor = 0.0f; // factor for memory usage penalty (neutral: 0.0, you can test: 0.25)
     int n_gpu_layers;
 
     bool split_output_tensor = false; // force split output tensor in split mode graph

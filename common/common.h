@@ -263,6 +263,11 @@ struct gpt_params {
     int32_t main_gpu              =       0; // the GPU that is used for scratch and small tensors
     int32_t max_gpu_per_split     =       0; // max number of GPUs to use at a time for split mode "graph" / "tenpar"
     float   split_adjust_step_frequency = 0.5f; // < 1: legacy formula (inverted), >= 1: direct layer count
+    bool    split_adjust_vram_aware = false;    // use VRAM-aware selection in adjust_split
+    bool    split_adjust_not_used = false;      // dismiss adjust_split entirely
+    float   split_tensor_split_factor   = 1.0f; // factor for proportional split (neutral: 1.0, you can test: 0.75)
+    float   split_vram_free_factor      = 0.0f; // factor for VRAM availability (neutral: 0.0, you can test: 0.75)
+    float   split_usage_penalty_factor  = 0.0f; // factor for memory usage penalty (neutral: 0.0, you can test: 0.25)
     int32_t ncmoe                 =       0; // number of layers in which MoE tensors are left in VRAM
     int32_t fit_margin            =       0; // safety margin for auto-fit in MiB
     bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)
