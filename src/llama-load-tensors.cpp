@@ -312,6 +312,14 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
             }
             last_split = splits[i];
         }
+        if (ibest < 0) {
+            for (int i = 0; i < (int)splits.size(); ++i) {
+                if (result[i] > 0) {
+                    ibest = i;
+                    break;
+                }
+            }
+        }
         GGML_ASSERT(ibest >= 0 && result[ibest] > 0);
         --result[ibest];
         --sum;
