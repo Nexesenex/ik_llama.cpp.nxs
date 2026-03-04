@@ -999,15 +999,12 @@ static bool llama_kv_cache_init(
         LLAMA_LOG_INFO("%s: KV cache size per device:\n", __func__);
         size_t total_kv_size = 0;
         for (auto & mem : mem_split) total_kv_size += mem;
-        
-        // use kv_splits if provided, otherwise use model.splits
-        const std::vector<float> & kv_split_ratios = model.kv_splits.empty() ? model.splits : model.kv_splits;
         float last_split = 0;
-        for (int i = 0; i < int(kv_split_ratios.size()); ++i) {
-            float ratio = kv_split_ratios[i] - last_split;
+        for (int i = 0; i < int(model.splits.size()); ++i) {
+            float ratio = model.splits[i] - last_split;
             size_t kv_per_device = (size_t)(total_kv_size * ratio);
             LLAMA_LOG_INFO("    Device %d:  %g MiB\n", i, kv_per_device/1024./1024.);
-            last_split = kv_split_ratios[i];
+            last_split = model.splits[i];
         }
     }
 
@@ -1983,7 +1980,6 @@ static bool llm_load_tensors(
         int main_gpu,
         int max_gpu,
         const float * tensor_split,
-        const float * kv_split,
         bool use_mlock,
         bool validate_quants,
         bool mtp,
@@ -2053,21 +2049,6 @@ static bool llm_load_tensors(
             splits[i] /= split_sum;
         }
         model.splits = std::move(splits);
-
-        // initialize kv_splits from kv_split parameter if provided
-        if (kv_split != nullptr && !std::all_of(kv_split, kv_split + device_count, [](float x) { return x == 0.0f; })) {
-            model.kv_splits.resize(device_count);
-            float kv_split_sum = 0.0f;
-            for (int i = 0; i < device_count; ++i) {
-                kv_split_sum += kv_split[i];
-                model.kv_splits[i] = kv_split[i];
-            }
-            float last = 0.0f;
-            for (int i = 0; i < device_count; ++i) {
-                last += model.kv_splits[i] / kv_split_sum;
-                model.kv_splits[i] = last;
-            }
-        }
     } else {
         model.splits = { 1.0f };
     }
@@ -2428,7 +2409,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 #endif
 
         if (!llm_load_tensors(
-            ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.max_gpu, params.tensor_split, params.kv_split,
+            ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.max_gpu, params.tensor_split,
             params.use_mlock, params.validate_quants, params.mtp,
             params.progress_callback, params.progress_callback_user_data
         )) {
@@ -4378,7 +4359,7 @@ void llama_lora_adapter_free(struct llama_lora_adapter * adapter) {
 // interface implementation
 //
 struct llama_model_params llama_model_default_params() {
-struct llama_model_params result = {
+    struct llama_model_params result = {
         /*.devices                 =*/ nullptr,
         /*.n_gpu_layers                =*/ 0,
         /*.mla                         =*/ 0,
@@ -4386,7 +4367,6 @@ struct llama_model_params result = {
         /*.main_gpu                    =*/ 0,
         /*.max_gpu                     =*/ 0,
         /*.tensor_split                =*/ nullptr,
-        /*.kv_split                    =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
