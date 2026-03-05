@@ -1486,14 +1486,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cuda_params = argv[i];
         return true;
     }
-    if (arg == "-mtp" || arg == "--multi-token-prediction") {
-        params.has_mtp = true;
-        return true;
-    }
-    if (arg == "-no-mtp" || arg == "--no-multi-token-prediction") {
-        params.has_mtp = false;
-        return true;
-    }
     if (arg == "-draft" || arg == "--draft-params") {
         CHECK_ARG
         params.speculative.params = argv[i];
@@ -2713,8 +2705,6 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-hfr,  --hf-repo REPO",         "Hugging Face model repository (default: unused)" });
     options.push_back({ "*",           "-hff,  --hf-file FILE",         "Hugging Face model file (default: unused)" });
     options.push_back({ "*",           "-hft,  --hf-token TOKEN",       "Hugging Face access token (default: value from HF_TOKEN environment variable)" });
-    options.push_back({ "*", "-mtp, --multi-token-prediction",          "whether to use multi-token-prediction (if supported) (default: %s)", params.has_mtp ? "true" : "false" });
-    options.push_back({ "*", "-no-mtp, --no-multi-token-prediction",    "whether to use multi-token-prediction (if supported) (default: %s)", !params.has_mtp ? "true" : "false" });
     options.push_back({ "*", "--draft-max, --draft, --draft-n N",
                                                                         "number of tokens to draft for speculative decoding (default: %d)", params.speculative.n_max });
     options.push_back({ "*", "--draft-min, --draft-n-min N",   "minimum number of draft tokens to use for speculative decoding" });
@@ -3462,7 +3452,6 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.validate_quants = params.validate_quants;
     mparams.merge_qkv       = params.merge_qkv;
     mparams.merge_up_gate_exps = params.merge_up_gate_exps;
-    mparams.mtp             = params.has_mtp;
     mparams.split_output_tensor = params.split_output_tensor;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
@@ -3586,8 +3575,6 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.thresh_experts    = params.thresh_experts;
     cparams.only_active_experts = params.only_active_exps;
     cparams.max_extra_alloc   = params.max_extra_alloc_MiB;
-    cparams.mtp               = params.has_mtp;
-    cparams.mtp_op_type      = MTP_OP_NONE;
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
