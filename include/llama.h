@@ -402,6 +402,7 @@ extern "C" {
         bool merge_up_gate_exps;  // if true, merge ffn_up_exps and ffn_gate_exps tensors into a single, contiguous tensor
         bool mtp;           // if true, load MTP layers if present
         bool dry_run;       // skip loading tensors
+        bool split_output_tensor; // if true, force split the output tensor in split mode graph
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
