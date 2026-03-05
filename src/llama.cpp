@@ -2134,6 +2134,7 @@ static bool llm_load_tensors(
         bool validate_quants,
         bool mtp,
         bool dry_run,
+        bool split_output_tensor,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
     model.t_start_us = ggml_time_us();
@@ -2539,6 +2540,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 params.kv_overrides, params.tensor_buft_overrides);
 
         model.hparams.vocab_only = params.vocab_only;
+        model.split_output_tensor = params.split_output_tensor;
 
         try {
             llm_load_arch(ml, model);
@@ -2589,7 +2591,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
             params.type_k, params.type_v, params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.flash_attn,
-            params.use_mlock, params.validate_quants, params.mtp, params.dry_run,
+            params.use_mlock, params.validate_quants, params.split_output_tensor, params.mtp, params.dry_run,
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;
@@ -4569,6 +4571,7 @@ struct llama_model_params llama_model_default_params() {
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.repack_tensors              =*/ false,
+        /*.split_output_tensor         =*/ false,
         /*.use_thp                     =*/ false,
         /*.validate_quants             =*/ false,
         /*.merge_qkv                   =*/ false,
