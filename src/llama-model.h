@@ -459,6 +459,7 @@ struct llama_model {
     std::vector<float> split_vram_reserve_factor; // per-GPU VRAM reserve (<1: fraction reserved, >1: direct limit %)
     int n_gpu_layers;
 
+    bool split_output_tensor = false; // force split output tensor in split mode graph
     bool mtp; // use mtp if is supported by the Model
 
     std::vector<rpc_device> rpc_servers;

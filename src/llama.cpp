@@ -3393,6 +3393,7 @@ static bool llm_load_tensors(
         bool mtp,
         bool fit,
         bool dry_run,
+        bool split_output_tensor,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
     model.t_start_us = ggml_time_us();
@@ -4149,6 +4150,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 params.kv_overrides, params.tensor_buft_overrides);
 
         model.hparams.vocab_only = params.vocab_only;
+        model.split_output_tensor = params.split_output_tensor;
 
         model.mtp = params.mtp;
 
@@ -4237,6 +4239,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             params.mtp,
             params.fit,
             params.dry_run,
+            params.split_output_tensor,
             params.progress_callback,
             params.progress_callback_user_data
         )) {
@@ -6524,6 +6527,7 @@ struct llama_model_params llama_model_default_params() {
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.repack_tensors              =*/ false,
+        /*.split_output_tensor         =*/ false,
         /*.use_thp                     =*/ false,
         /*.validate_quants             =*/ false,
         /*.merge_qkv                   =*/ false,
