@@ -21,7 +21,7 @@ ggml_cgraph * llm_build_context::build_qwen3() {
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
     ggml_tensor * rope_cache = nullptr;
-    if (model.split_mode != LLAMA_SPLIT_MODE_GRAPH && cparams.rope_cache &&
+    if (model.split_mode != LLAMA_SPLIT_MODE_TENSOR_PARALLEL && cparams.rope_cache &&
             (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM)) {
         rope_cache = ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow);
