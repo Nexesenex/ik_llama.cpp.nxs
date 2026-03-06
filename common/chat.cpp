@@ -736,8 +736,10 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_MINIMAX_M2: return "MiniMax-M2";
         case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
         case COMMON_CHAT_FORMAT_KIMI_K2: return "Kimi K2";
+        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder";
         case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
+        case COMMON_CHAT_FORMAT_MIROTHINKER: return "MiroThinker";
         case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE: return "peg-native";
         case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED: return "peg-constructed";
@@ -1890,6 +1892,56 @@ static common_chat_params common_chat_params_init_minimax_m2(const common_chat_t
     return data;
 }
 
+static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_chat_template & tmpl, const struct templates_params & params) {
+    common_chat_params data;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    data.prompt = apply(tmpl, params);
+    data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
+
+    // Qwen3.5 and Step-3.5-Flash use the Qwen3 Coder tool calling with thinking
+    bool supports_reasoning = (tmpl.source().find("<think>") != std::string::npos);
+
+    if (supports_reasoning && string_ends_with(data.prompt, "<think>\n")) {
+        if (!params.enable_thinking) {
+            data.prompt += "</think>";
+        } else {
+            data.thinking_forced_open = true;
+        }
+    }
+
+    data.preserved_tokens = {
+        "<tool_call>",
+        "</tool_call>",
+        "<function=",
+        "</function>",
+        "<parameter=",
+        "</parameter>",
+    };
+
+    if (supports_reasoning) {
+        data.preserved_tokens.insert(data.preserved_tokens.end(), { "<think>", "</think>" });
+    }
+
+    // build grammar for tool call
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form{};
+        form.scope_start = "";
+        form.tool_start = "\n<tool_call>\n<function=";
+        form.tool_sep = ">\n";
+        form.key_start = "<parameter=";
+        form.key_val_sep = ">\n";
+        form.val_end = "\n</parameter>\n";
+        form.tool_end = "</function>\n</tool_call>";
+        form.scope_end = "";
+        form.relax_arg = true;
+        return form;
+        })();
+        build_grammar_xml_tool_call(data, params.tools, form);
+
+        return data;
+}
+
 static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
     data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
@@ -1999,6 +2051,54 @@ static common_chat_params common_chat_params_init_xiaomi_mimo(const common_chat_
     build_grammar_xml_tool_call(data, params.tools, form);
 
     return data;
+}
+
+static common_chat_params common_chat_params_init_mirothinker(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+    //data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    //// Disable every Minja polyfill
+    //minja::chat_template_options topts;
+    //topts.apply_polyfills = true;
+    //topts.polyfill_tools = false;
+    //topts.polyfill_tool_call_examples = false;
+    //topts.polyfill_tool_calls = false;
+    //topts.polyfill_tool_responses = false;
+    //topts.polyfill_system_role = false;
+    //topts.polyfill_object_arguments = true;
+    //topts.polyfill_typed_content = false;
+    //topts.use_bos_token = true;
+    //topts.use_eos_token = true;
+
+    //data.prompt = apply(tmpl, params, std::nullopt, std::nullopt, std::nullopt, topts);
+    data.prompt = apply(tmpl, inputs);
+    data.format = COMMON_CHAT_FORMAT_MIROTHINKER;
+
+    data.preserved_tokens = {
+        "<use_mcp_tool>", "</use_mcp_tool>",
+        "<server_name>", "</server_name>",
+        "<tool_name>", "</tool_name>",
+        "<arguments>", "</arguments>",
+    };
+
+    // build grammar for tool call
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form{};
+        form.scope_start = "<use_mcp_tool>\n";
+        form.tool_start = "<server_name>\n";
+        form.tool_sep = "</tool_name>\n<arguments>\n{";
+        form.key_start = "\"";
+        form.key_val_sep = "\": ";
+        form.val_end = ", ";
+        form.tool_end = "}\n</arguments>";
+        form.scope_end = "</use_mcp_tool>";
+        form.raw_argval = false;
+        form.last_val_end = "";
+        return form;
+        })();
+        build_grammar_xml_tool_call(data, inputs.tools, form);
+
+        return data;
 }
 
 static common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & tmpl, const struct templates_params & inputs) {
@@ -3052,14 +3152,30 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_glm_4_5(tmpl, params);
     }
 
+    //// Qwen3-Coder XML format detection (must come before Hermes 2 Pro)
+    //// Detect via XML markers: <tool_call>, <function=...>, and <parameter=...> blocks.
+    //// Also matches Step-3.5-Flash and Nemotron 3 Nano which use the same output format.
+    //if (src.find("<tool_call>") != std::string::npos &&
+    //    src.find("<function=") != std::string::npos &&
+    //    src.find("<parameter=") != std::string::npos) {
+    //    workaround::func_args_not_string(params.messages);
+    //    return common_chat_params_init_qwen3_coder(tmpl, params);
+    //}
+
     // Qwen3-Coder XML format detection (must come before Hermes 2 Pro)
-    // Detect via XML markers: <tool_call>, <function=...>, and <parameter=...> blocks.
-    // Also matches Step-3.5-Flash and Nemotron 3 Nano which use the same output format.
+    // Detect via explicit XML markers unique to Qwen3-Coder to avoid false positives in other templates.
+    // Require presence of <tool_call>, <function=...>, and <parameter=...> blocks.
     if (src.find("<tool_call>") != std::string::npos &&
         src.find("<function=") != std::string::npos &&
         src.find("<parameter=") != std::string::npos) {
         workaround::func_args_not_string(params.messages);
-        return common_chat_params_init_qwen3_coder(tmpl, params);
+        // Models with <think> support (Step-3.5-Flash, Nemotron 3 Nano) use the
+        // Nemotron v3 PEG parser for streaming and schema-aware parameter parsing.
+        // Qwen3-Coder has no <think> in its template.
+        //if (src.find("<think>") != std::string::npos) {
+        //    return common_chat_params_init_qwen3_coder(tmpl, params);
+        //}
+        return common_chat_params_init_qwen3_coder_xml(tmpl, params);
     }
 
     // Xiaomi MiMo format detection (must come before Hermes 2 Pro)
@@ -3070,6 +3186,14 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("</tool_calls>") != std::string::npos &&
         src.find("<tool_response>") != std::string::npos) {
         return common_chat_params_init_xiaomi_mimo(tmpl, params);
+    }
+
+    // MiroThinker format detection (must come before Hermes 2 Pro)
+    if (src.find("</use_mcp_tool>") != std::string::npos &&
+        src.find("</server_name>") != std::string::npos &&
+        src.find("</tool_name>") != std::string::npos &&
+        src.find("</arguments>") != std::string::npos) {
+        return common_chat_params_init_mirothinker(tmpl, params);
     }
 
     // Hermes 2/3 Pro, Qwen 2.5 Instruct (w/ tools)
