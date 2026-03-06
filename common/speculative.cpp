@@ -1954,7 +1954,6 @@ bool common_speculative_load_draft_model(
     params_dft.cache_type_k     = params.cache_type_k.empty() ? params_base.cache_type_k : params.cache_type_k;
     params_dft.cache_type_v     = params.cache_type_v.empty() ? params_base.cache_type_v : params.cache_type_v;
 
-
     if (!params.params.empty()) {
         auto [argc, argv] = parse_command_line("llama-server " + params.params);
         if (!gpt_params_parse(argc, argv, params_dft)) {
