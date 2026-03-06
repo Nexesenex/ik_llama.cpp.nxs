@@ -762,7 +762,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 }
 
 ggml_cgraph * llm_build_context::build_deepseek2() {
-    const bool tp_mode = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
+    const bool tp_mode = (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
                           model.split_mode == LLAMA_SPLIT_MODE_ATTN);
 #ifdef GGML_USE_VULKAN
     const bool use_f32_attn_precision = true;

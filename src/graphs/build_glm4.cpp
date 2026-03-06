@@ -13,7 +13,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
     // position embeddings
     struct ggml_tensor * inp_pos = build_inp_pos();
 
-    auto rope_cache = model.split_mode != LLAMA_SPLIT_MODE_GRAPH && cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
+    auto rope_cache = model.split_mode != LLAMA_SPLIT_MODE_TENSOR_PARALLEL && cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
