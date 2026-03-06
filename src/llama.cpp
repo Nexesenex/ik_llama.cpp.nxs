@@ -1968,7 +1968,6 @@ static bool llm_load_tensors(
         bool use_mlock,
         bool validate_quants,
         bool mtp,
-        bool split_output_tensor,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
     model.t_start_us = ggml_time_us();
@@ -2347,7 +2346,6 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 params.kv_overrides, params.tensor_buft_overrides);
 
         model.hparams.vocab_only = params.vocab_only;
-        model.split_output_tensor = params.split_output_tensor;
 
         try {
             llm_load_arch(ml, model);
@@ -2397,7 +2395,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.max_gpu, params.tensor_split,
-            params.use_mlock, params.validate_quants, params.mtp, params.split_output_tensor,
+            params.use_mlock, params.validate_quants, params.mtp,
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;
@@ -4359,7 +4357,6 @@ struct llama_model_params llama_model_default_params() {
         /*.merge_qkv                   =*/ false,
         /*.merge_up_gate_exps          =*/ false,
         /*.mtp                         =*/ false,
-        /*.split_output_tensor         =*/ false,
     };
 
 #ifdef GGML_USE_METAL
