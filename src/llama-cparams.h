@@ -46,7 +46,7 @@ struct llama_cparams {
     bool dsa = false;                 // enable GLM DSA sparse attention (off by default; opt-in via --dsa)
     bool fused_idx_topk = false;      // enable the fused indexer topk op (off by default; opt-in via -fidx or --fused-indexer-topk)
     int  dsa_top_k = -1;              // DSA top-k override (<0 => use the model's configured indexer_top_k)
-    bool split_mode_graph_scheduling;
+    bool split_mode_tensor_parallel_scheduling;
     //bool split_mode_f16;
     bool scheduler_async;
     int  min_experts;
