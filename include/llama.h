@@ -276,7 +276,7 @@ extern "C" {
         LLAMA_SPLIT_MODE_NONE    = 0, // single GPU
         LLAMA_SPLIT_MODE_LAYER   = 1, // split layers and KV across GPUs
         LLAMA_SPLIT_MODE_ATTN    = 2, // splits self-attention computations across GPUs
-        LLAMA_SPLIT_MODE_GRAPH   = 3, // splits computations across GPUs
+        LLAMA_SPLIT_MODE_TENSOR_PARALLEL   = 3, // splits computations across GPUs
     };
 
 
@@ -447,7 +447,7 @@ extern "C" {
         float thresh_experts;
         bool only_active_experts;
         bool k_cache_hadamard;  // if true, apply Hadamard transfrom to K-cache
-        bool split_mode_graph_scheduling; // if true, force split mode graph scheduling
+        bool split_mode_tensor_parallel_scheduling; // if true, force split mode graph scheduling
         //bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
         bool scheduler_async;   // if true, with split mode "graph" graph evaluation will be done using multiple threads
 
