@@ -1226,8 +1226,8 @@ bool llama_model_loader::load_all_data(
 
         // --split-mode graph. Parallel
         const char * buffer_name = ggml_backend_buffer_name(cur->buffer);
-        const bool   is_probably_split_mode_graph = std::strncmp(buffer_name, GGML_CUDA_NAME, strlen(GGML_CUDA_NAME)) == 0;
-        if (is_probably_split_mode_graph) {
+        const bool   is_probably_split_mode_tensor_parallel = std::strncmp(buffer_name, GGML_CUDA_NAME, strlen(GGML_CUDA_NAME)) == 0;
+        if (is_probably_split_mode_tensor_parallel) {
 #if !defined(_WIN32)
             llama_mmap * mapping;
             {
