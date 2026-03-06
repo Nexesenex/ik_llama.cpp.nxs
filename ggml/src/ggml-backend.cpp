@@ -1181,7 +1181,7 @@ struct ggml_backend_sched {
     std::array<bool, GGML_SCHED_MAX_BACKENDS> own_cpy;
 
     bool only_active_experts;
-    bool split_mode_graph;
+    bool split_mode_tensor_parallel;
     bool is_async = false;
     bool debug;
     bool has_reduce = false;
@@ -1209,9 +1209,9 @@ void ggml_backend_sched_set_only_active_experts(ggml_backend_sched_t sched, bool
     sched->only_active_experts = on_or_off;
 }
 
-void ggml_backend_sched_set_split_mode_graph(ggml_backend_sched_t sched, bool on_or_off, bool async) {
+void ggml_backend_sched_set_split_mode_tensor_parallel(ggml_backend_sched_t sched, bool on_or_off, bool async) {
     if (!sched) return;
-    sched->split_mode_graph = on_or_off;
+    sched->split_mode_tensor_parallel = on_or_off;
     sched->is_async = async;
 }
 
@@ -2161,7 +2161,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
     for (auto & item : sched->needs_sync) item = true;
 
-    if (sched->is_async && sched->n_backends > 2 && sched->split_mode_graph && sched->has_reduce) {
+    if (sched->is_async && sched->n_backends > 2 && sched->split_mode_tensor_parallel && sched->has_reduce) {
 
         for (auto & s : sched->statuses) s = GGML_STATUS_SUCCESS;
 
@@ -2520,7 +2520,7 @@ static void ggml_sched_prepare_graph(ggml_backend_sched_t sched) {
     for (auto & item : sched->own_cpy   ) item = false;
     for (auto & item : sched->needs_sync) item = true;
 
-    if (sched->split_mode_graph) {
+    if (sched->split_mode_tensor_parallel) {
         auto tensor_size = [] (const ggml_tensor * t) {
             auto nbytes = ggml_nbytes(t);
             nbytes = 256*((nbytes + 255)/256);
