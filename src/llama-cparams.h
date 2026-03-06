@@ -70,7 +70,7 @@ struct llama_cparams {
     int  dsv41_replay_keep = 0;   // DeepSeek-V4.1: run the decoder layers on the last N prompt tokens
     bool dsv4_legacy_state = false;   // write DeepSeek-V4 state in the legacy full-slice layout (no MAGIC)
     int  dsa_top_k = -1;              // DSA top-k override (<0 => use the model's configured indexer_top_k)
-    bool split_mode_graph_scheduling;
+    bool split_mode_tensor_parallel_scheduling;
     //bool split_mode_f16;
     bool scheduler_async;
     int  sched_max_copies;

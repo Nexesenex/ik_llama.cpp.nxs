@@ -37,7 +37,7 @@ ggml_cgraph * llm_build_context::build_muse_glimmer() {
     pnd.f_rms_eps = post_norm_eps;
     post_norm_data * pnd_ptr = nullptr;
 
-    bool add_input = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? false : true;
+    bool add_input = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? false : true;
 
     int n_active_layer = hparams.n_layer - hparams.nextn_predict_layers;
 
@@ -47,7 +47,7 @@ ggml_cgraph * llm_build_context::build_muse_glimmer() {
         auto this_KQ_mask = use_rope ? KQ_mask_swa : KQ_mask;
         int this_n_swa = use_rope ? hparams.n_swa : 0;
 
-        if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && il > 0) {
+        if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL && il > 0) {
             GGML_ASSERT(pnd.next_input.size() == model.devices.size());
             pnd.norm = model.layers[il-1].ffn_post_norm;
             pnd_ptr = &pnd;
@@ -58,7 +58,7 @@ ggml_cgraph * llm_build_context::build_muse_glimmer() {
                 this_KQ_mask, nullptr, nullptr, kq_scale, 0.0f, this_n_swa, il, use_rope, false, add_input, false, false,
                 model.layers[il].attn_post_norm, -1, post_norm_eps, pnd_ptr);
 
-        if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
             pnd_ptr = &pnd;
             if (il == 0) {
                 pnd.next_input.resize(model.devices.size(), inpL);
@@ -87,7 +87,7 @@ ggml_cgraph * llm_build_context::build_muse_glimmer() {
     }
     cur = inpL;
 
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
         GGML_ASSERT(inpL->op == GGML_OP_REDUCE);
         int idx = model.default_layer_device[n_active_layer];
         cur = inpL->src[idx];
