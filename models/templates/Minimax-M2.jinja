@@ -18,8 +18,6 @@
                 {{- item }}
             {%- endif -%}
         {%- endfor -%}
-    {%- elif content is none -%}
-        {{- '' }}
     {%- else -%}
         {{- content }}
     {%- endif -%}
@@ -120,11 +118,7 @@
             {%- endfor -%}
             
             {{- toolcall_end_token}}
-            {%- if message.tool_calls[-1].function -%}
-                {%- set last_tool_call.name = message.tool_calls[-1].function.name -%}
-            {%- else -%}
-                {%- set last_tool_call.name = message.tool_calls[-1].name -%}
-            {%- endif -%}
+            {%- set last_tool_call.name = message.tool_calls[-1].function.name -%}
         {%- else -%}
             {%- set last_tool_call.name = none -%}
         {%- endif -%}
@@ -163,4 +157,3 @@
 {%- if add_generation_prompt -%}
 {{- ']~b]ai' ~ '\n' ~ '<think>' ~ '\n' }}
 {%- endif -%}
-
