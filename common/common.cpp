@@ -1394,8 +1394,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         else if (arg_next == "attn") {
             params.split_mode = LLAMA_SPLIT_MODE_ATTN;
         }
-        else if (arg_next == "graph") {
-            params.split_mode = LLAMA_SPLIT_MODE_GRAPH;
+        else if (arg_next == "tenpar") {
+            params.split_mode = LLAMA_SPLIT_MODE_TENSOR_PARALLEL;
         }
         else {
             invalid_param = true;
@@ -1703,8 +1703,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.split_output_tensor = true;
         return true;
     }
-    if (arg == "-smgs" || arg == "--split-mode-graph-scheduling") {
-        params.split_mode_graph_scheduling = true;
+    if (arg == "-smtps" || arg == "--split-mode-tensor-parallel-scheduling") {
+        params.split_mode_tensor_parallel_scheduling = true;
         return true;
     }
     if (arg == "-sas" || arg == "--scheduler-async") {
@@ -2466,7 +2466,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-smf32, --split-mode-f32,",       "Use f32 for data exchange between GPUs (default: %d)", false});
     options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f32"});
     options.push_back({ "*",         "-sot, --split-output-tensor,",    "Force split of the Output Tensor in Split Mode Graph (default: %d)", params.split_output_tensor});
-    options.push_back({ "*",         "-smgs, --split-mode-graph-scheduling,", "Force Split Mode Graph Scheduling (default: %d)", params.split_mode_graph_scheduling});
+    options.push_back({ "*",         "-smts, --split-mode-tensor-parallel-scheduling,", "Force Split Mode Tensor Parallel Scheduling (default: %d)", params.split_mode_tensor_parallel_scheduling});
     options.push_back({ "*",         "-sas,  --scheduler_async,",       "Async evaluation of compute graphs: %d)", params.scheduler_async});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
@@ -2680,7 +2680,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "-sm,   --split-mode SPLIT_MODE",
                                                                         "how to split the model across multiple GPUs, one of:\n"
                                                                         "  - none: use one GPU only\n"
-                                                                        "  - graph: split model tensors and computation graph across GPUs\n"
+                                                                        "  - tenpar: split model tensors and computation graph in parallel across GPUs\n"
                                                                         "  - layer (default): split layers and KV across GPUs\n" });
         options.push_back({ "*",           "-ts,   --tensor-split SPLIT",
                                                                         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1" });
@@ -2692,7 +2692,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                          "Example: CUDA0,CUDA1,RPC[192.168.0.1:8080]\n" });
         options.push_back({ "*",           "-mg,   --main-gpu i",       "the GPU to use for the model (with split-mode = none),\n"
                                                                         "or for intermediate results and KV (with split-mode = row) (default: %d)", params.main_gpu });
-        options.push_back({ "*",           "--max-gpu i",               "max. number of GPUs to use at a time with split mode 'graph', (default: %d)", params.max_gpu });
+        options.push_back({ "*",           "--max-gpu i",               "max. number of GPUs to use at a time with split mode 'tensor parallel', (default: %d)", params.max_gpu });
     }
 
     options.push_back({ "model" });
@@ -3568,7 +3568,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.rope_cache        = params.rope_cache;
     cparams.graph_reuse       = params.graph_reuse;
     cparams.k_cache_hadamard  = params.k_cache_hadamard;
-    cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
+    cparams.split_mode_tensor_parallel_scheduling = params.split_mode_tensor_parallel_scheduling;
     //cparams.split_mode_f16    = params.split_mode_f16;
     cparams.scheduler_async   = params.scheduler_async;
     cparams.min_experts       = params.min_experts;
@@ -4578,7 +4578,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "graph_reuse: %s # default: false\n", params.graph_reuse ? "true" : "false");
     fprintf(stream, "k_cache_hadamard: %s # default: false\n", params.k_cache_hadamard ? "true" : "false");
     fprintf(stream, "split_output_tensor: %s # default: false\n", params.split_output_tensor ? "true" : "false");
-    fprintf(stream, "split_mode_graph_scheduling: %s # default: false\n", params.split_mode_graph_scheduling ? "true" : "false");
+    fprintf(stream, "split_mode_tensor_parallel_scheduling: %s # default: false\n", params.split_mode_tensor_parallel_scheduling ? "true" : "false");
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");
