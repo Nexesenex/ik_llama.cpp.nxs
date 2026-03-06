@@ -109,7 +109,7 @@ ggml_tensor * delta_net::build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgr
     auto & kv_self = lctx.kv_self;
     auto & layer   = model.layers[il];
 
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && kv_self.s_l[il]->extra) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL && kv_self.s_l[il]->extra) {
         auto split_s_l = (ggml_split_tensor_t *) kv_self.s_l[il]->extra;
         GGML_ASSERT(split_s_l && split_s_l->n_device > 1);
 
