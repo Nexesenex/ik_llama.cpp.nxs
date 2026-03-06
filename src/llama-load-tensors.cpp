@@ -258,7 +258,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
             }
         }
         if (tgt_model) {
-            LLAMA_LOG_INFO("==================== Found target model for Gemma4-Assistant. split mode graph: %d\n", model.split_mode == LLAMA_SPLIT_MODE_GRAPH);
+            LLAMA_LOG_INFO("==================== Found target model for Gemma4-Assistant. split mode tensor parallel: %d\n", model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL);
         } else {
             LLAMA_LOG_INFO("==================== Did not find target model for Gemma4-Assistant\n");
             model.split_mode = LLAMA_SPLIT_MODE_LAYER;
@@ -287,7 +287,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
 
     if (ml.ncmoe > 0) {
         auto buft = llama_default_buffer_type_cpu(true);
-        if (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_GRAPH || ml.ncmoe >= n_layer || model.devices.size() < 2) {
+        if (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || ml.ncmoe >= n_layer || model.devices.size() < 2) {
             const auto tn = LLM_TN(model.arch);
             int last_layer = n_layer - model.hparams.nextn_predict_layers;
             int ndone = 0;
@@ -372,7 +372,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
     }
 
     // Split MTP layer's to graph
-    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) &&
+    if ((model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) &&
             model.hparams.nextn_predict_layers > 0 && model.splits.size() > 1) {
         [[maybe_unused]] int mtp_first = n_layer - model.hparams.nextn_predict_layers;
         LLAMA_LOG_DEBUG("%s: MTP layer(s) %d-%d: split attention+FFN, nextn on per-device CUDA\n",
@@ -611,12 +611,12 @@ bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
         // optional bias tensors
         layer.bo = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd},     llama_model_loader::TENSOR_NOT_REQUIRED);
 
-        layer.ffn_norm = create_tensor(model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
+        layer.ffn_norm = create_tensor(model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? ctx_split : ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
         layer.rope_freqs = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FREQS, "weight"), {n_embd/n_head/2}, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
 
         if (n_expert == 0) {
-            create_std_ffn(i, tn, layer, n_ff, n_embd, model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer);
+            create_std_ffn(i, tn, layer, n_ff, n_embd, model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? ctx_split : ctx_layer);
 
             // optional MLP bias
             layer.ffn_gate_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "bias", i), {n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -1643,7 +1643,7 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
         layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k});
         layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k});
 
-        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
+        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? ctx_split : ctx_layer;
         layer.ffn_norm = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
         layer.ffn_gate_inp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
@@ -1683,7 +1683,7 @@ bool create_tensors_helper::create_mellum_tensors(const LLM_TN & tn) {
         layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k});
         layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k});
 
-        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
+        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? ctx_split : ctx_layer;
         layer.ffn_norm = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
         layer.ffn_gate_inp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
@@ -1800,7 +1800,12 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
             layer.ssm_out        = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_OUT,        "weight", i), {value_dim, n_embd});
         }
 
-        auto ffn_ctx = ctx_split; //model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
+
+        // auto ffn_ctx = ctx_split; //model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? ctx_split : ctx_layer;
+
+        auto ffn_ctx = ctx_split; //model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? ctx_split : ctx_layer;
+
+        // auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? ctx_split : ctx_layer;
 
         // Dense FFN path (optional, e.g. mlp_only_layers)
         layer.ffn_gate = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -2358,7 +2363,7 @@ bool create_tensors_helper::create_mimo2_tensors(const LLM_TN & tn) {
         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i), { n_embd, n_embd_v_gqa }, 0);
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_v * n_head, n_embd }, 0);
 
-        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
+        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? ctx_split : ctx_layer;
         layer.ffn_norm = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
         // non-MoE branch
@@ -2634,7 +2639,7 @@ bool create_tensors_helper::create_gemma4_tensors(const LLM_TN & tn) {
 
     const uint32_t n_embd_per_layer = hparams.n_embd_per_layer;
     const int64_t  n_ff_exp         = hparams.n_ff_exp;
-    const bool     use_split_ctx    = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
+    const bool     use_split_ctx    = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
 
     if (n_embd_head_k != n_embd_head_v) {
         throw std::runtime_error("Gemma 4 requires n_embd_head_k == n_embd_head_v");
@@ -2737,7 +2742,7 @@ bool create_tensors_helper::create_gemma4_mtp_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     const int64_t n_backbone = hparams.mtp_backbone_n_embd;
-    const bool    use_split_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
+    const bool    use_split_ctx = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
     if (n_backbone <= 0) {
         throw std::runtime_error("Gemma 4 MTP assistant requires backbone_embedding_length metadata");
     }
@@ -2806,7 +2811,7 @@ bool create_tensors_helper::create_gemma4_mtp_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    const bool use_split_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
+    const bool use_split_ctx = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
 
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
@@ -2896,7 +2901,7 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_dflash2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    const bool use_split_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
+    const bool use_split_ctx = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
     const int64_t kernel_size = hparams.dflash_conv_kernel_size;
     const int64_t group_size = hparams.dflash_conv_group_size;
     const int64_t rank = hparams.dflash_selector_rank;
@@ -3357,7 +3362,7 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
         auto & layer = model.layers[i];
 
         // Under -sm graph/attn, norms need per-device replicas via prepare_split_tensors(-1, ...).
-        auto norm_ctx = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
+        auto norm_ctx = (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
                          model.split_mode == LLAMA_SPLIT_MODE_ATTN) ? ctx_split : ctx_layer;
         layer.attn_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
         if (!is_lite) {
@@ -3404,7 +3409,7 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
         }
 
         // Keep wkv_b on a single-device buffer; llm_prepare_mla reads it back to derive wk_b/wv_b.
-        auto wkv_b_ctx = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
+        auto wkv_b_ctx = (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
                           model.split_mode == LLAMA_SPLIT_MODE_ATTN) ? ctx_layer : ctx_split;
         layer.wkv_b     = create_tensor(wkv_b_ctx, tn(LLM_TENSOR_ATTN_KV_B,     "weight", i),
                 {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -3427,7 +3432,7 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
             layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff});
         } else {
             // llm_build_std_moe_ffn needs per-device extras on these under -sm graph/attn.
-            const auto moe_ctx = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
+            const auto moe_ctx = (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
                                   model.split_mode == LLAMA_SPLIT_MODE_ATTN) ? ctx_split : ctx_layer;
             layer.ffn_gate_inp = create_tensor(moe_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
             layer.ffn_exp_probs_b = create_tensor(moe_ctx, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 1);
@@ -3668,7 +3673,7 @@ bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
         auto & layer = model.layers[i];
 
         // Under -sm graph/attn, norms and MoE-gate tensors need per-device replicas in ctx_split.
-        const auto graph_or_attn = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
+        const auto graph_or_attn = (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
                                     model.split_mode == LLAMA_SPLIT_MODE_ATTN);
         auto norm_ctx = graph_or_attn ? ctx_split : ctx_layer;
         auto moe_ctx  = graph_or_attn ? ctx_split : ctx_layer;
@@ -3820,7 +3825,7 @@ bool create_tensors_helper::create_openpangu_tensors(const LLM_TN & tn) {
 
         auto & layer = model.layers[i];
 
-        const auto graph_or_attn = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
+        const auto graph_or_attn = (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
                                     model.split_mode == LLAMA_SPLIT_MODE_ATTN);
         auto norm_ctx = graph_or_attn ? ctx_split : ctx_layer;
         auto moe_ctx  = graph_or_attn ? ctx_split : ctx_layer;
@@ -3964,7 +3969,7 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
         layer.attn_k_norm = create_tensor(ctx_split,
                 tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, llama_model_loader::TENSOR_NOT_REQUIRED | flags);
 
-        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
+        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? ctx_split : ctx_layer;
 
         // Why are we adding an additional tensor type?
         // attn_post_norm is the exact same thing as ffn_norm
@@ -4569,7 +4574,7 @@ bool create_tensors_helper::create_bailingmoe3_tensors(const LLM_TN & tn) {
         auto & layer = model.layers[il];
         ggml_context * ctx_layer = ctx_for_layer(il);
         ggml_context * ctx_split = ctx_for_layer_split(il);
-        const bool graph_or_attn = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
+        const bool graph_or_attn = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
         ggml_context * norm_ctx = graph_or_attn ? ctx_split : ctx_layer;
         ggml_context * moe_ctx  = graph_or_attn ? ctx_split : ctx_layer;
         const bool is_mtp_layer = !hparams.has_kv(il);
@@ -4684,7 +4689,7 @@ bool create_tensors_helper::create_glm5next_tensors(const LLM_TN & tn) {
         auto & layer = model.layers[il];
         ggml_context * ctx_layer = ctx_for_layer(il);
         ggml_context * ctx_split = ctx_for_layer_split(il);
-        const bool graph_or_attn = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
+        const bool graph_or_attn = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
         ggml_context * norm_ctx = graph_or_attn ? ctx_split : ctx_layer;
         ggml_context * moe_ctx  = graph_or_attn ? ctx_split : ctx_layer;
 
@@ -5371,7 +5376,7 @@ static void reshape_folded_heads_to_3d(ggml_tensor * t, int n_head) {
 // wk_b/wv_b are per-head split (split_dim=2) — loaded directly when present
 // in the GGUF, or produced per-head-split by llm_prepare_mla()'s materialize
 // lambda when only wkv_b is in the GGUF.
-static void distribute_mla_tensors_for_split_mode_graph(
+static void distribute_mla_tensors_for_split_mode_tensor_parallel(
         llama_layer & layer,
         const llama_hparams & hparams,
         const std::vector<float> & cur_splits,
@@ -5654,7 +5659,7 @@ static void split_recurrent_tensors(const llama_hparams & hparams, llama_layer &
         GGML_ASSERT(eff_head_v_dim % tt.blck_size == 0);
     }
     if (tt.row_meta_size > 0) {
-        GGML_ABORT("Quantization types with per row meta data are not supported for the ssm_out tensor when using split mode graph");
+        GGML_ABORT("Quantization types with per row meta data are not supported for the ssm_out tensor when using split mode tensor parallel");
     }
 
     auto split = create_split(num_k_heads, k_head_granularity, cur_splits, mem_used);
@@ -5778,9 +5783,9 @@ static void split_bailingmoe3_kda_tensors(const llama_hparams & hparams, llama_l
 bool create_tensors_helper::create_tensors() {
     const auto tn = LLM_TN(model.arch);
     bool use_mmap_buffer = true;
-    if (ml.merge_qkv && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
+    if (ml.merge_qkv && (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
         LLAMA_LOG_WARN("\n========================================================\n");
-        LLAMA_LOG_WARN("merge_qkv is not compatible with split mode 'graph'\n");
+        LLAMA_LOG_WARN("merge_qkv is not compatible with split mode 'tensor parallel'\n");
         LLAMA_LOG_WARN("  => turning off merge_qkv\n");
         LLAMA_LOG_WARN("========================================================\n\n");
         ml.merge_qkv = false;
@@ -5971,9 +5976,9 @@ bool create_tensors_helper::create_tensors() {
         const bool unsupported =
             //(model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) ||
             (model.arch == LLM_ARCH_GEMMA4 && model.tok_embd_per_layer);
-        if (unsupported && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
+        if (unsupported && (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
             LLAMA_LOG_WARN("\n=========================================================\n");
-            LLAMA_LOG_WARN("Split mode 'graph' is not supported for %s\n",
+            LLAMA_LOG_WARN("Split mode 'tensor_parallel' is not supported for %s\n",
                            model.arch == LLM_ARCH_GEMMA4_MTP ? "Gemma 4 MTP assistant"
                                                               : "this Gemma4 variant");
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
@@ -5982,7 +5987,7 @@ bool create_tensors_helper::create_tensors() {
         }
     }
 
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const int n_layer = model.mtp ? model.layers.size()
                                   : model.layers.size() - model.hparams.nextn_predict_layers;
         LLAMA_LOG_INFO("================================ max_gpu = %d\n", model.max_gpu);
@@ -6301,9 +6306,11 @@ bool create_tensors_helper::create_tensors() {
                 }
             }
 
-            // wkv_b can be null when the model was quantized by mainline llama.cpp.
+            // MLA tensor distribution 
+            // FORMER: (DEEPSEEK2/GLM_DSA/MISTRAL4). Detect by arch + absence of wk
+            // since wkv_b can be null when the model was quantized by mainline llama.cpp.
             if (layer.wo && !layer.wk && model.is_mla_model()) {
-                distribute_mla_tensors_for_split_mode_graph(
+                distribute_mla_tensors_for_split_mode_tensor_parallel(
                     layer, hparams, cur_splits, mem_used, ctx_split, il);
             }
 
