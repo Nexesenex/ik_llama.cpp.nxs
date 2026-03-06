@@ -217,7 +217,7 @@ static const char * split_mode_str(llama_split_mode mode) {
     switch (mode) {
         case LLAMA_SPLIT_MODE_NONE:  return "none";
         case LLAMA_SPLIT_MODE_LAYER: return "layer";
-        case LLAMA_SPLIT_MODE_GRAPH: return "graph";
+        case LLAMA_SPLIT_MODE_TENSOR_PARALLEL: return "tenpar";
         default: GGML_ABORT("invalid split mode");
     }
 }
@@ -653,8 +653,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     mode = LLAMA_SPLIT_MODE_NONE;
                 } else if (m == "layer") {
                     mode = LLAMA_SPLIT_MODE_LAYER;
-                } else if (m == "graph") {
-                    mode = LLAMA_SPLIT_MODE_GRAPH;
+                } else if (m == "tenpar") {
+                    mode = LLAMA_SPLIT_MODE_TENSOR_PARALLEL;
                 } else {
                     invalid_param = true;
                     break;
