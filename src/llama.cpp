@@ -582,7 +582,7 @@ bool llama_context::update_cache_copies() {
         }
         auto kl = (ggml_split_tensor_t *)kv_self.k_l[il]->extra;
         if (kl) {
-            GGML_ASSERT(model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN);
+            GGML_ASSERT(model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN);
             GGML_ASSERT(model.splits.size() > 1);
             auto vl = !kv_self.v_l.empty() && kv_self.v_l[il] ? (ggml_split_tensor_t *)kv_self.v_l[il]->extra : nullptr;
             GGML_ASSERT(kl && (!kv_self.v_l[il] || vl));
@@ -636,7 +636,7 @@ bool llama_context::update_cache_copies() {
 llama_context::llama_context(const llama_model & model)
     : model(model) , sampling(llama_n_vocab(&model)) , t_start_us(model.t_start_us) , t_load_us(model.t_load_us) {
     const auto & hparams = model.hparams;
-    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
+    if ((model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
         cache_copies.resize(2*model.splits.size()*hparams.n_layer);
     } else {
         cache_copies.resize(2*hparams.n_layer);
@@ -756,7 +756,7 @@ static bool llama_kv_cache_init(
     bool is_mla_attn = model.arch == LLM_ARCH_DEEPSEEK2 || model.arch == LLM_ARCH_GLM_DSA;
 
     bool split_cache   = false;
-    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && !is_mla_attn && offload) {
+    if ((model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && !is_mla_attn && offload) {
         cache.split_k_l.reserve(n_layer);
         cache.split_v_l.reserve(n_layer);
         split_cache = true;
@@ -1974,7 +1974,7 @@ static bool llm_load_tensors(
 
     auto & hparams = model.hparams;
 
-    if (split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) {
+    if (split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || split_mode == LLAMA_SPLIT_MODE_ATTN) {
         if (!is_model_split_supported(model)) {
             LLAMA_LOG_WARN("\n=======================================================\n");
             LLAMA_LOG_WARN("Split mode 'graph' is not supported for this model\n");
@@ -2068,7 +2068,7 @@ static bool llm_load_tensors(
         }
     } else {
         ggml_backend_buffer_type_t split_buft;
-        if ((split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
+        if ((split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
             split_buft = llama_default_buffer_type_split(model, model.devices[main_gpu]);
             model.split_buft = split_buft;
         } else {
@@ -4409,7 +4409,7 @@ struct llama_context_params llama_context_default_params() {
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
         /*.k_cache_hadamard            =*/ false,
-        /*.split_mode_graph_scheduling =*/ false,
+        /*.split_mode_tensor_parallel_scheduling =*/ false,
         // /*.split_mode_f16           =*/ true,
         /*.scheduler_async             =*/ false,
         /*.mtp                         =*/ false,
@@ -4779,7 +4779,7 @@ struct llama_context * llama_init_from_model(
     cparams.rope_cache       = params.rope_cache;
     cparams.graph_reuse      = params.graph_reuse;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
-    cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
+    cparams.split_mode_tensor_parallel_scheduling = params.split_mode_tensor_parallel_scheduling;
     //cparams.split_mode_f16   = params.split_mode_f16;
     cparams.scheduler_async  = params.scheduler_async;
     cparams.min_experts      = params.min_experts;
@@ -4853,7 +4853,7 @@ struct llama_context * llama_init_from_model(
     if (model->arch != LLM_ARCH_DEEPSEEK2 && model->arch != LLM_ARCH_GLM_DSA && cparams.mla_attn != 0) {
         cparams.mla_attn = 0;
     }
-    if (model->arch == LLM_ARCH_OPENAI_MOE && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+    if (model->arch == LLM_ARCH_OPENAI_MOE && model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
         if (cparams.reduce_type == GGML_TYPE_F16) {
             LLAMA_LOG_WARN("=====================================================================\n");
             LLAMA_LOG_WARN("GPT-OSS with split mode graph requires f32 precision\n");
@@ -4884,7 +4884,7 @@ struct llama_context * llama_init_from_model(
     LLAMA_LOG_INFO("%s: rope_cache    = %d\n",     __func__, cparams.rope_cache);
     LLAMA_LOG_INFO("%s: graph_reuse   = %d\n",     __func__, cparams.graph_reuse);
     LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);
-    LLAMA_LOG_INFO("%s: split_mode_graph_scheduling = %d\n",   __func__, cparams.split_mode_graph_scheduling);
+    LLAMA_LOG_INFO("%s: split_mode_tensor_parallel_scheduling = %d\n",   __func__, cparams.split_mode_tensor_parallel_scheduling);
     //LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
     LLAMA_LOG_INFO("%s: reduce_type   = %s\n",     __func__, ggml_type_name(cparams.reduce_type));
     LLAMA_LOG_INFO("%s: sched_async   = %d\n",     __func__, cparams.scheduler_async);
@@ -4932,7 +4932,7 @@ struct llama_context * llama_init_from_model(
         }
 #elif defined(GGML_USE_CUDA)
         if (model->split_mode == LLAMA_SPLIT_MODE_NONE) {
-            // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
+            // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_TENSOR_PARALLEL, only the main GPU backend is used
             ggml_backend_t backend = ggml_backend_cuda_init(model->main_gpu, cparams.cuda_params);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, model->main_gpu);
@@ -4942,10 +4942,10 @@ struct llama_context * llama_init_from_model(
             ggml_backend_add_from_device(ctx, backend);
 
         } else {
-            // LLAMA_SPLIT_MODE_LAYER and LLAMA_SPLIT_MODE_GRAPH require a backend for each GPU
+            // LLAMA_SPLIT_MODE_LAYER and LLAMA_SPLIT_MODE_TENSOR_PARALLEL require a backend for each GPU
             auto params = cparams.cuda_params;
             std::string new_params;
-            if (false && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+            if (false && model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
                 static const std::string extra_string{"graphs=0"};
                 if (params) new_params = std::string{(const char *)params} + ',';
                 new_params += extra_string;
@@ -4962,7 +4962,7 @@ struct llama_context * llama_init_from_model(
             }
         }
 #elif defined(GGML_USE_VULKAN)
-        if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN) {
+        if (model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model->split_mode == LLAMA_SPLIT_MODE_ATTN) {
             LLAMA_LOG_ERROR("%s: split mode 'graph' or 'attn' not supported. Failed to initialize Vulkan backend\n", __func__);
             llama_free(ctx);
             return nullptr;
@@ -4987,8 +4987,8 @@ struct llama_context * llama_init_from_model(
             }
         }
 #elif defined(GGML_USE_SYCL)
-        // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
-        if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_TENSOR_PARALLEL, only the main GPU backend is used
+        if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
             ggml_backend_t backend = ggml_backend_sycl_init(model->main_gpu);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize SYCL%d backend\n", __func__, model->main_gpu);
@@ -5019,9 +5019,9 @@ struct llama_context * llama_init_from_model(
             ggml_backend_add_from_device(ctx, backend);
         }
 #elif defined(GGML_USE_CANN)
-    // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
+    // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_TENSOR_PARALLEL, only the main GPU backend is used
     // TODO: ggml_backend_cann is not support split tensor now, just leave code here.
-    if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+    if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
         ggml_backend_t backend = ggml_backend_cann_init(model->main_gpu);
         if (backend == nullptr) {
             LLAMA_LOG_ERROR("%s: failed to initialize CANN%d backend\n", __func__, model->main_gpu);
@@ -5237,12 +5237,12 @@ struct llama_context * llama_init_from_model(
         LLAMA_LOG_INFO("%s: enabling only_active_experts scheduling\n", __func__);
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
     }
-    if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
-        ggml_backend_sched_set_split_mode_graph(ctx->sched, true, cparams.scheduler_async);
+    if (model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL && (!model->has_tensor_overrides() || cparams.split_mode_tensor_parallel_scheduling)) {
+        ggml_backend_sched_set_split_mode_tensor_parallel(ctx->sched, true, cparams.scheduler_async);
         ggml_backend_sched_set_max_extra_alloc(ctx->sched, params.max_extra_alloc);
-        if (model->has_tensor_overrides() && cparams.split_mode_graph_scheduling) {
+        if (model->has_tensor_overrides() && cparams.split_mode_tensor_parallel_scheduling) {
             LLAMA_LOG_INFO("XXXXXXXX Split Mode Graph Scheduling is FORCED despite tensor overrides due to user choice.\n");
-            LLAMA_LOG_INFO("XXXXXXXX It may or might NOT infer properly due to unsupported combinations between SMGS and every possible tensor overrides.\n");
+            LLAMA_LOG_INFO("XXXXXXXX It may or might NOT infer properly due to unsupported combinations between SMTPS and every possible tensor overrides.\n");
         }
     }
 

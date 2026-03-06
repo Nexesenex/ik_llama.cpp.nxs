@@ -355,7 +355,7 @@ struct gpt_params {
     bool merge_qkv         = false; // if true, merge separate Q, K, V tensors into a single, contiguous tensor
     bool merge_up_gate_exps= false; // if true, merge ffn_up_exps and ffn_gate_exps into a single, contiguous tensor
     bool k_cache_hadamard  = false; // if true, use Hadamard transform for the K-cache (only makes sense with quantized cache)
-    bool split_mode_graph_scheduling = false; // if true, force split mode graph scheduling
+    bool split_mode_tensor_parallel_scheduling = false; // if true, force split mode graph scheduling
     //bool split_mode_f16    = true;  // if true, intermediate results will be cast to f16 before copying to other GPUs to perform reduce ops
     bool scheduler_async   = false; // if true, in split mode graph the scheduler will use multiple threads to evaluate the graph
     int  fused_delta_net   = 0;     // use fused delta-net if number of tokens in the batch is less than this value
