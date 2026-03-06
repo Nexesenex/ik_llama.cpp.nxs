@@ -471,6 +471,7 @@ void server_slot::reset() {
     oai_resp_fc_id.clear();
 
     t_start_batch_100 = 0;
+    n_past_pp_log = 0;
 
     task.reset();
 }
@@ -3358,6 +3359,8 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
 
                     slot.t_start_process_prompt = ggml_time_us();
                     slot.t_start_generation = 0;
+                    slot.n_past_start = slot.n_past;
+                    slot.n_past_pp_log = 0;
 
                     if (slot.infill) {
                         const bool add_bos = llama_should_add_bos_token(model);
@@ -3572,7 +3575,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     common_sampler_reset(slot.ctx_sampling);
                 }
 
-                LOG_INFO("kv cache rm [p0, end)", {
+                LOG_VERBOSE("kv cache rm [p0, end)", {
                     { "id_slot", slot.id },
                     { "id_task", slot.id_task },
                     { "p0",      p0 }
@@ -3663,16 +3666,26 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                 });
 
                 const int64_t t_current = ggml_time_us();
-                const double cur_pp_tok_per_sec = slot.n_prompt_tokens_processed * 1e6 / (t_current - slot.t_start_process_prompt);
-                LOG_INFO("PP", {
-                    // {"id_slot",  slot.id},
-                    {"n_p",   slot.n_past},
-                    // {"n_ctx",    n_ctx},
-                    // {"n_tokens", batch.n_tokens},
-                    {"Tot", slot.n_prompt_tokens},
-                    {"%_P", [&slot]() { char buf[16]; snprintf(buf, sizeof(buf), "%.2f", (double)slot.n_past / slot.n_prompt_tokens * 100); return std::string(buf); }()},
-                    {"Cur t/s",    std::round(cur_pp_tok_per_sec * 100) / 100},
-                });
+                const int32_t n_new_tokens = slot.n_prompt_tokens - slot.n_past_start;
+                const int32_t n_processed_total = slot.n_past - slot.n_past_start;
+                
+                if (slot.n_past_pp_log == 0) {
+                    slot.n_past_pp_log = slot.n_past;
+                    LOG_INFO("PP_INIT", {
+                        {"n_p",   slot.n_past},
+                        {"Tot", n_new_tokens},
+                    });
+                } else {
+                    const int32_t n_processed_since_init = slot.n_past - slot.n_past_pp_log;
+                    const double cur_pp_tok_per_sec = (n_processed_since_init > 0) ? 
+                        (n_processed_since_init * 1e6 / (t_current - slot.t_start_process_prompt)) : 0;
+                    LOG_INFO("PP", {
+                        {"n_p",   slot.n_past},
+                        {"Tot", n_new_tokens},
+                        {"%_P", [&n_processed_total, &n_new_tokens]() { char buf[16]; snprintf(buf, sizeof(buf), "%.2f", (double)n_processed_total / n_new_tokens * 100); return std::string(buf); }()},
+                        {"Cur t/s",    std::round(cur_pp_tok_per_sec * 100) / 100},
+                    });
+                }
 
                 // entire prompt has been processed - start decoding new tokens
                 if (slot.n_past_prompt == slot.n_prompt_tokens) {
@@ -3966,7 +3979,7 @@ void server_context::send_token_results(completion_token_outputs& results, serve
                 slot.release();
                 slot.print_timings();
                 metrics.on_prediction(slot);
-                released = true;
+                slot.released = true;
                 break;
         }
         if (n > 0 && count >= n) {
@@ -3974,7 +3987,7 @@ void server_context::send_token_results(completion_token_outputs& results, serve
         }
     }
 
-    if (!released && slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
+    if (!slot.released && slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
         const int last_n_tokens = (slot.n_decoded % 100 == 0) ? 100 : (slot.n_decoded % 100);
         const double last_tok_per_sec = last_n_tokens * 1e6 / ((slot.t_start_generation + slot.t_token_generation * 1e3) - slot.t_start_batch_100);
         const double cur_tg_tok_per_sec = slot.n_decoded * 1e6 / (slot.t_token_generation * 1e3);
@@ -4359,12 +4372,13 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 slot.t_start_batch_100 = slot.t_start_generation;
                 slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
                 metrics.on_prompt_eval(slot);
+                const int32_t n_new_tokens = slot.n_prompt_tokens - slot.n_past_start;
                 LOG_INFO("PP_OK", {
                     {"n_p",   slot.n_past},
                     {"n_ctx",    n_ctx},
-                    {"n_tok", slot.n_prompt_tokens},
+                    {"n_tok", n_new_tokens},
                     {"pp_ms",    std::round(slot.t_prompt_processing * 100) / 100},
-                    {"TotCur t/s",    std::round(slot.n_prompt_tokens * 1e3 / slot.t_prompt_processing * 100) / 100},
+                    {"TotCur t/s",    std::round(n_new_tokens * 1e3 / slot.t_prompt_processing * 100) / 100},
                     });
                 // create checkpoint after prompt processing ends
                 if (params_base.ctx_checkpoints_tolerance<=0 && params_base.do_checkpoint) {
