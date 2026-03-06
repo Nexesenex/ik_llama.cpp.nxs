@@ -1756,10 +1756,10 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
         }
     }
-    if (llama_model_is_split_mode_graph(llama_get_model(slot.ctx))) {
+    if (llama_model_is_split_mode_tensor_parallel(llama_get_model(slot.ctx))) {
         if (params_base.ctx_shift) {
             params_base.ctx_shift = false;
-            LOG_WARNING("%s\n", "ctx_shift is not implemented for split mode graph, it will be disabled");
+            LOG_WARNING("%s\n", "ctx_shift is not implemented for split mode tensor parallel, it will be disabled");
         }
     }
     {
