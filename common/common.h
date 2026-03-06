@@ -532,7 +532,7 @@ struct gpt_params {
 
     bool do_checkpoint = false;               // do checkpoint for recurrent models only
     int32_t ctx_checkpoints_n = 32;           // max number of context checkpoints per slot
-    int32_t ctx_checkpoints_interval = 512;   // minimum number of tokens between each context checkpoints
+    int32_t ctx_checkpoints_interval = n_batch * 2;   // minimum number of tokens between each context checkpoints
     int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint
     int32_t cache_ram_mib = 8192;   // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
     int32_t cache_ram_n_min = 0;     // min number of tokens required to save in the ram
