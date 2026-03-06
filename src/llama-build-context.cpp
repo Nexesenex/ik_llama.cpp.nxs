@@ -77,7 +77,7 @@ llm_build_context::llm_build_context(
         fused_mmad       (cparams.fused_mmad),
         rope_cache       (cparams.rope_cache),
         k_cache_hadamard (cparams.k_cache_hadamard),
-        split_mode_graph_scheduling (cparams.split_mode_graph_scheduling),
+        split_mode_tensor_parallel_scheduling (cparams.split_mode_tensor_parallel_scheduling),
         min_experts      (cparams.min_experts),
         thresh_experts   (cparams.thresh_experts),
         pooling_type     (cparams.pooling_type),
@@ -4340,7 +4340,7 @@ ggml_cgraph * llm_build_context::build_qwen3() {
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
     ggml_tensor * rope_cache = nullptr;
-    if (model.split_mode != LLAMA_SPLIT_MODE_GRAPH && cparams.rope_cache &&
+    if (model.split_mode != LLAMA_SPLIT_MODE_TENSOR_PARALLEL && cparams.rope_cache &&
             (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM)) {
         rope_cache = ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow);
@@ -6480,7 +6480,7 @@ ggml_cgraph * llm_build_context::build_gemma4() {
 
     }
 
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
         return build_gemma4_graph_parallel(*this, lctx, ctx0, inpL, inp_pos, inp_out_ids,
                                      KQ_mask, KQ_mask_swa, n_tokens,  cb);
     }
@@ -8025,7 +8025,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
     // position embeddings
     struct ggml_tensor * inp_pos = build_inp_pos();
 
-    auto rope_cache = model.split_mode != LLAMA_SPLIT_MODE_GRAPH && cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
+    auto rope_cache = model.split_mode != LLAMA_SPLIT_MODE_TENSOR_PARALLEL && cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
@@ -9896,7 +9896,7 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
         cur = inpL;
 
         // self_attention
-        if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+        if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
             // Unfortunately we cannot use build_std_attention because Q and K get normed before being RoPE'd,
             // but the RMS norm is applied on the whole row, and not per head as it is normally done.
             // Hence, we need to keep a copy of wq and wk on each device, do the whole matrix multiplications

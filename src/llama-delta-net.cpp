@@ -472,7 +472,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     GGML_ASSERT(num_v_heads % num_k_heads == 0);
     int64_t gqa_ratio   = num_v_heads / num_k_heads;
 
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && kv_self.s_l[il]->extra) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL && kv_self.s_l[il]->extra) {
         GGML_ASSERT(head_k_dim == head_v_dim);
         auto split_s_l = (ggml_split_tensor_t *)kv_self.s_l[il]->extra;
         GGML_ASSERT(split_s_l);

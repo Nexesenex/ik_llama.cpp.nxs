@@ -41,7 +41,7 @@ struct llama_cparams {
     bool graph_reuse;
     bool k_cache_hadamard;
     bool v_cache_hadamard;
-    bool split_mode_graph_scheduling;
+    bool split_mode_tensor_parallel_scheduling;
     //bool split_mode_f16;
     bool scheduler_async;
     int  min_experts;
