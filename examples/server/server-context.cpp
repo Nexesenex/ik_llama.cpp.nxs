@@ -3142,7 +3142,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     common_sampler_reset(slot.ctx_sampling);
                 }
 
-                LOG_INFO("kv cache rm [p0, end)", {
+                LOG_VERBOSE("kv cache rm [p0, end)", {
                     { "id_slot", slot.id },
                     { "id_task", slot.id_task },
                     { "p0",      p0 }
@@ -3460,7 +3460,7 @@ void server_context::send_token_results(completion_token_outputs& results, serve
                 slot.release();
                 slot.print_timings();
                 metrics.on_prediction(slot);
-                released = true;
+                slot.released = true;
                 break;
         }
         if (n > 0 && count >= n) {
@@ -3468,7 +3468,7 @@ void server_context::send_token_results(completion_token_outputs& results, serve
         }
     }
 
-    if (!released && slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
+    if (!slot.released && slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
         const int last_n_tokens = (slot.n_decoded % 100 == 0) ? 100 : (slot.n_decoded % 100);
         const double last_tok_per_sec = last_n_tokens * 1e6 / ((slot.t_start_generation + slot.t_token_generation * 1e3) - slot.t_start_batch_100);
         const double cur_tg_tok_per_sec = slot.n_decoded * 1e6 / (slot.t_token_generation * 1e3);
