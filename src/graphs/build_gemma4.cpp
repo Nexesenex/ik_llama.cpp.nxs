@@ -603,7 +603,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
         }
     }
 
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
         int n_device = model.splits.size();
         std::vector<ggml_tensor *> sa_inp(n_device, nullptr);
         std::vector<ggml_tensor *> sa_out(n_device, nullptr);
@@ -916,7 +916,7 @@ ggml_cgraph * llm_build_context::build_gemma4() {
 
     auto inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
 
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
         return build_gemma4_graph_parallel(*this, lctx, ctx0, inpL, inp_pos, inp_out_ids,
                                      KQ_mask, KQ_mask_swa, n_tokens,  cb);
     }
