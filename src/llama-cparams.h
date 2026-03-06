@@ -49,7 +49,7 @@ struct llama_cparams {
     bool dsv4_cache_cpu = false;      // keep DeepSeek-V4 compressed-attention K caches (CSA/HCA) in host memory
     bool dsv4_lid_cache_cpu = false;  // also keep the DeepSeek-V4 indexer (LID) K cache in host memory
     int  dsa_top_k = -1;              // DSA top-k override (<0 => use the model's configured indexer_top_k)
-    bool split_mode_graph_scheduling;
+    bool split_mode_tensor_parallel_scheduling;
     //bool split_mode_f16;
     bool scheduler_async;
     int  min_experts;
