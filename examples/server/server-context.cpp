@@ -3293,7 +3293,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
             const auto & cur = *it;
             const bool stale = has_recurrent ? (cur.pos_max > pos_next) : (cur.pos_min > pos_min_thold);
             if (stale) {
-                SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024);
+                // SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024);
                 it = slot.server_cached_prompt.checkpoints.erase(it);
             } else {
                 ++it;
@@ -3319,8 +3319,8 @@ bool server_context::create_checkpoint(server_slot & slot) {
             // make room for the new checkpoint, if needed
             const auto & cur = slot.server_cached_prompt.checkpoints.front();
 
-            SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
-                cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024);
+            // SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
+                // cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024);
 
             slot.server_cached_prompt.checkpoints.erase(slot.server_cached_prompt.checkpoints.begin());
         }
@@ -3337,9 +3337,9 @@ bool server_context::create_checkpoint(server_slot & slot) {
 
         llama_state_seq_get_data(ctx, cur.data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
-        SLT_WRN(slot, "created context checkpoint %d of %d (timestamp=%lld, pos = %d <-> %d, size = %.3f MiB, took %.2f ms)\n",
-            (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, (int64_t)time(nullptr), cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024,
-            (ggml_time_us() - t_start) / 1000.0);
+        // SLT_WRN(slot, "created context checkpoint %d of %d (timestamp=%lld, pos = %d <-> %d, size = %.3f MiB, took %.2f ms)\n",
+            // (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, (int64_t)time(nullptr), cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024,
+            // (ggml_time_us() - t_start) / 1000.0);
     }
     return do_checkpoint;
 }
