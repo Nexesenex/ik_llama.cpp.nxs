@@ -2973,6 +2973,9 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     slot.n_prompt_tokens_processed_log = 0;
                     slot.t_start_process_prompt = ggml_time_us();
                     LOG_INFO("PP_INIT", {
+                        {"n_past",   slot.n_past},
+                        {"n_ctx",    n_ctx},
+                        {"n_tokens", batch.n_tokens},
                         {"n_ptp",   slot.n_prompt_tokens_processed},
                         {"Tot",   slot.n_prompt_tokens - slot.n_past_start},
                     });
