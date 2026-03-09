@@ -759,6 +759,9 @@ static bool llama_kv_cache_init(
     if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && !is_mla_attn && offload) {
         cache.split_k_l.reserve(n_layer);
         cache.split_v_l.reserve(n_layer);
+        if (llama_model_has_recurrent(&model)) {
+            cache.split_s_l.reserve(n_layer);
+        }
         split_cache = true;
     }
 
@@ -780,8 +783,8 @@ static bool llama_kv_cache_init(
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
     for (auto & it : buft_layer_count) {
         int n_layers = it.second;
-        size_t ctx_mem_size = 5u*n_layers*ggml_tensor_overhead();
-        if (split_cache) ctx_mem_size += 2*model.splits.size()*n_layers*ggml_tensor_overhead();
+        size_t ctx_mem_size = 8u*n_layers*ggml_tensor_overhead();
+        if (split_cache) ctx_mem_size += 4*model.splits.size()*n_layers*ggml_tensor_overhead();
         struct ggml_init_params params = {
             /*.mem_size   =*/ ctx_mem_size,
             /*.mem_buffer =*/ NULL,
@@ -843,7 +846,8 @@ static bool llama_kv_cache_init(
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k;
 
-        struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        struct ggml_context * ctx = split_cache ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
@@ -877,6 +881,31 @@ static bool llama_kv_cache_init(
                 cache.s_l[i] = s;
                 cache.k_l.push_back(nullptr);
                 cache.v_l.push_back(nullptr);
+                LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
+                if (split_cache && model.layers[i].ssm_out->extra) {
+                    auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
+                    GGML_ASSERT(split_ssm_out);
+                    int num_v_heads = hparams.ssm_dt_rank;
+                    int head_v_dim  = hparams.ssm_d_inner / num_v_heads;
+                    int n_device = split_ssm_out->n_device;
+                    auto & split_s_l = cache.split_s_l.emplace_back();
+                    split_s_l.tensor_splits.resize(n_device, nullptr);
+                    for (int is = 0; is < n_device; ++is) {
+                        auto split = split_ssm_out->splits[is];
+                        if (!split) continue;
+                        GGML_ASSERT(split->ne[0] % head_v_dim == 0);
+                        int nv = split->ne[0] / head_v_dim;
+                        auto size = hparams.n_embd_v_s_id(nv);
+                        split_s_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, size, qnext_state_slots);
+                        auto split_name = s_name + '.' + std::to_string(is);
+                        ggml_set_name(split_s_l.tensor_splits[is], split_name.c_str());
+                        mem_split[is] += ggml_nbytes(split_s_l.tensor_splits[is]);
+                    }
+                    split_s_l.ggml.n_device  = n_device;
+                    split_s_l.ggml.split_dim = 0;
+                    split_s_l.ggml.splits    = split_s_l.tensor_splits.data();
+                    cache.s_l[i]->extra = (void *)&split_s_l.ggml;
+                }
                 continue;
             }
             bool split_cache_i = split_cache;
@@ -1939,7 +1968,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_MINIMAX_M2,
         LLM_ARCH_SEED_OSS,
         LLM_ARCH_STEP35,
-        LLM_ARCH_QWEN3NEXT,
+        //LLM_ARCH_QWEN3NEXT,
         LLM_ARCH_QWEN35,
         LLM_ARCH_QWEN35MOE,
     };
