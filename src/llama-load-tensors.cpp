@@ -3602,7 +3602,7 @@ static void prepare_delta_split(int ttype, int repeat_type, int num_k_heads, int
     check_delta_split(t, l_split);
 }
 
-static void split_recurrent_tensors(const llama_hparams & hparams, llama_layer & layer, const std::vector<float> & cur_splits, std::vector<size_t> & mem_used,
+static void split_recurrent_tensors(const llama_hparams & hparams, llama_layer & layer, const std::vector<float> & cur_splits, std::vector<size_t> & mem_used, std::vector<size_t>& mem_available,
         ggml_context * ctx_split, [[maybe_unused]] int il) { //, int repeat_type) {
     int head_k_dim  = hparams.ssm_d_state;
     int num_k_heads = hparams.ssm_n_group;
@@ -3635,7 +3635,7 @@ static void split_recurrent_tensors(const llama_hparams & hparams, llama_layer &
         GGML_ABORT("Quantization types with per row meta data are not supported for the ssm_out tensor when using split mode graph");
     }
 
-    auto split = create_split(num_k_heads, k_head_granularity, cur_splits, mem_used);
+    auto split = create_split(num_k_heads, k_head_granularity, cur_splits, mem_used, mem_available);
     LLAMA_LOG_DEBUG("================ %s(%d)", __func__, il);
     int n_on = 0;
     for (auto & s : split) {
@@ -3942,7 +3942,7 @@ bool create_tensors_helper::create_tensors() {
                 prepare_split_tensors(-1, ctx_split, layer.rope_freqs, layer.split_rope_freqs, split, mem_used);
             }
             if (hparams.is_recurrent(il)) {
-                split_recurrent_tensors(hparams, layer, cur_splits, mem_used, ctx_split, il); //, model.arch == LLM_ARCH_QWEN3NEXT ? 0 : 1);
+                split_recurrent_tensors(hparams, layer, cur_splits, mem_used, mem_available, ctx_split, il); //, model.arch == LLM_ARCH_QWEN3NEXT ? 0 : 1);
             }
             else if (layer.wo && layer.wq && layer.wk && layer.wv) {
                 auto granularity_kq = hparams.n_embd_head_k * gqa_ratio;
