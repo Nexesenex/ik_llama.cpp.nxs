@@ -3514,8 +3514,12 @@ static int llama_decode_internal(
         printf("graph_compute(...): %d us\n", int(tim2-tim1));
 #endif
 
+        bool reset_previous = false;
         // update the kv ring buffer
         {
+            if (llama_model_has_recurrent(&lctx.model) && kv_self.head == 0) {
+                reset_previous = true;
+            }
             kv_self.head += n_tokens;
 
             // Ensure kv cache head points to a valid index.
@@ -3607,6 +3611,12 @@ static int llama_decode_internal(
         }
         n_outputs_prev += lctx.n_outputs;
         cur_token += n_tokens;
+        if (reset_previous) {
+            // We need to discard this graph. Otherwise, iwith CUDA graphs enabled, the graph will get resused and this will reset the
+            // recurrent state for each new token. This is probably not very relevant in practice because we basically never run TG with
+            // empty context, but for the sake of correctness let's just do it.
+            lctx.prev.reset();
+        }
     }
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
