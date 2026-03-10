@@ -243,12 +243,12 @@ bool server_sent_anthropic_event(httplib::DataSink& sink, const json& data);
 // used by /completions endpoint
 json oaicompat_chat_params_parse(const json& body);
 
-struct server_chat_params {
+struct oaicompat_parser_options {
     bool use_jinja;
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
     std::map<std::string, std::string> chat_template_kwargs;
-    common_chat_templates_ptr  tmpls;
+    common_chat_templates* tmpls;
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
@@ -258,7 +258,7 @@ struct server_chat_params {
 json oaicompat_chat_params_parse(
     const struct llama_model* model,
     json& body, /* openai api json semantics */
-    const server_chat_params& opt,
+    const oaicompat_parser_options& opt,
     std::vector<raw_buffer>& out_files);
 
 // convert OpenAI Responses API format to OpenAI Chat Completions API format
@@ -267,7 +267,7 @@ json convert_responses_to_chatcmpl(const json& body);
 json anthropic_params_from_json(
     const struct llama_model* model,
     const json& body_in, /* anthropic messages api json semantics */
-    const server_chat_params& opt,
+    const oaicompat_parser_options& opt,
     std::vector<raw_buffer>& out_files);
 
 
