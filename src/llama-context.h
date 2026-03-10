@@ -61,7 +61,6 @@ struct llama_kv_cache {
 
     std::vector<llama_split_tensor> split_k_l;
     std::vector<llama_split_tensor> split_v_l;
-    std::vector<llama_split_tensor> split_s_l;
 
     std::vector<struct ggml_context *> ctxs;
     std::vector<ggml_backend_buffer_t> bufs;
