@@ -757,20 +757,6 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
     static bool ggml_backend_cuda_buffer_type_initialized = false;
 
     if (!ggml_backend_cuda_buffer_type_initialized) {
-
-        // Set CUDA_SCALE_LAUNCH_QUEUES before any CUDA API call to improve multi-GPU pipeline parallelism performance
-        // PR: https://github.com/ggml-org/llama.cpp/pull/19042
-        if (getenv("CUDA_SCALE_LAUNCH_QUEUES") == nullptr) {
-#ifdef _WIN32
-            _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "2x");
-#else
-            setenv("CUDA_SCALE_LAUNCH_QUEUES", "2x", 0); // don't overwrite if already set
-#endif // _WIN32
-            GGML_CUDA_LOG_WARN("==================================================================================\n");
-            GGML_CUDA_LOG_WARN("CUDA_SCALE_LAUNCH_QUEUES=2x EnVar has been enabled for increased Multi-GPUs perfs.\n");
-            GGML_CUDA_LOG_WARN("==================================================================================\n");
-        }
-
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; i++) {
             ggml_backend_cuda_buffer_types[i] = {
                 /* .iface    = */ ggml_backend_cuda_buffer_type_interface,
