@@ -3431,7 +3431,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     }
     auto split_mode = params.split_mode;
     if (!params.mmproj.path.empty() || !params.mmproj.url.empty()) {
-        if (split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) {
+        if (split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || split_mode == LLAMA_SPLIT_MODE_ATTN) {
             LLAMA_LOG_WARN("\n======================================================\n");
             LLAMA_LOG_WARN("Disabling split mode graph due to vision being enabled\n");
             LLAMA_LOG_WARN("======================================================\n\n");
