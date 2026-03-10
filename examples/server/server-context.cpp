@@ -2804,7 +2804,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         {"n_past",   slot.n_past},
                         {"n_ctx",    n_ctx},
                         {"n_tokens", batch.n_tokens},
-                        {"n_ptp",   slot.n_prompt_tokens_processed},
+                        {"n_ptp",   slot.n_past + slot.n_prompt_tokens_processed},
                         {"Tot",   slot.n_prompt_tokens - slot.n_past_start},
                     });
                 }
@@ -2944,7 +2944,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
 
                 if ((slot.n_prompt_tokens_processed - batch.n_tokens) >1) {
                     LOG_INFO("PP", {
-                        {"n_ptp",   slot.n_past_start + slot.n_prompt_tokens_processed - batch.n_tokens},
+                        {"n_ptp",   slot.n_past + batch.n_tokens},
                         {"Tot", n_new_tokens},
                         {"%_P", [&n_processed_total, &n_new_tokens]() { char buf[16]; snprintf(buf, sizeof(buf), "%.2f", (double)n_processed_total / n_new_tokens * 100); return std::string(buf); }()},
                         {"LB t/s",    std::round(lb_pp_tok_per_sec * 100) / 100},
