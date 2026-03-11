@@ -3153,6 +3153,11 @@ bool server_context::accept_special_token(const server_slot& slot, const  llama_
     return params_base.special || slot.sparams.preserved_tokens.find(token) != slot.sparams.preserved_tokens.end();
 }
 
+void server_context::release_slot_after_final_response(server_slot & slot) {
+    slot.print_timings();
+    slot.release();
+    metrics.on_prediction(slot);
+}
 
 void server_context::send_token_results(completion_token_outputs& results, server_slot& slot, int32_t n) {
     int count = 0;
