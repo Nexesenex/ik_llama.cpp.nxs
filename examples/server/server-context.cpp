@@ -3361,12 +3361,12 @@ inline int32_t check_ban_phrase(server_slot& slot) {
         } catch (...) { continue; }
     }
 
-    if (found) {
-        std::vector<size_t> unused;
-        LLAMA_LOG_DEBUG("Banned string dectected: %s\n", string_buffer.substr(start).c_str());
-        n = find_n_tokens_from_string(slot.ctx, tokens, start, 0, unused);
-        n_rewind = (int32_t) slot.token_buffer.size() - (int32_t) n;
-    }
+    // if (found) {
+        // std::vector<size_t> unused;
+        // LLAMA_LOG_DEBUG("Banned string dectected: %s\n", string_buffer.substr(start).c_str());
+        // n = find_n_tokens_from_string(slot.ctx, tokens, start, 0, unused);
+        // n_rewind = (int32_t) slot.token_buffer.size() - (int32_t) n;
+    // }
 
     // 3. Check regex case insensitive
     for (const auto& pattern : slot.ban_regex_ci) {
@@ -3462,10 +3462,10 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
         if (slot.n_decoded < 0) slot.n_decoded = 0;
     }
 
-    slot.token_buffer.resize(n_keep_rewind);
-    size_t n_keep = slot.cache_tokens.size() - n_rewind;
-    slot.sampled = slot.cache_tokens[n_keep];
-    slot.cache_tokens.keep_first(n_keep);
+    // slot.token_buffer.resize(n_keep_rewind);
+    // size_t n_keep = slot.cache_tokens.size() - n_rewind;
+    // slot.sampled = slot.cache_tokens[n_keep];
+    // slot.cache_tokens.keep_first(n_keep);
 }
 
 void server_context::buffer_and_check_string_ban(server_slot & slot, completion_token_output & result) {
