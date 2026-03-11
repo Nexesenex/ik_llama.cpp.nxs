@@ -357,4 +357,5 @@ struct server_context {
     // Re-aggregates all active vectors and updates the model state
     bool apply_control_vectors_internal();
 
+    void release_slot_after_final_response(server_slot & slot);
 };
