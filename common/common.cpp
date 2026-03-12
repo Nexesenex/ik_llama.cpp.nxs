@@ -3682,7 +3682,7 @@ static void common_minilog_callback(ggml_log_level level, const char * text, voi
         // "llm_load_tensors:",
         "==========================",
         "merging up/gate in layer",
-        "repacking up/gate experts weight in layer",
+        "concatenating up/gate experts weight in layer",
         "model has unused ",
         "Setting default ",
         "buffer type overriden to CPU",
