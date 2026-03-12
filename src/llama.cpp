@@ -5193,16 +5193,16 @@ void llama_free_model(struct llama_model * model) {
     delete model;
 }
 
-static void llama_repack_up_gate_exps(llama_context & lctx) {
+static void llama_concatenate_up_gate_exps(llama_context & lctx) {
     auto & model = lctx.model;
-    bool needs_repack = false;
+    bool needs_concatenate = false;
     for (auto & l : model.layers) {
         if (l.ffn_up_gate_exps && l.ffn_up_exps && l.ffn_gate_exps &&
            !l.ffn_up_gate_exps->extra) {
-            needs_repack = true; break;
+            needs_concatenate = true; break;
         }
     }
-    if (!needs_repack) return;
+    if (!needs_concatenate) return;
 
     std::vector<char> aux_buffer_up, aux_buffer_gate, aux_buffer_up_gate;
     for (int il = 0; il < int(model.layers.size()); ++il) {
@@ -5225,7 +5225,7 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
             if (nbytes > aux_buffer_gate.size()) {
                 aux_buffer_gate.resize(nbytes);
             }
-            LLAMA_LOG_INFO("%s: repacking up/gate experts weight in layer %d\n", __func__, il);
+            LLAMA_LOG_INFO("%s: Concatenating up/gate experts weight in layer %d\n", __func__, il);
             ggml_backend_tensor_get(l.ffn_up_exps, aux_buffer_up.data(), 0, nbytes);
             ggml_backend_tensor_get(l.ffn_gate_exps, aux_buffer_gate.data(), 0, nbytes);
             if (aux_buffer_up_gate.size() < 2*nbytes) {
@@ -5251,7 +5251,7 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
                 if (nbytes > aux_buffer_gate.size()) {
                     aux_buffer_gate.resize(nbytes);
                 }
-                LLAMA_LOG_INFO("%s: repacking up/gate experts bias in layer %d\n", __func__, il);
+                LLAMA_LOG_INFO("%s: Concatenating up/gate experts bias in layer %d\n", __func__, il);
                 ggml_backend_tensor_get(l.ffn_up_exps_b, aux_buffer_up.data(), 0, nbytes);
                 ggml_backend_tensor_get(l.ffn_gate_exps_b, aux_buffer_gate.data(), 0, nbytes);
                 if (aux_buffer_up_gate.size() < 2*nbytes) {
@@ -5753,7 +5753,7 @@ struct llama_context * llama_init_from_model(
                 LLAMA_LOG_INFO("%s: pipeline parallelism enabled (n_copies=%d)\n", __func__, ggml_backend_sched_get_n_copies(ctx->sched));
             }
 
-            llama_repack_up_gate_exps(*ctx);
+            llama_concatenate_up_gate_exps(*ctx);
 
             // build worst-case graph
             int n_past = cparams.n_ctx - n_tokens;

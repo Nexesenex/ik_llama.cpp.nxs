@@ -38,7 +38,7 @@ static void llama_selective_log_callback(ggml_log_level level, const char * text
         "llm_load_tensors:",
         "==========================",
         "merging up/gate in layer",
-        "repacking up/gate experts weight in layer",
+        "Concatenating up/gate experts weight in layer",
     };
     for (const char * pat : skip_patterns) {
         if (strstr(text, pat) != nullptr) {
