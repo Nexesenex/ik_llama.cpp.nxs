@@ -3278,7 +3278,7 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
         return false;
     }
 
-    LLAMA_LOG_INFO("%s: merging up/gate in layer %d\n", __func__, i);
+    LLAMA_LOG_DEBUG("%s: Will concatenate up/gate in layer %d after loading\n", __func__, i);
 
     layer.ffn_up_gate_exps = ggml_new_tensor_3d(u_ctx, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1], u_meta->ne[2]);
     snprintf(layer.ffn_up_gate_exps->name, GGML_MAX_NAME, "blk.%d.ffn_gate_up_exps.weight", i);
