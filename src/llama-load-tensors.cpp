@@ -4,6 +4,12 @@
 #include "llama-model.h"
 #include "ggml.h"
 
+#ifdef GGML_USE_CUDA
+#include "../ggml/include/ggml-cuda.h"
+#endif
+#ifdef GGML_USE_VULKAN
+#include "../ggml/include/ggml-vulkan.h"
+#endif
 
 #include <set>
 #include <map>
@@ -3973,6 +3979,37 @@ bool create_tensors_helper::create_tensors() {
         LLAMA_LOG_INFO("================================ max_gpu_per_split = %d\n", model.max_gpu_per_split);
         LLAMA_LOG_INFO("================================ split_adjust_step_frequency = %.2f\n", model.split_adjust_step_frequency);
         std::vector<size_t> mem_used(model.splits.size(), 0);
+        std::vector<size_t> vram_free(model.splits.size(), 0);
+        std::vector<size_t> vram_total(model.splits.size(), 0);
+#if defined(GGML_USE_CUDA)
+        for (int i = 0; i < int(model.splits.size()); ++i) {
+            size_t free; size_t total;
+            ggml_backend_cuda_get_device_memory(model.devices[i], &free, &total);
+            vram_free[i] = free;
+            vram_total[i] = total;
+            LLAMA_LOG_INFO("GPU %d: total physical VRAM: %.2f MiB, free VRAM: %.2f MiB\n", i, total/1024./1024., free/1024./1024.);
+        }
+#elif defined(GGML_USE_VULKAN)
+        for (int i = 0; i < int(model.splits.size()); ++i) {
+            size_t free; size_t total;
+            ggml_backend_vk_get_device_memory(model.devices[i], &free, &total);
+            vram_free[i] = free;
+            vram_total[i] = total;
+            LLAMA_LOG_INFO("GPU %d: total physical VRAM: %.2f MiB, free VRAM: %.2f MiB\n", i, total/1024./1024., free/1024./1024.);
+        }
+#else
+        for (int i = 0; i < int(model.splits.size()); ++i) {
+            vram_free[i] = 1;
+            vram_total[i] = 1;
+        }
+#endif
+        size_t mgpu_vram_total = 0; size_t mgpu_vram_free = 0;
+        for (int i = 0; i < int(model.splits.size()); ++i) {
+            mgpu_vram_total += vram_total[i];
+            mgpu_vram_free += vram_free[i];
+        }
+        LLAMA_LOG_INFO("Total physical VRAM across %d GPUs: %.1f MiB, Free VRAM: %.2f MiB\n",
+                model.splits.size(), mgpu_vram_total/1024./1024., mgpu_vram_free/1024./1024.);
         const auto & hparams = model.hparams;
         auto cur_splits = model.splits;
         int effective_sasf;
