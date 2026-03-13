@@ -136,7 +136,8 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
                         n_expert, n_expert_used,
                         LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
                         (llm_expert_gating_func_type) hparams.expert_gating_func,
-                        LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
+                        LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr, nullptr, nullptr,
+                        model.layers[il].ffn_up_gate_shexp);
             }
 
             // residual and context vector
@@ -367,7 +368,8 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
             n_expert, n_expert_used,
             LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
             (llm_expert_gating_func_type) hparams.expert_gating_func,
-            LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps);
+            LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps, nullptr, nullptr, nullptr,
+            mtp_layer.ffn_up_gate_shexp);
 
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);

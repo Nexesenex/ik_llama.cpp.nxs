@@ -64,7 +64,8 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, true, false, 0.0f,
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr, model.layers[il].ffn_gate_inp_shexp);
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr, model.layers[il].ffn_gate_inp_shexp, nullptr,
+                    model.layers[il].ffn_up_gate_shexp);
 
             cur = lctx.cvec.apply_to(ctx0, cur, il);
             cb(cur, "l_out", il);
@@ -230,7 +231,8 @@ struct ggml_tensor * llm_build_context::build_qwen35moe_mtp(
             n_expert, n_expert_used,
             LLM_FFN_SILU, true, false, 0.0f,
             LLM_EXPERT_GATING_FUNC_SOFTMAX,
-            LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps, nullptr, mtp_layer.ffn_gate_inp_shexp);
+            LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps, nullptr, mtp_layer.ffn_gate_inp_shexp, nullptr,
+            mtp_layer.ffn_up_gate_shexp);
 
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);

@@ -50,6 +50,7 @@ struct llama_model_loader {
     bool use_thp = false;
     bool merge_qkv = false;
     bool merge_up_gate_exps = false;
+    bool merge_up_gate_shexp = false;
     bool defer_experts = false;
 
     llama_files files;
@@ -91,7 +92,7 @@ struct llama_model_loader {
     llama_expert_tensor_index expert_tensor_index;
 
     llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
-            bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
+            bool merge_qkv, bool merge_up_gate_exps, bool merge_up_gate_shexp, bool defer_experts,
             const llama_model_kv_override * param_overrides_p,
             const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
 
