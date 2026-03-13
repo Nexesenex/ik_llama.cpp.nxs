@@ -420,6 +420,7 @@ extern "C" {
         bool validate_quants; // if true, check for NaNs while loading the model
         bool merge_qkv;     // if true, merge separate Q, K, V tensors into a single, contiguous tensor
         bool merge_up_gate_exps;  // if true, merge ffn_up_exps and ffn_gate_exps tensors into a single, contiguous tensor
+        bool merge_up_gate_shexp; // if true, merge ffn_up_shexp and ffn_gate_shexp tensors into a single, contiguous tensor
         bool mtp;           // if true, load MTP layers if present
         bool dry_run;       // skip loading tensors
         bool flash_attn;

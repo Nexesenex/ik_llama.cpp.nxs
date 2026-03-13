@@ -1800,6 +1800,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.merge_up_gate_exps = true;
         return true;
     }
+    if (arg == "-mugse" || arg == "--merge-up-gate-shared-experts") {
+        params.merge_up_gate_shexp = true;
+        return true;
+    }
     if (arg == "-khad" || arg == "--k-cache-hadamard") {
         params.k_cache_hadamard = true;
         return true;
@@ -2600,6 +2604,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",         "-muge,  --merge-up-gate-experts,","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
+    options.push_back({ "*",         "-mugse, --merge-up-gate-shared-experts,","merge ffn_up_shexp/ffn_gate_shexp (default: %d)", params.merge_up_gate_shexp});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard,",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
     options.push_back({ "*",         "-vhad,  --v-cache-hadamard,",     "Use Hadamard transform for V-cache (default: %d)", params.v_cache_hadamard});
     options.push_back({ "*",         "-smf16, --split-mode-f16,",       "Use f16 for data exchange between GPUs (default: %d)", true});
@@ -3766,6 +3771,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.validate_quants = params.validate_quants;
     mparams.merge_qkv       = params.merge_qkv;
     mparams.merge_up_gate_exps = params.merge_up_gate_exps;
+    mparams.merge_up_gate_shexp = params.merge_up_gate_shexp;
     mparams.mtp             = params.has_mtp;
     mparams.flash_attn      = params.flash_attn;
 	
