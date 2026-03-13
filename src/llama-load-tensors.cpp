@@ -4,6 +4,12 @@
 #include "llama-model.h"
 #include "ggml.h"
 
+#ifdef GGML_USE_CUDA
+#include "../ggml/include/ggml-cuda.h"
+#endif
+#ifdef GGML_USE_VULKAN
+#include "../ggml/include/ggml-vulkan.h"
+#endif
 
 #include <set>
 #include <map>
@@ -3859,6 +3865,37 @@ bool create_tensors_helper::create_tensors() {
         const int n_layer = model.layers.size() - model.hparams.nextn_predict_layers;
         LLAMA_LOG_INFO("================================ max_gpu = %d\n", model.max_gpu);
         std::vector<size_t> mem_used(model.splits.size(), 0);
+        std::vector<size_t> free_vram(model.splits.size(), 0);
+        std::vector<size_t> total_vram(model.splits.size(), 0);
+#if defined(GGML_USE_CUDA)
+        for (int i = 0; i < int(model.splits.size()); ++i) {
+            size_t free; size_t total;
+            ggml_backend_cuda_get_device_memory(model.devices[i], &free, &total);
+            free_vram[i] = free;
+            total_vram[i] = total;
+            LLAMA_LOG_INFO("GPU %d: total physical VRAM: %.2f MiB, free VRAM: %.2f MiB\n", i, total/1024./1024., free/1024./1024.);
+        }
+#elif defined(GGML_USE_VULKAN)
+        for (int i = 0; i < int(model.splits.size()); ++i) {
+            size_t free; size_t total;
+            ggml_backend_vk_get_device_memory(model.devices[i], &free, &total);
+            free_vram[i] = free;
+            total_vram[i] = total;
+            LLAMA_LOG_INFO("GPU %d: total physical VRAM: %.2f MiB, free VRAM: %.2f MiB\n", i, total/1024./1024., free/1024./1024.);
+        }
+#else
+        for (int i = 0; i < int(model.splits.size()); ++i) {
+            free_vram[i] = 1;
+            total_vram[i] = 1;
+        }
+#endif
+        size_t mgpu_total_vram = 0; size_t mgpu_free_vram = 0;
+        for (int i = 0; i < int(model.splits.size()); ++i) {
+            mgpu_total_vram += total_vram[i];
+            mgpu_free_vram += free_vram[i];
+        }
+        LLAMA_LOG_INFO("Total physical VRAM across %d GPUs: %.1f MiB, Free VRAM: %.2f MiB\n",
+                model.splits.size(), mgpu_total_vram/1024./1024., mgpu_free_vram/1024./1024.);
         const auto & hparams = model.hparams;
         auto cur_splits = model.splits;
         int adjust_step = std::max(1, int(n_layer / (2*model.splits.size())));
