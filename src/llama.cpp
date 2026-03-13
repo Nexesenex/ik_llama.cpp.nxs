@@ -4248,7 +4248,7 @@ static bool llm_load_tensors(
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
         llama_model_loader ml(fname, params.ncmoe, params.use_mmap, params.check_tensors,
-                params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
+                params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps, params.merge_up_gate_shexp,
                 params.defer_experts,
                 params.kv_overrides, params.tensor_buft_overrides);
 
@@ -6688,6 +6688,7 @@ struct llama_model_params llama_model_default_params() {
         /*.validate_quants             =*/ false,
         /*.merge_qkv                   =*/ false,
         /*.merge_up_gate_exps          =*/ false,
+        /*.merge_up_gate_shexp         =*/ false,
         /*.mtp                         =*/ false,
         /*.dry_run                     =*/ false,
         /*.split_output_tensor         =*/ false,
@@ -7104,6 +7105,54 @@ static void llama_concatenate_up_gate_exps(llama_context & lctx) {
                 }
                 ggml_backend_tensor_set(l.ffn_up_gate_exps_b, aux_buffer_up_gate.data(), 0, 2*expert_size*l.ffn_up_gate_exps_b->ne[1]);
             }
+        }
+    }
+}
+
+static void llama_concatenate_up_gate_shexp(llama_context & lctx) {
+    auto & model = lctx.model;
+    bool needs_concatenate = false;
+    for (auto & l : model.layers) {
+        if (l.ffn_up_gate_shexp && l.ffn_up_shexp && l.ffn_gate_shexp &&
+           !l.ffn_up_gate_shexp->extra) {
+            needs_concatenate = true; break;
+        }
+    }
+    if (!needs_concatenate) return;
+
+    std::vector<char> aux_buffer_up, aux_buffer_gate, aux_buffer_up_gate;
+    for (int il = 0; il < int(model.layers.size()); ++il) {
+        auto & l = model.layers[il];
+        if (l.ffn_up_gate_shexp && l.ffn_up_shexp && l.ffn_gate_shexp &&
+           !l.ffn_up_gate_shexp->extra) {
+            if (!ggml_backend_buffer_is_host(l.ffn_up_shexp->buffer)) {
+                continue;
+            }
+            GGML_ASSERT(l.ffn_up_gate_shexp->type  == l.ffn_up_shexp->type  && l.ffn_up_gate_shexp->type  == l.ffn_gate_shexp->type);
+            GGML_ASSERT(l.ffn_up_gate_shexp->ne[0] == l.ffn_up_shexp->ne[0] && l.ffn_up_gate_shexp->ne[0] == l.ffn_gate_shexp->ne[0]);
+            GGML_ASSERT(l.ffn_up_gate_shexp->ne[1] == l.ffn_up_shexp->ne[1] + l.ffn_gate_shexp->ne[1]);
+            auto nbytes = ggml_nbytes(l.ffn_up_shexp);
+            GGML_ASSERT(nbytes == ggml_nbytes(l.ffn_gate_shexp));
+            if (nbytes > aux_buffer_up.size()) {
+                aux_buffer_up.resize(nbytes);
+            }
+            if (nbytes > aux_buffer_gate.size()) {
+                aux_buffer_gate.resize(nbytes);
+            }
+            printf("%s: Concatenating up/gate shared experts weight in layer %d\n", __func__, il);
+            ggml_backend_tensor_get(l.ffn_up_shexp, aux_buffer_up.data(), 0, nbytes);
+            ggml_backend_tensor_get(l.ffn_gate_shexp, aux_buffer_gate.data(), 0, nbytes);
+            if (aux_buffer_up_gate.size() < 2*nbytes) {
+                aux_buffer_up_gate.resize(2*nbytes);
+            }
+            size_t offset_up_gate = 0;
+            size_t offset_up = 0;
+            auto shexp_size = l.ffn_up_shexp->ne[1]*l.ffn_up_shexp->nb[1];
+            std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_gate.data() + offset_up, shexp_size);
+            offset_up_gate += shexp_size;
+            std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_up.data() + offset_up, shexp_size);
+            offset_up_gate += shexp_size;
+            ggml_backend_tensor_set(l.ffn_up_gate_shexp, aux_buffer_up_gate.data(), 0, 2*shexp_size);
         }
     }
 }
@@ -7671,14 +7720,21 @@ struct llama_context * llama_init_from_model(
             }
 
             llama_concatenate_up_gate_exps(*ctx);
+            LLAMA_LOG_INFO("=== After exps concatenation ===\n");
+            llama_concatenate_up_gate_shexp(*ctx);
+            LLAMA_LOG_INFO("=== After shexp concatenation ===\n");
 
             // build worst-case graph
             int n_past = cparams.n_ctx - n_tokens;
             llama_token token = llama_token_bos(&ctx->model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
+            LLAMA_LOG_INFO("=== Before llama_build_graph ===\n");
             ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true, cparams.worst_graph_tokens);
+            LLAMA_LOG_INFO("=== After llama_build_graph ===\n");
 
             // initialize scheduler with the worst-case graph
+            LLAMA_LOG_INFO("=== Before ggml_backend_sched_reserve ===\n");
             bool gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
+            LLAMA_LOG_INFO("=== After ggml_backend_sched_reserve ===\n");
             if (!gf_success)
             {
                 if (pipeline_parallel) {

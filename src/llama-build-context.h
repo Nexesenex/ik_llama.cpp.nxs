@@ -491,6 +491,7 @@ llm_expert_gating_func_type   gating_op,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input = false,
          ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr,
          ggml_tensor * shexp_gate = nullptr, ggml_tensor * add_extra = nullptr);
+         ggml_tensor * up_gate_shexp = nullptr, ggml_tensor * up_gate_shexp_b = nullptr,
 
     static ggml_cgraph * llama_build_graph_defrag(llama_context & lctx, const std::vector<uint32_t> & ids);
 
