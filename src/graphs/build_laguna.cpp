@@ -47,7 +47,8 @@ ggml_cgraph * llm_build_context::build_laguna() {
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, hparams.expert_weights_norm, hparams.expert_weights_scale != 0.0f, hparams.expert_weights_scale,
                     (llm_expert_gating_func_type) hparams.expert_gating_func,
-                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr, nullptr, nullptr,
+                    model.layers[il].ffn_up_gate_shexp);
         }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);

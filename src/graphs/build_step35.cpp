@@ -56,7 +56,8 @@ ggml_cgraph * llm_build_context::build_step35() {
                     LLM_FFN_SILU, norm_w, scale_w, w_scale,
                     LLM_EXPERT_GATING_FUNC_SIGMOID,
                     //(llm_expert_gating_func_type) hparams.expert_gating_func,
-                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr, nullptr, nullptr,
+                    model.layers[il].ffn_up_gate_shexp);
         }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);

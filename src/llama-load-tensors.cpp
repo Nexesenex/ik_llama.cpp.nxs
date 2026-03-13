@@ -1,4 +1,4 @@
-#include "llama-model-loader.h"
+﻿#include "llama-model-loader.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
@@ -39,6 +39,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     bool merge_qkv(const LLM_TN & tn, int i, int bias, bool ignore_attn_scale = false);
 
     bool merge_up_gate_exps(const LLM_TN & tn, int i, int bias);
+    bool merge_up_gate_shexp(const LLM_TN & tn, int i);
 
     bool create_std_ffn_exps(int64_t n_embd, const LLM_TN & tn, int i, int flags = 0, int n_ff_exps_input = 0,
             ggml_context * ffn_ctx = nullptr);
@@ -414,6 +415,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
     auto n_tensors = ml.n_tensors;
     if (ml.merge_qkv) n_tensors += n_layer;
     if (ml.merge_up_gate_exps) n_tensors += n_layer;
+    if (ml.merge_up_gate_shexp) n_tensors += n_layer;
     ctx_size = ggml_tensor_overhead()*(n_tensors + 1); // +1 for models where tok_embd is duplicated as output
     ctx_size += ggml_tensor_overhead()*n_layer*3;         // for moe merged tensors
 
@@ -846,9 +848,12 @@ bool create_tensors_helper::create_llama4_tensors(const LLM_TN & tn) {
 
             // Shared expert
             const int64_t n_ff_shexp = n_ff_exp;
+            if (!ml.merge_up_gate_shexp) {
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {    n_embd, n_ff_shexp}, 0);
-            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd    }, 0);
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {    n_embd, n_ff_shexp}, 0);
+            }
+            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd    }, 0);
+            if (ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
         } else {
             create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
         }
@@ -1400,12 +1405,15 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
             layer.ffn_exp_probs_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert},
                     llama_model_loader::TENSOR_NOT_REQUIRED);
         // shared expert MLP
+            if (!ml.merge_up_gate_shexp) {
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp},
                     llama_model_loader::TENSOR_NOT_REQUIRED);
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp},
                     llama_model_loader::TENSOR_NOT_REQUIRED);
+            }
             layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd},
                     llama_model_loader::TENSOR_NOT_REQUIRED);
+            if (ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
         }
     }
     return use_mmap_buffer;
@@ -1517,9 +1525,12 @@ bool create_tensors_helper::create_qwen2_moe_tensors(const LLM_TN & tn) {
         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
 
         layer.ffn_gate_inp_shexp = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", i), {n_embd});
+        if (!ml.merge_up_gate_shexp) {
         layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {    n_embd, n_ff_shexp});
-        layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp,     n_embd});
         layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {    n_embd, n_ff_shexp});
+        }
+        layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp,     n_embd});
+        if (ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
     }
     return use_mmap_buffer;
 }
@@ -1736,9 +1747,12 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
         // Shared expert path (optional per-layer)
         layer.ffn_gate_inp_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", i), {n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
         if (layer.ffn_gate_inp_shexp != nullptr) {
+            if (!ml.merge_up_gate_shexp) {
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_shexp}, llama_model_loader::TENSOR_NOT_REQUIRED);
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_shexp}, llama_model_loader::TENSOR_NOT_REQUIRED);
+            }
             layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
+            if (ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
         }
     }
 
@@ -1828,9 +1842,12 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
 
         layer.ffn_gate_inp_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", i), { n_embd }, flags);
+        if (!(flags == 0 && ml.merge_up_gate_shexp)) {
         layer.ffn_gate_shexp     = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP,     "weight", i), { n_embd, n_ff_shexp }, flags);
         layer.ffn_up_shexp       = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,       "weight", i), { n_embd, n_ff_shexp }, flags);
+        }
         layer.ffn_down_shexp     = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP,     "weight", i), { n_ff_shexp, n_embd }, flags);
+        if (flags == 0 && ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
 
         if (is_mtp_layer) {
             layer.nextn.eh_proj          = create_tensor(ctx_split,
@@ -2886,11 +2903,15 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
             use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
 
             // Shared expert branch
+            if (!ml.merge_up_gate_shexp) {
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_exp * n_expert_shared});
-            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd});
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared});
+            }
+            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd});
+            if (ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
         }
     }
+    
     return use_mmap_buffer;
 }
 
@@ -3144,9 +3165,12 @@ bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
             layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
 
             // Shared expert branch
+            if (!(flags == 0 && ml.merge_up_gate_shexp)) {
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_exp * n_expert_shared}, flags);
-            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd}, flags);
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, flags);
+            }
+            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd}, flags);
+            if (flags == 0 && ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
         }
 
         if (is_mtp_layer) {
@@ -3382,12 +3406,15 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
             if (n_expert_shared > 0) {
                 const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
                 const int64_t n_ff_shexp = n_ff_exp * n_expert_shared;
+                if (!(flags == 0 && ml.merge_up_gate_shexp)) {
                 layer.ffn_gate_shexp     = create_tensor(ffn_ctx,
                         tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), { n_embd, n_ff_shexp }, flags);
-                layer.ffn_down_shexp = create_tensor(ffn_ctx,
-                        tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), { n_ff_shexp, n_embd }, flags);
                 layer.ffn_up_shexp = create_tensor(ffn_ctx,
                         tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i), { n_embd, n_ff_shexp }, flags);
+                }
+                layer.ffn_down_shexp = create_tensor(ffn_ctx,
+                        tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), { n_ff_shexp, n_embd }, flags);
+                if (flags == 0 && ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
             }
         } else {
             // Dense layers (first k layers) - GLM uses separate gate/up projections
@@ -3866,9 +3893,12 @@ bool create_tensors_helper::create_dots1_tensors(const LLM_TN & tn) {
             // MoE branch
             use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
             // Shared expert branch
+            if (!ml.merge_up_gate_shexp) {
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
-            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd}, 0);
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
+            }
+            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd}, 0);
+            if (ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
         }
     }
     return use_mmap_buffer;
@@ -3922,9 +3952,12 @@ bool create_tensors_helper::create_bailingmoe2_tensors(const LLM_TN & tn) {
 
             use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, flags);
 
+            if (!(flags == 0 && ml.merge_up_gate_shexp)) {
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_shexp}, flags);
-            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, flags);
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_shexp}, flags);
+            }
+            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, flags);
+            if (flags == 0 && ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
         } else { // Dense layers
             layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, flags);
             layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, flags);
@@ -3981,9 +4014,12 @@ bool create_tensors_helper::create_ernie45_tensors(const LLM_TN & tn) {
 
             // Shared expert (if present)
             if (hparams.n_ff_shexp > 0) {
+                if (!ml.merge_up_gate_shexp) {
                 layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), { n_embd, hparams.n_ff_shexp }, 0);
-                layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), { hparams.n_ff_shexp, n_embd }, 0);
                 layer.ffn_up_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i), { n_embd, hparams.n_ff_shexp }, 0);
+                }
+                layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), { hparams.n_ff_shexp, n_embd }, 0);
+                if (ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
             }
         }
         else { // Dense layers
@@ -4018,9 +4054,12 @@ bool create_tensors_helper::create_hunyuan_tensors(const LLM_TN & tn) {
         layer.ffn_gate_inp  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
         use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff);
 
+        if (!ml.merge_up_gate_shexp) {
         layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
         layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
+        }
         layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, 0);
+        if (ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
     }
     return use_mmap_buffer;
 }
@@ -4165,9 +4204,12 @@ bool create_tensors_helper::create_minimaxm3_tensors(const LLM_TN & tn) {
             layer.ffn_exp_probs_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, 0);
             use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff_exp);
 
+            if (!ml.merge_up_gate_shexp) {
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), { n_embd, n_ff_exp * n_expert_shared }, 0);
-            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), { n_ff_exp * n_expert_shared, n_embd }, 0);
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i), { n_embd, n_ff_exp * n_expert_shared }, 0);
+            }
+            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), { n_ff_exp * n_expert_shared, n_embd }, 0);
+            if (ml.merge_up_gate_shexp) { merge_up_gate_shexp(tn, i); }
         }
     }
     return use_mmap_buffer;
@@ -4259,6 +4301,48 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
             { g_meta_b->ne[0], g_meta_b->ne[1] }, 0);
     layer.ffn_up_exps_b   = ml.create_tensor_as_view(ctx_split, layer.ffn_up_gate_exps_b, u_name_b.c_str(),
             { u_meta_b->ne[0], u_meta_b->ne[1] }, ggml_nbytes(layer.ffn_gate_exps_b));
+
+    return true;
+}
+
+bool create_tensors_helper::merge_up_gate_shexp(const LLM_TN & tn, int i) {
+    ggml_context * ctx_split = ctx_for_layer_split(i);
+
+    auto & layer = model.layers[i];
+
+    auto u_name = tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i);
+    auto g_name = tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i);
+    auto u_meta = ml.get_tensor_meta(u_name.c_str());
+    auto g_meta = ml.get_tensor_meta(g_name.c_str());
+
+    if (!u_meta || !g_meta) {
+        return false;
+    }
+
+    if (u_meta->type != g_meta->type || u_meta->ne[0] != g_meta->ne[0]) {
+        LLAMA_LOG_INFO("%s: not merging because up/gate shexp meta info is different\n", __func__);
+        return false;
+    }
+
+    auto u_ctx = get_context_for_tensor(ctx_split, u_name);
+    auto g_ctx = get_context_for_tensor(ctx_split, g_name);
+
+    if (u_ctx != g_ctx) {
+        LLAMA_LOG_INFO("%s: not merging because of context\n", __func__);
+        return false;
+    }
+
+    LLAMA_LOG_DEBUG("%s: Will concatenate up/gate shexp in layer %d after loading\n", __func__, i);
+
+    layer.ffn_up_gate_shexp = ggml_new_tensor_2d(u_ctx, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1]);
+    snprintf(layer.ffn_up_gate_shexp->name, GGML_MAX_NAME, "blk.%d.ffn_gate_up_shexp.weight", i);
+    if (u_ctx == ctx_split) {
+        split_tensors.insert(layer.ffn_up_gate_shexp);
+    }
+    layer.ffn_gate_shexp = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_shexp, g_name.c_str(),
+            { g_meta->ne[0], g_meta->ne[1] }, 0);
+    layer.ffn_up_shexp   = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_shexp, u_name.c_str(),
+            { u_meta->ne[0], u_meta->ne[1] }, ggml_nbytes(layer.ffn_gate_shexp));
 
     return true;
 }
@@ -5549,10 +5633,10 @@ bool create_tensors_helper::create_tensors() {
                 }
             }
 
-            if (layer.ffn_down_shexp && layer.ffn_up_shexp && layer.ffn_gate_shexp) {
-                bool use_split = split_tensors.find(layer.ffn_down_shexp) != split_tensors.end() &&
-                                 split_tensors.find(layer.ffn_gate_shexp) != split_tensors.end() &&
-                                 split_tensors.find(layer.ffn_up_shexp)   != split_tensors.end();
+            if (layer.ffn_down_shexp && ((layer.ffn_up_shexp && layer.ffn_gate_shexp) || layer.ffn_up_gate_shexp)) {
+                bool has_up_gate = split_tensors.find(layer.ffn_gate_shexp) != split_tensors.end() && split_tensors.find(layer.ffn_up_shexp) != split_tensors.end();
+                has_up_gate |= split_tensors.find(layer.ffn_up_gate_shexp) != split_tensors.end();
+                bool use_split = split_tensors.find(layer.ffn_down_shexp) != split_tensors.end() && has_up_gate;
                 if (use_split) {
                     int ffn_granularity = 16;
                     if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
@@ -5600,8 +5684,15 @@ bool create_tensors_helper::create_tensors() {
                         LLAMA_LOG_DEBUG("\n");
                     }
                     prepare_split_tensors(0, ctx_split, layer.ffn_down_shexp, layer.split_ffn_down_shexp, split, mem_used);
-                    prepare_split_tensors(1, ctx_split, layer.ffn_up_shexp,   layer.split_ffn_up_shexp,   split, mem_used);
-                    prepare_split_tensors(1, ctx_split, layer.ffn_gate_shexp, layer.split_ffn_gate_shexp, split, mem_used);
+                    if (layer.ffn_up_gate_shexp) {
+                        auto up_gate_split = split;
+                        for (auto & v : up_gate_split) v *= 2;
+                        prepare_split_tensors(1, ctx_split, layer.ffn_up_gate_shexp, layer.split_ffn_up_gate_shexp, up_gate_split, mem_used);
+                        prepare_up_gate_split(layer.ffn_up_gate_shexp, layer.split_ffn_up_gate_shexp);
+                    } else {
+                        prepare_split_tensors(1, ctx_split, layer.ffn_up_shexp,   layer.split_ffn_up_shexp,   split, mem_used);
+                        prepare_split_tensors(1, ctx_split, layer.ffn_gate_shexp, layer.split_ffn_gate_shexp, split, mem_used);
+                    }
                     if (layer.ffn_gate_inp_shexp) {
                         prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp_shexp, layer.split_ffn_gate_inp_shexp, split, mem_used);
                     }
