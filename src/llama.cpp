@@ -822,6 +822,23 @@ static bool llama_kv_cache_init(
 
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
+    std::vector<size_t> kv_mem_available(model.splits.size());
+    if (split_cache) {
+        for (int i = 0; i < (int)model.splits.size(); ++i) {
+#if defined(GGML_USE_CUDA)
+            size_t total; size_t free;
+            ggml_backend_cuda_get_device_memory(model.devices[i], &free, &total);
+            kv_mem_available[i] = free;
+#elif defined(GGML_USE_VULKAN)
+            size_t total; size_t free;
+            ggml_backend_vk_get_device_memory(model.devices[i], &free, &total);
+            kv_mem_available[i] = free;
+#else
+            kv_mem_available[i] = 1;
+#endif
+        }
+    }
+
     const uint32_t qnext_state_slots = llama_qwen3next_state_slots(cparams, kv_size);
     if ((model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) && qnext_state_slots < std::max<uint32_t>(1, cparams.n_seq_max)) {
         LLAMA_LOG_WARN("%s: reducing qwen3next state slots from %u to %u to fit KV cache size\n",
@@ -921,18 +938,34 @@ static bool llama_kv_cache_init(
                     bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
                     auto extra_K = (const ggml_split_tensor_t *)K->extra;
                     auto extra_V = (const ggml_split_tensor_t *)V->extra;
+                    std::vector<int> kv_heads(extra_K->n_device, 0);
+                    size_t tot_kv_mem_available = 1;
+                    for (int is = 0; is < extra_K->n_device; ++is) {
+                        tot_kv_mem_available += kv_mem_available[is];
+                    }
+                    float head_ratio = float(n_head_kv) / float(tot_kv_mem_available);
+                    for (int is = 0; is < extra_K->n_device; ++is) {
+                        kv_heads[is] = std::max(1, int(kv_mem_available[is] * head_ratio));
+                    }
+                    int sum_heads = 0;
+                    for (auto h : kv_heads) sum_heads += h;
+                    if (sum_heads > n_head_kv) {
+                        int excess = sum_heads - n_head_kv;
+                        for (int is = extra_K->n_device - 1; is >= 0 && excess > 0; --is) {
+                            if (kv_heads[is] > 1) { --kv_heads[is]; --excess; }
+                        }
+                    } else if (sum_heads < n_head_kv) {
+                        int deficit = n_head_kv - sum_heads;
+                        for (int is = 0; is < extra_K->n_device && deficit > 0; ++is) {
+                            ++kv_heads[is]; --deficit;
+                        }
+                    }
                     auto & split_k_l = cache.split_k_l.emplace_back();
                     auto & split_v_l = cache.split_v_l.emplace_back();
                     split_k_l.tensor_splits.resize(extra_K->n_device, nullptr);
                     split_v_l.tensor_splits.resize(extra_V->n_device, nullptr);
                     for (int is = 0; is < extra_K->n_device; ++is) {
-                        auto split = use_V_for_K ? extra_V->splits[is] : extra_K->splits[is];
-                        if (!split) continue;
-                        int nhead_kv = use_V_for_K ? split->ne[1] / n_embd_head_v : split->ne[1]/n_embd_head_k;
-                        if (use_V_for_K) {
-                            LLAMA_LOG_DEBUG("K_cache(%d, %d): using %d instead of %ld heads\n",
-                                    i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
-                        }
+                        int nhead_kv = kv_heads[is];
                         split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, nhead_kv * kv_size);
                         auto split_name = k_name + '.' + std::to_string(is);
                         ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
@@ -942,9 +975,8 @@ static bool llama_kv_cache_init(
                     split_k_l.ggml.split_dim = 0;
                     split_k_l.ggml.splits    = split_k_l.tensor_splits.data();
                     for (int is = 0; is < extra_V->n_device; ++is) {
-                        auto split = extra_V->splits[is];
-                        if (!split) continue;
-                        split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, type_v, split->ne[1] * kv_size);
+                        int nhead_kv = kv_heads[is];
+                        split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, type_v, nhead_kv * kv_size);
                         auto split_name = v_name + '.' + std::to_string(is);
                         ggml_set_name(split_v_l.tensor_splits[is], split_name.c_str());
                         mem_split[is] += ggml_nbytes(split_v_l.tensor_splits[is]);
