@@ -3896,6 +3896,40 @@ bool create_tensors_helper::create_tensors() {
         }
         LLAMA_LOG_INFO("Total physical VRAM across %d GPUs: %.1f MiB, Free VRAM: %.2f MiB\n",
                 model.splits.size(), mgpu_vram_total/1024./1024., mgpu_vram_free/1024./1024.);
+        if (model.output && split_tensors.find(model.output) == split_tensors.end()) {
+            size_t output_size = ggml_nbytes(model.output);
+            int output_device = -1;
+            if (ml.tensor_buft_overrides) {
+                for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
+                    std::regex pattern(overrides->pattern);
+                    if (std::regex_match("output.weight", pattern)) {
+#if defined(GGML_USE_CUDA)
+                        for (int i = 0; i < int(model.splits.size()); ++i) {
+                            if (overrides->buft == ggml_backend_cuda_buffer_type(model.devices[i])) {
+                                output_device = i;
+                                break;
+                            }
+                        }
+#elif defined(GGML_USE_VULKAN)
+                        for (int i = 0; i < int(model.splits.size()); ++i) {
+                            if (overrides->buft == ggml_backend_vk_buffer_type(model.devices[i])) {
+                                output_device = i;
+                                break;
+                            }
+                        }
+#endif
+                        break;
+                    }
+                }
+            }
+            if (output_device < 0) {
+                output_device = model.main_gpu;
+            }
+            if (output_device >= 0 && output_device < int(model.splits.size())) {
+                vram_free[output_device] -= output_size;
+                LLAMA_LOG_INFO("Output tensor (%.2f MiB) monolithic on GPU %d, adjusted free VRAM\n", output_size/1024./1024., output_device);
+            }
+        }
         const auto & hparams = model.hparams;
         auto cur_splits = model.splits;
         int adjust_step = std::max(1, int(n_layer / (2*model.splits.size())));
