@@ -1081,8 +1081,8 @@ void MulMat::clamp_oai(int n, float * x) {
         auto one = _mm256_set1_ps(1.f);
         for (; i + 7 < n; i += 8) {
             auto xi = _mm256_loadu_ps(x + i);
-            auto upper_clamped = v_clamp_max(xi, _mm256_set1_ps(k_swiglu_oai_limit));
-            auto mask = _mm256_cmp_ps(xi, _mm256_set1_ps(-k_swiglu_oai_limit), _CMP_LT_OQ);
+            auto upper_clamped = v_clamp_max(xi, limit);
+            auto mask = _mm256_cmp_ps(xi, neg_limit, _CMP_LT_OQ);
             auto both_clamped = _mm256_or_ps(_mm256_and_ps(mask, neg_limit), _mm256_andnot_ps(mask, upper_clamped));
             _mm256_storeu_ps(x + i, _mm256_add_ps(one, both_clamped));
         }
