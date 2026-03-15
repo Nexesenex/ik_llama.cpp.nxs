@@ -1157,7 +1157,7 @@ void MulMat::relu(int n, const float * x, float * y) {
     if (i + 7 < n) {
         for (; i + 7 < n; i += 8) {
             auto xm = _mm256_loadu_ps(x + i);
-            _mm256_storeu_ps(y + i, _mm256_and_ps(_mm256_cmp_ps(_mm256_loadu_ps(x + i), _mm256_setzero_ps(), _CMP_GT_OQ), _mm256_loadu_ps(x + i)));
+            _mm256_storeu_ps(y + i, _mm256_and_ps(_mm256_cmp_ps(xm, _mm256_setzero_ps(), _CMP_GT_OQ), xm));
         }
     }
 #endif
