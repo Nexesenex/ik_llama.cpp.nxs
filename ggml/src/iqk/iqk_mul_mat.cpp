@@ -1150,7 +1150,16 @@ void MulMat::silu(int n, const float * x, float * y) {
 }
 
 void MulMat::relu(int n, const float * x, float * y) {
-    for (int j = 0; j < n; ++j) y[j] = x[j] > 0 ? x[j] : 0;
+    int i = 0;
+#if defined __AVX2__ && defined __FMA__
+    if (i + 7 < n) {
+        for (; i + 7 < n; i += 8) {
+            auto xm = _mm256_loadu_ps(x + i);
+            _mm256_storeu_ps(y + i, _mm256_and_ps(_mm256_cmp_ps(_mm256_loadu_ps(x + i), _mm256_setzero_ps(), _CMP_GT_OQ), _mm256_loadu_ps(x + i)));
+        }
+    }
+#endif
+    for (; i < n; ++i) y[i] = x[i] > 0 ? x[i] : 0;
 }
 
 #endif
