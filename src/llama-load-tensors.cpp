@@ -3932,7 +3932,7 @@ bool create_tensors_helper::create_tensors() {
         }
         const auto & hparams = model.hparams;
         auto cur_splits = model.splits;
-        int adjust_step = std::max(1, int(n_layer / (2*model.splits.size())));
+        int adjust_step = std::max(1, int(n_layer / (4*model.splits.size())));
         if (model.max_gpu > 1 && model.max_gpu < int(cur_splits.size())) {
             bool equal_split = true;
             for (int i = 0; i < int(cur_splits.size()); ++i) {
