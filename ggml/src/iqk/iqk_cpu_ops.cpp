@@ -153,6 +153,33 @@ void iqk_sumrows_div(struct ggml_tensor * div, int ith, int nth) {
     int last  = std::min(first + npt, nrows);
     if (last < first) return;
 
+#if defined __AVX2__ && defined __FMA__
+    if (ne00 >= 8) {
+        for (int ir = first; ir < last; ++ir) {
+            auto values = (const float *)((const char *)src->data + ir*src->nb[1]);
+            __m256 vsum = _mm256_setzero_ps();
+            int j = 0;
+            for (; j + 7 < ne00; j += 8) {
+                auto v = _mm256_loadu_ps(values + j);
+                vsum = _mm256_add_ps(vsum, v);
+            }
+            float sum = 0;
+            for (int k = 0; k < 8; ++k) {
+                sum += ((float *)&vsum)[k];
+            }
+            for (; j < ne00; ++j) sum += values[j];
+            float norm = sum > 0 ? 1/sum : 0.0f;
+            auto result = (float *)((char *)div->data + ir*div->nb[1]);
+            j = 0;
+            for (; j + 7 < ne00; j += 8) {
+                _mm256_storeu_ps(result + j, _mm256_mul_ps(_mm256_loadu_ps(values + j), _mm256_set1_ps(norm)));
+            }
+            for (; j < ne00; ++j) result[j] = values[j]*norm;
+        }
+        return;
+    }
+#endif
+
     for (int ir = first; ir < last; ++ir) {
         auto values = (const float *)((const char *)src->data + ir*src->nb[1]);
         float sum = 0;
