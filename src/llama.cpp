@@ -4584,8 +4584,7 @@ static void llama_concatenate_up_gate_exps(llama_context & lctx) {
     bool needs_concatenate = false;
     for (auto & l : model.layers) {
         if (l.ffn_up_gate_exps && l.ffn_up_exps && l.ffn_gate_exps &&
-            ggml_backend_buffer_is_host(l.ffn_up_gate_exps->buffer) &&
-            ggml_backend_buffer_is_host(l.ffn_up_exps->buffer) && ggml_backend_buffer_is_host(l.ffn_gate_exps->buffer)) {
+           !l.ffn_up_gate_exps->extra) {
             needs_concatenate = true; break;
         }
     }
@@ -4595,8 +4594,7 @@ static void llama_concatenate_up_gate_exps(llama_context & lctx) {
     for (int il = 0; il < int(model.layers.size()); ++il) {
         auto & l = model.layers[il];
         if (l.ffn_up_gate_exps && l.ffn_up_exps && l.ffn_gate_exps &&
-            ggml_backend_buffer_is_host(l.ffn_up_gate_exps->buffer) &&
-            ggml_backend_buffer_is_host(l.ffn_up_exps->buffer) && ggml_backend_buffer_is_host(l.ffn_gate_exps->buffer)) {
+           !l.ffn_up_gate_exps->extra) {
             GGML_ASSERT(l.ffn_up_gate_exps->type  == l.ffn_up_exps->type  && l.ffn_up_gate_exps->type  == l.ffn_gate_exps->type);
             GGML_ASSERT(l.ffn_up_gate_exps->ne[0] == l.ffn_up_exps->ne[0] && l.ffn_up_gate_exps->ne[0] == l.ffn_gate_exps->ne[0]);
             GGML_ASSERT(l.ffn_up_gate_exps->ne[2] == l.ffn_up_exps->ne[2] && l.ffn_up_gate_exps->ne[2] == l.ffn_gate_exps->ne[2]);
