@@ -258,19 +258,22 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
     GGML_ASSERT(!splits.empty());
     if (granularity < 0) return std::vector<int>(splits.size(), nr);
     GGML_ASSERT(mem_used.size() == splits.size());
-    size_t tot_memory_used = 1;
-    for (auto & mem : mem_used) tot_memory_used += mem;
+
     size_t tot_vram_free = 1;
     for (auto & mem : vram_free) tot_vram_free += mem;
+    size_t tot_memory_used = 1;
+    for (auto & mem : mem_used) tot_memory_used += mem;
+
     int nchunk = nr / granularity;
     std::vector<int> result(splits.size());
     float last_split = 0;
     int sum = 0;
-    if (verbose) LLAMA_LOG_INFO("--- %s: %d chunks\n", __func__, nchunk);
+    if (verbose) LLAMA_LOG_INFO("--- %s: %d chunks, use_vram_free = %s\n", __func__, nchunk, use_vram_free ? "true" : "false");
+
     for (int i = 0; i < (int)splits.size(); ++i) {
         float p = splits[i] - last_split;
         float p0 = p;
-        if (use_vram_free && vram_free[i] > 0) {
+        if (use_vram_free) {
             p += p * (float)vram_free[i] / (float)tot_vram_free;
         } else {
             p += (p - 1.f*mem_used[i]/tot_memory_used);
@@ -288,7 +291,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
         for (int i = 0; i < (int)splits.size(); ++i) {
             if (result[i] > 0) {
                 float p = splits[i] - last_split;
-                if (use_vram_free && vram_free[i] > 0) {
+                if (use_vram_free) {
                     p += p * (float)vram_free[i] / (float)tot_vram_free;
                 } else {
                     p += (p - 1.f*mem_used[i]/tot_memory_used);
@@ -311,7 +314,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
         int ibest = -1;
         for (int i = 0; i < (int)splits.size(); ++i) {
             float p = splits[i] - last_split;
-            if (use_vram_free && vram_free[i] > 0) {
+            if (use_vram_free) {
                 p += p * (float)vram_free[i] / (float)tot_vram_free;
             } else {
                 p += (p - 1.f*mem_used[i]/tot_memory_used);
@@ -3891,7 +3894,7 @@ bool create_tensors_helper::create_tensors() {
     }
     if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const int n_layer = model.layers.size() - model.hparams.nextn_predict_layers;
-        LLAMA_LOG_INFO("================================ max_gpu = %d\n", model.max_gpu);
+        LLAMA_LOG_INFO("================================ max_gpu = %d, vram_based_graph_split = %s\n", model.max_gpu, vram_based_graph_split ? "enabled" : "disabled");
         std::vector<size_t> mem_used(model.splits.size(), 0);
         std::vector<size_t> vram_free(model.splits.size(), 0);
         std::vector<size_t> vram_total(model.splits.size(), 0);
