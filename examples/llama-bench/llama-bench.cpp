@@ -278,7 +278,7 @@ struct cmd_params {
     bool defer_experts = false;
     bool rcache = false;
     bool sas = false;
-    int  max_gpu = 0;
+    int  max_gpu_per_split = 0;
     bool print_overrides = false;
     bool sweep_memory = false;
     bool fit = false;
@@ -339,7 +339,7 @@ static const cmd_params cmd_params_defaults = {
     /* defer_experts        */ false,
     /* rcache               */ false,
     /* sas                  */ false,
-    /* max_gpu              */ 0,
+    /* max_gpu_per_split    */ 0,
     /* print_overrides      */ false,
     /* sweep_memory         */ false,
     /* fit                  */ false,
@@ -424,7 +424,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -sas, --scheduler-async <0|1>       (default: %s)\n", cmd_params_defaults.sas ? "1" : "0");
     printf("  --fit <0|1>                         (default: %s)\n", cmd_params_defaults.fit ? "1" : "0");
     printf("  --fit-margin N                      (default: %d)\n", cmd_params_defaults.fit_margin);
-    printf("  --max-gpu <N>                       (default: %d)\n", cmd_params_defaults.max_gpu);
+    printf("  --max-gpu-per-split <N>             (default: %d)\n", cmd_params_defaults.max_gpu_per_split);
     printf("        --print-overrides <0|1>       (default: %s)\n", cmd_params_defaults.print_overrides ? "1" : "0");
     printf("  --sweep-memory                      report the process RSS high-water mark and the VRAM delta (default: 0)\n");
     printf("  other llama-server options          one value for the run (see llama-server --help)\n");
@@ -862,12 +862,15 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.fit_margin = std::stoi(argv[i]);
-        } else if (arg == "--max-gpu") {
+        } else if (arg == "--max-gpu-per-split" || arg == "--max-gpu" || arg == "-mgps") {
+            // --max-gpu/-mgps are kept as aliases: main's common-option fallback
+            // would otherwise parse them into extra and this instance would
+            // override them with the benchmark default.
             if (++i >= argc) {
                 invalid_param = true;
                 break;
             }
-            params.max_gpu = std::stoi(argv[i]);
+            params.max_gpu_per_split = std::stoi(argv[i]);
         } else if (arg == "-rcache" || arg == "--rope-cache") {
             params.rcache = has_value(i, argc, argv) ? std::stoi(argv[++i]) : 1;
         } else if (arg == "-thp" || arg == "--transparent-huge-pages") {
@@ -1128,7 +1131,7 @@ struct cmd_params_instance {
     bool defer_experts = false;
     bool rcache = false;
     bool sas = false;
-    int max_gpu = 0;
+    int max_gpu_per_split = 0;
     int n_cpu_moe = 0;
     bool fit = false;
     int  fit_margin = 0;
@@ -1155,7 +1158,7 @@ struct cmd_params_instance {
         mparams.defer_experts = defer_experts;
         mparams.tensor_buft_overrides = buft_overrides;
         mparams.mla = mla_attn;
-        mparams.max_gpu = max_gpu;
+        mparams.max_gpu_per_split = max_gpu_per_split;
         mparams.ncmoe = n_cpu_moe;
         mparams.fit = fit;
         mparams.fit_margin = fit_margin;
@@ -1180,7 +1183,7 @@ struct cmd_params_instance {
                sas == other.sas &&
                fit == other.fit &&
                fit_margin == other.fit_margin &&
-               max_gpu == other.max_gpu &&
+               max_gpu_per_split == other.max_gpu_per_split &&
                n_cpu_moe == other.n_cpu_moe &&
                tensor_split == other.tensor_split;
     }
@@ -1282,7 +1285,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .defer_experts= */ params.defer_experts,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
-                /* .max_gpu      = */ params.max_gpu,
+                /* .max_gpu_per_split = */ params.max_gpu_per_split,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
@@ -1330,7 +1333,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .defer_experts= */ params.defer_experts,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
-                /* .max_gpu      = */ params.max_gpu,
+                /* .max_gpu_per_split = */ params.max_gpu_per_split,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
@@ -1378,7 +1381,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .defer_experts= */ params.defer_experts,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
-                /* .max_gpu      = */ params.max_gpu,
+                /* .max_gpu_per_split = */ params.max_gpu_per_split,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
@@ -1426,7 +1429,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .defer_experts= */ params.defer_experts,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
-                /* .max_gpu      = */ params.max_gpu,
+                /* .max_gpu_per_split = */ params.max_gpu_per_split,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
@@ -1484,7 +1487,7 @@ struct test {
     bool defer_experts = false;
     bool rcache = false;
     bool sas = false;
-    bool max_gpu = 0;
+    int max_gpu_per_split = 0;
     int  n_cpu_moe = 0;
     bool fit = false;
     int  fit_margin = 0;
@@ -1533,7 +1536,7 @@ struct test {
         ger = inst.ger;
         rcache = inst.rcache;
         sas = inst.sas;
-        max_gpu = inst.max_gpu;
+        max_gpu_per_split = inst.max_gpu_per_split;
         n_cpu_moe = inst.n_cpu_moe;
         fit = inst.fit;
         fit_margin = inst.fit_margin;
@@ -1639,7 +1642,7 @@ struct test {
             field == "model_size" || field == "model_n_params" ||
             field == "n_gpu_layers" || field == "main_gpu" ||
             field == "n_prompt" || field == "n_gen" || field == "mla_attn" || field == "attn_max_batch" ||
-            field == "avg_ns" || field == "stddev_ns" || field == "max_gpu" || field == "n_cpu_moe") {
+            field == "avg_ns" || field == "stddev_ns" || field == "max_gpu_per_split" || field == "n_cpu_moe") {
             return INT;
         }
         if (field == "cuda" || field == "vulkan" || field == "metal" ||
@@ -1696,7 +1699,7 @@ struct test {
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
             std::to_string(repack), std::to_string(mqkv), std::to_string(muge), std::to_string(defer_experts), std::to_string(fmoe), std::to_string(ger),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
-            std::to_string(max_gpu),
+            std::to_string(max_gpu_per_split),
             cuda_params, override_tensor, extra_args,
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
@@ -1718,7 +1721,7 @@ struct test {
             "n_gpu_layers", "n_cpu_moe", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
             "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "defer_experts", "fused_moe", "grouped_er",
-            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "cuda_params", "override_tensor", "extra_args",
+            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu_per_split", "cuda_params", "override_tensor", "extra_args",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "rss_hwm_mib", "vram_delta_mib", "test",
@@ -1913,7 +1916,7 @@ struct markdown_printer : public printer {
         if (field == "sas") {
             return 3;
         }
-        if (field == "max_gpu") {
+        if (field == "max_gpu_per_split") {
             return 7;
         }
         if (field == "use_thp") {
@@ -1995,8 +1998,8 @@ struct markdown_printer : public printer {
         if (field == "sas") {
             return "sas";
         }
-        if (field == "max_gpu") {
-            return "max_gpu";
+        if (field == "max_gpu_per_split") {
+            return "max_gpu_per_split";
         }
         if (field == "use_thp") {
             return "thp";
@@ -2117,8 +2120,8 @@ struct markdown_printer : public printer {
         if (params.sas != cmd_params_defaults.sas) {
             fields.emplace_back("sas");
         }
-        if (params.max_gpu != cmd_params_defaults.max_gpu) {
-            fields.emplace_back("max_gpu");
+        if (params.max_gpu_per_split != cmd_params_defaults.max_gpu_per_split) {
+            fields.emplace_back("max_gpu_per_split");
         }
         if (params.muge != cmd_params_defaults.muge) {
             fields.emplace_back("muge");
