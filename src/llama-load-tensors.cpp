@@ -3439,18 +3439,27 @@ static void adjust_split(std::vector<float> & split, const std::vector<size_t> &
     if (max_gpu < 1 || max_gpu >= int(split.size()) || split.size() != mem_used.size()) {
         return;
     }
-    size_t tot_mem_used = 1;
-    for (auto & mem : mem_used) tot_mem_used += mem;
-    size_t tot_vram_free = 1;
-    for (auto & mem : vram_free) tot_vram_free += mem;
     for (int i = split.size() - 1; i > 0; --i) split[i] -= split[i-1];
     std::vector<std::pair<float, int>> sorted(split.size());
-    for (int i = 0; i < int(split.size()); ++i) {
-        float mem_ideal = split[i]*(use_vram_free ? (float)tot_vram_free : (float)tot_mem_used);
-        float actual = use_vram_free ? (float)vram_free[i] : (float)mem_used[i];
-        float err = mem_ideal - actual;
-        sorted[i] = {err, i};
+
+    if (use_vram_free) {
+        size_t tot_vram_free = 1;
+        for (auto & mem : vram_free) tot_vram_free += mem;
+        for (int i = 0; i < int(split.size()); ++i) {
+            float mem_ideal = split[i] * (float)tot_vram_free;
+            float err = mem_ideal - (float)vram_free[i];
+            sorted[i] = {err, i};
+        }
+    } else {
+        size_t tot_mem_used = 1;
+        for (auto & mem : mem_used) tot_mem_used += mem;
+        for (int i = 0; i < int(split.size()); ++i) {
+            float mem_ideal = split[i] * (float)tot_mem_used;
+            float err = mem_ideal - (float)mem_used[i];
+            sorted[i] = {err, i};
+        }
     }
+
     std::partial_sort(sorted.begin(), sorted.begin() + max_gpu, sorted.end(), std::greater<std::pair<float,int>>{});
     for (auto & p : split) p = 0;
     for (int j = 0; j < max_gpu; ++j) split[sorted[j].second] = 1;
