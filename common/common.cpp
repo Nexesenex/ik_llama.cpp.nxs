@@ -1457,6 +1457,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
 #endif // GGML_USE_CUDA_SYCL_VULKAN
         return true;
     }
+    if (arg == "--vram-based-graph-split" || arg == "-vbgs") {
+        params.vram_based_graph_split = true;
+        return true;
+    }
     if (arg == "--rpc") {
         CHECK_ARG
 #ifdef GGML_USE_RPC
@@ -2678,6 +2682,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "  - layer (default): split layers and KV across GPUs\n" });
         options.push_back({ "*",           "-ts,   --tensor-split SPLIT",
                                                                         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1" });
+        options.push_back({ "*",           "-vbgs, --vram-based-graph-split",
+                                                                        "use actual free VRAM for graph splitting in split_mode_tensor_parallel" });
         options.push_back({ "*",           "-dev,   --device dev1,dev2",
                                                                          "comma-separated list of devices to use for offloading (none = don't offload)\n"
                                                                          "Example: CUDA0,CUDA1,RPC[192.168.0.1:8080]\n" });

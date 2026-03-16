@@ -1948,6 +1948,7 @@ static bool llm_load_tensors(
         int main_gpu,
         int max_gpu,
         const float * tensor_split,
+        bool vram_based_graph_split,
         bool use_mlock,
         bool validate_quants,
         bool split_output_tensor,
@@ -1994,10 +1995,11 @@ static bool llm_load_tensors(
         model.buft_layer[i] = llama_default_buffer_type_cpu(true);
     }
 
-    bool tensor_split_user_provided = false;
     if (int device_count = model.devices.size(); device_count > 1) {
         bool all_zero = tensor_split == nullptr || std::all_of(tensor_split, tensor_split + device_count, [](float x) { return x == 0.0f; });
-        tensor_split_user_provided = !all_zero;
+        if (!all_zero) {
+            vram_based_graph_split = false;
+        }
         std::vector<float> splits(device_count);
         if (all_zero) {
             // default split, by free memory
@@ -2083,7 +2085,7 @@ static bool llm_load_tensors(
         }
     }
 
-    auto cth = create_tensors_helper_interface::instance(ml, model, tensor_split_user_provided);
+    auto cth = create_tensors_helper_interface::instance(ml, model, vram_based_graph_split);
 
     auto ctx_size = cth->get_ctx_size();
     auto & ctx_map = cth->get_ctx_map();
@@ -2380,7 +2382,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.max_gpu, params.tensor_split,
-            params.use_mlock, params.validate_quants, params.split_output_tensor,
+            params.vram_based_graph_split, params.use_mlock, params.validate_quants, params.split_output_tensor,
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;
@@ -4314,6 +4316,7 @@ struct llama_model_params llama_model_default_params() {
         /*.merge_qkv                   =*/ false,
         /*.merge_up_gate_exps          =*/ false,
         /*.split_output_tensor         =*/ false,
+        /*.vram_based_graph_split     =*/ false,
     };
 
 #ifdef GGML_USE_METAL
