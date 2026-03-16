@@ -3512,8 +3512,8 @@ static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor
     }
 }
 
-static void adjust_split(std::vector<float> & split, const std::vector<size_t> & mem_used, int max_gpu) {
-    if (max_gpu < 1 || max_gpu >= int(split.size()) || split.size() != mem_used.size()) {
+static void adjust_split(std::vector<float> & split, const std::vector<size_t> & mem_used, int max_gpu_per_split) {
+    if (max_gpu_per_split < 1 || max_gpu_per_split >= int(split.size()) || split.size() != mem_used.size()) {
         return;
     }
     size_t tot_mem_used = 1;
@@ -3525,12 +3525,12 @@ static void adjust_split(std::vector<float> & split, const std::vector<size_t> &
         float err = mem_ideal - mem_used[i];
         sorted[i] = {err, i};
     }
-    std::partial_sort(sorted.begin(), sorted.begin() + max_gpu, sorted.end(), std::greater<std::pair<float,int>>{});
+    std::partial_sort(sorted.begin(), sorted.begin() + max_gpu_per_split, sorted.end(), std::greater<std::pair<float,int>>{});
     for (auto & p : split) p = 0;
-    for (int j = 0; j < max_gpu; ++j) split[sorted[j].second] = 1;
+    for (int j = 0; j < max_gpu_per_split; ++j) split[sorted[j].second] = 1;
     float sum = 0;
     for (auto & p : split) {
-        sum += p/max_gpu;
+        sum += p/max_gpu_per_split;
         p = sum;
     }
 }
@@ -3958,12 +3958,12 @@ bool create_tensors_helper::create_tensors() {
     if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const int n_layer = model.mtp ? model.layers.size()
                                   : model.layers.size() - model.hparams.nextn_predict_layers;
-        LLAMA_LOG_INFO("================================ max_gpu = %d\n", model.max_gpu);
+        LLAMA_LOG_INFO("================================ max_gpu_per_split = %d\n", model.max_gpu_per_split);
         std::vector<size_t> mem_used(model.splits.size(), 0);
         const auto & hparams = model.hparams;
         auto cur_splits = model.splits;
         int adjust_step = std::max(1, int(n_layer / (2*model.splits.size())));
-        if (model.max_gpu > 1 && model.max_gpu < int(cur_splits.size())) {
+        if (model.max_gpu_per_split > 1 && model.max_gpu_per_split < int(cur_splits.size())) {
             bool equal_split = true;
             for (int i = 0; i < int(cur_splits.size()); ++i) {
                 float p = i > 0 ? cur_splits[i] - cur_splits[i-1] : cur_splits[i];
@@ -3972,8 +3972,8 @@ bool create_tensors_helper::create_tensors() {
                 }
             }
             if (equal_split) {
-                if (cur_splits.size() % model.max_gpu == 0) {
-                    int nadj = cur_splits.size()/model.max_gpu;
+                if (cur_splits.size() % model.max_gpu_per_split == 0) {
+                    int nadj = cur_splits.size()/model.max_gpu_per_split;
                     adjust_step = (n_layer + nadj - 1) / nadj;
                 } else {
                     adjust_step = (n_layer + cur_splits.size() - 1)/cur_splits.size();
@@ -4002,9 +4002,9 @@ bool create_tensors_helper::create_tensors() {
                 LLAMA_LOG_INFO("%s: not splitting layer %d because buffer type is host\n", __func__, il);
                 continue;
             }
-            if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size()) && il % adjust_step == 0) {
+            if (model.max_gpu_per_split > 0 && model.max_gpu_per_split < int(model.splits.size()) && il % adjust_step == 0) {
                 cur_splits = model.splits;
-                adjust_split(cur_splits, mem_used, model.max_gpu);
+                adjust_split(cur_splits, mem_used, model.max_gpu_per_split);
                 LLAMA_LOG_INFO("Adjusted split at layer %2d:", il);
                 float last_split = 0;
                 for (auto & p : cur_splits) {
