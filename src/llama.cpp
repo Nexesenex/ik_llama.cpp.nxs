@@ -1948,7 +1948,6 @@ static bool llm_load_tensors(
         int main_gpu,
         int max_gpu,
         const float * tensor_split,
-        bool vram_based_graph_split,
         bool use_mlock,
         bool validate_quants,
         bool split_output_tensor,
@@ -1998,7 +1997,7 @@ static bool llm_load_tensors(
     if (int device_count = model.devices.size(); device_count > 1) {
         bool tensor_split_provided = tensor_split != nullptr && !std::all_of(tensor_split, tensor_split + device_count, [](float x) { return x == 0.0f; });
         std::vector<float> splits(device_count);
-        if (vram_based_graph_split) {
+        if (model.vram_based_graph_split) {
             // Case 3 & 4: -vbgs is set, use VRAM-based splitting
             // For case 4, ignore -ts values and compute from VRAM
             for (int i = 0; i < device_count; ++i) {
@@ -2089,7 +2088,7 @@ static bool llm_load_tensors(
         }
     }
 
-    auto cth = create_tensors_helper_interface::instance(ml, model, vram_based_graph_split);
+    auto cth = create_tensors_helper_interface::instance(ml, model);
 
     auto ctx_size = cth->get_ctx_size();
     auto & ctx_map = cth->get_ctx_map();
@@ -2337,6 +2336,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         model.hparams.vocab_only = params.vocab_only;
         model.split_output_tensor = params.split_output_tensor;
+        model.vram_based_graph_split = params.vram_based_graph_split;
 
         try {
             llm_load_arch(ml, model);
@@ -2386,7 +2386,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.max_gpu, params.tensor_split,
-            params.vram_based_graph_split, params.use_mlock, params.validate_quants, params.split_output_tensor,
+            params.use_mlock, params.validate_quants, params.split_output_tensor,
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;

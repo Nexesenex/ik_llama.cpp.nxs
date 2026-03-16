@@ -394,6 +394,7 @@ struct llama_model {
     int n_gpu_layers;
 
     bool split_output_tensor = false; // force split output tensor in split mode graph
+    bool vram_based_graph_split = false; // use VRAM-based graph splitting in split_mode_tensor_parallel
 
     std::vector<rpc_device> rpc_servers;
     std::vector<int32_t> devices;
