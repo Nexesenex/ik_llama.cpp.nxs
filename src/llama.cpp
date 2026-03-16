@@ -1994,8 +1994,10 @@ static bool llm_load_tensors(
         model.buft_layer[i] = llama_default_buffer_type_cpu(true);
     }
 
+    bool tensor_split_user_provided = false;
     if (int device_count = model.devices.size(); device_count > 1) {
         bool all_zero = tensor_split == nullptr || std::all_of(tensor_split, tensor_split + device_count, [](float x) { return x == 0.0f; });
+        tensor_split_user_provided = !all_zero;
         std::vector<float> splits(device_count);
         if (all_zero) {
             // default split, by free memory
@@ -2081,7 +2083,7 @@ static bool llm_load_tensors(
         }
     }
 
-    auto cth = create_tensors_helper_interface::instance(ml, model);
+    auto cth = create_tensors_helper_interface::instance(ml, model, tensor_split_user_provided);
 
     auto ctx_size = cth->get_ctx_size();
     auto & ctx_map = cth->get_ctx_map();

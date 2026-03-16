@@ -22,7 +22,7 @@
 
 struct create_tensors_helper : public create_tensors_helper_interface {
 
-    create_tensors_helper(llama_model_loader & ml, llama_model & model);
+    create_tensors_helper(llama_model_loader & ml, llama_model & model, bool tensor_split_user_provided);
     ~create_tensors_helper() = default;
 
     //virtual std::map<ggml_backend_buffer_type_t, int> & buft_layer_count_map() override {
@@ -34,6 +34,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     }
 
     virtual size_t get_ctx_size() const override { return ctx_size; }
+
+    bool tensor_split_user_provided;
 
     bool merge_qkv(const LLM_TN & tn, int i, int bias, bool ignore_attn_scale = false);
 
@@ -207,7 +209,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     }
 };
 
-create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_model & _model) : ml(_ml), model(_model) {
+create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_model & _model, bool _tensor_split_user_provided) : ml(_ml), model(_model), tensor_split_user_provided(_tensor_split_user_provided) {
 
     const int n_layer = model.hparams.n_layer;
     buft_layer_count[model.buft_input.buft]++;
@@ -4249,6 +4251,6 @@ bool create_tensors_helper::create_tensors() {
     return use_mmap_buffer;
 }
 
-std::unique_ptr<create_tensors_helper_interface> create_tensors_helper_interface::instance(llama_model_loader & ml, llama_model & model) {
-    return std::make_unique<create_tensors_helper>(ml, model);
+std::unique_ptr<create_tensors_helper_interface> create_tensors_helper_interface::instance(llama_model_loader & ml, llama_model & model, bool tensor_split_user_provided) {
+    return std::make_unique<create_tensors_helper>(ml, model, tensor_split_user_provided);
 }

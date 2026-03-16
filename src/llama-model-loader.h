@@ -184,5 +184,5 @@ struct create_tensors_helper_interface {
     virtual std::map<ggml_backend_buffer_type_t, ggml_context *> & get_ctx_map() = 0;
     virtual size_t get_ctx_size() const = 0;
 
-    static std::unique_ptr<create_tensors_helper_interface> instance(llama_model_loader & ml, llama_model & model);
+    static std::unique_ptr<create_tensors_helper_interface> instance(llama_model_loader & ml, llama_model & model, bool tensor_split_user_provided = false);
 };
