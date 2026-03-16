@@ -1998,6 +1998,8 @@ static bool llm_load_tensors(
     if (int device_count = model.devices.size(); device_count > 1) {
         bool all_zero = tensor_split == nullptr || std::all_of(tensor_split, tensor_split + device_count, [](float x) { return x == 0.0f; });
         if (!all_zero) {
+            // When user explicitly provides --tensor-split, disable VRAM-based splitting
+            // to respect user-provided proportions
             vram_based_graph_split = false;
         }
         std::vector<float> splits(device_count);
