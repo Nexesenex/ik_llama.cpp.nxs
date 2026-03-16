@@ -1999,9 +1999,19 @@ static bool llm_load_tensors(
         std::vector<float> splits(device_count);
         if (model.vram_based_graph_split) {
             // Case 3 & 4: -vbgs is set, use VRAM-based splitting
-            // For case 4, ignore -ts values and compute from VRAM
-            for (int i = 0; i < device_count; ++i) {
-                splits[i] = llama_get_device_memory(model, model.devices[i]);
+            if (tensor_split_provided) {
+                // Case 4: -ts provided with -vbgs, use -ts as demultiplier for vram_free
+                // factor = tensor_split[i] / vram_free[i], so splits[i] = vram_free[i] * factor = tensor_split[i]
+                for (int i = 0; i < device_count; ++i) {
+                    float vram_free = llama_get_device_memory(model, model.devices[i]);
+                    float factor = tensor_split[i] / vram_free;
+                    splits[i] = vram_free * factor;
+                }
+            } else {
+                // Case 3: -vbgs without -ts, use vram_free directly
+                for (int i = 0; i < device_count; ++i) {
+                    splits[i] = llama_get_device_memory(model, model.devices[i]);
+                }
             }
         } else if (tensor_split_provided) {
             // Case 2: -ts provided without -vbgs, use user-provided proportions
