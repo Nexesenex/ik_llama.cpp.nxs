@@ -2200,7 +2200,7 @@ static bool llm_load_tensors(
         int mla_attn,
         enum llama_split_mode split_mode,
         int main_gpu,
-        int max_gpu,
+        int max_gpu_per_split,
         const float * tensor_split,
         ggml_type cache_type_k,
         ggml_type cache_type_v,
@@ -2232,12 +2232,12 @@ static bool llm_load_tensors(
             LLAMA_LOG_WARN("=======================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
         } else {
-            if (model.arch == LLM_ARCH_MIMO2 && model.devices.size() > 4 && (max_gpu == 0 || max_gpu > 4)) {
+            if (model.arch == LLM_ARCH_MIMO2 && model.devices.size() > 4 && (max_gpu_per_split == 0 || max_gpu_per_split > 4)) {
                 LLAMA_LOG_WARN("\n================================================================\n");
                 LLAMA_LOG_WARN("Split mode 'graph' for Mimo2 does not work with more than 4 GPUs\n");
-                LLAMA_LOG_WARN("  => setting max_gpu to 4\n");
+                LLAMA_LOG_WARN("  => setting max_gpu_per_split to 4\n");
                 LLAMA_LOG_WARN("================================================================\n\n");
-                max_gpu = 4;
+                max_gpu_per_split = 4;
             }
         }
     }
@@ -2263,7 +2263,7 @@ static bool llm_load_tensors(
 
     model.split_mode   = split_mode;
     model.main_gpu     = main_gpu;
-    model.max_gpu      = max_gpu;
+    model.max_gpu_per_split      = max_gpu_per_split;
     model.n_gpu_layers = n_gpu_layers;
     model.mtp          = mtp;
 
@@ -2901,7 +2901,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 #endif
 
         if (!llm_load_tensors(
-            ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
+            ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu_per_split, params.tensor_split,
             params.type_k, params.type_v, params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin, params.flash_attn,
             params.use_mlock, params.validate_quants, params.mtp, params.fit, params.dry_run, params.split_output_tensor,
             params.progress_callback, params.progress_callback_user_data
@@ -4890,7 +4890,7 @@ struct llama_model_params llama_model_default_params() {
         /*.mla                         =*/ 0,
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
         /*.main_gpu                    =*/ 0,
-        /*.max_gpu                     =*/ 0,
+        /*.max_gpu_per_split           =*/ 0,
         /*.ncmoe                       =*/ 0,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
