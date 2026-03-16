@@ -3884,6 +3884,22 @@ bool create_tensors_helper::create_tensors() {
                 }
             }
         }
+        int estimated_splits = 1;
+        if (model.splits.size() > 1) {
+            int n_gpu_transitions = 0;
+            int last_gpu = -1;
+            for (int il = 0; il < n_layer; ++il) {
+                int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.end(),
+                    float(il)/n_layer) - model.splits.begin();
+                if (last_gpu != -1 && layer_gpu != last_gpu) {
+                    n_gpu_transitions++;
+                }
+                last_gpu = layer_gpu;
+            }
+            estimated_splits = n_gpu_transitions + 2;
+            LLAMA_LOG_INFO("Estimated graph splits before processing: ~%d (based on %d GPU transitions across %d layers)\n",
+                estimated_splits, n_gpu_transitions, n_layer);
+        }
         for (int il = 0; il < n_layer; ++il) {
             int gqa_ratio = hparams.n_head(il) / hparams.n_head_kv(il);
             if (ggml_backend_buft_is_host(model.buft_layer[il].buft_matrix)) {
