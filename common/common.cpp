@@ -3455,6 +3455,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.merge_qkv       = params.merge_qkv;
     mparams.merge_up_gate_exps = params.merge_up_gate_exps;
     mparams.split_output_tensor = params.split_output_tensor;
+    mparams.vram_based_graph_split = params.vram_based_graph_split;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -4578,6 +4579,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "graph_reuse: %s # default: false\n", params.graph_reuse ? "true" : "false");
     fprintf(stream, "k_cache_hadamard: %s # default: false\n", params.k_cache_hadamard ? "true" : "false");
     fprintf(stream, "split_output_tensor: %s # default: false\n", params.split_output_tensor ? "true" : "false");
+    fprintf(stream, "vram_based_graph_split: %s # default: false\n", params.vram_based_graph_split ? "true" : "false");
     fprintf(stream, "split_mode_tensor_parallel_scheduling: %s # default: false\n", params.split_mode_tensor_parallel_scheduling ? "true" : "false");
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
