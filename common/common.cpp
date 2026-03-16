@@ -1403,9 +1403,9 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
 #endif // GGML_USE_CUDA_SYCL_VULKAN
         return true;
     }
-    else if (arg == "--max-gpu") {
+    else if (arg == "--max-gpu-per-split") {
         CHECK_ARG
-        params.max_gpu = std::stoi(argv[i]);
+        params.max_gpu_per_split = std::stoi(argv[i]);
         return true;
     }
     if (arg == "--split-mode" || arg == "-sm") {
@@ -2696,7 +2696,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                          "Example: CUDA0,CUDA1,RPC[192.168.0.1:8080]\n" });
         options.push_back({ "*",           "-mg,   --main-gpu i",       "the GPU to use for the model (with split-mode = none),\n"
                                                                         "or for intermediate results and KV (with split-mode = row) (default: %d)", params.main_gpu });
-        options.push_back({ "*",           "--max-gpu i",               "max. number of GPUs to use at a time with split mode 'tensor parallel', (default: %d)", params.max_gpu });
+        options.push_back({ "*",           "--max-gpu-per-split i",               "max. number of GPUs to use at a time with split mode 'tensor parallel', (default: %d)", params.max_gpu_per_split });
     }
 
     options.push_back({ "model" });
@@ -3448,7 +3448,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.dry_run         = params.dry_run;
     mparams.rpc_servers     = params.rpc_servers.c_str();
     mparams.main_gpu        = params.main_gpu;
-    mparams.max_gpu         = params.max_gpu;
+    mparams.max_gpu_per_split = params.max_gpu_per_split;
     mparams.ncmoe           = params.ncmoe;
     mparams.split_mode      = params.split_mode;
     mparams.tensor_split    = params.tensor_split;
@@ -4524,7 +4524,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     }
     fprintf(stream, "lora_init_without_apply: %s # default: false\n", params.lora_init_without_apply ? "true" : "false");
     fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
-    fprintf(stream, "max_gpu: %d # default: 0\n", params.max_gpu);
+    fprintf(stream, "max_gpu_per_split: %d # default: 0\n", params.max_gpu_per_split);
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
     fprintf(stream, "min_keep: %d # default: 0 (disabled)\n", sparams.min_keep);
     fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);
