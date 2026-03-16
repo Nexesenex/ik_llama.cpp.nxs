@@ -1996,20 +1996,22 @@ static bool llm_load_tensors(
     }
 
     if (int device_count = model.devices.size(); device_count > 1) {
-        bool all_zero = tensor_split == nullptr || std::all_of(tensor_split, tensor_split + device_count, [](float x) { return x == 0.0f; });
-        if (!all_zero) {
-            // When user explicitly provides --tensor-split, disable VRAM-based splitting
-            // to respect user-provided proportions
-            vram_based_graph_split = false;
-        }
+        bool tensor_split_provided = tensor_split != nullptr && !std::all_of(tensor_split, tensor_split + device_count, [](float x) { return x == 0.0f; });
         std::vector<float> splits(device_count);
-        if (all_zero) {
-            // default split, by free memory
+        if (vram_based_graph_split) {
+            // Case 3 & 4: -vbgs is set, use VRAM-based splitting
+            // For case 4, ignore -ts values and compute from VRAM
             for (int i = 0; i < device_count; ++i) {
                 splits[i] = llama_get_device_memory(model, model.devices[i]);
             }
-        } else {
+        } else if (tensor_split_provided) {
+            // Case 2: -ts provided without -vbgs, use user-provided proportions
             std::copy(tensor_split, tensor_split + device_count, splits.begin());
+        } else {
+            // Case 1: neither -vbgs nor -ts, use default device memory
+            for (int i = 0; i < device_count; ++i) {
+                splits[i] = llama_get_device_memory(model, model.devices[i]);
+            }
         }
 
         // sum and normalize the splits to get the split points
