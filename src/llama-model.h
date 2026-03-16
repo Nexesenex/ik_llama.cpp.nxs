@@ -391,7 +391,7 @@ struct llama_model {
 
     llama_split_mode split_mode;
     int main_gpu;
-    int max_gpu = 0; // max. number of GPUs to use per layer for aplit mode "graph"
+    int max_gpu_per_split = 0; // max. number of GPUs to use per layer for aplit mode "graph"
     int n_gpu_layers;
 
     bool mtp; // use mtp if is supported by the Model
