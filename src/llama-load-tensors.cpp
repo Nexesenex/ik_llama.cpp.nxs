@@ -3859,10 +3859,11 @@ bool create_tensors_helper::create_tensors() {
     if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const int n_layer = model.layers.size() - model.hparams.nextn_predict_layers;
         LLAMA_LOG_INFO("================================ max_gpu_per_split = %d\n", model.max_gpu_per_split);
+        LLAMA_LOG_INFO("================================ split_adjust_step_frequency = %d\n", model.split_adjust_step_frequency);
         std::vector<size_t> mem_used(model.splits.size(), 0);
         const auto & hparams = model.hparams;
         auto cur_splits = model.splits;
-        int adjust_step = std::max(1, int(n_layer / (2*model.splits.size())));
+        int adjust_step = std::max(1, int(n_layer / (model.split_adjust_step_frequency*model.splits.size())));
         if (model.max_gpu_per_split > 1 && model.max_gpu_per_split < int(cur_splits.size())) {
             bool equal_split = true;
             for (int i = 0; i < int(cur_splits.size()); ++i) {
