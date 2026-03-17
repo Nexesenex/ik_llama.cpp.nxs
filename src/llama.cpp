@@ -2332,6 +2332,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         model.hparams.vocab_only = params.vocab_only;
         model.split_output_tensor = params.split_output_tensor;
+        model.monolithic_output_tensor_accounted = params.monolithic_output_tensor_accounted;
 
         try {
             llm_load_arch(ml, model);
@@ -4316,6 +4317,7 @@ struct llama_model_params llama_model_default_params() {
         /*.merge_qkv                   =*/ false,
         /*.merge_up_gate_exps          =*/ false,
         /*.split_output_tensor         =*/ false,
+        /*.monolithic_output_tensor_accounted =*/ false,
     };
 
 #ifdef GGML_USE_METAL

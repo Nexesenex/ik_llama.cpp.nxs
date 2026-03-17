@@ -396,6 +396,7 @@ extern "C" {
         bool merge_qkv;     // if true, merge separate Q, K, V tensors into a single, contiguous tensor
         bool merge_up_gate_exps;  // if true, merge ffn_up_exps and ffn_gate_exps tensors into a single, contiguous tensor      // if true, load MTP layers if present
         bool split_output_tensor; // if true, force split the output tensor in split mode graph
+        bool monolithic_output_tensor_accounted; // if true, account for monolithic output tensor location in mem_used calculation for split_mode_tensor_parallel
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations

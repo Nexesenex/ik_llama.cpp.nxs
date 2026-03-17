@@ -396,6 +396,7 @@ struct llama_model {
     int n_gpu_layers;
 
     bool split_output_tensor = false; // force split output tensor in split mode graph
+    bool monolithic_output_tensor_accounted = false; // account for monolithic output tensor location in mem_used calculation
 
     std::vector<rpc_device> rpc_servers;
     std::vector<int32_t> devices;
