@@ -1382,6 +1382,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.max_gpu_per_split = std::stoi(argv[i]);
         return true;
     }
+    else if (arg == "--split-adjust-step-frequency" || arg == "-sasf") {
+        CHECK_ARG
+        params.split_adjust_step_frequency = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "--split-mode" || arg == "-sm") {
         CHECK_ARG
         std::string arg_next = argv[i];
@@ -2698,6 +2703,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "-mg,   --main-gpu i",       "the GPU to use for the model (with split-mode = none),\n"
                                                                         "or for intermediate results and KV (with split-mode = row) (default: %d)", params.main_gpu });
         options.push_back({ "*",           "--max-gpu-per-split i",               "max. number of GPUs to use at a time with split mode 'tensor parallel', (default: %d)", params.max_gpu_per_split });
+        options.push_back({ "*",           "-sasf, --split-adjust-step-frequency i", "adjust_step multiplicator in split mode 'graph' (default: %d)", params.split_adjust_step_frequency });
     }
 
     options.push_back({ "model" });
@@ -3501,6 +3507,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.rpc_servers     = params.rpc_servers.c_str();
     mparams.main_gpu        = params.main_gpu;
     mparams.max_gpu_per_split = params.max_gpu_per_split;
+    mparams.split_adjust_step_frequency = params.split_adjust_step_frequency;
     mparams.ncmoe           = params.ncmoe;
     mparams.type_k          = kv_cache_type_from_str(params.cache_type_k);
     mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
@@ -4549,6 +4556,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "lora_init_without_apply: %s # default: false\n", params.lora_init_without_apply ? "true" : "false");
     fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
     fprintf(stream, "max_gpu_per_split: %d # default: 0\n", params.max_gpu_per_split);
+    fprintf(stream, "split_adjust_step_frequency: %d # default: 2\n", params.split_adjust_step_frequency);
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
     fprintf(stream, "min_keep: %d # default: 0 (disabled)\n", sparams.min_keep);
     fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);
