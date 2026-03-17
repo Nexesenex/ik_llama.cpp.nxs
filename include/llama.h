@@ -498,6 +498,7 @@ extern "C" {
         bool only_copy;                      // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
         bool pure;                           // quantize all tensors to the default type
         bool keep_split;                     // quantize to the same number of shards
+        bool skip_first_shard;               // Do not output the first shard (assumed metadata only, not containing tensors)
         bool ignore_imatrix_rules;           // If set to true, the built-in rules for refusing to quantize into certain quants without imatrix are ignored
         bool only_repack;                    // Only repack tensors
         bool dry_run;                        //
@@ -661,7 +662,9 @@ extern "C" {
     LLAMA_API uint32_t llama_model_quantize(
             const char * fname_inp,
             const char * fname_out,
-            const llama_model_quantize_params * params);
+            const llama_model_quantize_params * params,
+            const uint16_t n_split,
+            const size_t * tensor_ids);
 
     // Load a LoRA adapter from file
     // The loaded adapter will be associated to the given model, and will be free when the model is deleted
