@@ -1948,6 +1948,7 @@ static bool llm_load_tensors(
         enum llama_split_mode split_mode,
         int main_gpu,
         int max_gpu_per_split,
+        int split_adjust_step_frequency,
         const float * tensor_split,
         bool use_mlock,
         bool validate_quants,
@@ -1980,6 +1981,7 @@ static bool llm_load_tensors(
     model.split_mode   = split_mode;
     model.main_gpu     = main_gpu;
     model.max_gpu_per_split      = max_gpu_per_split;
+    model.split_adjust_step_frequency = split_adjust_step_frequency;
     model.n_gpu_layers = n_gpu_layers;
 
     const int n_layer     = hparams.n_layer;
@@ -2381,7 +2383,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 #endif
 
         if (!llm_load_tensors(
-            ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.max_gpu_per_split, params.tensor_split,
+            ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu,
+            params.max_gpu_per_split, params.split_adjust_step_frequency, params.tensor_split,
             params.use_mlock, params.validate_quants, params.dry_run, params.split_output_tensor,
             params.progress_callback, params.progress_callback_user_data
         )) {
@@ -4300,6 +4303,7 @@ struct llama_model_params llama_model_default_params() {
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
         /*.main_gpu                    =*/ 0,
         /*.max_gpu_per_split           =*/ 0,
+        /*.split_adjust_step_frequency =*/ 2,
         /*.ncmoe                       =*/ 0,
         /*.tensor_split                =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
