@@ -262,6 +262,7 @@ struct gpt_params {
     int32_t n_gpu_layers          =      -1; // number of layers to store in VRAM (-1 - use default)
     int32_t main_gpu              =       0; // the GPU that is used for scratch and small tensors
     int32_t max_gpu_per_split     =       0; // max number of GPUs to use at a time for split mode "graph" / "tenpar"
+    float   split_adjust_step_frequency = 0.5f; // < 1: legacy formula (inverted), >= 1: direct layer count
     int32_t ncmoe                 =       0; // number of layers in which MoE tensors are left in VRAM
     int32_t fit_margin            =       0; // safety margin for auto-fit in MiB
     bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)

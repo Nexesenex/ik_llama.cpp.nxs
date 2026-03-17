@@ -374,6 +374,7 @@ extern "C" {
         // LLAMA_SPLIT_LAYER: ignored
         int32_t main_gpu;
         int32_t max_gpu_per_split;
+        float split_adjust_step_frequency;
         int32_t ncmoe;
 
         enum ggml_type type_k;
