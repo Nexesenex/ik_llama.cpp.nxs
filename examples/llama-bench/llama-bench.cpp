@@ -274,6 +274,7 @@ struct cmd_params {
     bool rcache = false;
     bool sas = false;
     int  max_gpu_per_split = 0;
+    float split_adjust_step_frequency = 0.5f;
     bool print_overrides = false;
     bool fit = false;
     int  fit_margin = 0;
@@ -325,6 +326,7 @@ static const cmd_params cmd_params_defaults = {
     /* rcache               */ false,
     /* sas                  */ false,
     /* max_gpu_per_split    */ 0,
+    /* split_adjust_step_frequency */ 0.5f,
     /* print_overrides      */ false,
     /* fit                  */ false,
     /* fit_margin           */ 0,
@@ -387,6 +389,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --fit <0|1>                         (default: %s)\n", cmd_params_defaults.fit ? "1" : "0");
     printf("  --fit-margin N                      (default: %d)\n", cmd_params_defaults.fit_margin);
     printf("  --max-gpu-per-split <N>             (default: %d)\n", cmd_params_defaults.max_gpu_per_split);
+    printf("  -sasf, --split-adjust-step-frequency <F> (default: %.1f, <1: legacy formula, >=1: direct)\n", cmd_params_defaults.split_adjust_step_frequency);
     printf("  --print-overrides <0|1>             (default: %s)\n", cmd_params_defaults.print_overrides ? "1" : "0");
     printf("\n");
     printf("Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.\n");
@@ -861,6 +864,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.max_gpu_per_split = std::stoi(argv[i]);
+        } else if (arg == "--split-adjust-step-frequency") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.split_adjust_step_frequency = std::stof(argv[i]);
         } else if (arg == "-rcache" || arg == "--rope-cache") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -1012,6 +1021,7 @@ struct cmd_params_instance {
     int max_gpu_per_split = 0;
     bool fit = false;
     int  fit_margin = 0;
+    float split_adjust_step_frequency = 0.5f;
     const llama_model_tensor_buft_override* buft_overrides;
     int32_t n_parallel = 1;
 
@@ -1038,6 +1048,7 @@ struct cmd_params_instance {
         mparams.fit_margin = fit_margin;
         mparams.type_k = type_k;
         mparams.type_v = type_v;
+        mparams.split_adjust_step_frequency = split_adjust_step_frequency;
 
         return mparams;
     }
@@ -1058,6 +1069,7 @@ struct cmd_params_instance {
                fit == other.fit &&
                fit_margin == other.fit_margin &&
                max_gpu_per_split == other.max_gpu_per_split &&
+               split_adjust_step_frequency == other.split_adjust_step_frequency &&
                tensor_split == other.tensor_split;
     }
 
@@ -1158,6 +1170,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .max_gpu_per_split = */ params.max_gpu_per_split,
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
+                /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
                 /* .n_parallel   = */ params.n_parallel,
             };
@@ -1207,6 +1220,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .max_gpu_per_split = */ params.max_gpu_per_split,
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
+                /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
                 /* .n_parallel   = */ params.n_parallel,
             };
@@ -1256,6 +1270,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .max_gpu_per_split = */ params.max_gpu_per_split,
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
+                /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
                 /* .n_parallel   = */ params.n_parallel,
             };
@@ -1305,6 +1320,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .max_gpu_per_split = */ params.max_gpu_per_split,
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
+                /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
                 /* .n_parallel   = */ params.n_parallel,
             };
@@ -1364,6 +1380,7 @@ struct test {
     int max_gpu_per_split = 0;
     bool fit = false;
     int  fit_margin = 0;
+    float split_adjust_step_frequency = 0.5f;
     std::string override_tensor;
     int n_prompt;
     int n_gen;
@@ -1409,6 +1426,7 @@ struct test {
         max_gpu_per_split = inst.max_gpu_per_split;
         fit = inst.fit;
         fit_margin = inst.fit_margin;
+        split_adjust_step_frequency = inst.split_adjust_step_frequency;
         no_fug = inst.no_fug;
         use_thp = inst.use_thp;
         no_ooae = inst.no_ooae;
@@ -1513,7 +1531,7 @@ struct test {
             field == "model_size" || field == "model_n_params" ||
             field == "n_gpu_layers" || field == "main_gpu" ||
             field == "n_prompt" || field == "n_gen" || field == "mla_attn" || field == "attn_max_batch" ||
-            field == "avg_ns" || field == "stddev_ns" || field == "max_gpu_per_split") {
+            field == "avg_ns" || field == "stddev_ns" || field == "max_gpu_per_split" || field == "split_adjust_step_frequency") {
             return INT;
         }
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
@@ -1566,6 +1584,7 @@ struct test {
             std::to_string(repack), std::to_string(mqkv), std::to_string(muge), std::to_string(defer_experts), std::to_string(fmoe), std::to_string(ger),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
             std::to_string(max_gpu_per_split),
+            std::to_string(split_adjust_step_frequency),
             cuda_params, override_tensor,
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
@@ -1586,7 +1605,7 @@ struct test {
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
             "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "defer_experts", "fused_moe", "grouped_er",
-            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu_per_split", "cuda_params", "override_tensor",
+            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu_per_split", "split_adjust_step_frequency", "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1782,6 +1801,9 @@ struct markdown_printer : public printer {
         if (field == "max_gpu_per_split") {
             return 7;
         }
+        if (field == "split_adjust_step_frequency") {
+            return 7;
+        }
         if (field == "use_thp") {
             return 3;
         }
@@ -1860,6 +1882,9 @@ struct markdown_printer : public printer {
         }
         if (field == "max_gpu_per_split") {
             return "max_gpu_per_split";
+        }
+        if (field == "split_adjust_step_frequency") {
+            return "split_adjust_step_frequency";
         }
         if (field == "use_thp") {
             return "thp";
@@ -1973,6 +1998,9 @@ struct markdown_printer : public printer {
         }
         if (params.max_gpu_per_split != cmd_params_defaults.max_gpu_per_split) {
             fields.emplace_back("max_gpu_per_split");
+        }
+        if (params.split_adjust_step_frequency != cmd_params_defaults.split_adjust_step_frequency) {
+            fields.emplace_back("split_adjust_step_frequency");
         }
         if (params.muge != cmd_params_defaults.muge) {
             fields.emplace_back("muge");
