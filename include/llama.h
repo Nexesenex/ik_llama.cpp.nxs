@@ -404,6 +404,7 @@ extern "C" {
         bool mtp;           // if true, load MTP layers if present
         bool dry_run;       // skip loading tensors
         bool split_output_tensor; // if true, force split the output tensor in split mode graph
+        bool monolithic_output_tensor_accounted; // if true, account for monolithic output tensor location in mem_used calculation for split_mode_tensor_parallel
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations

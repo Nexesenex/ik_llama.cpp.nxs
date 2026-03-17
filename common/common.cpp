@@ -1708,6 +1708,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.split_output_tensor = true;
         return true;
     }
+    if (arg == "-mota" || arg == "--monolithic-output-tensor-accounted") {
+        params.monolithic_output_tensor_accounted = true;
+        return true;
+    }
     if (arg == "-smtps" || arg == "--split-mode-tensor-parallel-scheduling") {
         params.split_mode_tensor_parallel_scheduling = true;
         return true;
@@ -2471,6 +2475,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-smf32, --split-mode-f32,",       "Use f32 for data exchange between GPUs (default: %d)", false});
     options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f32"});
     options.push_back({ "*",         "-sot, --split-output-tensor,",    "Force split of the Output Tensor in Split Mode Graph (default: %d)", params.split_output_tensor});
+    options.push_back({ "*",         "-mota, --monolithic-output-tensor-accounted,", "Account for monolithic output tensor location in mem_used (default: %d)", params.monolithic_output_tensor_accounted});
     options.push_back({ "*",         "-smts, --split-mode-tensor-parallel-scheduling,", "Force Split Mode Tensor Parallel Scheduling (default: %d)", params.split_mode_tensor_parallel_scheduling});
     options.push_back({ "*",         "-sas,  --scheduler_async,",       "Async evaluation of compute graphs: %d)", params.scheduler_async});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
@@ -3460,6 +3465,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.merge_up_gate_exps = params.merge_up_gate_exps;
     mparams.mtp             = params.has_mtp;
     mparams.split_output_tensor = params.split_output_tensor;
+    mparams.monolithic_output_tensor_accounted = params.monolithic_output_tensor_accounted;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
