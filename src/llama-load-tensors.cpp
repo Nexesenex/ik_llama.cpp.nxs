@@ -3959,10 +3959,22 @@ bool create_tensors_helper::create_tensors() {
         const int n_layer = model.mtp ? model.layers.size()
                                   : model.layers.size() - model.hparams.nextn_predict_layers;
         LLAMA_LOG_INFO("================================ max_gpu_per_split = %d\n", model.max_gpu_per_split);
+        LLAMA_LOG_INFO("================================ split_adjust_step_frequency = %.2f\n", model.split_adjust_step_frequency);
         std::vector<size_t> mem_used(model.splits.size(), 0);
         const auto & hparams = model.hparams;
         auto cur_splits = model.splits;
-        int adjust_step = std::max(1, int(n_layer / (2*model.splits.size())));
+        int effective_sasf;
+        if (model.split_adjust_step_frequency < 1) {
+            effective_sasf = int(std::round(1.0f / model.split_adjust_step_frequency));
+        } else {
+            effective_sasf = int(std::round(model.split_adjust_step_frequency));
+        }
+        int adjust_step;
+        if (model.split_adjust_step_frequency < 1) {
+            adjust_step = std::max(1, int(n_layer / (effective_sasf * model.splits.size())));
+        } else {
+            adjust_step = std::max(1, effective_sasf);
+        }
         if (model.max_gpu_per_split > 1 && model.max_gpu_per_split < int(cur_splits.size())) {
             bool equal_split = true;
             for (int i = 0; i < int(cur_splits.size()); ++i) {
@@ -3995,6 +4007,10 @@ bool create_tensors_helper::create_tensors() {
             estimated_splits = n_gpu_transitions + 2;
             LLAMA_LOG_INFO("Estimated graph splits before processing: ~%d (based on %d GPU transitions across %d layers)\n",
                 estimated_splits, n_gpu_transitions, n_layer);
+        }
+        if (!(model.max_gpu_per_split > 0 && model.max_gpu_per_split < int(model.splits.size()))) {
+            LLAMA_LOG_INFO("No split_adjust_step_frequency adjustment will occur (max_gpu_per_split=%d, n_splits=%zu)\n",
+                model.max_gpu_per_split, model.splits.size());
         }
         for (int il = 0; il < n_layer; ++il) {
             int gqa_ratio = hparams.n_head(il) / hparams.n_head_kv(il);
