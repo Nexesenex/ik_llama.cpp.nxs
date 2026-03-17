@@ -273,6 +273,7 @@ struct cmd_params {
     bool sas = false;
     int  max_gpu_per_split = 0;
     float split_adjust_step_frequency = 0.5f;
+    bool monolithic_output_tensor_accounted = false;
     bool print_overrides = false;
     bool fit = false;
     int  fit_margin = 0;
@@ -322,6 +323,7 @@ static const cmd_params cmd_params_defaults = {
     /* sas                  */ false,
     /* max_gpu_per_split    */ 0,
     /* split_adjust_step_frequency */ 0.5f,
+    /* monolithic_output_tensor_accounted */ true,
     /* print_overrides      */ false,
     /* fit                  */ false,
     /* fit_margin           */ 0,
@@ -381,6 +383,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --fit-margin N                      (default: %d)\n", cmd_params_defaults.fit_margin);
     printf("  --max-gpu-per-split <N>             (default: %d)\n", cmd_params_defaults.max_gpu_per_split);
     printf("  -sasf, --split-adjust-step-frequency <F> (default: %.1f, <1: legacy formula, >=1: direct)\n", cmd_params_defaults.split_adjust_step_frequency);
+    printf("  -mota, --monolithic-output-tensor-accounted (default: %s)\n", cmd_params_defaults.monolithic_output_tensor_accounted ? "enabled" : "disabled");
     printf("  --print-overrides <0|1>             (default: %s)\n", cmd_params_defaults.print_overrides ? "1" : "0");
     printf("\n");
     printf("Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.\n");
@@ -846,6 +849,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.split_adjust_step_frequency = std::stof(argv[i]);
+        } else if (arg == "-mota" || arg == "--monolithic-output-tensor-accounted") {
+            params.monolithic_output_tensor_accounted = true;
         } else if (arg == "-rcache" || arg == "--rope-cache") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -996,6 +1001,7 @@ struct cmd_params_instance {
     bool fit = false;
     int  fit_margin = 0;
     float split_adjust_step_frequency = 0.5f;
+    bool monolithic_output_tensor_accounted = false;
     const llama_model_tensor_buft_override* buft_overrides;
 
     llama_model_params to_llama_mparams() const {
@@ -1021,6 +1027,7 @@ struct cmd_params_instance {
         mparams.type_k = type_k;
         mparams.type_v = type_v;
         mparams.split_adjust_step_frequency = split_adjust_step_frequency;
+        mparams.monolithic_output_tensor_accounted = monolithic_output_tensor_accounted;
 
         return mparams;
     }
@@ -1137,6 +1144,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
+                /* .monolithic_output_tensor_accounted = */ params.monolithic_output_tensor_accounted,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1184,6 +1192,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
+                /* .monolithic_output_tensor_accounted = */ params.monolithic_output_tensor_accounted,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1231,6 +1240,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
+                /* .monolithic_output_tensor_accounted = */ params.monolithic_output_tensor_accounted,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1278,6 +1288,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
+                /* .monolithic_output_tensor_accounted = */ params.monolithic_output_tensor_accounted,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
