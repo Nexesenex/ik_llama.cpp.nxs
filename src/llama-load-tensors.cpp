@@ -3642,7 +3642,8 @@ static void split_recurrent_tensors(const llama_hparams & hparams, llama_layer &
     }
     LLAMA_LOG_DEBUG("\n");
     if (n_on < 2) {
-        GGML_ABORT("The configuration results in a single GPU participating in the delta-net tensor split. This is not supported");
+        LLAMA_LOG_INFO("=== delta-net split error in layer %d: only %d GPU(s) participating\n", il, n_on);
+        return false;
     }
 
     size_t orig_size = 0, split_size = 0;
