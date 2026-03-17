@@ -2859,6 +2859,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         model.hparams.vocab_only = params.vocab_only;
         model.split_output_tensor = params.split_output_tensor;
+        model.monolithic_output_tensor_accounted = params.monolithic_output_tensor_accounted;
 
         try {
             llm_load_arch(ml, model);
@@ -4942,6 +4943,7 @@ struct llama_model_params llama_model_default_params() {
         /*.check_tensors               =*/ false,
         /*.repack_tensors              =*/ false,
         /*.split_output_tensor         =*/ false,
+        /*.monolithic_output_tensor_accounted =*/ false,
         /*.use_thp                     =*/ false,
         /*.validate_quants             =*/ false,
         /*.merge_qkv                   =*/ false,
