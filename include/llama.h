@@ -406,6 +406,7 @@ extern "C" {
         bool check_tensors; // validate model tensor data
         bool repack_tensors;// repack if available
         bool split_output_tensor; // if true, force split the output tensor in split mode graph
+        bool monolithic_output_tensor_accounted; // if true, account for monolithic output tensor location in mem_used calculation for split_mode_tensor_parallel
         bool use_thp;       // use transparent huge pages (linux only)
         bool validate_quants; // if true, check for NaNs while loading the model
         bool merge_qkv;     // if true, merge separate Q, K, V tensors into a single, contiguous tensor
