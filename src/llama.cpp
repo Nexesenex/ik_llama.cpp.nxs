@@ -2380,7 +2380,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
     try {
         llama_model_loader ml(fname, params.use_mmap, params.check_tensors,
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
-                params.kv_overrides, params.tensor_buft_overrides, nullptr);
+                params.kv_overrides, params.tensor_buft_overrides);
 
         model.hparams.vocab_only = params.vocab_only;
 
@@ -4497,7 +4497,6 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.only_copy                   =*/ false,
         /*.pure                        =*/ false,
         /*.keep_split                  =*/ false,
-        /*.skip_first_shard            =*/ false,
         /*.ignore_imatrix_rules        =*/ false,
         /*.only_repack                 =*/ false,
         /*.dry_run                     =*/ false,
