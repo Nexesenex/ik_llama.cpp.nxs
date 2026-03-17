@@ -191,6 +191,9 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     std::vector<std::pair<std::regex, ggml_backend_buffer_type_t>> overrides;
 
+    int output_tensor_device = -1;
+    size_t output_tensor_size = 0;
+
     inline ggml_context * ctx_for_buft(ggml_backend_buffer_type_t buft) {
         if (auto it = ctx_map.find(buft); it != ctx_map.end()) return it->second;
 
@@ -3994,6 +3997,44 @@ bool create_tensors_helper::create_tensors() {
         }
         LLAMA_LOG_INFO("Total physical VRAM across %d GPUs: %.1f MiB, Free VRAM: %.2f MiB\n",
                 model.splits.size(), mgpu_vram_total/1024./1024., mgpu_vram_free/1024./1024.);
+        if (model.output && split_tensors.find(model.output) == split_tensors.end()) {
+            size_t output_size = ggml_nbytes(model.output);
+            int output_device = -1;
+            if (ml.tensor_buft_overrides) {
+                for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
+                    std::regex pattern(overrides->pattern);
+                    if (std::regex_match("output.weight", pattern)) {
+#if defined(GGML_USE_CUDA)
+                        for (int i = 0; i < int(model.splits.size()); ++i) {
+                            if (overrides->buft == ggml_backend_cuda_buffer_type(model.devices[i])) {
+                                output_device = i;
+                                break;
+                            }
+                        }
+#elif defined(GGML_USE_VULKAN)
+                        for (int i = 0; i < int(model.splits.size()); ++i) {
+                            if (overrides->buft == ggml_backend_vk_buffer_type(model.devices[i])) {
+                                output_device = i;
+                                break;
+                            }
+                        }
+#endif
+                        break;
+                    }
+                }
+            }
+            if (output_device < 0) {
+                output_device = model.main_gpu;
+            }
+            LLAMA_LOG_INFO("Output tensor (%.2f MiB) monolithic on GPU %d\n", output_size/1024./1024., output_device);
+            if (model.monolithic_output_tensor_accounted && output_device >= 0 && output_device < int(model.splits.size())) {
+                vram_free[output_device] -= output_size;
+                mem_used[output_device] += output_size;
+                output_tensor_device = output_device;
+                output_tensor_size = output_size;
+                LLAMA_LOG_INFO("  -> adjusted vram_free and mem_used (monolithic_output_tensor_accounted = true)\n");
+            }
+        }
         const auto & hparams = model.hparams;
         auto cur_splits = model.splits;
         int adjust_step = std::max(1, int(n_layer / (model.split_adjust_step_frequency*model.splits.size())));
@@ -4307,7 +4348,11 @@ bool create_tensors_helper::create_tensors() {
 
         LLAMA_LOG_INFO("Estimated model buffer size per device:\n");
         for (int i = 0; i < int(mem_used.size()); ++i) {
-            LLAMA_LOG_INFO("    Device %d:  %8.2f MiB\n", i, mem_used[i]/1024./1024.);
+            size_t display_size = mem_used[i];
+            if (model.monolithic_output_tensor_accounted && i == output_tensor_device) {
+                display_size -= output_tensor_size;
+            }
+            LLAMA_LOG_INFO("    Device %d:  %8.2f MiB\n", i, display_size/1024./1024.);
         }
     }
     return use_mmap_buffer;
