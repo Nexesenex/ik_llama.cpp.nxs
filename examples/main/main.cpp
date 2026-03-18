@@ -183,6 +183,8 @@ int main(int argc, char ** argv) {
 
     LOG_TEE("%s: build = %d (%s)\n",      __func__, LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
     LOG_TEE("%s: built with %s for %s\n", __func__, LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+    LOG_TEE("Last Llama.cpp mainline commit merged continuously : b3570.\n");
+    LOG_TEE("IK_LLama build = %d\n", IK_LLAMA_BUILD_NUMBER);
 
     if (params.seed == LLAMA_DEFAULT_SEED) {
         params.seed = time(NULL);

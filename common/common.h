@@ -66,6 +66,7 @@ using llama_tokens = std::vector<llama_token>;
 
 // build info
 extern int LLAMA_BUILD_NUMBER;
+extern int IK_LLAMA_BUILD_NUMBER;
 extern char const * LLAMA_COMMIT;
 extern char const * LLAMA_COMPILER;
 extern char const * LLAMA_BUILD_TARGET;
