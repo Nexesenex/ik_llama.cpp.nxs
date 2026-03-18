@@ -939,6 +939,7 @@ inline void static_for(T&&f) {
 #include <nmmintrin.h>
 #include <immintrin.h>
 #include <stdlib.h>
+#include <cstdint>
 inline int popcount(uint8_t x) { return __popcnt(x); }
 inline int popcount(uint16_t x) { return __popcnt(x); }
 inline int popcount(uint32_t x) { return __popcnt(x); }
