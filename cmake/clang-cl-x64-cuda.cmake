@@ -54,8 +54,12 @@ set(CMAKE_CUDA_ARCHITECTURES "86")
 # CUDA settings
 set(CMAKE_CUDA_COMPILER "${CUDA_ROOT}/bin/nvcc.exe")
 
-# MSVC bin directory (needed by nvcc to find cl.exe)
+# MSVC bin directory (needed by nvcc to find cl.exe for host code)
 set(MSVC_BIN "${VS_ROOT}/VC/Tools/MSVC/${MSVC_VERSION}/bin/Hostx64/x64")
+
+# Tell NVCC to use MSVC's cl.exe as the host compiler
+# This is the proper CMake way - doesn't rely on PATH
+set(CMAKE_CUDA_HOST_COMPILER "${MSVC_BIN}/cl.exe")
 
 # Include and lib paths
 set(MSVC_INCLUDE    "${VS_ROOT}/VC/Tools/MSVC/${MSVC_VERSION}/include")
@@ -80,11 +84,8 @@ link_directories(
     "${CUDA_LIB}"
 )
 
-# Prepend MSVC bin to PATH so nvcc can find cl.exe
-set(ENV{PATH} "${MSVC_BIN};$ENV{PATH}")
-
 # =============================================================================
-# C/C++ specific flags (using _INIT to prevent CUDA from receiving them)
+# C/C++ specific flags
 # =============================================================================
 
 # Base flags for Clang-CL - NOTE: Do NOT use /Gm (minimal rebuild) with /std:c++20
@@ -92,8 +93,8 @@ set(CMAKE_C_FLAGS_INIT "/O2 /GL /Gy /MP /EHsc /GS /fp:precise /std:c11 /D__FINIT
 set(CMAKE_CXX_FLAGS_INIT "/O2 /GL /Gy /MP /EHsc /GS /fp:precise /std:c++20 /D__FINITE_MATH_ONLY__=0")
 
 # Add Clang-specific flags (Unix-style that Clang-Cl accepts)
-set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} -fno-finite-math-only -mavx2 -mbmi2 -mfma -mavxvnni -mavxifma -mcmpccxadd -fopenmp=libomp")
-set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} -fno-finite-math-only -mavx2 -mbmi2 -mfma -mavxvnni -mavxifma -mcmpccxadd -fopenmp=libomp")
+set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} -fno-finite-math-only -mavx2 -mbmi2 -mfma -mavxvnni -mavxifma -mcmpccxadd -mf16c -fopenmp=libomp")
+set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} -fno-finite-math-only -mavx2 -mbmi2 -mfma -mavxvnni -mavxifma -mcmpccxadd -mf16c -fopenmp=libomp")
 
 # =============================================================================
 # CUDA specific flags

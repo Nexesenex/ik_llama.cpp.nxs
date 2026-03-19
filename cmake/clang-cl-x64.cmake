@@ -97,6 +97,7 @@ add_compile_options(
     -mavxvnni
     -mavxifma
     -mcmpccxadd
+    -mf16c
 )
 
 # Disable the __FINITE_MATH_ONLY__ check in ggml.c
