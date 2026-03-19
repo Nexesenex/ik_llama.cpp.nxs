@@ -279,7 +279,7 @@
     {
         "name": "x64-Rel-Clang-OMP5-Cuda",
         "inherits": [ "base", "release" ],
-        "generator": "Visual Studio 18 2026",
+        "generator": "Ninja",
         "cacheVariables": {
             "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/clang-cl-x64-cuda.cmake",
             "GGML_IQK_FA_ALL_QUANTS": "True",
