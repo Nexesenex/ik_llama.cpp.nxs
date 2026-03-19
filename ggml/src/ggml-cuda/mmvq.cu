@@ -103,6 +103,9 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
         case GGML_TYPE_IQ4_NL:
             mul_mat_vec_iq4_nl_q8_1_cuda(args, stream);
             break;
+        case GGML_TYPE_IQ5_NL:
+            mul_mat_vec_iq5_nl_q8_1_cuda(args, stream);
+            break;
         case GGML_TYPE_MXFP4:
             mul_mat_vec_mxfp4_q8_1_cuda(args, stream);
             break;
@@ -323,6 +326,7 @@ bool ggml_cuda_mmvq_type_supported(ggml_type src0_type) {
         case GGML_TYPE_IQ1_BN:
         case GGML_TYPE_IQ2_BN:
         case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ5_NL:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ2_K:

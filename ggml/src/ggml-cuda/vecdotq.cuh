@@ -1164,6 +1164,8 @@ static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4) {
 
 #define VDR_IQ4_NL_Q8_1_MMVQ 2
 #define VDR_IQ4_NL_Q8_1_MMQ  4
+#define VDR_IQ5_NL_Q8_1_MMVQ 2
+#define VDR_IQ5_NL_Q8_1_MMQ  4
 
 static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
@@ -1183,6 +1185,38 @@ static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1(
     }
 
     const float d = __half2float(bq4->d) * __low2float(bq8_1->ds);
+    return d * sumi;
+}
+
+static __device__ __forceinline__ float vec_dot_iq5_nl_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq5_nl * bq5 = (const block_iq5_nl *) vbq + kbx;
+
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+
+    uint32_t qh;
+    memcpy(&qh, bq5->qh, sizeof(qh));
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < VDR_IQ5_NL_Q8_1_MMVQ; ++l) {
+        const int iqs4 = iqs + l;
+        const int ib = iqs4/8;
+        const int il = iqs4%8;
+        const int n = ib*8 + il;
+
+        const uint8_t qh_0 = (qh >> (2*n)) & 0x03;
+        const uint8_t qh_1 = (qh >> (2*n + 16)) & 0x03;
+
+        const int x0 = kvalues_iq5nl[(bq5->qs[n] & 0x0F) | (qh_0 << 4)];
+        const int x1 = kvalues_iq5nl[(bq5->qs[n] >> 4) | (qh_1 << 4)];
+
+        sumi = ggml_cuda_dp4a(x0, q8[l + 0], sumi);
+        sumi = ggml_cuda_dp4a(x1, q8[l + 4], sumi);
+    }
+
+    const float d = __half2float(bq5->d) * __low2float(bq8_1->ds);
     return d * sumi;
 }
 
