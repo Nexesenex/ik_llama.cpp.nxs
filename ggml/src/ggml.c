@@ -3309,9 +3309,62 @@ inline static void ggml_vec_sigmoid_f32 (const int n, float * y, const float * x
 inline static float ggml_compute_softplus_f32(const float x) { return x > 20.0f ? x : logf(1.0f + expf(x)); }
 inline static void ggml_vec_exp_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = expf(x[i]); }
 inline static void ggml_vec_softplus_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_compute_softplus_f32(x[i]); }
-// TODO: optimize performance
-inline static void ggml_vec_hardswish_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = x[i] * fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f)); }
-inline static void ggml_vec_hardsigmoid_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f)); }
+inline static void ggml_vec_hardswish_f32 (const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
+    const __m512 inv_six = _mm512_set1_ps(1.0f/6.0f);
+    const __m512 three = _mm512_set1_ps(3.0f);
+    const __m512 one = _mm512_set1_ps(1.0f);
+    const __m512 zero = _mm512_setzero_ps();
+    for (; i + 15 < n; i += 16) {
+        const __m512 xi = _mm512_loadu_ps(x + i);
+        const __m512 scaled = _mm512_mul_ps(_mm512_add_ps(xi, three), inv_six);
+        const __m512 clamped = _mm512_max_ps(zero, _mm512_min_ps(scaled, one));
+        _mm512_storeu_ps(y + i, _mm512_mul_ps(xi, clamped));
+    }
+#endif
+#if defined(__AVX2__) && defined(__FMA__)
+    const __m256 inv_six = _mm256_set1_ps(1.0f/6.0f);
+    const __m256 three = _mm256_set1_ps(3.0f);
+    const __m256 one = _mm256_set1_ps(1.0f);
+    const __m256 zero = _mm256_setzero_ps();
+    for (; i + 7 < n; i += 8) {
+        const __m256 xi = _mm256_loadu_ps(x + i);
+        const __m256 scaled = _mm256_mul_ps(_mm256_add_ps(xi, three), inv_six);
+        const __m256 clamped = _mm256_max_ps(zero, _mm256_min_ps(scaled, one));
+        _mm256_storeu_ps(y + i, _mm256_mul_ps(xi, clamped));
+    }
+#endif
+    for (; i < n; ++i) y[i] = x[i] * fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f));
+}
+inline static void ggml_vec_hardsigmoid_f32 (const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
+    const __m512 inv_six = _mm512_set1_ps(1.0f/6.0f);
+    const __m512 three = _mm512_set1_ps(3.0f);
+    const __m512 one = _mm512_set1_ps(1.0f);
+    const __m512 zero = _mm512_setzero_ps();
+    for (; i + 15 < n; i += 16) {
+        const __m512 xi = _mm512_loadu_ps(x + i);
+        const __m512 scaled = _mm512_mul_ps(_mm512_add_ps(xi, three), inv_six);
+        const __m512 clamped = _mm512_max_ps(zero, _mm512_min_ps(scaled, one));
+        _mm512_storeu_ps(y + i, clamped);
+    }
+#endif
+#if defined(__AVX2__) && defined(__FMA__)
+    const __m256 inv_six = _mm256_set1_ps(1.0f/6.0f);
+    const __m256 three = _mm256_set1_ps(3.0f);
+    const __m256 one = _mm256_set1_ps(1.0f);
+    const __m256 zero = _mm256_setzero_ps();
+    for (; i + 7 < n; i += 8) {
+        const __m256 xi = _mm256_loadu_ps(x + i);
+        const __m256 scaled = _mm256_mul_ps(_mm256_add_ps(xi, three), inv_six);
+        const __m256 clamped = _mm256_max_ps(zero, _mm256_min_ps(scaled, one));
+        _mm256_storeu_ps(y + i, clamped);
+    }
+#endif
+    for (; i < n; ++i) y[i] = fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f));
+}
 
 static const float GELU_QUICK_COEF = -1.702f;
 static const float GELU_COEF_A     = 0.044715f;
