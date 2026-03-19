@@ -26659,10 +26659,28 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 
 #ifdef GGML_USE_OPENMP
     if (n_threads > 1) {
+// IK_OPENMP_PROC_BIND: Enable thread affinity for hybrid CPUs (P+E cores like 265K)
+// proc_bind(close) binds threads close to their parent - keeps P-cores together, E-cores together
+// This is critical for Intel 265K (8P+12E cores) where threads should stay on their respective core types
+//
+// OpenMP version detection:
+// - Clang/LLVM: _OPENMP >= 201811 for OpenMP 5.0+
+// - MSVC: _OPENMP is defined but version semantics differ; use runtime check if available
+#if defined(_OPENMP) && _OPENMP >= 201811
+        // OpenMP 5.0+ (Clang/LLVM with libomp): full proc_bind(close) support
+        #pragma omp parallel num_threads(n_threads) proc_bind(close)
+#elif defined(__clang__) || defined(__INTEL_COMPILER)
+        // Clang with older OpenMP or ICC: try proc_bind if available (OpenMP 3.1+)
+        // Note: proc_bind(close) is more reliably implemented in OpenMP 5.0+
+        #pragma omp parallel num_threads(n_threads) proc_bind(close)
+#else
+        // MSVC or unknown compiler: use standard parallel region without explicit affinity
+        // Fallback to compiler's default thread affinity
+        #pragma omp parallel num_threads(n_threads)
+#endif
 //#if IK_PRINT_TIMING
 //        int64_t tim1 = ggml_time_us();
 //#endif
-        #pragma omp parallel num_threads(n_threads)
         {
             #pragma omp single
             {
