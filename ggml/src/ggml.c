@@ -30099,6 +30099,22 @@ int ggml_cpu_has_fma(void) {
 #endif
 }
 
+int ggml_cpu_has_avx_ifma(void) {
+#if defined(__AVXIFMA__)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+int ggml_cpu_has_cmpccxadd(void) {
+#if defined(__CMPCCXADD__)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 int ggml_cpu_has_neon(void) {
 #if defined(__ARM_NEON)
     return 1;
