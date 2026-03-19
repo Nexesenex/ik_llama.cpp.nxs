@@ -5,23 +5,10 @@
         "name":  "base",
         "hidden": true,
         "generator":   "Ninja",
-        "binaryDir":   "${sourceDir}/build-${presetName}",
+        "binaryDir":   "${sourceDir}/out/build/${presetName}",
         "cacheVariables": {
             "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-            "CMAKE_INSTALL_RPATH": "$ORIGIN;$ORIGIN/.."
-        }
-    },
-    {
-        "name": "sycl-base",
-        "hidden": true,
-        "generator": "Ninja",
-        "binaryDir": "${sourceDir}/build-${presetName}",
-        "cacheVariables": {
-            "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-            "CMAKE_CXX_COMPILER": "icx",
-            "CMAKE_C_COMPILER": "cl",
-            "GGML_SYCL": "ON",
-            "CMAKE_INSTALL_RPATH": "$ORIGIN;$ORIGIN/.."
+            "CMAKE_MAKE_PROGRAM": "C:/Python310/Scripts/ninja.exe"
         }
     },
     { "name": "debug",   "hidden": true, "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
@@ -30,36 +17,321 @@
     { "name": "static",  "hidden": true, "cacheVariables": { "GGML_STATIC": "ON" } },
 
     {
-        "name": "arm64-windows-msvc", "hidden": true,
-        "architecture": { "value": "arm64",       "strategy": "external" },
-        "toolset":      { "value": "host=x86_64", "strategy": "external" },
-        "cacheVariables": {
-            "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/arm64-windows-msvc.cmake"
-        }
+        "name": "x64_windows_msvc", "hidden": true,
+        "toolchainFile": "${sourceDir}/cmake/x64-windows-msvc.cmake"
+    },
+    {
+        "name": "x64_windows_llvm", "hidden": true,
+        "toolchainFile": "${sourceDir}/cmake/x64-windows-llvm.cmake"
     },
 
     {
-        "name": "arm64-windows-llvm", "hidden": true,
-        "architecture": { "value": "arm64",       "strategy": "external" },
-        "toolset":      { "value": "host=x86_64", "strategy": "external" },
+        "name": "x64_Rel_MSVC_CPU",
+        "inherits": [ "base", "release", "x64_windows_msvc" ],
         "cacheVariables": {
-            "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/arm64-windows-llvm.cmake"
+            "GGML_IQK_FA_ALL_QUANTS": "True",
+            "GGML_AVX2": "True",
+            "GGML_AVX": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_AVX_NE_CONVERT": "True",
+            "GGML_CUDA": "False",
+            "GGML_CUDA_FA_ALL_QUANTS": "False",
+            "GGML_CUDA_FORCE_MMQ": "True",
+            "GGML_CUDA_CUBLAS": "True",
+            "GGML_OPENMP": "True",
+            "GGML_SCHED_MAX_COPIES": "1",
+            "GGML_CUDA_COMPRESSION_MODE": "speed",
+            "GGML_MAX_CONTEXTS": "2048",
+            "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY": "False",
+            "CMAKE_CUDA_COMPILER": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+            "CMAKE_CUDA_ARCHITECTURES": "86"
         }
     },
-
-    { "name": "arm64-windows-llvm-debug"  , "inherits": [ "base", "arm64-windows-llvm",  "debug"   ] },
-    { "name": "arm64-windows-llvm-release", "inherits": [ "base", "arm64-windows-llvm",  "reldbg" ] },
-    { "name": "arm64-windows-llvm+static-release", "inherits": [ "base", "arm64-windows-llvm",  "reldbg", "static" ] },
-
-    { "name": "arm64-windows-msvc-debug"  , "inherits": [ "base", "arm64-windows-msvc",  "debug"   ] },
-    { "name": "arm64-windows-msvc-release", "inherits": [ "base", "arm64-windows-msvc",  "reldbg" ] },
-    { "name": "arm64-windows-msvc+static-release", "inherits": [ "base", "arm64-windows-msvc",  "reldbg", "static" ] },
-
-    { "name": "x64-windows-msvc-debug"  , "inherits": [ "base", "debug"   ] },
-    { "name": "x64-windows-msvc-release", "inherits": [ "base", "reldbg" ] },
-    { "name": "x64-windows-msvc+static-release", "inherits": [ "base", "reldbg", "static" ] },
-
-    { "name": "x64-windows-sycl-debug"  , "inherits": [ "sycl-base", "debug"   ] },
-    { "name": "x64-windows-sycl-release", "inherits": [ "sycl-base", "release" ] }
+    {
+        "name": "x64_Rel_MSVC_Cublas",
+        "inherits": [ "base", "release", "x64_windows_msvc" ],
+        "cacheVariables": {
+            "GGML_IQK_FA_ALL_QUANTS": "False",
+            "GGML_AVX2": "True",
+            "GGML_AVX": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_AVX_NE_CONVERT": "True",
+            "GGML_CUDA": "True",
+            "GGML_CUDA_FA_ALL_QUANTS": "False",
+            "GGML_CUDA_F16": "True",
+            "GGML_CUDA_FUSION": "1",
+            "GGML_CUDA_PEER_MAX_BATCH_SIZE": "256",
+            "GGML_NCCL": "False",
+            "GGML_OPENMP": "True",
+            "GGML_SCHED_MAX_COPIES": "1",
+            "GGML_CUDA_COMPRESSION_MODE": "speed",
+            "GGML_MAX_CONTEXTS": "2048",
+            "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY": "False",
+            "CMAKE_CUDA_COMPILER": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+            "CMAKE_CUDA_ARCHITECTURES": "86"
+        }
+    },
+    {
+        "name": "x64_Rel_MSVC_Cuda",
+        "inherits": [ "base", "release", "x64_windows_msvc" ],
+        "cacheVariables": {
+            "GGML_IQK_FA_ALL_QUANTS": "False",
+            "GGML_AVX2": "True",
+            "GGML_AVX": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_AVX_NE_CONVERT": "True",
+            "GGML_CUDA": "True",
+            "GGML_CUDA_FA_ALL_QUANTS": "False",
+            "GGML_CUDA_FORCE_MMQ": "True",
+            "GGML_CUDA_F16": "True",
+            "GGML_CUDA_FUSION": "1",
+            "GGML_CUDA_PEER_MAX_BATCH_SIZE": "256",
+            "GGML_NCCL": "False",
+            "GGML_OPENMP": "True",
+            "GGML_SCHED_MAX_COPIES": "1",
+            "GGML_CUDA_COMPRESSION_MODE": "speed",
+            "GGML_MAX_CONTEXTS": "2048",
+            "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY": "False",
+            "CMAKE_CUDA_COMPILER": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+            "CMAKE_CUDA_ARCHITECTURES": "86"
+        }
+    },
+    {
+        "name": "x64_Rel_MSVC_CUDA_Main",
+        "inherits": [ "base", "release", "x64_windows_msvc" ],
+        "cacheVariables": {
+            "GGML_IQK_FA_ALL_QUANTS": "True",
+            "GGML_AVX2": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_AVX_NE_CONVERT": "True",
+            "GGML_CUDA": "True",
+            "GGML_CUDA_FA_ALL_QUANTS": "False",
+            "GGML_CUDA_FORCE_MMQ": "True",
+            "GGML_CUDA_F16": "True",
+            "GGML_CUDA_COMPRESSION_MODE": "speed",
+            "GGML_CUDA_FUSION": "1",
+            "GGML_CUDA_PEER_MAX_BATCH_SIZE": "256",
+            "GGML_NCCL": "False",
+            "GGML_NATIVE": "False",
+            "GGML_MAX_CONTEXTS": "2048",
+            "CMAKE_CUDA_COMPILER": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+            "CMAKE_CUDA_ARCHITECTURES": "86"
+        }
+    },
+    {
+        "name": "x64_Rel_MSVC_CUDA_Test",
+        "inherits": [ "base", "release", "x64_windows_msvc" ],
+        "cacheVariables": {
+            "GGML_IQK_FA_ALL_QUANTS": "True",
+            "GGML_AVX2": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_AVX_NE_CONVERT": "True",
+            "GGML_CUDA": "True",
+            "GGML_CUDA_FA_ALL_QUANTS": "False",
+            "GGML_CUDA_FORCE_MMQ": "True",
+            "GGML_CUDA_F16": "True",
+            "GGML_CUDA_COMPRESSION_MODE": "speed",
+            "GGML_CUDA_FUSION": "1",
+            "GGML_CUDA_PEER_MAX_BATCH_SIZE": "256",
+            "GGML_NCCL": "False",
+            "GGML_NATIVE": "False",
+            "GGML_MAX_CONTEXTS": "2048",
+            "CMAKE_CUDA_COMPILER": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+            "CMAKE_CUDA_ARCHITECTURES": "86"
+        }
+    },
+    {
+        "name": "x64_Rel_MSVC_CUDA_Legacy",
+        "inherits": [ "base", "release", "x64_windows_msvc" ],
+        "cacheVariables": {
+            "GGML_IQK_FA_ALL_QUANTS": "True",
+            "GGML_AVX2": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_AVX_NE_CONVERT": "True",
+            "GGML_CUDA": "True",
+            "GGML_CUDA_FA_ALL_QUANTS": "False",
+            "GGML_CUDA_FORCE_MMQ": "True",
+            "GGML_CUDA_F16": "True",
+            "GGML_CUDA_COMPRESSION_MODE": "speed",
+            "GGML_CUDA_FUSION": "1",
+            "GGML_CUDA_PEER_MAX_BATCH_SIZE": "256",
+            "GGML_NCCL": "False",
+            "GGML_NATIVE": "False",
+            "GGML_MAX_CONTEXTS": "2048",
+            "CMAKE_CUDA_COMPILER": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+            "CMAKE_CUDA_ARCHITECTURES": "86"
+        }
+    },
+    {
+        "name": "x64_Rel_MSVC_CUDA_Dev",
+        "inherits": [ "base", "release", "x64_windows_msvc" ],
+        "cacheVariables": {
+            "GGML_IQK_FA_ALL_QUANTS": "True",
+            "GGML_AVX2": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_AVX_NE_CONVERT": "True",
+            "GGML_CUDA": "True",
+            "GGML_CUDA_FA_ALL_QUANTS": "False",
+            "GGML_CUDA_FORCE_MMQ": "True",
+            "GGML_CUDA_F16": "True",
+            "GGML_CUDA_COMPRESSION_MODE": "speed",
+            "GGML_CUDA_FUSION": "1",
+            "GGML_CUDA_PEER_MAX_BATCH_SIZE": "256",
+            "GGML_NCCL": "False",
+            "GGML_NATIVE": "False",
+            "GGML_MAX_CONTEXTS": "2048",
+            "CMAKE_CUDA_COMPILER": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+            "CMAKE_CUDA_ARCHITECTURES": "86"
+        }
+    },
+    {
+        "name": "x64_Rel_Clang_CPU",
+        "inherits": [ "base", "release", "x64_windows_llvm" ],
+        "cacheVariables": {
+            "GGML_IQK_FA_ALL_QUANTS": "True",
+            "GGML_AVX2": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_AVX_NE_CONVERT": "True",
+            "GGML_CUDA": "False",
+            "GGML_CUDA_FA_ALL_QUANTS": "False",
+            "GGML_CUDA_FORCE_MMQ": "True",
+            "GGML_CUDA_FUSION": "1",
+            "GGML_CUDA_PEER_MAX_BATCH_SIZE": "256",
+            "GGML_NCCL": "False",
+            "GGML_NATIVE": "False",
+            "GGML_OPENMP": "True",
+            "GGML_MAX_CONTEXTS": "2048",
+            "CMAKE_CUDA_COMPILER": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+            "CMAKE_CUDA_ARCHITECTURES": "86"
+        }
+    },
+    {
+        "name": "x64_Rel_Clang_Cuda",
+        "inherits": [ "base", "release", "x64_windows_llvm" ],
+        "cacheVariables": {
+            "GGML_IQK_FA_ALL_QUANTS": "True",
+            "GGML_AVX2": "True",
+            "GGML_AVX": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_AVX_NE_CONVERT": "True",
+            "GGML_CUDA": "True",
+            "GGML_CUDA_FA_ALL_QUANTS": "False",
+            "GGML_CUDA_FORCE_MMQ": "True",
+            "GGML_CUDA_F16": "True",
+            "GGML_CUDA_FUSION": "1",
+            "GGML_CUDA_PEER_MAX_BATCH_SIZE": "256",
+            "GGML_NCCL": "False",
+            "GGML_OPENMP": "True",
+            "GGML_SCHED_MAX_COPIES": "1",
+            "GGML_CUDA_COMPRESSION_MODE": "speed",
+            "GGML_MAX_CONTEXTS": "2048",
+            "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY": "False",
+            "CMAKE_CUDA_COMPILER": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+            "CMAKE_CUDA_ARCHITECTURES": "86"
+        }
+    },
+    {
+        "name": "x64_Rel_Clang_CUDA_Dev",
+        "inherits": [ "base", "release", "x64_windows_llvm" ],
+        "cacheVariables": {
+            "GGML_IQK_FA_ALL_QUANTS": "True",
+            "GGML_AVX2": "True",
+            "GGML_AVX": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_AVX_NE_CONVERT": "True",
+            "GGML_CUDA": "True",
+            "GGML_CUDA_FA_ALL_QUANTS": "False",
+            "GGML_CUDA_FORCE_MMQ": "True",
+            "GGML_CUDA_F16": "True",
+            "GGML_CUDA_FUSION": "1",
+            "GGML_CUDA_PEER_MAX_BATCH_SIZE": "256",
+            "GGML_NCCL": "False",
+            "GGML_OPENMP": "True",
+            "GGML_SCHED_MAX_COPIES": "1",
+            "GGML_CUDA_COMPRESSION_MODE": "speed",
+            "GGML_MAX_CONTEXTS": "2048",
+            "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY": "False",
+            "CMAKE_CUDA_COMPILER": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+            "CMAKE_CUDA_ARCHITECTURES": "86"
+        }
+    },
+    {
+        "name": "x64_Rel_Clang_LLVM_CPU",
+        "inherits": [ "base", "release" ],
+        "cacheVariables": {
+            "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/msvc-llvm-omp.cmake",
+            "GGML_IQK_FA_ALL_QUANTS": "True",
+            "GGML_AVX2": "True",
+            "GGML_AVX": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_OPENMP": "True",
+            "GGML_CUDA": "False",
+            "GGML_SYCL": "False",
+            "GGML_BLAS": "False",
+            "GGML_SCHED_MAX_COPIES": "1",
+            "GGML_MAX_CONTEXTS": "2048"
+        }
+    },
+    {
+        "name": "x64_Rel_Clang_LLVM_CUDA",
+        "inherits": [ "base", "release" ],
+        "cacheVariables": {
+            "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/llvm-clang-x64-cuda.cmake",
+            "GGML_IQK_FA_ALL_QUANTS": "True",
+            "GGML_AVX2": "True",
+            "GGML_AVX": "True",
+            "GGML_FMA": "True",
+            "GGML_AVXVNNI": "True",
+            "GGML_AVX_IFMA": "True",
+            "GGML_CMPCCXADD": "True",
+            "GGML_OPENMP": "True",
+            "GGML_CUDA": "True",
+            "GGML_CUDA_FA_ALL_QUANTS": "False",
+            "GGML_CUDA_FORCE_MMQ": "True",
+            "GGML_CUDA_F16": "True",
+            "GGML_CUDA_FUSION": "1",
+            "GGML_CUDA_PEER_MAX_BATCH_SIZE": "256",
+            "GGML_CUDA_COMPRESSION_MODE": "speed",
+            "GGML_NCCL": "False",
+            "GGML_SCHED_MAX_COPIES": "1",
+            "GGML_MAX_CONTEXTS": "2048",
+            "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY": "False",
+            "CMAKE_CUDA_COMPILER": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+            "CMAKE_CUDA_ARCHITECTURES": "86"
+        }
+    }
   ]
 }

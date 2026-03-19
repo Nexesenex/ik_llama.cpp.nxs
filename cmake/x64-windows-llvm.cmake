@@ -6,8 +6,20 @@ set(CMAKE_SYSTEM_NAME      Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
 # Use Clang from Visual Studio's LLVM toolchain
-set(CMAKE_C_COMPILER   clang)
-set(CMAKE_CXX_COMPILER clang++)
+set(CMAKE_C_COMPILER   "P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe")
+set(CMAKE_CXX_COMPILER "P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe")
+set(CMAKE_RC_COMPILER  "P:/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe")
+set(CMAKE_MT           "P:/Windows Kits/10/bin/10.0.26100.0/x64/mt.exe")
+set(CUDA_NVCC_HOST_COMPILER "P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36014/bin/Hostx64/x64/cl.exe")
+
+# Add Windows SDK library path for linker
+set(CMAKE_EXE_LINKER_FLAGS "/LIBPATH:\"P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36014/lib/x64\" /LIBPATH:\"P:/Windows Kits/10/lib/10.0.26100.0/ucrt/x64\" /LIBPATH:\"P:/Windows Kits/10/lib/10.0.26100.0/um/x64\"")
+set(CMAKE_SHARED_LINKER_FLAGS "/LIBPATH:\"P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36014/lib/x64\" /LIBPATH:\"P:/Windows Kits/10/lib/10.0.26100.0/ucrt/x64\" /LIBPATH:\"P:/Windows Kits/10/lib/10.0.26100.0/um/x64\"")
+
+# Set environment variables for Clang
+set(ENV{LIB} "P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36014/lib/x64;P:/Windows Kits/10/lib/10.0.26100.0/ucrt/x64;P:/Windows Kits/10/lib/10.0.26100.0/um/x64")
+set(ENV{INCLUDE} "P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36014/include;P:/Windows Kits/10/include/10.0.26100.0/ucrt;P:/Windows Kits/10/include/10.0.26100.0/um;P:/Windows Kits/10/include/10.0.26100.0/shared;P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/lib/clang/20/include")
+set(ENV{PATH} "P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin;P:/Windows Kits/10/bin/10.0.26100.0/x64;${env.PATH}")
 
 # Common architecture tuning flags (no ISA extensions here)
 # - Base x86_64 instruction set
