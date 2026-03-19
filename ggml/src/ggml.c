@@ -3306,8 +3306,8 @@ inline static float ggml_compute_softplus_f32(const float x) { return x > 20.0f 
 inline static void ggml_vec_exp_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = expf(x[i]); }
 inline static void ggml_vec_softplus_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_compute_softplus_f32(x[i]); }
 inline static void ggml_vec_hardswish_f32 (const int n, float * y, const float * x) {
-#if defined(__AVX2__) && defined(__FMA__)
     int i = 0;
+#if defined(__AVX2__) && defined(__FMA__)
     const __m256 six = _mm256_set1_ps(6.0f);
     const __m256 three = _mm256_set1_ps(3.0f);
     const __m256 one = _mm256_set1_ps(1.0f);
