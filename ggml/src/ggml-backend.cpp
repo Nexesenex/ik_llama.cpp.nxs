@@ -2195,7 +2195,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         if (!has_cpu_work) {
+        // IK_OPENMP_PROC_BIND: Same thread affinity logic as ggml.c for hybrid CPU support
+        // proc_bind(close) keeps threads close to their parent - important for P+E core systems
+#if defined(_OPENMP) && _OPENMP >= 201811
+        #pragma omp parallel num_threads(sched->n_backends) proc_bind(close)
+#elif defined(__clang__) || defined(__INTEL_COMPILER)
+        #pragma omp parallel num_threads(sched->n_backends) proc_bind(close)
+#else
         #pragma omp parallel num_threads(sched->n_backends)
+#endif
         {
 
             int last_reduce = first_reduce;
