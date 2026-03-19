@@ -4606,10 +4606,51 @@ static inline void ggml_barrier_impl(struct ggml_compute_state_shared * shared) 
 // Arrowlake CPU / Clang compiler curiosity: Custom atomic barrier's TG is ~2x faster than OpenMP's barrier.
 
 // More examples :
-// With value "<=32", Custom atomic barrier becomes used for TG and small PP batches, OpenMP for large PP batches 
-// With value "<1", then Custom atomic barriers is discarded, and OpenMP is used for every batch size.  
+// With value "<=32", Custom atomic barrier becomes used for TG and small PP batches, OpenMP for large PP batches
+// With value "<1", then Custom atomic barriers is discarded, and OpenMP is used for every batch size.
 
 // To be able to adjust this: runtime configurable via ggml_set_batch_thread_threshold() / argument -gbtt
+
+// IK_OPENMP_DIAGNOSTICS: Uncomment to enable OpenMP thread affinity diagnostics
+// #define IK_PRINT_OMP_AFFINITY 1
+
+#ifdef GGML_USE_OPENMP
+// ggml_print_omp_affinity: Print OpenMP thread affinity info (for debugging hybrid CPU performance)
+// Enable by defining IK_PRINT_OMP_AFFINITY above
+static void ggml_print_omp_affinity(int n_threads, int n_batch) {
+#if defined(IK_PRINT_OMP_AFFINITY) && IK_PRINT_OMP_AFFINITY
+    #pragma omp single
+    {
+        printf("=== IK OpenMP Thread Affinity Info ===\n");
+        printf("  Threads: %d | Batch: %d | Threshold: %d\n", n_threads, n_batch, GGML_BATCH_THREAD_THRESHOLD);
+#if _OPENMP >= 201811
+        printf("  OpenMP: 5.0+ (proc_bind supported)\n");
+        omp_proc_bind_t proc_bind;
+        int proc_bind_set = omp_get_proc_bind(&proc_bind);
+        const char * bind_name = "unknown";
+        if (proc_bind_set == 0) {
+            switch (proc_bind) {
+                case omp_proc_bind_false:     bind_name = "false"; break;
+                case omp_proc_bind_true:      bind_name = "true"; break;
+                case omp_proc_bind_close:     bind_name = "close"; break;
+                case omp_proc_bind_master:    bind_name = "master"; break;
+                case omp_proc_bind_spread:    bind_name = "spread"; break;
+                default:                      bind_name = "unknown"; break;
+            }
+        }
+        printf("  proc_bind: %s\n", bind_name);
+#else
+        printf("  OpenMP: legacy (proc_bind affinity may be limited)\n");
+#endif
+        printf("  Barrier type: %s\n", n_batch > GGML_BATCH_THREAD_THRESHOLD ? "custom" : "OpenMP");
+        printf("====================================\n");
+    }
+#else
+    (void)n_threads;
+    (void)n_batch;
+#endif
+}
+#endif
 
 #ifndef GGML_BATCH_THREAD_THRESHOLD
 #define GGML_BATCH_THREAD_THRESHOLD 32
@@ -26837,6 +26878,8 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
                 // update the number of threads from the actual number of threads that we got from OpenMP
                 n_threads = omp_get_num_threads();
                 state_shared.n_threads = n_threads;
+                // IK_OPENMP_DIAGNOSTICS: Print thread affinity info if enabled
+                ggml_print_omp_affinity(n_threads, state_shared.n_batch);
             }
 
             struct ggml_compute_state worker = {
