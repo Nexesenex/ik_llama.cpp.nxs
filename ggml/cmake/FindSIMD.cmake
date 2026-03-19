@@ -98,3 +98,39 @@ if (NOT ${AVX512_FOUND})
 else()
     set(GGML_AVX512 ON)
 endif()
+
+set(AVXIFMA_CODE "
+    #include <immintrin.h>
+    int main()
+    {
+        __m256i a = _mm256_setzero_si256();
+        __m256i b = _mm256_setzero_si256();
+        __m256i c = _mm256_setzero_si256();
+        a = _mm256_madd52lo_epu64(a, b, c);
+        return 0;
+    }
+")
+
+set(CMPCCXADD_CODE "
+    #include <immintrin.h>
+    int main()
+    {
+        unsigned int a = 0, b = 0, c = 0;
+        a = _cmpccxadd_u32(a, b, c);
+        return 0;
+    }
+")
+
+check_sse("AVXIFMA" " ;/arch:AVX2")
+if (NOT ${AVXIFMA_FOUND})
+    set(GGML_AVX_IFMA OFF)
+else()
+    set(GGML_AVX_IFMA ON)
+endif()
+
+check_sse("CMPCCXADD" " ;/arch:AVX2")
+if (NOT ${CMPCCXADD_FOUND})
+    set(GGML_CMPCCXADD OFF)
+else()
+    set(GGML_CMPCCXADD ON)
+endif()
