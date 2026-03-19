@@ -3521,67 +3521,22 @@ static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor
     }
 }
 
-static void adjust_split(std::vector<float> & split, const std::vector<size_t> & mem_used, const std::vector<size_t> & vram_free, int max_gpu_per_split) {
+static void adjust_split(std::vector<float> & split, const std::vector<size_t> & mem_used, int max_gpu_per_split) {
     if (max_gpu_per_split < 1 || max_gpu_per_split >= int(split.size()) || split.size() != mem_used.size()) {
         return;
     }
-    GGML_ASSERT(vram_free.size() == mem_used.size());
+    size_t tot_mem_used = 1;
+    for (auto & mem : mem_used) tot_mem_used += mem;
     for (int i = split.size() - 1; i > 0; --i) split[i] -= split[i-1];
-    std::vector<std::pair<size_t, int>> sorted(split.size());
+    std::vector<std::pair<float, int>> sorted(split.size());
     for (int i = 0; i < int(split.size()); ++i) {
-        size_t remaining_space = (vram_free[i] > mem_used[i]) ? (vram_free[i] - mem_used[i]) : 0;
-        sorted[i] = {remaining_space, i};
+        float mem_ideal = split[i]*tot_mem_used;
+        float err = mem_ideal - mem_used[i];
+        sorted[i] = {err, i};
     }
-    std::partial_sort(sorted.begin(), sorted.begin() + max_gpu_per_split, sorted.end(), std::greater<std::pair<size_t, int>>{});
-
-    std::vector<int> selected_gpus;
-    for (int j = 0; j < max_gpu_per_split; ++j) {
-        selected_gpus.push_back(sorted[j].second);
-    }
-
-    std::vector<std::pair<size_t, int>> vram_sorted(split.size());
-    for (int i = 0; i < int(split.size()); ++i) {
-        vram_sorted[i] = {vram_free[i], i};
-    }
-    std::sort(vram_sorted.begin(), vram_sorted.end(), std::greater<std::pair<size_t, int>>{});
-    std::vector<int> gpu_selection_count(split.size(), 0);
-    for (int idx : selected_gpus) {
-        gpu_selection_count[idx]++;
-    }
-    for (int i = 0; i < int(vram_sorted.size());) {
-        int j = i;
-        while (j < int(vram_sorted.size()) && vram_sorted[j].first == vram_sorted[i].first) {
-            j++;
-        }
-        if (j - i > 1) {
-            int group_size = j - i;
-            std::vector<int> group_indices;
-            for (int k = i; k < j; k++) {
-                group_indices.push_back(vram_sorted[k].second);
-            }
-            int min_count = group_size;
-            int max_count = 0;
-            for (int idx : group_indices) {
-                min_count = std::min(min_count, gpu_selection_count[idx]);
-                max_count = std::max(max_count, gpu_selection_count[idx]);
-            }
-            if (max_count - min_count > 1) {
-                std::sort(group_indices.begin(), group_indices.end(), [&](int a, int b) {
-                    return gpu_selection_count[a] < gpu_selection_count[b];
-                });
-                selected_gpus.clear();
-                for (int k = 0; k < max_gpu_per_split; k++) {
-                    selected_gpus.push_back(group_indices[k % group_size]);
-                }
-            }
-        }
-        i = j;
-    }
-
+    std::partial_sort(sorted.begin(), sorted.begin() + max_gpu_per_split, sorted.end(), std::greater<std::pair<float,int>>{});
     for (auto & p : split) p = 0;
-    for (int idx : selected_gpus) {
-        split[idx] = 1;
-    }
+    for (int j = 0; j < max_gpu_per_split; ++j) split[sorted[j].second] = 1;
     float sum = 0;
     for (auto & p : split) {
         sum += p/max_gpu_per_split;
@@ -4128,7 +4083,7 @@ bool create_tensors_helper::create_tensors() {
             }
             if (model.max_gpu_per_split > 0 && model.max_gpu_per_split < int(model.splits.size()) && il % adjust_step == 0) {
                 cur_splits = model.splits;
-                adjust_split(cur_splits, mem_used, vram_free, model.max_gpu_per_split);
+                adjust_split(cur_splits, mem_used, model.max_gpu_per_split);
                 LLAMA_LOG_INFO("Adjusted split at layer %2d:", il);
                 float last_split = 0;
                 for (auto & p : cur_splits) {
