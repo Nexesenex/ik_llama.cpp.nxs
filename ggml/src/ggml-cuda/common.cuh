@@ -395,6 +395,7 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
 
 // TODO: move to ggml-common.h
 static constexpr __device__ int8_t kvalues_iq4nl[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
+static constexpr __device__ uint8_t kvalues_iq5nl[32] = {2, 14, 25, 36, 45, 54, 63, 71, 78, 85, 92, 98, 104, 110, 116, 122, 127, 133, 139, 145, 151, 157, 164, 171, 179, 187, 196, 205, 215, 225, 237, 249};
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
 
@@ -570,6 +571,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ4_NL> {
     static constexpr int qk = QK4_NL;
     static constexpr int qr = QR4_NL;
     static constexpr int qi = QI4_NL;
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ5_NL> {
+    static constexpr int qk = QK5_NL;
+    static constexpr int qr = QR5_NL;
+    static constexpr int qi = QI5_NL;
 };
 
 template<>
