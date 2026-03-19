@@ -3229,14 +3229,14 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     {"progress", (float)slot.n_prompt_tokens_processed / slot.n_prompt_tokens},
                     });
 
-                LOG_INFO("PP", {
+                // LOG_INFO("PP", {
                     // {"id_slot",  slot.id},
-                    {"n_past",   slot.n_past},
+                    // {"n_past",   slot.n_past},
                     // {"n_ctx",    n_ctx},
                     // {"n_tokens", batch.n_tokens},
-                    {"total", slot.n_prompt_tokens},
-                    {"%_past", (float) slot.n_past / slot.n_prompt_tokens * 100},
-                });
+                    // {"total", slot.n_prompt_tokens},
+                    // {"%_past", (float) slot.n_past / slot.n_prompt_tokens * 100},
+                // });
 
                 const int64_t t_current = ggml_time_us();
                 const int32_t n_new_tokens = slot.n_prompt_tokens - slot.n_past_start;
