@@ -241,3 +241,19 @@ if (LLAMA_BUILD_EXAMPLES)
     add_subdirectory(examples)
     add_subdirectory(pocs)
 endif()
+
+# Copy libomp.dll for LLVM Clang builds with OpenMP
+# Standalone LLVM: C:/Program Files/LLVM/bin/libomp.dll
+# MSVS integrated LLVM: P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/libomp.dll
+if (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    set(LIBOMP_DLL "")
+    if (EXISTS "C:/Program Files/LLVM/bin/libomp.dll")
+        set(LIBOMP_DLL "C:/Program Files/LLVM/bin/libomp.dll")
+    elseif (EXISTS "P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/libomp.dll")
+        set(LIBOMP_DLL "P:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/libomp.dll")
+    endif()
+    
+    if (NOT LIBOMP_DLL STREQUAL "")
+        message(STATUS "Copying libomp.dll for LLVM Clang OpenMP support: ${LIBOMP_DLL}")
+    endif()
+endif()
