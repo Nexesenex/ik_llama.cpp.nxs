@@ -3892,6 +3892,35 @@ void dequantize_row_iq4_xs(const block_iq4_xs * restrict x, float * restrict y, 
     }
 }
 
+// IQ5_NL: 5-bit non-linear quantization
+// kvalues_iq5nl is a non-linear lookup table for 32 values (5-bit)
+static const uint8_t kvalues_iq5nl[32] = {
+    2, 14, 25, 36, 45, 54, 63, 71, 78, 85, 92, 98, 104, 110, 116, 122, 127,
+    133, 139, 145, 151, 157, 164, 171, 179, 187, 196, 205, 215, 225, 237, 249
+};
+
+void dequantize_row_iq5_nl(const block_iq5_nl * restrict x, float * restrict y, int64_t k) {
+    assert(k % QK5_NL == 0);
+    const int64_t nb = k / QK5_NL;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+
+        uint32_t qh;
+        memcpy(&qh, x[i].qh, sizeof(qh));
+
+        for (int j = 0; j < QK5_NL/2; ++j) {
+            const uint8_t qh_bit0 = (qh >> (j +  0)) & 1u;
+            const uint8_t qh_bit1 = (qh >> (j + 16)) & 1u;
+            const int x0 = (x[i].qs[j] & 0x0F) | (qh_bit0 << 4);
+            const int x1 = (x[i].qs[j] >> 4)   | (qh_bit1 << 4);
+            y[j +      0] = d * kvalues_iq5nl[x0];
+            y[j + QK5_NL/2] = d * kvalues_iq5nl[x1];
+        }
+        y += QK5_NL;
+    }
+}
+
 //===================================== Q8_K ==============================================
 
 void quantize_row_q8_K_ref(const float * restrict x, block_q8_K * restrict y, int64_t k) {
@@ -12492,6 +12521,43 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * restrict s, size_t bs, const void *
 #endif
 }
 
+// ================================ IQ5_NL quantization =============================================
+
+void ggml_vec_dot_iq5_nl_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
+    const int nb = n / QK5_NL;
+    int ib = 0;
+    float sumf = 0;
+
+    assert(n % QK5_NL == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_iq5_nl * restrict x = vx;
+    const block_q8_0   * restrict y = vy;
+
+    for (; ib < nb; ++ib) {
+        const float d = GGML_FP16_TO_FP32(x[ib].d) * GGML_FP16_TO_FP32(y[ib].d);
+        uint32_t qh;
+        memcpy(&qh, x[ib].qh, sizeof(qh));
+        const uint8_t * restrict qs = x[ib].qs;
+        const int8_t  * restrict q8 = y[ib].qs;
+        int sumi = 0;
+        for (int j = 0; j < QK5_NL/2; ++j) {
+            const uint8_t qh_bit0 = (qh >> (j +  0)) & 1u;
+            const uint8_t qh_bit1 = (qh >> (j + 16)) & 1u;
+            const int x0 = (qs[j] & 0x0F) | (qh_bit0 << 4);
+            const int x1 = (qs[j] >> 4)   | (qh_bit1 << 4);
+            sumi += q8[j +      0] * kvalues_iq5nl[x0];
+            sumi += q8[j + QK5_NL/2] * kvalues_iq5nl[x1];
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
 // ================================ IQ2 quantization =============================================
 
 typedef struct {
@@ -14920,6 +14986,270 @@ void quantize_row_iq4_nl(const float * restrict x, void * restrict vy, int64_t k
 void quantize_row_iq4_nl_ref(const float * restrict x, block_iq4_nl * restrict y, int64_t k) {
     assert(k % QK4_NL == 0);
     quantize_row_iq4_nl(x, y, k);
+}
+
+// IQ5_NL quantization: uses non-linear 32-value lookup table
+static int best_index_iq5nl(const int8_t * values, float x) {
+    int ix = (int)(x + 0.5f);
+    if (ix < 0) return 0;
+    if (ix >= 31) return 31;
+    return ix;
+}
+
+size_t quantize_iq5_nl(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_ASSERT(n_per_row%QK5_NL == 0);
+    int64_t nblock = n_per_row/QK5_NL;
+    char * qrow = (char *)dst;
+    uint8_t L[QK5_NL];
+    float weight[QK5_NL];
+    for (int64_t row = 0; row < nrow; ++row) {
+        block_iq5_nl * iq5 = (block_iq5_nl *)qrow;
+        for (int ibl = 0; ibl < nblock; ++ibl) {
+            const float * xb = src + QK5_NL*ibl;
+            float amax = 0.0f;
+            float max = 0.0f;
+            for (int j = 0; j < QK5_NL; ++j) {
+                float ax = fabsf(xb[j]);
+                if (amax < ax) {
+                    amax = ax;
+                    max = xb[j];
+                }
+            }
+            if (amax < GROUP_MAX_EPS) {
+                iq5[ibl].d = GGML_FP32_TO_FP16(0.0f);
+                memset(iq5[ibl].qs, 0, QK5_NL/2);
+                memset(iq5[ibl].qh, 0, 4);
+                continue;
+            }
+            float d = max/kvalues_iq5nl[0];
+            float id = 1.0f/d;
+            float sigma2 = 0;
+            for (int j = 0; j < QK5_NL; ++j) sigma2 += xb[j]*xb[j];
+            sigma2 *= 2.0f/QK5_NL;
+            float sumqx = 0, sumq2 = 0;
+            for (int j = 0; j < QK5_NL; ++j) {
+                float w = quant_weights ? quant_weights[QK5_NL*ibl + j] * sqrtf(sigma2 + xb[j]*xb[j]) : xb[j]*xb[j];
+                int l = best_index_iq5nl(kvalues_iq5nl, id*xb[j]);
+                L[j] = l;
+                float q = kvalues_iq5nl[l];
+                sumqx += w*q*xb[j];
+                sumq2 += w*q*q;
+            }
+            d = sumqx/sumq2;
+            float best = d*sumqx;
+            float best_sumqx = sumqx, best_sumq2 = sumq2;
+            for (int itry = -7; itry <= 7; ++itry) {
+                id = (itry + kvalues_iq5nl[0])/max;
+                sumqx = sumq2 = 0;
+                for (int j = 0; j < QK5_NL; ++j) {
+                    int l = best_index_iq5nl(kvalues_iq5nl, id*xb[j]);
+                    float q = kvalues_iq5nl[l];
+                    float w = quant_weights ? quant_weights[QK5_NL*ibl + j] * sqrtf(sigma2 + xb[j]*xb[j]) : xb[j]*xb[j];
+                    sumqx += w*q*xb[j];
+                    sumq2 += w*q*q;
+                }
+                if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+                    d = sumqx/sumq2; best = d * sumqx;
+                    best_sumqx = sumqx; best_sumq2 = sumq2;
+                    for (int j = 0; j < QK5_NL; ++j) {
+                        L[j] = best_index_iq5nl(kvalues_iq5nl, id*xb[j]);
+                    }
+                }
+                id = (itry + kvalues_iq5nl[31])/max;
+                sumqx = sumq2 = 0;
+                for (int j = 0; j < QK5_NL; ++j) {
+                    int l = best_index_iq5nl(kvalues_iq5nl, id*xb[j]);
+                    float q = kvalues_iq5nl[l];
+                    float w = quant_weights ? quant_weights[QK5_NL*ibl + j] * sqrtf(sigma2 + xb[j]*xb[j]) : xb[j]*xb[j];
+                    sumqx += w*q*xb[j];
+                    sumq2 += w*q*q;
+                }
+                if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+                    d = sumqx/sumq2; best = d * sumqx;
+                    best_sumqx = sumqx; best_sumq2 = sumq2;
+                    for (int j = 0; j < QK5_NL; ++j) {
+                        L[j] = best_index_iq5nl(kvalues_iq5nl, id*xb[j]);
+                    }
+                }
+            }
+            sumqx = best_sumqx; sumq2 = best_sumq2;
+            for (int iter = 0; iter < 32*QK5_NL; ++iter) {
+                float min_step = INFINITY;
+                int best_j = -1; int dir = 0;
+                for (int j = 0; j < QK5_NL; ++j) {
+                    float w = quant_weights ? quant_weights[QK5_NL*ibl + j] * sqrtf(sigma2 + xb[j]*xb[j]) : xb[j]*xb[j];
+                    float g = d * w * (xb[j] - d*kvalues_iq5nl[L[j]]);
+                    if (g > 0 && L[j] < 31) {
+                        float step = (kvalues_iq5nl[L[j]+1] - kvalues_iq5nl[L[j]])/g;
+                        if (step < min_step) {
+                            min_step = step; best_j = j; dir = 1;
+                        }
+                    }
+                    else if (g < 0 && L[j] > 0) {
+                        float step = (kvalues_iq5nl[L[j]-1] - kvalues_iq5nl[L[j]])/g;
+                        if (step < min_step) {
+                            min_step = step; best_j = j; dir = -1;
+                        }
+                    }
+                }
+                if (best_j >= 0) {
+                    L[best_j] += dir;
+                    sumqx += quant_weights ? quant_weights[QK5_NL*ibl + best_j] * sqrtf(sigma2 + xb[best_j]*xb[best_j]) * (kvalues_iq5nl[L[best_j]] - kvalues_iq5nl[L[best_j]-dir]) * xb[best_j] : xb[best_j]*xb[best_j] * (kvalues_iq5nl[L[best_j]] - kvalues_iq5nl[L[best_j]-dir]) * xb[best_j];
+                    sumq2 += quant_weights ? quant_weights[QK5_NL*ibl + best_j] * sqrtf(sigma2 + xb[best_j]*xb[best_j]) * (kvalues_iq5nl[L[best_j]]*kvalues_iq5nl[L[best_j]] - kvalues_iq5nl[L[best_j]-dir]*kvalues_iq5nl[L[best_j]-dir]) : xb[best_j]*xb[best_j] * (kvalues_iq5nl[L[best_j]]*kvalues_iq5nl[L[best_j]] - kvalues_iq5nl[L[best_j]-dir]*kvalues_iq5nl[L[best_j]-dir]);
+                    if (sumq2 > 0) {
+                        d = sumqx/sumq2;
+                        if (d*sumqx > best) {
+                            best = d*sumqx; best_sumqx = sumqx; best_sumq2 = sumq2;
+                        } else {
+                            L[best_j] -= dir;
+                        }
+                    } else {
+                        L[best_j] -= dir;
+                    }
+                } else {
+                    break;
+                }
+            }
+            iq5[ibl].d = GGML_FP32_TO_FP16(d);
+            uint32_t qh = 0;
+            for (int j = 0; j < QK5_NL/2; ++j) {
+                int x0 = L[j];
+                int x1 = L[j + QK5_NL/2];
+                iq5[ibl].qs[j] = (x0 & 0x0F) | ((x1 & 0x0F) << 4);
+                qh |= ((x0 & 0x10u) >> 4) << (j + 0);
+                qh |= ((x1 & 0x10u) >> 4) << (j + QK5_NL/2);
+            }
+            memcpy(iq5[ibl].qh, &qh, sizeof(qh));
+        }
+        src += n_per_row;
+        qrow += nblock*sizeof(block_iq5_nl);
+    }
+    return nrow * nblock * sizeof(block_iq5_nl);
+}
+
+void quantize_row_iq5_nl(const float * restrict x, void * restrict vy, int64_t k) {
+    GGML_ASSERT(k%QK5_NL == 0);
+    int64_t nblock = k/QK5_NL;
+    uint8_t L[QK5_NL];
+    float weight[QK5_NL];
+    block_iq5_nl * iq5 = (block_iq5_nl *)vy;
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        const float * xb = x + QK5_NL*ibl;
+        float amax = 0.0f;
+        float max = 0.0f;
+        for (int j = 0; j < QK5_NL; ++j) {
+            float ax = fabsf(xb[j]);
+            if (amax < ax) {
+                amax = ax;
+                max = xb[j];
+            }
+        }
+        if (amax < GROUP_MAX_EPS) {
+            iq5[ibl].d = GGML_FP32_TO_FP16(0.0f);
+            memset(iq5[ibl].qs, 0, QK5_NL/2);
+            memset(iq5[ibl].qh, 0, 4);
+            continue;
+        }
+        float d = max/kvalues_iq5nl[0];
+        float id = 1.0f/d;
+        float sigma2 = 0;
+        for (int j = 0; j < QK5_NL; ++j) sigma2 += xb[j]*xb[j];
+        sigma2 *= 2.0f/QK5_NL;
+        float sumqx = 0, sumq2 = 0;
+        for (int j = 0; j < QK5_NL; ++j) {
+            int l = best_index_iq5nl(kvalues_iq5nl, id*xb[j]);
+            L[j] = l;
+            float q = kvalues_iq5nl[l];
+            float w = xb[j]*xb[j];
+            sumqx += w*q*xb[j];
+            sumq2 += w*q*q;
+        }
+        d = sumqx/sumq2;
+        float best = d*sumqx;
+        float best_sumqx = sumqx, best_sumq2 = sumq2;
+        for (int itry = -7; itry <= 7; ++itry) {
+            id = (itry + kvalues_iq5nl[0])/max;
+            sumqx = sumq2 = 0;
+            for (int j = 0; j < QK5_NL; ++j) {
+                int l = best_index_iq5nl(kvalues_iq5nl, id*xb[j]);
+                float q = kvalues_iq5nl[l];
+                float w = xb[j]*xb[j];
+                sumqx += w*q*xb[j];
+                sumq2 += w*q*q;
+            }
+            if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+                d = sumqx/sumq2; best = d * sumqx;
+                best_sumqx = sumqx; best_sumq2 = sumq2;
+                for (int j = 0; j < QK5_NL; ++j) {
+                    L[j] = best_index_iq5nl(kvalues_iq5nl, id*xb[j]);
+                }
+            }
+            id = (itry + kvalues_iq5nl[31])/max;
+            sumqx = sumq2 = 0;
+            for (int j = 0; j < QK5_NL; ++j) {
+                int l = best_index_iq5nl(kvalues_iq5nl, id*xb[j]);
+                float q = kvalues_iq5nl[l];
+                float w = xb[j]*xb[j];
+                sumqx += w*q*xb[j];
+                sumq2 += w*q*q;
+            }
+            if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+                d = sumqx/sumq2; best = d * sumqx;
+                best_sumqx = sumqx; best_sumq2 = sumq2;
+                for (int j = 0; j < QK5_NL; ++j) {
+                    L[j] = best_index_iq5nl(kvalues_iq5nl, id*xb[j]);
+                }
+            }
+        }
+        sumqx = best_sumqx; sumq2 = best_sumq2;
+        for (int iter = 0; iter < 32*QK5_NL; ++iter) {
+            float min_step = INFINITY;
+            int best_j = -1; int dir = 0;
+            for (int j = 0; j < QK5_NL; ++j) {
+                float w = xb[j]*xb[j];
+                float g = d * w * (xb[j] - d*kvalues_iq5nl[L[j]]);
+                if (g > 0 && L[j] < 31) {
+                    float step = (kvalues_iq5nl[L[j]+1] - kvalues_iq5nl[L[j]])/g;
+                    if (step < min_step) {
+                        min_step = step; best_j = j; dir = 1;
+                    }
+                }
+                else if (g < 0 && L[j] > 0) {
+                    float step = (kvalues_iq5nl[L[j]-1] - kvalues_iq5nl[L[j]])/g;
+                    if (step < min_step) {
+                        min_step = step; best_j = j; dir = -1;
+                    }
+                }
+            }
+            if (best_j >= 0) {
+                L[best_j] += dir;
+                sumqx += xb[best_j]*xb[best_j] * (kvalues_iq5nl[L[best_j]] - kvalues_iq5nl[L[best_j]-dir]) * xb[best_j];
+                sumq2 += xb[best_j]*xb[best_j] * (kvalues_iq5nl[L[best_j]]*kvalues_iq5nl[L[best_j]] - kvalues_iq5nl[L[best_j]-dir]*kvalues_iq5nl[L[best_j]-dir]);
+                if (sumq2 > 0) {
+                    d = sumqx/sumq2;
+                    if (d*sumqx > best) {
+                        best = d*sumqx; best_sumqx = sumqx; best_sumq2 = sumq2;
+                    } else {
+                        L[best_j] -= dir;
+                    }
+                } else {
+                    L[best_j] -= dir;
+                }
+            } else {
+                break;
+            }
+        }
+        iq5[ibl].d = GGML_FP32_TO_FP16(d);
+        uint32_t qh = 0;
+        for (int j = 0; j < QK5_NL/2; ++j) {
+            int x0 = L[j];
+            int x1 = L[j + QK5_NL/2];
+            iq5[ibl].qs[j] = (x0 & 0x0F) | ((x1 & 0x0F) << 4);
+            qh |= ((x0 & 0x10u) >> 4) << (j + 0);
+            qh |= ((x1 & 0x10u) >> 4) << (j + QK5_NL/2);
+        }
+        memcpy(iq5[ibl].qh, &qh, sizeof(qh));
+    }
 }
 
 size_t quantize_iq4_xs(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
