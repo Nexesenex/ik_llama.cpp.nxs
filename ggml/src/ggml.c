@@ -4578,14 +4578,23 @@ static inline void ggml_barrier_impl(struct ggml_compute_state_shared * shared) 
 }
 
 #ifdef GGML_USE_OPENMP
+// IK_BATCH_THRESHOLD: Tunable threshold for hybrid barrier strategy
+// n_batch <= threshold: use OpenMP barrier (better for low-medium thread counts, token gen)
+// n_batch > threshold: use custom barrier (better for high thread counts, large PP batches)
+// Default: 32
+#define GGML_BATCH_THREAD_THRESHOLD 32
+
 static void ggml_barrier(struct ggml_compute_state_shared * shared) {
     if (shared->n_threads == 1) {
         return;
     }
-    if (shared && shared->n_batch > 32) {
+    // IK_BATCH_THRESHOLD: For 18 threads (-t 18), use custom barrier when n_batch > 20
+    // This balances OpenMP efficiency for token gen with custom barrier for large PP
+    if (shared && shared->n_batch > GGML_BATCH_THREAD_THRESHOLD) {
         ggml_barrier_impl(shared);
         return;
     }
+    // OpenMP barrier: efficient for token gen (n_batch=1) and small PP batches
     #pragma omp barrier
 }
 #else
