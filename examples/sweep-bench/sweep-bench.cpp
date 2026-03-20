@@ -36,6 +36,8 @@ static void llama_selective_log_callback(ggml_log_level level, const char * text
         "------------------- Layer sizes",
         "Layer ",
         "llm_load_tensors:",
+        "llama_repack_",
+        "llama_concatenate_",
         "==========================",
     };
     for (const char * pat : skip_patterns) {
