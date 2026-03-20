@@ -654,28 +654,6 @@ float16_t dequantFuncIQ4_NL(const in decodeBufIQ4_NL bl, const in uint blockCoor
 }
 #endif
 
-#if defined(DATA_A_IQ5_NL)
-layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufIQ5_NL {
-   block_iq5_nl block;
-};
-
-float16_t dequantFuncIQ5_NL(const in decodeBufIQ5_NL bl, const in uint blockCoords[2], const in uint coordInBlock[2])
-{
-    const float16_t d = bl.block.d;
-    const uint idx = coordInBlock[1];
-    const uint iqs = idx & 0xF;
-    const uint qh_idx = (idx & 0x1F) >> 2;
-    const uint qh_shift = 2 * (idx & 3);
-    uint32_t qs = bl.block.qs[iqs];
-    uint32_t qh = 0;
-    memcpy(qh, bl.block.qh, 4);
-    uint32_t qh_bits = (qh >> (qh_idx * 2)) & 3;
-    uint32_t q = (idx & 0x10) ? ((qs >> 4) | (qh_bits << 4)) : ((qs & 0xF) | (qh_bits << 4));
-    float16_t ret = float16_t(kvalues_iq5nl_const[q]) * d;
-    return ret;
-}
-#endif
-
 #if defined(DATA_A_Q4_0)
 #define dequantFuncA dequantFuncQ4_0
 #elif defined(DATA_A_Q4_1)
@@ -718,6 +696,4 @@ float16_t dequantFuncIQ5_NL(const in decodeBufIQ5_NL bl, const in uint blockCoor
 #define dequantFuncA dequantFuncIQ4_XS
 #elif defined(DATA_A_IQ4_NL)
 #define dequantFuncA dequantFuncIQ4_NL
-#elif defined(DATA_A_IQ5_NL)
-#define dequantFuncA dequantFuncIQ5_NL
 #endif
