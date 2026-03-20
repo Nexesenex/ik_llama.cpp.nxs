@@ -294,6 +294,16 @@ static inline __m256i load_iq4k_values_256() {
     return MM256_SET_M128I(val128, val128);
 }
 
+static inline __m128i load_iq5nl_values_128() {
+    static const uint8_t kvalues_iq5nl[32] = {2, 14, 25, 36, 45, 54, 63, 71, 78, 85, 92, 98, 104, 110, 116, 122, 127, 133, 139, 145, 151, 157, 164, 171, 179, 187, 196, 205, 215, 225, 237, 249};
+    return _mm_loadu_si128((const __m128i *)kvalues_iq5nl);
+}
+
+static inline __m256i load_iq5nl_values_256() {
+    auto val128 = load_iq5nl_values_128();
+    return MM256_SET_M128I(val128, val128);
+}
+
 template <int nrc, typename block_q8 = block_q8_K> struct Q8 {
 
     constexpr static int nrc_y = nrc;

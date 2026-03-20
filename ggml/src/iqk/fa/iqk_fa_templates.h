@@ -657,6 +657,43 @@ struct HelperIQ4nl final : public BaseHelper {
 #endif
 };
 
+struct HelperIQ5nl final : public BaseHelper {
+    using Base = BaseHelper;
+    constexpr static ggml_type type = GGML_TYPE_IQ5_NL;
+    constexpr static int block_size_q = QK5_NL;
+#ifdef __aarch64__
+    using block_q8 = block_q8_0;
+#else
+    using block_q8 = block_q8_2;
+#endif
+    HelperIQ5nl(const char * data, int stride) : Base(data, stride) {}
+
+    inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
+        int j = F16::block_size*i;
+        auto dl = (const block_iq5_nl *)Base::lblock(l1) + j/QK5_NL;
+        const float d = GGML_FP16_TO_FP32(dl->d);
+        uint32_t qh = 0;
+        memcpy(&qh, dl->qh, 4);
+        int jb = j%QK5_NL;
+        uint8_t qs_val = dl->qs[jb%16];
+        uint32_t qh_idx = (jb%16)/4;
+        uint32_t qh_bits = (qh >> (qh_idx*2)) & 3;
+        uint32_t q0 = ((qs_val & 0xF) | (qh_bits << 4)) % 32;
+        float vi0 = float(iq5nl_values[q0]);
+        qs_val = dl->qs[(jb+16)%16];
+        qh_bits = (qh >> (((jb+16)%16)/4*2)) & 3;
+        uint32_t q1 = ((qs_val >> 4) | (qh_bits << 4)) % 32;
+        float vi1 = float(iq5nl_values[32 + q1]);
+#ifdef __aarch64__
+        v1 = vmulq_f16(vdupq_n_f16(d * vi0), vdupq_n_f16(1));
+        v2 = vmulq_f16(vdupq_n_f16(d * vi1), vdupq_n_f16(1));
+#else
+        v1 = _mm256_mul_ps(_mm256_set1_ps(d * vi0), _mm256_set1_ps(1.0f));
+        v2 = _mm256_mul_ps(_mm256_set1_ps(d * vi1), _mm256_set1_ps(1.0f));
+#endif
+    }
+};
+
 struct HelperQ60 final : public BaseHelper {
     constexpr static ggml_type type = GGML_TYPE_Q6_0;
 #ifdef __aarch64__
@@ -1540,6 +1577,7 @@ struct FlashAttn {
         if constexpr (std::is_same_v<KHelper, HelperQ40> ||
                       std::is_same_v<KHelper, HelperQ41> ||
                       std::is_same_v<KHelper, HelperIQ4nl> ||
+                      std::is_same_v<KHelper, HelperIQ5nl> ||
                       std::is_same_v<KHelper, HelperQ60> ||
                       std::is_same_v<KHelper, HelperQ80R8<Dk>> ||
                       std::is_same_v<KHelper, HelperQ80> ||
@@ -2175,6 +2213,10 @@ inline bool iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
             HelperIQ4nl vh(v, stride_v);
             iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
+        case GGML_TYPE_IQ5_NL: {
+            HelperIQ5nl vh(v, stride_v);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
+        } break;
 #endif
         default: return false;
     }
@@ -2220,6 +2262,10 @@ inline bool iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
         } break;
         case GGML_TYPE_IQ4_NL: {
             HelperIQ4nl kh(k, stride_k);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
+        } break;
+        case GGML_TYPE_IQ5_NL: {
+            HelperIQ5nl kh(k, stride_k);
             result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
 #endif
