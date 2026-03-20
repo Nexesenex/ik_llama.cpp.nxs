@@ -1186,6 +1186,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     size_t total_size_org = 0;
     size_t total_size_new = 0;
+    size_t total_size_src = 0;
+    size_t total_size_skipped_src = 0;
+    size_t total_size_skipped_dest = 0;
+    size_t total_size_orig_dest = 0;
 
     std::vector<std::thread> workers;
     workers.reserve(nthread);
@@ -1229,6 +1233,79 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     int cur_split = -1;
     std::ofstream fout;
     std::vector<bool> split_skipped(n_split, false);
+    std::vector<std::string> split_existing_type(n_split, "unknown");
+    std::vector<size_t> split_existing_size(n_split, 0);
+    std::vector<std::vector<uint8_t>> split_existing_data(n_split);
+    std::string current_fname;
+    bool current_file_exists = false;
+    
+    // Phase 1: Pre-sweep all destination splits to get their tensor types, sizes, and data
+    if (params->force_requant && !params->only_repack) {
+        LLAMA_LOG_INFO("\n=== Phase 1: Pre-sweep destination splits ===\n");
+        for (int i = 0; i < n_split; ++i) {
+            std::string fname = fname_out;
+            if (params->keep_split) {
+                char split_path[PATH_MAX] = {0};
+                llama_split_path(split_path, sizeof(split_path), fname_out.c_str(), i, n_split);
+                fname = std::string(split_path);
+            }
+            
+            struct gguf_init_params gguf_params;
+            gguf_params.no_alloc = true;
+            gguf_params.ctx = nullptr;
+            struct gguf_context * ctx_dest = gguf_init_from_file(fname.c_str(), gguf_params);
+            
+            if (ctx_dest) {
+                int n_tensors = gguf_get_n_tensors(ctx_dest);
+                if (n_tensors == 1) {
+                    const char * tensor_name = gguf_get_tensor_name(ctx_dest, 0);
+                    enum ggml_type tensor_type = gguf_get_tensor_type(ctx_dest, 0);
+                    split_existing_type[i] = ggml_type_name(tensor_type);
+                    
+                    // Get tensor size from file size minus metadata
+                    split_existing_size[i] = std::filesystem::file_size(fname) - gguf_get_meta_size(ctx_dest);
+                    
+                    // Read tensor data for later copying
+                    if (split_existing_size[i] > 0) {
+                        size_t data_offset = gguf_get_data_offset(ctx_dest) + gguf_get_tensor_offset(ctx_dest, 0);
+                        std::ifstream src_file(fname, std::ios::binary);
+                        src_file.seekg(data_offset);
+                        split_existing_data[i].resize(split_existing_size[i]);
+                        src_file.read((char*)split_existing_data[i].data(), split_existing_size[i]);
+                    }
+                    
+                    LLAMA_LOG_INFO("Parsed split %d: tensor '%s' is in '%s' (%zu bytes)\n", 
+                        i, tensor_name, split_existing_type[i].c_str(), split_existing_size[i]);
+                } else {
+                    split_existing_type[i] = "multi";
+                    split_existing_size[i] = 0;
+                    LLAMA_LOG_INFO("split %d: has %d tensors (multi-tensor split)\n", i, n_tensors);
+                }
+                total_size_orig_dest += split_existing_size[i];
+                gguf_free(ctx_dest);
+            } else {
+                std::ifstream test_file(fname);
+                if (test_file) {
+                    LLAMA_LOG_WARN("split %d: corrupted\n", i);
+                    std::error_code ec;
+                    std::filesystem::remove(fname, ec);
+                    split_existing_type[i] = ec ? "corrupted" : "missing";
+                    split_existing_size[i] = 0;
+                    if (ec) {
+                        LLAMA_LOG_WARN("failed to delete corrupted split %d: %s\n", i, ec.message().c_str());
+                    } else {
+                        LLAMA_LOG_INFO("deleted corrupted split %d\n", i);
+                    }
+                } else {
+                    split_existing_type[i] = "missing";
+                    split_existing_size[i] = 0;
+                    LLAMA_LOG_INFO("split %d: missing (will be quantized)\n", i);
+                }
+            }
+        }
+        LLAMA_LOG_INFO("=== Phase 1 complete ===\n\n");
+    }
+    
     auto close_ofstream = [&]() {
         // Write metadata and close file handler
         if (fout.is_open()) {
@@ -1251,16 +1328,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             llama_split_path(split_path, sizeof(split_path), fname_out.c_str(), cur_split, n_split);
             fname = std::string(split_path);
         }
-
-        if (params->partial_requant) {
-            std::ifstream test_file(fname);
-            if (test_file) {
-                LLAMA_LOG_INFO("%s: split file %s exists, skipping\n", __func__, fname.c_str());
-                split_skipped[cur_split] = true;
-                fout = std::ofstream();
-                return;
-            }
-        }
+        current_fname = fname;
+        current_file_exists = (split_existing_type[cur_split] != "missing" && split_existing_type[cur_split] != "corrupted");
 
         ensure_output_directory(fname);
         fout = std::ofstream(fname, std::ios::binary);
@@ -1280,14 +1349,16 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             new_ofstream(weight->idx);
         }
 
-        if (params->partial_requant && split_skipped[cur_split]) {
-            const std::string name = ggml_get_name(tensor);
-            gguf_set_tensor_type(ctx_outs[cur_split], name.c_str(), tensor->type);
-            gguf_set_tensor_data(ctx_outs[cur_split], name.c_str(), tensor->data, ggml_nbytes(tensor));
-            continue;
-        }
-
         const std::string name = ggml_get_name(tensor);
+
+        if ((params->partial_requant || params->force_requant) && current_file_exists) {
+            if (split_existing_type[cur_split] == "missing" || split_existing_type[cur_split] == "corrupted") {
+                // File doesn't exist or was deleted - proceed with quantization
+            } else {
+                // File exists - need to check if we should skip
+                // This will be done after we know the expected type
+            }
+        }
 
         if (!ml.use_mmap) {
             if (read_data.size() < ggml_nbytes(tensor)) {
@@ -1340,6 +1411,13 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         enum ggml_type new_type;
         void * new_data = nullptr;
         size_t new_size = 0;
+
+        // Early skip check: if destination already has the expected type, skip quantization entirely
+        if ((params->partial_requant || params->force_requant) && current_file_exists) {
+            new_type = tensor->type; // Get expected type without quantization
+            // We need to determine what type this tensor SHOULD be
+            // For now, we'll determine it properly after checking quantize flags
+        }
 
         if (params->only_repack) {
             ggml_type repacked_type = (ggml_type)iqk_repacked_type(tensor);
@@ -1448,6 +1526,43 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             // If we've decided to quantize to the same type the tensor is already
             // in then there's nothing to do.
             quantize = tensor->type != new_type;
+        }
+
+        // Early skip check: if destination already has the expected type AND size, skip quantization but COPY data
+        if ((params->partial_requant || params->force_requant) && current_file_exists && 
+            split_existing_type[cur_split] != "corrupted" && split_existing_type[cur_split] != "multi") {
+            const char * expected_type_name = ggml_type_name(new_type);
+            size_t expected_size = tensor->ne[2] * tensor->ne[1] * ggml_row_size(new_type, tensor->ne[0]);
+            
+            // Compare type AND size
+            bool type_match = (split_existing_type[cur_split] == expected_type_name);
+            bool size_match = (split_existing_size[cur_split] == expected_size);
+            
+            if (type_match && size_match) {
+                LLAMA_LOG_INFO("split %d: dest has '%s' (%.2f MiB), skip\n", 
+                    cur_split, expected_type_name, split_existing_size[cur_split]/1024.0/1024.0);
+                split_skipped[cur_split] = true;
+                total_size_src += ggml_nbytes(tensor);
+                total_size_skipped_src += ggml_nbytes(tensor);
+                total_size_new += split_existing_size[cur_split];
+                total_size_skipped_dest += split_existing_size[cur_split];
+                // Add tensor to context with correct type and existing data
+                gguf_set_tensor_type(ctx_outs[cur_split], name.c_str(), new_type);
+                gguf_set_tensor_data(ctx_outs[cur_split], name.c_str(), split_existing_data[cur_split].data(), split_existing_size[cur_split]);
+                if (!params->dry_run) {
+                    fout.write((const char*)split_existing_data[cur_split].data(), split_existing_size[cur_split]);
+                }
+                continue;
+            } else {
+                if (!type_match) {
+                    LLAMA_LOG_INFO("split %d: type mismatch - dest='%s', expected='%s', requantize\n", 
+                        cur_split, split_existing_type[cur_split].c_str(), expected_type_name);
+                }
+                if (!size_match) {
+                    LLAMA_LOG_INFO("split %d: size mismatch - dest=%zu bytes, expected=%zu bytes, requantize\n", 
+                        cur_split, split_existing_size[cur_split], expected_size);
+                }
+            }
         }
 
         if (!quantize) {
@@ -1629,7 +1744,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", ggml_nbytes(tensor)/1024.0/1024.0, new_size/1024.0/1024.0);
         }
 
-QuantizationDone:;
+        QuantizationDone:;
         total_size_org += ggml_nbytes(tensor);
         total_size_new += new_size;
 
@@ -1648,8 +1763,13 @@ QuantizationDone:;
         gguf_free(c);
     }
 
-    LLAMA_LOG_INFO("%s: model size  = %8.2f MB\n", __func__, total_size_org/1024.0/1024.0);
-    LLAMA_LOG_INFO("%s: quant size  = %8.2f MB\n", __func__, total_size_new/1024.0/1024.0);
+    LLAMA_LOG_INFO("%s: source model size  = %8.2f MB\n", __func__, total_size_src/1024.0/1024.0);
+    LLAMA_LOG_INFO("%s: originally quantized destination model size  = %8.2f MB\n", __func__, total_size_orig_dest/1024.0/1024.0);
+    LLAMA_LOG_INFO("%s: requantized destination model size  = %8.2f MB\n", __func__, total_size_new/1024.0/1024.0);
+    LLAMA_LOG_INFO("%s: skipped source tensors size  = %8.2f MB\n", __func__, total_size_skipped_src/1024.0/1024.0);
+    LLAMA_LOG_INFO("%s: skipped destination tensors size  = %8.2f MB\n", __func__, total_size_skipped_dest/1024.0/1024.0);
+    LLAMA_LOG_INFO("%s: requantized source tensors size  = %8.2f MB\n", __func__, (total_size_src - total_size_skipped_src)/1024.0/1024.0);
+    LLAMA_LOG_INFO("%s: requantized destination tensors size  = %8.2f MB\n", __func__, (total_size_new - total_size_skipped_dest)/1024.0/1024.0);
 
     if (qs.n_fallback > 0) {
         LLAMA_LOG_WARN("%s: WARNING: %d of %d tensor(s) required fallback quantization\n",
