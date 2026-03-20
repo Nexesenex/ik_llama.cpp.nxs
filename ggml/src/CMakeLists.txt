@@ -427,6 +427,8 @@ if (GGML_CUDA)
             list(APPEND GGML_SOURCES_CUDA ${SRCS})
             file(GLOB   SRCS "ggml-cuda/template-instances/fattn-vec*q5_0-q4_0.cu")
             list(APPEND GGML_SOURCES_CUDA ${SRCS})
+            file(GLOB   SRCS "ggml-cuda/template-instances/fattn-vec*iq5_nl*.cu")
+            list(APPEND GGML_SOURCES_CUDA ${SRCS})
         endif()
 
         list(APPEND GGML_CDEF_PUBLIC GGML_USE_CUDA)
