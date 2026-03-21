@@ -2447,46 +2447,13 @@ static bool llm_load_tensors(
 
     // load tensor data
     if (!dry_run) {
-        int ctx_idx = 0;
         for (auto & it : ctx_bufs) {
             ggml_context * ctx = it.first;
             auto & bufs = it.second;
-            printf("DEBUG: llama.cpp calling load_all_data for context[%d] %p\n", ctx_idx++, (void*)ctx);
             if (!ml.load_all_data(ctx, bufs, use_mlock ? &model.mlock_mmaps : NULL, progress_callback, progress_callback_user_data)) {
                 return false;
             }
-            printf("DEBUG: llama.cpp load_all_data returned for context %p\n", (void*)ctx);
         }
-    }
-    printf("DEBUG: llama.cpp all load_all_data calls completed\n");
-
-    // For split_mode_tensor_parallel: release CPU memory after loading
-    // This releases CPU RAM since all tensor data has been copied to GPU
-    printf("DEBUG: checking split mode CPU release - use_mmap=%d, split_mode=%d (TENSOR_PARALLEL=%d)\n", 
-           ml.use_mmap, model.split_mode, LLAMA_SPLIT_MODE_TENSOR_PARALLEL);
-    
-    if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
-        if (ml.use_mmap) {
-            // With mmap: unmap tensor data regions from mmap after all loading is complete
-            printf("DEBUG: unmapping mmap tensor regions for split_mode_tensor_parallel\n");
-            for (uint32_t idx = 0; idx < ml.mappings.size(); idx++) {
-                const auto & mmap_used = ml.mmaps_used.at(idx);
-                auto & mapping = ml.mappings.at(idx);
-                // Unmap all tensor data regions (everything between first and second)
-                if (mmap_used.first < mmap_used.second) {
-                    printf("DEBUG: unmapping mmap region [%zu, %zu] for file %u\n", mmap_used.first, mmap_used.second, idx);
-                    mapping->unmap_fragment(mmap_used.first, mmap_used.second);
-                }
-            }
-        } else {
-            // Without mmap: CPU buffer freeing is handled in llama-model-loader.cpp
-            // This is because load_all_data is called from within the ctx_bufs loop,
-            // and llama-model-loader.cpp has direct access to the tensors to determine
-            // which buffers can be freed. Here we just log that it was handled.
-            printf("DEBUG: CPU buffer freeing for split_mode_tensor_parallel handled in load_all_data\n");
-        }
-    } else {
-        printf("DEBUG: skipping CPU release - not in split_mode_tensor_parallel\n");
     }
 
     if (model.arch == LLM_ARCH_DEEPSEEK2 || model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_MISTRAL4) {
