@@ -272,7 +272,7 @@ struct cmd_params {
     bool rcache = false;
     bool sas = false;
     int  max_gpu_per_split = 0;
-    int  split_adjust_step_frequency = 2;
+    float split_adjust_step_frequency = 0.5f;
     bool monolithic_output_tensor_accounted = false;
     bool print_overrides = false;
     output_formats output_format;
@@ -320,7 +320,7 @@ static const cmd_params cmd_params_defaults = {
     /* rcache               */ false,
     /* sas                  */ false,
     /* max_gpu_per_split              */ 0,
-    /* split_adjust_step_frequency    */ 2,
+    /* split_adjust_step_frequency    */ 0.5f,
     /* monolithic_output_tensor_accounted */ true,
     /* print_overrides      */ false,
     /* output_format        */ MARKDOWN,
@@ -376,7 +376,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -no-ooae, --no-offload-only-active-experts <0|1>   (default: %s)\n", cmd_params_defaults.no_ooae? "1" : "0");
     printf("  -sas, --scheduler-async <0|1>       (default: %s)\n", cmd_params_defaults.sas ? "1" : "0");
     printf("  --max-gpu-per-split <N>                       (default: %d)\n", cmd_params_defaults.max_gpu_per_split);
-    printf("  --split-adjust-step-frequency <N>              (default: %d)\n", cmd_params_defaults.split_adjust_step_frequency);
+    printf("  --split-adjust-step-frequency <F>              (default: %.1f, <1: legacy formula, >=1: direct)\n", cmd_params_defaults.split_adjust_step_frequency);
     printf("  -mota, --monolithic-output-tensor-accounted      (default: %s)\n", cmd_params_defaults.monolithic_output_tensor_accounted ? "enabled" : "disabled");
     printf("        --print-overrides <0|1>       (default: %s)\n", cmd_params_defaults.print_overrides ? "1" : "0");
     printf("\n");
@@ -830,7 +830,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 invalid_param = true;
                 break;
             }
-            params.split_adjust_step_frequency = std::stoi(argv[i]);
+            params.split_adjust_step_frequency = std::stof(argv[i]);
         } else if (arg == "-mota" || arg == "--monolithic-output-tensor-accounted") {
             params.monolithic_output_tensor_accounted = true;
         } else if (arg == "-rcache" || arg == "--rope-cache") {
@@ -980,7 +980,7 @@ struct cmd_params_instance {
     bool rcache = false;
     bool sas = false;
     int max_gpu_per_split = 0;
-    int split_adjust_step_frequency = 2;
+    float split_adjust_step_frequency = 0.5f;
     bool monolithic_output_tensor_accounted = false;
     const llama_model_tensor_buft_override* buft_overrides;
 
@@ -1310,7 +1310,7 @@ struct test {
     bool rcache = false;
     bool sas = false;
     int max_gpu_per_split = 0;
-    int split_adjust_step_frequency = 2;
+    float split_adjust_step_frequency = 0.5f;
     std::string override_tensor;
     int n_prompt;
     int n_gen;
