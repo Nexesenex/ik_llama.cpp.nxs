@@ -23,6 +23,7 @@
 #include <future>
 #include <regex>
 #include <algorithm>
+#include <cstring>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -1042,6 +1043,232 @@ bool llama_model_loader::load_all_data(
     }
 #endif
 
+    // ============================================================================
+    // MEMORY MANAGEMENT FOR split_mode_tensor_parallel
+    // ============================================================================
+    //
+    // PROBLEM BEING SOLVED:
+    // In split_mode_tensor_parallel, when tensors are offloaded to GPU, they are first
+    // loaded into CPU RAM and then copied to GPU VRAM. After the copy, the CPU RAM
+    // should be released. However, llama.cpp was not releasing this CPU RAM.
+    //
+    // MEMORY LAYOUT IN split_mode_tensor_parallel:
+    // - CPU buffer (~107 GB): Contains tensors explicitly routed to CPU via -ot command
+    //   (e.g., FFN expert weights for MoE models). User choice, NEVER free.
+    //
+    // - CUDA_Split buffer (~50 GB): Staging buffer in pinned CPU RAM used during
+    //   tensor distribution to multiple GPUs. After tensors are copied to GPU VRAM,
+    //   this buffer SHOULD be freed to release RAM. Currently DISABLED due to
+    //   crash - something accesses it after load_all_data completes.
+    //
+    // - CUDA_Host buffer (~400 MB): Pinned CPU memory for CUDA DMA transfers.
+    //   Must remain in RAM for CUDA operations. NEVER free.
+    //
+    // - CUDA0/CUDA1/CUDA2 buffers: GPU VRAM allocations. Managed by CUDA,
+    //   not RAM-related. Labeled as [OCCUPIED-VRAM] for tracking.
+    //
+    // IMPLEMENTATION:
+    // 1. Iterate through all tensors in the current ggml_context
+    // 2. Group tensors by their backend buffer
+    // 3. Classify each buffer type (CPU, CUDA_Split, CUDA_Host, CUDA0/1/2)
+    // 4. Apply memory management rules based on buffer type
+    //
+    // BUFFER CLASSIFICATION RULES:
+    // - CPU: NEVER free - user explicitly routed tensors to CPU via -ot
+    // - CUDA_Split: Free after copy to GPU (DISABLED - causes crash)
+    // - CUDA_Host: NEVER free - pinned memory for CUDA operations
+    // - CUDA0/1/2: Do not touch - GPU VRAM managed by CUDA
+    //
+    // DEBUG OUTPUT CATEGORIES:
+    // - [KEPT-RAM]: Buffers that remain in RAM
+    // - [FREED-RAM]: Buffers that were freed (currently CUDA_Split disabled)
+    // - [OCCUPIED-VRAM]: GPU VRAM buffers (for tracking only)
+    //
+    // KNOWN ISSUE:
+    // Freeing CUDA_Split buffer causes crash after load_all_data completes.
+    // The crash occurs during/after ggml_backend_buffer_free() call.
+    // Possible cause: something still references the buffer after tensor copies.
+    // TODO: Investigate what accesses CUDA_Split after buffer free.
+    //
+    // ============================================================================
+    
+    printf("DEBUG: load_all_data context=%p, counting tensors...\n", (void*)ctx);
+    int tensor_count = 0;
+    int split_tensor_count = 0;
+    for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
+        tensor_count++;
+        auto extra = (const ggml_split_tensor_t *)cur->extra;
+        if (extra && extra->n_device > 1) {
+            split_tensor_count++;
+        }
+    }
+    printf("DEBUG: context has %d tensors, %d are split tensors\n", tensor_count, split_tensor_count);
+    
+    std::map<ggml_backend_buffer_t, bool> buf_all_offloaded;
+    std::map<std::string, int> buf_type_counts;
+    std::map<std::string, int> buf_type_shown;
+    std::map<std::string, size_t> buf_type_total_size;
+    int buf_count = 0;
+    for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
+        if (!cur->buffer) {
+            continue;
+        }
+        ggml_backend_buffer_t buf = cur->buffer;
+        
+        // Check if we've already processed this buffer
+        if (buf_all_offloaded.find(buf) != buf_all_offloaded.end()) {
+            continue;
+        }
+        buf_count++;
+        
+        // Check if ALL tensors in this buffer are offloaded
+        // Rules:
+        // - CPU buffers: NEVER free (tensors need CPU RAM for inference)
+        // - CUDA_Split buffers: can free RAM after copy to GPU
+        // - CUDA0/1/2 buffers: GPU VRAM, managed by CUDA
+        const char * buft_name = ggml_backend_buft_name(ggml_backend_buffer_get_type(buf));
+        bool is_cpu_buffer = strcmp(buft_name, "CPU") == 0;
+        
+        // Only consider freeing if this is NOT a CPU buffer
+        bool all_offloaded = true;
+        if (!is_cpu_buffer) {
+            for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+                if (t->buffer != buf) continue;
+                auto extra = (const ggml_split_tensor_t *)t->extra;
+                // If any tensor is not a split tensor or has n_device <= 1, can't free
+                if (!extra || extra->n_device <= 1) {
+                    all_offloaded = false;
+                    break;
+                }
+            }
+        } else {
+            // CPU buffer - tensors need to stay in CPU RAM
+            all_offloaded = false;
+        }
+        buf_all_offloaded[buf] = all_offloaded;
+        
+        // Track counts per buffer type
+        const char * buft_type_name = ggml_backend_buft_name(ggml_backend_buffer_get_type(buf));
+        std::string type_str(buft_type_name);
+        buf_type_counts[type_str]++;
+        buf_type_total_size[type_str] += ggml_backend_buffer_get_size(buf);
+        
+        // Only show first 10 of each type
+        if (buf_type_shown[type_str] < 10) {
+            printf("DEBUG: buffer[%d] %p - all_offloaded=%d, size=%zu, is_host=%d, type=%s\n", 
+                   buf_count, (void*)buf, all_offloaded, ggml_backend_buffer_get_size(buf), 
+                   ggml_backend_buffer_is_host(buf), buft_type_name);
+            buf_type_shown[type_str]++;
+        }
+    }
+    
+    // Print summary for buffer types that were truncated
+    for (auto & type_count : buf_type_counts) {
+        const std::string & type_str = type_count.first;
+        int shown = buf_type_shown[type_str];
+        int total = type_count.second;
+        if (shown < total) {
+            printf("DEBUG: ... and %d more %s buffers (total size: %.2f MiB)\n", 
+                   total - shown, type_str.c_str(), buf_type_total_size[type_str] / 1024.0 / 1024.0);
+        }
+    }
+    
+    // Now free or clear buffers based on buffer type
+    int freed_ram_count = 0;
+    size_t freed_ram_size = 0;
+    int kept_ram_count = 0;
+    size_t kept_ram_size = 0;
+    int occupied_vram_count = 0;
+    size_t occupied_vram_size = 0;
+    int user_cpu_count = 0;
+    size_t user_cpu_size = 0;
+    int cuda_host_kept_count = 0;
+    size_t cuda_host_kept_size = 0;
+    printf("DEBUG: === Buffer freeing for context %p ===\n", (void*)ctx);
+    for (auto & buf_status : buf_all_offloaded) {
+        ggml_backend_buffer_t buf = buf_status.first;
+        bool all_offloaded = buf_status.second;
+        const char * buf_type_name = ggml_backend_buft_name(ggml_backend_buffer_get_type(buf));
+        size_t buf_size = ggml_backend_buffer_get_size(buf);
+        
+        // CPU buffers - user explicitly routed tensors to CPU via -ot, never free
+        if (strcmp(buf_type_name, "CPU") == 0) {
+            user_cpu_count++;
+            user_cpu_size += buf_size;
+            if (user_cpu_count <= 3) {
+                printf("DEBUG: [KEPT-RAM] %s (%.2f MiB) - user routed to CPU\n", buf_type_name, buf_size/1024.0/1024.0);
+            }
+            continue;
+        }
+        
+        // CUDA_Split - staging buffer for GPU tensor distribution, free after copy
+        if (strcmp(buf_type_name, "CUDA_Split") == 0) {
+            freed_ram_count++;
+            freed_ram_size += buf_size;
+            if (freed_ram_count <= 3) {
+                printf("DEBUG: [FREED-RAM] %s (%.2f MiB) - staging buffer for GPU distribution\n", buf_type_name, buf_size/1024.0/1024.0);
+            }
+            // Count tensors that reference this buffer
+            int tensor_ref_count = 0;
+            for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
+                if (cur->buffer == buf) {
+                    tensor_ref_count++;
+                }
+            }
+            printf("DEBUG: [FREED-RAM] freeing CUDA_Split buffer, %d tensors reference it\n", tensor_ref_count);
+            printf("DEBUG: [FREED-RAM] WAITING 3 SECONDS BEFORE FREE...\n");
+            printf("DEBUG: [FREED-RAM] If crash occurs after this line, it's during/after buffer free\n");
+            fflush(stdout);
+            Sleep(3000); // 3 second delay
+            printf("DEBUG: [FREED-RAM] delay complete, DISABLED free - would free buffer\n");
+            // ggml_backend_buffer_free(buf);
+            // printf("DEBUG: [FREED-RAM] buffer freed successfully\n");
+            // printf("DEBUG: [FREED-RAM] clearing tensor pointers for CUDA_Split...\n");
+            // for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
+            //     if (cur->buffer == buf) {
+            //         cur->buffer = nullptr;
+            //         cur->data = nullptr;
+            //     }
+            // }
+            // printf("DEBUG: [FREED-RAM] tensor pointers cleared for CUDA_Split\n");
+            continue;
+        }
+        
+        // CUDA_Host - pinned CPU memory for CUDA transfers, keep in RAM (per user rule)
+        if (strcmp(buf_type_name, "CUDA_Host") == 0) {
+            cuda_host_kept_count++;
+            cuda_host_kept_size += buf_size;
+            if (cuda_host_kept_count <= 3) {
+                printf("DEBUG: [KEPT-RAM] %s (%.2f MiB) - pinned memory for CUDA transfers\n", buf_type_name, buf_size/1024.0/1024.0);
+            }
+            continue;
+        }
+        
+        // CUDA0/CUDA1/CUDA2 - GPU VRAM buffers, do not touch
+        if (strcmp(buf_type_name, "CUDA0") == 0 || strcmp(buf_type_name, "CUDA1") == 0 || strcmp(buf_type_name, "CUDA2") == 0) {
+            occupied_vram_count++;
+            occupied_vram_size += buf_size;
+            if (occupied_vram_count <= 3) {
+                printf("DEBUG: [OCCUPIED-VRAM] %s (%.2f MiB)\n", buf_type_name, buf_size/1024.0/1024.0);
+            }
+            continue;
+        }
+        
+        // Default: keep other buffers
+        kept_ram_count++;
+        kept_ram_size += buf_size;
+        if (kept_ram_count <= 3) {
+            printf("DEBUG: [KEPT-RAM] %s (%.2f MiB)\n", buf_type_name, buf_size/1024.0/1024.0);
+        }
+    }
+    printf("DEBUG: === SUMMARY ===\n");
+    printf("DEBUG: [FREED-RAM] %d buffers (%.2f MiB) - CUDA_Split staging freed\n", freed_ram_count, freed_ram_size/1024.0/1024.0);
+    printf("DEBUG: [KEPT-RAM] user CPU buffers: %d buffers (%.2f MiB)\n", user_cpu_count, user_cpu_size/1024.0/1024.0);
+    printf("DEBUG: [KEPT-RAM] CUDA_Host buffers: %d buffers (%.2f MiB)\n", cuda_host_kept_count, cuda_host_kept_size/1024.0/1024.0);
+    printf("DEBUG: [KEPT-RAM] other buffers: %d buffers (%.2f MiB)\n", kept_ram_count, kept_ram_size/1024.0/1024.0);
+    printf("DEBUG: [OCCUPIED-VRAM] %d buffers (%.2f MiB)\n", occupied_vram_count, occupied_vram_size/1024.0/1024.0);
+    printf("DEBUG: load_all_data for context %p - continuing with validation...\n", (void*)ctx);
+
     // check validation results
     bool validation_failed = false;
     for (auto & future : validation_result) {
@@ -1057,17 +1284,18 @@ bool llama_model_loader::load_all_data(
 
     // check if this is the last call and do final cleanup
     if (size_done >= size_data) {
-        // unmap offloaded tensors and metadata
-        if (use_mmap) {
-            for (uint32_t idx = 0; idx < mappings.size(); idx++) {
-                const auto & mmap_used = mmaps_used.at(idx);
-                auto & mapping = mappings.at(idx);
-                mapping->unmap_fragment(0, mmap_used.first);
-                if (mmap_used.second != 0) {
-                    mapping->unmap_fragment(mmap_used.second, mapping->size());
-                }
+        // Check if we're in split_mode_tensor_parallel by checking for split tensors
+        // Do this check on ALL contexts, not just the last one
+        bool has_split_tensors = false;
+        for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
+            auto extra = (const ggml_split_tensor_t *)cur->extra;
+            if (extra && extra->n_device > 1) {
+                has_split_tensors = true;
+                break;
             }
         }
+        // Note: unmapping of mmap regions is now done in llama.cpp after all load_all_data calls
+        // This is to avoid unmapping before all contexts have finished loading
         if (progress_callback) {
             // Even though the model is done loading, we still honor
             // cancellation since we need to free allocations.
@@ -1075,6 +1303,7 @@ bool llama_model_loader::load_all_data(
         }
     }
 
+    printf("DEBUG: load_all_data for context %p - returning true\n", (void*)ctx);
     return true;
 }
 
