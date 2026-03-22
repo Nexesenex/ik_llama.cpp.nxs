@@ -2195,6 +2195,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         if (!has_cpu_work) {
+        // IK_OPENMP: Standard parallel region without proc_bind
+        // proc_bind(close) tested and showed worse performance on Intel 265K
         #pragma omp parallel num_threads(sched->n_backends)
         {
 
