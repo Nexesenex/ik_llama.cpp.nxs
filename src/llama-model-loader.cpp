@@ -228,6 +228,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     } else {
         LLAMA_LOG_INFO("%s: max stdio successfully set to %d\n", __func__, _setmaxstdio_ret);
     }
+    LLAMA_LOG_INFO("%s: ggml batch thread threshold: %s\n", __func__, ggml_get_batch_thread_threshold());
 #endif // GGML_MAX_CONTEXTS > 512
 #endif // _WIN32
 

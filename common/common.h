@@ -213,6 +213,7 @@ struct gpt_params {
 
     int32_t n_threads             = cpu_get_num_math();
     int32_t n_threads_batch       =      -1; // number of threads to use for batch processing (-1 = use n_threads)
+    std::string ggml_batch_thread_thresh = ">32"; // batch thread threshold for barrier strategy: format: ">N", "<N", ">=N", "<=N", "==N"
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
