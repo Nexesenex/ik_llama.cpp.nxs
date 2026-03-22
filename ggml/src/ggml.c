@@ -4533,11 +4533,13 @@ static inline void ggml_barrier_impl(struct ggml_compute_state_shared * shared) 
 }
 
 // IK_OPENMP: Batch thread threshold for hybrid barrier strategy
-// Token gen (n_batch=1): use OpenMP barrier
-// Small PP (n_batch <= threshold): use OpenMP barrier
-// Large PP (n_batch > threshold): use custom atomic barrier
+// Custom atomic barrier is ~2x faster for small batches (token gen, n_batch < threshold)
+// OpenMP barrier is used for large PP batches (n_batch >= threshold)
+// Threshold 256: token gen uses custom barrier, PP uses OpenMP barrier
+// But on Intel Arrowlake, custom barrier is faster in any case
+// Threshold 1: token gen and PP uses custom barrier
 #ifndef GGML_BATCH_THREAD_THRESHOLD
-#define GGML_BATCH_THREAD_THRESHOLD 32
+#define GGML_BATCH_THREAD_THRESHOLD 1
 #endif
 
 #ifdef GGML_USE_OPENMP
@@ -4545,7 +4547,7 @@ static void ggml_barrier(struct ggml_compute_state_shared * shared) {
     if (shared->n_threads == 1) {
         return;
     }
-    if (shared && shared->n_batch > GGML_BATCH_THREAD_THRESHOLD) {
+    if (shared && shared->n_batch >= GGML_BATCH_THREAD_THRESHOLD) {
         ggml_barrier_impl(shared);
         return;
     }
