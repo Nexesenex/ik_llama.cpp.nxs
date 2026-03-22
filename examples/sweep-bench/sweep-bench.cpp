@@ -92,10 +92,16 @@ int main(int argc, char ** argv) {
     }
     LOG_TEE("%s: built with %s on the %s\n", __func__, LLAMA_COMPILER, LLAMA_BUILD_DATE);
 
+    // IK_OPENMP: set PP batch size for barrier threshold logging
+    // pp_batch = min(n_batch, n_ubatch) as per llama.cpp logic
+    int pp_batch = params.n_ubatch > 0 ? std::min(params.n_batch, params.n_ubatch) : params.n_batch;
+    ggml_set_pp_batch_size(pp_batch);
+
     // initialize the model
 
     llama_model_params model_params = common_model_params_to_llama(params);
 
+    ggml_set_batch_thread_threshold(params.ggml_batch_thread_thresh.c_str());
     llama_model * model = llama_model_load_from_file(params.model.c_str(), model_params);
 
     if (model == NULL) {
