@@ -124,32 +124,12 @@
           "type": "BOOL"
         },
         {
-          "name": "GGML_CMPCCXADD",
-          "value": "True",
-          "type": "BOOL"
-        },
-        {
-          "name": "GGML_OPENMP",
-          "value": "True",
-          "type": "BOOL"
-        },
-        {
-          "name": "AVXVNNI_FOUND",
-          "value": "True",
-          "type": "BOOL"
-        },
-        {
           "name": "GGML_AVX512_VBMI",
           "value": "True",
           "type": "BOOL"
         },
         {
-          "name": "GGML_AVX512_BF16",
-          "value": "True",
-          "type": "BOOL"
-        },
-        {
-          "name": "GGML_AVX512_VNNI",
+          "name": "GGML_CMPCCXADD",
           "value": "True",
           "type": "BOOL"
         }
@@ -275,11 +255,6 @@
           "name": "GGML_CMPCCXADD",
           "value": "True",
           "type": "BOOL"
-        },
-        {
-          "name": "GGML_OPENMP",
-          "value": "True",
-          "type": "BOOL"
         }
       ]
     },
@@ -401,11 +376,6 @@
         },
         {
           "name": "GGML_CMPCCXADD",
-          "value": "True",
-          "type": "BOOL"
-        },
-        {
-          "name": "GGML_OPENMP",
           "value": "True",
           "type": "BOOL"
         }
@@ -1639,7 +1609,7 @@
         },
         {
           "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
-          "value": "True",
+          "value": "False",
           "type": "BOOL"
         },
         {
