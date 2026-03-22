@@ -545,10 +545,10 @@ jobs:
             -DGGML_OPENMP=ON ^
             -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} ^
             -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512=${{ (matrix.instr == 'avx512') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
             -DCURL_LIBRARY="%CURL_PATH%\lib\libcurl.dll.a" ^
             -DCURL_INCLUDE_DIR="%CURL_PATH%\include" ^
             -DGGML_MAX_CONTEXTS=2048 ^
@@ -1124,10 +1124,10 @@ jobs:
             -DGGML_OPENMP=ON ^
             -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} ^
             -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512=${{ (matrix.instr == 'avx512') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
             -DCURL_LIBRARY="%CURL_PATH%\lib\libcurl.dll.a" ^
             -DCURL_INCLUDE_DIR="%CURL_PATH%\include" ^
             -DGGML_CUDA=ON ^
