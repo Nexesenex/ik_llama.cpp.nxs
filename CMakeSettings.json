@@ -1,0 +1,1787 @@
+{
+  "configurations": [
+    {
+      "name": "x64-Debug",
+      "generator": "Ninja",
+      "configurationType": "Debug",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": ""
+    },
+    {
+      "name": "x64-Release",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": ""
+    },
+    {
+      "name": "x64-Rel-MSVC-CPU",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_CUBLAS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "AVXVNNI_FOUND",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX512_VBMI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX512_BF16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX512_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
+    },
+    {
+      "name": "x64-Rel-MSVC-Cublas",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_CUBLAS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
+    },
+    {
+      "name": "x64-Rel-MSVC-Cuda",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
+    },
+    {
+      "name": "x64-Rel-MSVC-Cuda-Main",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_NATIVE",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
+    },
+    {
+      "name": "x64-Rel-MSVC-Cuda-Test",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_NATIVE",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX512_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX512_VBMI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX512_BF16",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
+    },
+    {
+      "name": "x64-Rel-MSVC-Cuda-Legacy",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_NATIVE",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
+    },
+    {
+      "name": "x64-Rel-MSVC-Cuda-Dev",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_NATIVE",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
+    },
+    {
+      "name": "x64-Rel-Clang-CPU",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "clang_cl_x64_x64" ],
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_NATIVE",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ]
+    },
+    {
+      "name": "x64-Rel-Clang-Cuda",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ],
+      "inheritEnvironments": [ "clang_cl_x64_x64" ]
+    },
+    {
+      "name": "x64-Rel-Clang-Cuda-Main",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ],
+      "inheritEnvironments": [ "clang_cl_x64_x64" ]
+    },
+    {
+      "name": "x64-Rel-Clang-Cuda-Test",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ],
+      "inheritEnvironments": [ "clang_cl_x64_x64" ]
+    },
+    {
+      "name": "x64-Rel-Clang-Cuda-Legacy",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ],
+      "inheritEnvironments": [ "clang_cl_x64_x64" ]
+    },
+    {
+      "name": "x64-Rel-Clang-Cuda-Dev",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        }
+      ],
+      "inheritEnvironments": [ "clang_cl_x64_x64" ]
+    },
+    {
+      "name": "x64-Rel-Clang-OMP5-CPU",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "-DCMAKE_TOOLCHAIN_FILE=${projectDir}\\cmake\\clang-cl-x64.cmake",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "cmakeExecutable": "C:\\Python310\\Scripts\\cmake.exe",
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_BLAS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        }
+      ],
+      "inheritEnvironments": []
+    },
+    {
+      "name": "x64-Rel-Clang-OMP5-Cuda",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "-DCMAKE_TOOLCHAIN_FILE=${projectDir}\\cmake\\clang-cl-x64-cuda.cmake",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_VNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_F16",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FUSION",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_PEER_MAX_BATCH_SIZE",
+          "value": "256",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_NCCL",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        }
+      ],
+      "inheritEnvironments": []
+    }
+  ]
+}
