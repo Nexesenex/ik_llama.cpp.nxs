@@ -28396,7 +28396,8 @@ size_t ggml_quantize_chunk(
     const int64_t n = (int64_t) nrows * n_per_row;
 
     if (ggml_quantize_requires_imatrix(type)) {
-        GGML_ASSERT(imatrix != NULL);
+        // THIREUS: Lift limitations of llama-quantize
+        //GGML_ASSERT(imatrix != NULL);
     }
 
     GGML_ASSERT(start % type_traits[type].blck_size == 0);
