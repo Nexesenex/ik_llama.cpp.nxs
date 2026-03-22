@@ -313,6 +313,27 @@ struct gpt_params {
     int32_t n_threads_batch       =      -1; // number of threads to use for batch processing (-1 = use n_threads)
     std::vector<int32_t> cpu_affinity;       // logical CPU ids to pin worker threads to (empty = no pinning, opt-in via -cm/-cr/-ca/-capp/-catg)
     int     cpu_affinity_mode     = LLAMA_CPU_AFFINITY_DISABLED; // opt-in auto P-core phases (see llama.h); explicit list wins over auto
+
+    // IK_OPENMP: Sensible defaults for barrier strategy based on compiler
+    // Clang: custom atomic barrier is ~2x faster for token gen
+    // MSVC: OpenMP barrier is faster
+    // Use -gbtt to override: ">N", "<N", ">=N", "<=N", "==N"
+
+    // Param -gbtt	| TG (n_batch=1)	| MTP/PP (n_batch<32)	| Large PP (n_batch>32)
+    // --------------------------------------------------------------------------------
+    // <1			| OpenMP			| OpenMP				| OpenMP
+    // <=1			| Custom			| OpenMP				| OpenMP
+    // <32			| Custom			| Custom				| OpenMP
+    // >1			| OpenMP			| Custom				| Custom
+    // >=32			| OpenMP			| OpenMP				| Custom
+    // >=1			| Custom			| Custom				| Custom
+
+#ifdef __clang__
+    std::string ggml_batch_thread_thresh = ">=1"; // Clang: always use custom barrier
+#else
+    std::string ggml_batch_thread_thresh = "<1";  // MSVC: always use OpenMP barrier
+#endif
+
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
