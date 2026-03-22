@@ -352,6 +352,29 @@ struct gpt_params {
     int32_t cpu_power_cap         = 100;     // --cpu-power: N% of the hardware maximum
     bool    cpu_power_set         = false;   // --cpu-power was given (100 = reset)
     int32_t power_sleep           = 100;     // --power-sleep: duty cycle, 100 = off
+
+    // IK_OPENMP: Sensible defaults for barrier strategy based on compiler
+    // Clang: custom atomic barrier is ~2x faster for token gen
+    // MSVC: OpenMP barrier is faster
+    // Use -gbtt to override: ">N", "<N", ">=N", "<=N", "==N"
+
+    // Param -gbtt	| TG (n_batch=1)	| MTP/PP (n_batch<32)	| Large PP (n_batch>32)
+    // --------------------------------------------------------------------------------
+    // <1			| OpenMP			| OpenMP				| OpenMP
+    // <=1			| Custom			| OpenMP				| OpenMP
+    // <32			| Custom			| Custom				| OpenMP
+    // >1			| OpenMP			| Custom				| Custom
+    // >=32			| OpenMP			| OpenMP				| Custom
+    // >=1			| Custom			| Custom				| Custom
+
+#if defined(__clang__)
+    std::string ggml_batch_thread_thresh = ">=32"; // Clang: split barrier (OpenMP for TG, custom for PP).
+#elif defined(_MSC_VER)
+    std::string ggml_batch_thread_thresh = "<1";  // MSVC: Uses always OpenMP barrier
+#else
+    std::string ggml_batch_thread_thresh = ">=32";  // IK's switch: use OpenMP barrier for TG, custom barrier for PP
+#endif
+
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
