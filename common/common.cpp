@@ -660,6 +660,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "-gbtt" || arg == "--ggml-batch-thread-threshold") {
+        CHECK_ARG
+        params.ggml_batch_thread_thresh = argv[i];
+        return true;
+    }
     if (arg == "-p" || arg == "--prompt") {
         CHECK_ARG
         params.prompt = argv[i];
@@ -2480,6 +2485,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-s,    --seed SEED",            "RNG seed (default: %d, use random seed for < 0)", params.seed });
     options.push_back({ "*",           "-t,    --threads N",            "number of threads to use during generation (default: %d)", params.n_threads });
     options.push_back({ "*",           "-tb,   --threads-batch N",      "number of threads to use during batch and prompt processing (default: same as --threads)" });
+    options.push_back({ "*",           "-gbtt, --ggml-batch-thread-threshold EXPR",
+                                                                        "OpenMP barrier threshold: \">N\", \"<N\", \">=N\", \"<=N\", \"==N\" (default: %s)", params.ggml_batch_thread_thresh.c_str() });
     options.push_back({ "speculative", "-td,   --threads-draft N",      "number of threads to use during generation (default: same as --threads)" });
     options.push_back({ "speculative", "-tbd,  --threads-batch-draft N",
                                                                         "number of threads to use during batch and prompt processing (default: same as --threads-draft)" });
@@ -3442,6 +3449,7 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
 
     llama_model * model = nullptr;
 
+    ggml_set_batch_thread_threshold(params.ggml_batch_thread_thresh.c_str());
     if (!params.hf_repo.empty() && !params.hf_file.empty()) {
         model = llama_load_model_from_hf(params.hf_repo.c_str(), params.hf_file.c_str(), params.model.c_str(), params.hf_token.c_str(), mparams);
     } else if (!params.model_url.empty()) {
