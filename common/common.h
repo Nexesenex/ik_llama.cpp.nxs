@@ -212,6 +212,15 @@ struct gpt_params {
 
     int32_t n_threads             = cpu_get_num_math();
     int32_t n_threads_batch       =      -1; // number of threads to use for batch processing (-1 = use n_threads)
+    // IK_OPENMP: Sensible defaults for barrier strategy based on compiler
+    // Clang: custom atomic barrier is ~2x faster for token gen
+    // MSVC: OpenMP barrier is faster
+    // Use -gbtt to override: ">N", "<N", ">=N", "<=N", "==N"
+#ifdef __clang__
+    std::string ggml_batch_thread_thresh = ">=1"; // Clang: always use custom barrier
+#else
+    std::string ggml_batch_thread_thresh = "<1";  // MSVC: always use OpenMP barrier
+#endif
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)

@@ -85,6 +85,7 @@ int main(int argc, char ** argv) {
 
     llama_model_params model_params = common_model_params_to_llama(params);
 
+    ggml_set_batch_thread_threshold(params.ggml_batch_thread_thresh.c_str());
     llama_model * model = llama_model_load_from_file(params.model.c_str(), model_params);
 
     if (model == NULL) {
