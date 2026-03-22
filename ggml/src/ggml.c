@@ -4532,12 +4532,20 @@ static inline void ggml_barrier_impl(struct ggml_compute_state_shared * shared) 
     }
 }
 
+// IK_OPENMP: Batch thread threshold for hybrid barrier strategy
+// Token gen (n_batch=1): use OpenMP barrier
+// Small PP (n_batch <= threshold): use OpenMP barrier
+// Large PP (n_batch > threshold): use custom atomic barrier
+#ifndef GGML_BATCH_THREAD_THRESHOLD
+#define GGML_BATCH_THREAD_THRESHOLD 32
+#endif
+
 #ifdef GGML_USE_OPENMP
 static void ggml_barrier(struct ggml_compute_state_shared * shared) {
     if (shared->n_threads == 1) {
         return;
     }
-    if (shared && shared->n_batch > 32) {
+    if (shared && shared->n_batch > GGML_BATCH_THREAD_THRESHOLD) {
         ggml_barrier_impl(shared);
         return;
     }
@@ -26659,6 +26667,10 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 
 #ifdef GGML_USE_OPENMP
     if (n_threads > 1) {
+// IK_OPENMP: Standard parallel region
+// - Uses GGML_BATCH_THREAD_THRESHOLD to select barrier strategy
+// - proc_bind(close) was tested but showed worse performance on Intel 265K
+
 //#if IK_PRINT_TIMING
 //        int64_t tim1 = ggml_time_us();
 //#endif
