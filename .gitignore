@@ -55,7 +55,6 @@ build*
 android-ndk-*
 arm_neon.h
 cmake-build-*
-CMakeSettings.json
 compile_commands.json
 ggml-metal-embed.metal
 llama-batched-swift
