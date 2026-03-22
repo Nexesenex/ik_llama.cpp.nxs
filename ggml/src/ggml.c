@@ -4490,6 +4490,9 @@ struct ggml_state {
 static struct ggml_state g_state;
 static atomic_flag g_state_critical = ATOMIC_FLAG_INIT;
 
+// IK_OPENMP: batch thread threshold expression (set via CLI before ggml_init)
+static const char * g_ggml_batch_thread_thresh_expr = NULL;
+
 // critical section via spin lock
 inline static void ggml_critical_section_start(void) {
     while (atomic_flag_test_and_set(&g_state_critical)) {
@@ -4533,21 +4536,82 @@ static inline void ggml_barrier_impl(struct ggml_compute_state_shared * shared) 
 }
 
 // IK_OPENMP: Batch thread threshold for hybrid barrier strategy
-// Custom atomic barrier is ~2x faster for small batches (token gen, n_batch < threshold)
-// OpenMP barrier is used for large PP batches (n_batch >= threshold)
-// Threshold 256: token gen uses custom barrier, PP uses OpenMP barrier
-// But on Intel Arrowlake, custom barrier is faster in any case
-// Threshold 1: token gen and PP uses custom barrier
+// Custom atomic barrier is ~2x faster for small batches (token gen)
+// OpenMP barrier is used for large PP batches
+// Runtime configurable via ggml_set_batch_thread_threshold()
 #ifndef GGML_BATCH_THREAD_THRESHOLD
-#define GGML_BATCH_THREAD_THRESHOLD 1
+#define GGML_BATCH_THREAD_THRESHOLD 32
 #endif
 
+#define GGML_BATCH_THREAD_THRESHOLD_MAX 65536
+
 #ifdef GGML_USE_OPENMP
+static int ggml_batch_threshold_value = GGML_BATCH_THREAD_THRESHOLD;
+static int ggml_batch_threshold_comp = 0; // 0: >, 1: >=, 2: <, 3: <=, 4: ==
+
+static bool ggml_batch_threshold_check(int n_batch) {
+    switch (ggml_batch_threshold_comp) {
+        case 0: return n_batch > ggml_batch_threshold_value;
+        case 1: return n_batch >= ggml_batch_threshold_value;
+        case 2: return n_batch < ggml_batch_threshold_value;
+        case 3: return n_batch <= ggml_batch_threshold_value;
+        case 4: return n_batch == ggml_batch_threshold_value;
+        default: return n_batch > ggml_batch_threshold_value;
+    }
+}
+
+void ggml_set_batch_thread_threshold(const char * expr) {
+    if (!expr || expr[0] == '\0') {
+        ggml_batch_threshold_value = GGML_BATCH_THREAD_THRESHOLD;
+        ggml_batch_threshold_comp = 0;
+        return;
+    }
+
+    const char * p = expr;
+    int comp = 0;
+    bool converted_eq_eq = false;
+
+    if (p[0] == '>' && p[1] == '=') { comp = 1; p += 2; }
+    else if (p[0] == '<' && p[1] == '=') { comp = 3; p += 2; }
+    else if (p[0] == '=' && p[1] == '=') { comp = 4; p += 2; converted_eq_eq = true; }
+    else if (p[0] == '>') { comp = 0; p += 1; }
+    else if (p[0] == '<') { comp = 2; p += 1; }
+    else if (p[0] == '=') { comp = 4; p += 1; }
+
+    if (converted_eq_eq) {
+        fprintf(stderr, "\nWARNING: \"==\" comparison in -gbtt is not recommended. "
+                        "Converting \"==%d\" to \"=%d\" for proper barrier behavior.\n", atoi(p), atoi(p));
+    }
+
+    int val = atoi(p);
+    if (val < 0) val = 0;
+    if (val > GGML_BATCH_THREAD_THRESHOLD_MAX) val = GGML_BATCH_THREAD_THRESHOLD_MAX;
+
+    ggml_batch_threshold_value = val;
+    ggml_batch_threshold_comp = comp;
+    g_ggml_batch_thread_thresh_expr = expr;
+}
+
+const char * ggml_get_batch_thread_threshold(void) {
+    static char buf[32];
+    const char * comp_str;
+    switch (ggml_batch_threshold_comp) {
+        case 0: comp_str = ">"; break;
+        case 1: comp_str = ">="; break;
+        case 2: comp_str = "<"; break;
+        case 3: comp_str = "<="; break;
+        case 4: comp_str = "=="; break;
+        default: comp_str = ">"; break;
+    }
+    snprintf(buf, sizeof(buf), "%s%d", comp_str, ggml_batch_threshold_value);
+    return buf;
+}
+
 static void ggml_barrier(struct ggml_compute_state_shared * shared) {
     if (shared->n_threads == 1) {
         return;
     }
-    if (shared && shared->n_batch >= GGML_BATCH_THREAD_THRESHOLD) {
+    if (shared && ggml_batch_threshold_check(shared->n_batch)) {
         ggml_barrier_impl(shared);
         return;
     }
@@ -4557,6 +4621,8 @@ static void ggml_barrier(struct ggml_compute_state_shared * shared) {
 static void ggml_barrier(struct ggml_compute_state_shared * shared) {
     ggml_barrier_impl(shared);
 }
+void ggml_set_batch_thread_threshold(const char * expr) { (void)expr; }
+const char * ggml_get_batch_thread_threshold(void) { return ">32"; }
 #endif
 
 // TODO: make this somehow automatically executed
@@ -5094,6 +5160,11 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
     static bool is_first_call = true;
 
     if (is_first_call) {
+        // IK_OPENMP: set batch thread threshold from CLI if provided
+        if (g_ggml_batch_thread_thresh_expr) {
+            ggml_set_batch_thread_threshold(g_ggml_batch_thread_thresh_expr);
+        }
+
         // initialize time system (required on Windows)
         ggml_time_init();
 
