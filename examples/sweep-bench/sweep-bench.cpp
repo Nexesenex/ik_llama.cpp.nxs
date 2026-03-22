@@ -37,6 +37,7 @@ static void llama_selective_log_callback(ggml_log_level level, const char * text
         "Layer ",
         "llm_load_tensors:",
         "==========================",
+        " in layer",  // MoE up/gate merge/repack/concatenate operations
     };
     for (const char * pat : skip_patterns) {
         if (strstr(text, pat) != nullptr) {
