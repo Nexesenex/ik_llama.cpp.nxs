@@ -4513,6 +4513,9 @@ struct ggml_state {
 static struct ggml_state g_state;
 static atomic_flag g_state_critical = ATOMIC_FLAG_INIT;
 
+// IK_OPENMP: batch thread threshold expression (set via CLI before ggml_init)
+static const char * g_ggml_batch_thread_thresh_expr = NULL;
+
 // critical section via spin lock
 inline static void ggml_critical_section_start(void) {
     while (atomic_flag_test_and_set(&g_state_critical)) {
@@ -4555,12 +4558,111 @@ static inline void ggml_barrier_impl(struct ggml_compute_state_shared * shared) 
     }
 }
 
+// IK_OPENMP: Batch thread threshold for hybrid barrier strategy
+
+// Ikawrakaw's default treshold is ">32" :
+// Meaning of the default treshold:
+// Token gen (n_batch=1): use OpenMP barrier
+// Small PP (n_batch <= threshold): use OpenMP barrier
+// Large PP (n_batch > threshold): use custom atomic barrier
+
+// Nexesenex's testing :
+// If treshold is ">=1", Custom atomic barrier is permanent (used for every batch size), OpenMP is discarded.
+// Arrowlake CPU / Clang compiler curiosity: Custom atomic barrier's TG is ~2x faster than OpenMP's barrier.
+
+// More examples :
+// With value "<=32", Custom atomic barrier becomes used for TG and small PP batches, OpenMP for large PP batches 
+// With value "<1", then Custom atomic barriers is discarded, and OpenMP is used for every batch size.  
+
+// To be able to adjust this: runtime configurable via ggml_set_batch_thread_threshold() / argument -gbtt
+
+#ifndef GGML_BATCH_THREAD_THRESHOLD
+#define GGML_BATCH_THREAD_THRESHOLD 32
+#endif
+
+#define GGML_BATCH_THREAD_THRESHOLD_MAX 65536
+
 #ifdef GGML_USE_OPENMP
+static int ggml_batch_threshold_value = GGML_BATCH_THREAD_THRESHOLD;
+static int ggml_batch_threshold_comp = 0; // 0: >, 1: >=, 2: <, 3: <=, 4: ==
+
+static bool ggml_batch_threshold_check(int n_batch) {
+    switch (ggml_batch_threshold_comp) {
+        case 0: return n_batch > ggml_batch_threshold_value;
+        case 1: return n_batch >= ggml_batch_threshold_value;
+        case 2: return n_batch < ggml_batch_threshold_value;
+        case 3: return n_batch <= ggml_batch_threshold_value;
+        case 4: return n_batch == ggml_batch_threshold_value;
+        default: return n_batch > ggml_batch_threshold_value;
+    }
+}
+
+void ggml_set_batch_thread_threshold(const char * expr) {
+    if (!expr || expr[0] == '\0') {
+        ggml_batch_threshold_value = GGML_BATCH_THREAD_THRESHOLD;
+        ggml_batch_threshold_comp = 0;
+        return;
+    }
+
+    const char * p = expr;
+    int comp = 0;
+    bool converted_eq_eq = false;
+
+    if (p[0] == '>' && p[1] == '=') { comp = 1; p += 2; }
+    else if (p[0] == '<' && p[1] == '=') { comp = 3; p += 2; }
+    else if (p[0] == '=' && p[1] == '=') { comp = 4; p += 2; converted_eq_eq = true; }
+    else if (p[0] == '>') { comp = 0; p += 1; }
+    else if (p[0] == '<') { comp = 2; p += 1; }
+    else if (p[0] == '=') { comp = 4; p += 1; }
+
+    if (converted_eq_eq) {
+        fprintf(stderr, "\nWARNING: \"==\" comparison in -gbtt is not recommended. "
+                        "Converting \"==%d\" to \"=%d\" for proper barrier behavior.\n", atoi(p), atoi(p));
+    }
+
+    int val = atoi(p);
+    if (val < 0) val = 0;
+    if (val > GGML_BATCH_THREAD_THRESHOLD_MAX) val = GGML_BATCH_THREAD_THRESHOLD_MAX;
+
+    ggml_batch_threshold_value = val;
+    ggml_batch_threshold_comp = comp;
+    g_ggml_batch_thread_thresh_expr = expr;
+}
+
+static int g_ggml_pp_batch_size = 128;
+
+void ggml_set_pp_batch_size(int batch_size) {
+    if (batch_size > 0) {
+        g_ggml_pp_batch_size = batch_size;
+    }
+}
+
+const char * ggml_get_batch_thread_threshold(void) {
+    static char buf[72];
+    const char * comp_str;
+    switch (ggml_batch_threshold_comp) {
+        case 0: comp_str = ">"; break;
+        case 1: comp_str = ">="; break;
+        case 2: comp_str = "<"; break;
+        case 3: comp_str = "<="; break;
+        case 4: comp_str = "=="; break;
+        default: comp_str = ">"; break;
+    }
+    int val = ggml_batch_threshold_value;
+    const char * tg_barrier = ggml_batch_threshold_check(1) ? "Custom" : "OpenMP";
+    const char * b32_barrier = ggml_batch_threshold_check(32) ? "Custom" : "OpenMP";
+    const char * b_ub_barrier = ggml_batch_threshold_check(g_ggml_pp_batch_size) ? "Custom" : "OpenMP";
+    snprintf(buf, sizeof(buf), "%s%d ; TG_Batch(1) = %s ; Ref(32) = %s ; PP_Batch(%d) = %s",
+             comp_str, val, tg_barrier, b32_barrier, g_ggml_pp_batch_size, b_ub_barrier);
+    return buf;
+}
+
 static void ggml_barrier(struct ggml_compute_state_shared * shared) {
     if (shared->n_threads == 1) {
         return;
     }
-    if (shared && shared->n_batch > 32) {
+    // if (shared && shared->n_batch > 32) { // Ikawrakow's default switch.
+    if (shared && ggml_batch_threshold_check(shared->n_batch)) {
         ggml_barrier_impl(shared);
         return;
     }
@@ -4570,6 +4672,9 @@ static void ggml_barrier(struct ggml_compute_state_shared * shared) {
 static void ggml_barrier(struct ggml_compute_state_shared * shared) {
     ggml_barrier_impl(shared);
 }
+void ggml_set_batch_thread_threshold(const char * expr) { (void)expr; }
+void ggml_set_actual_batch_size(int batch_size) { (void)batch_size; }
+const char * ggml_get_batch_thread_threshold(void) { return ">32"; }
 #endif
 
 // TODO: make this somehow automatically executed
@@ -5108,6 +5213,11 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
     static bool is_first_call = true;
 
     if (is_first_call) {
+        // IK_OPENMP: set batch thread threshold from CLI if provided
+        if (g_ggml_batch_thread_thresh_expr) {
+            ggml_set_batch_thread_threshold(g_ggml_batch_thread_thresh_expr);
+        }
+
         // initialize time system (required on Windows)
         ggml_time_init();
 
@@ -26727,6 +26837,10 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 
 #ifdef GGML_USE_OPENMP
     if (n_threads > 1) {
+// IK_OPENMP: Standard parallel region
+// - Uses GGML_BATCH_THREAD_THRESHOLD to select barrier strategy
+// - proc_bind(close) was tested but showed worse performance on Intel 265K
+
 //#if IK_PRINT_TIMING
 //        int64_t tim1 = ggml_time_us();
 //#endif
