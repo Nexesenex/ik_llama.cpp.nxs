@@ -242,6 +242,7 @@ struct cmd_params {
     std::vector<ggml_type> type_k;
     std::vector<ggml_type> type_v;
     std::vector<std::pair<int,int>> n_threads;
+    std::vector<int> n_threads_batch;
     std::vector<int> n_gpu_layers;
     std::vector<std::string> rpc_servers;
     std::vector<llama_split_mode> split_mode;
@@ -277,6 +278,7 @@ struct cmd_params {
     bool print_overrides = false;
     bool fit = false;
     int  fit_margin = 0;
+    int32_t n_parallel = 1;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -292,6 +294,7 @@ static const cmd_params cmd_params_defaults = {
     /* type_k               */ {GGML_TYPE_F16},
     /* type_v               */ {GGML_TYPE_F16},
     /* n_threads            */ {{cpu_get_num_math(), cpu_get_num_math()}},
+    /* n_threads_batch      */ {},
     /* n_gpu_layers         */ {999},
     /* rpc_servers          */ {""},
     /* split_mode           */ {LLAMA_SPLIT_MODE_LAYER},
@@ -327,6 +330,7 @@ static const cmd_params cmd_params_defaults = {
     /* print_overrides      */ false,
     /* fit                  */ false,
     /* fit_margin           */ 0,
+    /* n_parallel           */ 1,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -347,6 +351,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ctv, --cache-type-v <t>            (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_v, ggml_type_name), ",").c_str());
     printf("  -t, --threads <n>                   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
     printf("  -tgb, --threads-gen-batch <n1,n2>   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
+    printf("  -tb, --threads-batch <n>            (default: same as --threads)\n");
+    printf("  -np, --parallel <n>                 (default: %d)\n", cmd_params_defaults.n_parallel);
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  --n-cpu-moe <n>                     (default: none)\n");
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
@@ -639,6 +645,19 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 params.n_threads.push_back({p[0], p[1]});
             }
+        } else if (arg == "-tb" || arg == "--threads-batch") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            auto p = string_split<int>(argv[i], split_delim);
+            params.n_threads_batch.insert(params.n_threads_batch.end(), p.begin(), p.end());
+        } else if (arg == "-np" || arg == "--parallel") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.n_parallel = std::stoi(argv[i]);
         } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -973,6 +992,7 @@ struct cmd_params_instance {
     ggml_type type_k;
     ggml_type type_v;
     std::pair<int,int> n_threads;
+    int n_threads_batch;
     int n_gpu_layers;
     std::string rpc_servers;
     llama_split_mode split_mode;
@@ -1003,6 +1023,7 @@ struct cmd_params_instance {
     float split_adjust_step_frequency = 0.5f;
     bool monolithic_output_tensor_accounted = false;
     const llama_model_tensor_buft_override* buft_overrides;
+    int32_t n_parallel = 1;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1057,8 +1078,11 @@ struct cmd_params_instance {
         cparams.n_ctx = n_prompt + n_gen;
         cparams.n_batch = n_batch;
         cparams.n_ubatch = n_ubatch;
+        cparams.n_seq_max = n_parallel;
         cparams.type_k = type_k;
         cparams.type_v = type_v;
+        cparams.n_threads = n_threads.first;
+        cparams.n_threads_batch = n_threads_batch > 0 ? n_threads_batch : n_threads.second;
         cparams.offload_kqv = !no_kv_offload;
         cparams.flash_attn = flash_attn;
         cparams.mla_attn = mla_attn;
@@ -1116,6 +1140,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .type_k       = */ tk,
                 /* .type_v       = */ tv,
                 /* .n_threads    = */ nt,
+                /* .n_threads_batch = */ params.n_threads_batch.empty() ? nt.second : params.n_threads_batch[0],
                 /* .n_gpu_layers = */ nl,
                 /* .rpc_servers  = */ rpc,
                 /* .split_mode   = */ sm,
@@ -1146,6 +1171,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
                 /* .monolithic_output_tensor_accounted = */ params.monolithic_output_tensor_accounted,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
+                /* .n_parallel   = */ params.n_parallel,
             };
             instances.push_back(instance);
         }
@@ -1164,6 +1190,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .type_k       = */ tk,
                 /* .type_v       = */ tv,
                 /* .n_threads    = */ nt,
+                /* .n_threads_batch = */ params.n_threads_batch.empty() ? nt.second : params.n_threads_batch[0],
                 /* .n_gpu_layers = */ nl,
                 /* .rpc_servers  = */ rpc,
                 /* .split_mode   = */ sm,
@@ -1194,6 +1221,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
                 /* .monolithic_output_tensor_accounted = */ params.monolithic_output_tensor_accounted,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
+                /* .n_parallel   = */ params.n_parallel,
             };
             instances.push_back(instance);
         }
@@ -1212,6 +1240,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .type_k       = */ tk,
                 /* .type_v       = */ tv,
                 /* .n_threads    = */ nt,
+                /* .n_threads_batch = */ params.n_threads_batch.empty() ? nt.second : params.n_threads_batch[0],
                 /* .n_gpu_layers = */ nl,
                 /* .rpc_servers  = */ rpc,
                 /* .split_mode   = */ sm,
@@ -1242,6 +1271,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
                 /* .monolithic_output_tensor_accounted = */ params.monolithic_output_tensor_accounted,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
+                /* .n_parallel   = */ params.n_parallel,
             };
             instances.push_back(instance);
         }
@@ -1260,6 +1290,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .type_k       = */ tk,
                 /* .type_v       = */ tv,
                 /* .n_threads    = */ nt,
+                /* .n_threads_batch = */ params.n_threads_batch.empty() ? nt.second : params.n_threads_batch[0],
                 /* .n_gpu_layers = */ nl,
                 /* .rpc_servers  = */ rpc,
                 /* .split_mode   = */ sm,
@@ -1290,6 +1321,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
                 /* .monolithic_output_tensor_accounted = */ params.monolithic_output_tensor_accounted,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
+                /* .n_parallel   = */ params.n_parallel,
             };
             instances.push_back(instance);
         }
