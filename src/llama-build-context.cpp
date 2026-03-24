@@ -9779,8 +9779,6 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             GGML_ABORT("fatal error");
     }
 
-    result->n_batch = llm.n_tokens;
-
     // add on pooling layer
     if (lctx.cparams.embeddings) {
         result = llm.append_pooling(result);
