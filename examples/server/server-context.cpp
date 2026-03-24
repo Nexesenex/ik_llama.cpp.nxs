@@ -41,7 +41,7 @@ static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, lla
 }
 
 static void log_text(const gpt_params & params_base, const std::string & text) {
-    if (params_base.minilog) {
+    if (params_base.dumplog) {
         LOG_TEE("%s\n", text.c_str());
     }
 }
