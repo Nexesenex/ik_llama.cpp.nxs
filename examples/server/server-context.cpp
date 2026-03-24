@@ -17,7 +17,7 @@
 #include <exception>
 
 static void log_text(const gpt_params & params_base, const std::string & text) {
-    if (params_base.minilog) {
+    if (params_base.dumplog) {
         LOG_TEE("%s\n", text.c_str());
     }
 }
