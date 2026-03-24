@@ -476,11 +476,27 @@ int main(int argc, char ** argv) {
         {"commit", LLAMA_COMMIT}
     });
 
+    LOG_INFO("Details", {
+        {"last_pr",         LLAMA_BUILD_LAST_MERGED_PR},
+        {"last_commit",     LLAMA_BUILD_LAST_COMMIT},
+    });
+
+    LOG_INFO("NXS", {
+        {"branch",          LLAMA_BUILD_BRANCH},
+        {"nexes_commits",   LLAMA_NEXES_COMMITS},
+    });
+
+    LOG_INFO("Rel", {
+        {"date",            LLAMA_BUILD_DATE},
+        {"compiler",        LLAMA_COMPILER},
+    });
+
     LOG_INFO("system info", {
         {"n_threads",       params.n_threads},
         {"n_threads_batch", params.n_threads_batch},
         {"total_threads",   std::thread::hardware_concurrency()},
         {"system_info",     llama_print_system_info()},
+        {"cuda_version",   ggml_cpu_has_cuda() ? LLAMA_BUILD_CUDA_VERSION : "not used in CPU mode."},
     });
 
     std::unique_ptr<httplib::Server> svr;

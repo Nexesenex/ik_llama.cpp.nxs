@@ -66,9 +66,16 @@ using llama_tokens = std::vector<llama_token>;
 
 // build info
 extern int LLAMA_BUILD_NUMBER;
+extern int LLAMA_NEXES_COMMITS;
 extern char const * LLAMA_COMMIT;
 extern char const * LLAMA_COMPILER;
 extern char const * LLAMA_BUILD_TARGET;
+extern char const * LLAMA_BUILD_BRANCH;
+extern char const * LLAMA_BUILD_DATE;
+extern char const * LLAMA_BUILD_LAST_MERGED_PR;
+extern char const * LLAMA_BUILD_CUDA_VERSION;
+extern char const * LLAMA_BUILD_LAST_COMMIT;
+extern char const * LLAMA_BUILD_GGML_CUDA;
 
 struct llama_control_vector_load_info;
 
