@@ -432,7 +432,7 @@ inline void signal_handler(int signal) {
 }
 
 static void log_prompt(const gpt_params & params_base, const json & body) {
-    if (params_base.minilog) {
+    if (params_base.dumplog) {
         LOG_TEE("Prompt:\n%s\n", body.dump(4).c_str());
     }
 }

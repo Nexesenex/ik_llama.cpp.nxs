@@ -2412,6 +2412,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.minilog = true;
         return true;
     }
+    if (arg == "--dumplog") {
+        params.dumplog = true;
+        return true;
+    }
 
 #ifndef LOG_DISABLE_LOGS
     // Parse args for logging parameters
@@ -2486,6 +2490,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --version",              "show version and build info" });
     options.push_back({ "*",           "-v,    --verbose",              "print verbose information" });
     options.push_back({ "*",           "       --minilog",              "print important information" });
+    options.push_back({ "*",           "       --dumplog",              "dump prompt/logs to stderr" });
     options.push_back({ "*",           "       --verbosity N",          "set specific verbosity level (default: %d)", params.verbosity });
     options.push_back({ "*",           "       --verbose-prompt",       "print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false" });
     options.push_back({ "*",           "-dr,   --dry-run",       "skip loading tensors in the files"});
