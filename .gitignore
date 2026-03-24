@@ -32,6 +32,7 @@
 .vs/
 .vscode/
 nppBackup
+outbuild*/
 
 
 # Coverage
