@@ -1,6 +1,6 @@
 Can you configure the Visual Studio PROJECT: IK_Llama.cpp, a fork of llama.cpp.
 Project path: Q:\GitHub\ik_llama.cpp.fks
-In the Project CMakelist.txt, use the 'x64-Release' build to make your tests.
+In the Project CMakeLists.txt, use the 'x64_Rel_MSVC_CPU' build to make your tests.
 
 Lead developer: Iwan Kawrakow (Ikawrakow), lead LLM quantization developer.
 Current author: Nexes the Elder (Nexesenex), junior developer.
@@ -12,7 +12,12 @@ Languages used: C++, CUDA, Python.
 Current AI assisted programming environment used: OpenCode (the IDE we are using) running in Windows Desktop app mode. WSL is available if needed.
 Other IDE used: Microsoft Visual Studio 18 (2026) as our main compiler hub, and 2022 as a fallback only.
 
-COMPILERS AVAILABLE:
+IMPORTANT - BUILD SYSTEM NOTE:
+- CMake 4.30+ is used. Hyphens (-) in preset names are NOT supported - use underscores (_) instead!
+- CMakePresets.json and CMakeSettings.json have been standardized with underscore naming for compatibility.
+- Always verify preset names exist in CMakePresets.json before using them.
+
+COMPILERS AVAILABLE:a
 
 CUDA (use only when we work with CUDA, otherwise, skip that!):
 cuda nvcc compiler
@@ -26,12 +31,9 @@ We use the settings file: "Q:\GitHub\ik_llama.cpp.fks\CMakeSettings.json", that 
 We can also use the presets file: "Q:\GitHub\ik_llama.cpp.fks\CMakePresets.json", that you can edit to fill the missing information on the presets we use.
 
 MSVC:
-msvc_x64 compiler path: "P:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64\cl.exe"
-MSVC include path: "P:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\include"
+msvc_x64 compiler path: "P:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36014\bin\Hostx64\x64\cl.exe"
+MSVC include path: "P:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36014\include"
 RC path "P:\Windows Kits\10\bin\10.0.26100.0\x64\rc.exe"
-
-- MS Visual Studio build to use with MSVC for CPU based inference: "x64-Rel-MSVC-CPU"
-- MS Visual Studio build to use with MSVC for CUDA based inference: "x64-Rel-MSVC-Cuda-Dev"
 
 CLANG:
 Clang compiler path: "P:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\Llvm\x64\bin\clang.exe"
@@ -44,26 +46,34 @@ LLVM Clang include path: "C:\Program Files\LLVM\lib\clang\22\include"
 OpenMP 5.1 .dll , if needed path: C:\Program Files\LLVM\bin\libomp.dll
 LLVM Updated RC path: "C:\Program Files\LLVM\bin\llvm-rc.exe"
 
-- MS Visual Studio build to use with Clang for CPU based inference: "x64-Rel-Clang-CPU"
-- MS Visual Studio build to use with Clang for CPU based inference: "x64-Rel-Clang-Cuda-Dev"
+AVAILABLE BUILD PRESETS (use underscores!):
+- x64_Rel_MSVC_CPU (CPU, MSVC compiler)
+- x64_Rel_MSVC_Cuda_Dev (CUDA, MSVC compiler)
+- x64_Rel_Clang_CPU (CPU, Clang compiler)
+- x64_Rel_Clang_Cuda_Dev (CUDA, Clang compiler)
+- x64_Rel_Clang_LLVM_CPU (CPU, standalone LLVM Clang with custom OpenMP 5.1)
+- x64_Rel_Clang_LLVM_Cuda (CUDA, standalone LLVM Clang with custom OpenMP 5.1)
 
-Troubleshooting for MSVS based compiling :
+To list all available presets:
+cmake --list-presets
 
-- Option 1 : Run these commands in "x64 Native Tools Command Prompt for VS 2022" or similar
-cmake --preset x64-Rel-MSVC-CPU -B out\build\x64-Rel-MSVC-CPU
-cmake --build out\build\x64-Rel-MSVC-CPU --parallel 16
+Troubleshooting for MSVS based compiling:
+
+- Option 1: Run these commands in "x64 Native Tools Command Prompt for VS 2022" or similar
+cmake --preset x64_Rel_MSVC_CPU -B out\build\x64_Rel_MSVC_CPU
+cmake --build out\build\x64_Rel_MSVC_CPU --parallel 16
 
 - Option 2: Create batch files for each build (my recommendation)
 Created build_msvc_cpu.bat as a template - run it from a VS Developer Command Prompt or create similar scripts for:
-build_msvc_cuda.bat (x64-Rel-MSVC-Cuda-Dev)
-build_clang_cpu.bat (x64-Rel-Clang-CPU)
-build_clang_cuda.bat (x64-Rel-Clang-Cuda-Dev)
+build_msvc_cuda.bat (x64_Rel_MSVC_Cuda_Dev)
+build_clang_cpu.bat (x64_Rel_Clang_CPU)
+build_clang_cuda.bat (x64_Rel_Clang_Cuda_Dev)
 
-- Option 3 : Add a step to "Open VS Developer Command Prompt" before running cmake commands, or provide instructions to configure CMake to use the correct environment variables.
+- Option 3: Add a step to "Open VS Developer Command Prompt" before running cmake commands, or provide instructions to configure CMake to use the correct environment variables.
 "Must run from Visual Studio Developer Command Prompt (x64) or run vcvarsall.bat x64 before cmake"
 
-- Option 4 : Add to each MSVC preset in CMakePresets.json:
-"environmentScript": "P:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\Hostx64\\x64\\vcvarsall.bat"
+- Option 4: Add to each MSVC preset in CMakePresets.json:
+"environmentScript": "P:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36014\bin\Hostx64\x64\vcvarsall.bat"
 
 PYTHON:
 Python 3.10 ninja PATH: "C:\Python310\Scripts\ninja.exe" (preferred)
@@ -74,43 +84,40 @@ Then, you can test our CPU implementations with this CLI command (adapt the rele
 IF you compiled with MSVC:
 
 - For CPU based inference:
-$ "CD /D Q:\GitHub\ik_llama.cpp.fks\out\build\x64-Rel-MSVC-CPU\bin\llama-sweep-bench.exe -m U:\text-generation-webui\models\Qwen3.5-14B-A3B-Claude-Opus-Reasoning-Distilled-4.6-MXFP4_MOE.gguf  -t 18 -ub 256 -b 256 -n 32 -fa 1 -no-ooae -mqkv -muge -gr -ger -grt f16 --override-kv qwen35moe.expert_used_count=int:10 -c 2304 -ctk f16 -ctv f16 -khad --warmup-batch --minilog"
+$ "CD /D Q:\GitHub\ik_llama.cpp.fks\out\build\x64_Rel_MSVC_CPU\bin\llama-sweep-bench.exe -m U:\text-generation-webui\models\Qwen3.5-35B-A3B-IQ4_XS\Qwen3.5-35B-A3B-IQ4_XS-00001-of-00734.gguf  -t 18 -ub 256 -b 256 -n 32 -fa 1 -no-ooae -mqkv -muge -gr -ger -grt f16 --override-kv qwen35moe.expert_used_count=int:10 -c 2304 -ctk f16 -ctv f16 -khad --warmup-batch --minilog"
 
 - For CUDA based inference:
-$ "CD /D Q:\GitHub\ik_llama.cpp.fks\out\build\x64-Rel-MSVC-Cuda-Dev\bin\llama-sweep-bench.exe
-U:\text-generation-webui\models\Qwen3.5-14B-A3B-Claude-Opus-Reasoning-Distilled-4.6-MXFP4_MOE.gguf -t 1 -ngl 150 -sm layer -ub 2048 -b 2048 -n 128 -mg 1 --device CUDA0,CUDA1,CUDA2 -ts 0,40,0 -fa 1 -cuda fusion=1,offload-batch-size=128,mmq-id-size=128,enable-p2p=1,fa-offset=0.6931f -ot "^output.weight$=CUDA1" -no-ooae -mqkv -muge -gr -ger -grt f16 --override-kv qwen35moe.expert_used_count=int:10 -c 34816 -ctk f16 -ctv f16 -khad --warmup-batch --minilog"
+$ "CD /D Q:\GitHub\ik_llama.cpp.fks\out\build\x64_Rel_MSVC_Cuda_Dev\bin\llama-sweep-bench.exe U:\text-generation-webui\models\Qwen3.5-35B-A3B-IQ4_XS\Qwen3.5-35B-A3B-IQ4_XS-00001-of-00734.gguf -t 1 -ngl 150 -sm layer -ub 2048 -b 2048 -n 128 -mg 1 --device CUDA0,CUDA1,CUDA2 -ts 0,40,0 -fa 1 -cuda fusion=1,offload-batch-size=128,mmq-id-size=128,enable-p2p=1,fa-offset=0.6931f -ot "^output.weight$=CUDA1" -no-ooae -mqkv -muge -gr -ger -grt f16 --override-kv qwen35moe.expert_used_count=int:10 -c 34816 -ctk f16 -ctv f16 -khad --warmup-batch --minilog"
 
-If you compiled with Clang :
+If you compiled with Clang:
 
 - For CPU based inference:
-$ "CD /D Q:\GitHub\ik_llama.cpp.fks\out\build\x64-Rel-Clang-CPU\bin\llama-sweep-bench.exe -m U:\text-generation-webui\models\Qwen3.5-14B-A3B-Claude-Opus-Reasoning-Distilled-4.6-MXFP4_MOE.gguf -t 18 -ub 256 -b 256 -n 32 -fa 1 -no-ooae -mqkv -muge -gr -ger -grt f16 --override-kv qwen35moe.expert_used_count=int:10 -c 2304 -ctk f16 -ctv f16 -khad --warmup-batch --minilog"
+$ "CD /D Q:\GitHub\ik_llama.cpp.fks\out\build\x64_Rel_Clang_CPU\bin\llama-sweep-bench.exe -m U:\text-generation-webui\models\Qwen3.5-35B-A3B-IQ4_XS\Qwen3.5-35B-A3B-IQ4_XS-00001-of-00734.gguf -t 18 -ub 256 -b 256 -n 32 -fa 1 -no-ooae -mqkv -muge -gr -ger -grt f16 --override-kv qwen35moe.expert_used_count=int:10 -c 2304 -ctk f16 -ctv f16 -khad --warmup-batch --minilog"
 
 For CUDA based inference:
-$ "CD /D Q:\GitHub\ik_llama.cpp.fks\out\build\x64-Rel-Clang-Cuda-Dev\bin\llama-sweep-bench.exe
-U:\text-generation-webui\models\Qwen3.5-14B-A3B-Claude-Opus-Reasoning-Distilled-4.6-MXFP4_MOE.gguf -t 1 -ngl 150 -sm layer -ub 2048 -b 2048 -n 128 -mg 1 --device CUDA0,CUDA1,CUDA2 -ts 0,40,0 -fa 1 -cuda fusion=1,offload-batch-size=128,mmq-id-size=128,enable-p2p=1,fa-offset=0.6931f -ot "^output.weight$=CUDA1" -no-ooae -mqkv -muge -gr -ger -grt f16 --override-kv qwen35moe.expert_used_count=int:10 -c 34816 -ctk f16 -ctv f16 -khad --warmup-batch --minilog"
+$ "CD /D Q:\GitHub\ik_llama.cpp.fks\out\build\x64_Rel_Clang_Cuda_Dev\bin\llama-sweep-bench.exe U:\text-generation-webui\models\Qwen3.5-35B-A3B-IQ4_XS\Qwen3.5-35B-A3B-IQ4_XS-00001-of-00734.gguf -t 1 -ngl 150 -sm layer -ub 2048 -b 2048 -n 128 -mg 1 --device CUDA0,CUDA1,CUDA2 -ts 0,40,0 -fa 1 -cuda fusion=1,offload-batch-size=128,mmq-id-size=128,enable-p2p=1,fa-offset=0.6931f -ot "^output.weight$=CUDA1" -no-ooae -mqkv -muge -gr -ger -grt f16 --override-kv qwen35moe.expert_used_count=int:10 -c 34816 -ctk f16 -ctv f16 -khad --warmup-batch --minilog"
 
 HARDWARE USED:
 
-System CPU: Intel Core Ultra 265K (Instructions supported : AVX2, FMA F16C (Packed conversions between FP16 and FP32) , AVX-VNNI (Vector Neural Network Instructions) , AVX-IFMA (Integer Fused Multiply Add) , AVX-NE-CONVERT (No-exception FP16/BF16 conversion instructions) , AVX-VNNI-INT8 , CMPccXADD ISA ).
+System CPU: Intel Core Ultra 265K (Instructions supported: AVX2, FMA F16C, AVX-VNNI, AVX-IFMA, AVX-NE-CONVERT, AVX-VNNI-INT8, CMPccXADD ISA).
 
 System RAM: 192 GB DDR5 6400 in dual channel.
 
-System GPUs: Nvidia RTX 3090 (24GB) + RTX 3090 (24GB) + RTXA4000 (16GB), Ampere Generation, No NCCL, P2P likely disabled systemwide due to lack of driver support.
+System GPUs: Nvidia RTX 3090 (24GB) + RTX 3090 (24GB) + RTX A4000 (16GB), Ampere Generation, No NCCL, P2P likely disabled systemwide due to lack of driver support.
 
 RULESET:
-Rule 1: Language supported : English, French. Use English language, but the French keyboard configuration and encoding when calling paths and programs on this Windows 11 system to not get confused if you get answers in French instead of English.
-Rule 2: If you loop to read a file, use grep, glob, bash pr PowerShell (so, for Windows), and DO NOT FORGET THE "\" CHARACTERS (antislash) IN THE FILEPATHS so the agents can access the files!
+Rule 1: Language supported: English, French. Use English language, but the French keyboard configuration and encoding when calling paths and programs on this Windows 11 system to not get confused if you get answers in French instead of English.
+Rule 2: If you loop to read a file, use grep, glob, bash or PowerShell (for Windows), and DO NOT FORGET THE "\" CHARACTERS (backslash) IN THE FILEPATHS so the agents can access the files!
 Rule 3: Never delete a file or a directory without asking permission to the user.
 Rule 4: Never modify indents of a non edited line. Indents are made with spaces, not tabulations.
-Rule 5: keep a minimalist editing approach targeted on the core problem.
+Rule 5: Keep a minimalist editing approach targeted on the core problem.
 Rule 6: Cleanliness of the code, respect of the existing code structure and logic to optimize collaborative work with other developers.
 Rule 7: Compile and sweep-bench ONLY our work on the GGML CPU / IQK backend.
 Rule 8: Use 16 threads to compile.
+Rule 9: ALWAYS use underscores (_) in preset names, NOT hyphens (-). CMake 4.x does not support hyphens in preset names.
 
 PRELIMINARY TASKS:
 1. Use the git branch "custom_neo"
 2. Acknowledge the current codebase and its commit list.
 3. Check the last commits to understand our current work and existing implementation.
-3. Do not stray away on other branches or builds unless requested.
-
-JOB (the title of this project): Fix all the toolchains in "Q:\GitHub\ik_llama.cpp.fks\cmake" so they are CMake 4.30 , MS Visual Studio 18  (2026) compatible. Test each of them until they work.
+4. Do not stray away on other branches or builds unless requested.
