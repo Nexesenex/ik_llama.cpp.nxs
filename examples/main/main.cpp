@@ -195,6 +195,7 @@ int main(int argc, char ** argv) {
     std::mt19937 rng(params.seed);
 
     LOG("%s: llama backend init\n", __func__);
+    common_params_minilog(params);
     llama_backend_init();
     llama_numa_init(params.numa);
 
