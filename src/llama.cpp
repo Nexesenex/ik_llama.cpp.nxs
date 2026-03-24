@@ -2353,7 +2353,7 @@ static bool llm_load_tensors(
         }
         LLAMA_LOG_INFO("Memory required for model tensors + cache: %.f MiB\n", required_mem/(1024.*1024.));
         LLAMA_LOG_INFO("Memory available on all devices - compute: %.f MiB\n", available_mem/(1024.*1024.));
-        if (required_mem > available_mem) {
+        if (fit && required_mem > available_mem) {
             float sum = 0;
             for (int id = 0; id < device_count; ++id) {
                 device_mem[id] = device_mem[id] > max_compute ? device_mem[id] - max_compute : 0;
