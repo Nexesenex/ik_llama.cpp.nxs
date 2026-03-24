@@ -485,6 +485,8 @@ int main(int argc, char ** argv) {
     // parse arguments from environment variables
     gpt_params_parse_from_env(params);
 
+    common_params_minilog(params);
+
     // Tee llama/ggml logs to --log-file; installed before model load so that
     // load-time logs are captured too.
     llama_log_set(llama_log_tee_callback, nullptr);
@@ -505,7 +507,6 @@ int main(int argc, char ** argv) {
     // TODO: not great to use extern vars
     server_log_json = params.log_json;
     server_verbose = params.verbosity > 0;
-
 
     // struct that contains llama context and inference
     server_context ctx_server;
