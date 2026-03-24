@@ -87,6 +87,18 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
+    LOG_TEE("%s: branch        = %s\n", __func__, LLAMA_BUILD_BRANCH);
+    LOG_TEE("%s: last PR       = %s\n", __func__, LLAMA_BUILD_LAST_MERGED_PR);
+    LOG_TEE("%s: last commit   = %s\n", __func__, LLAMA_BUILD_LAST_COMMIT);
+    LOG_TEE("%s: nexes commits = %d\n", __func__, LLAMA_NEXES_COMMITS);
+    if (ggml_cpu_has_cuda()) {
+        LOG_TEE("%s: cuda version = %s\n", __func__, LLAMA_BUILD_CUDA_VERSION);
+    } else {
+        LOG_TEE("%s: cuda version = not used in CPU mode.\n", __func__);
+    }
+    LOG_TEE("%s: built with %s on the %s\n", __func__, LLAMA_COMPILER, LLAMA_BUILD_DATE);
+    LOG_TEE("%s\n", gpt_params_get_system_info(params).c_str());
+
     // initialize the model
 
     llama_model_params model_params = common_model_params_to_llama(params);
