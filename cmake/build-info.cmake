@@ -2,6 +2,9 @@ set(BUILD_NUMBER 0)
 set(BUILD_COMMIT "unknown")
 set(BUILD_COMPILER "unknown")
 set(BUILD_TARGET "unknown")
+set(BUILD_BRANCH "unknown")
+set(BUILD_DATE "unknown")
+set(BUILD_NEXES_COMMITS 0)
 
 # Look for git
 find_package(Git)
@@ -37,7 +40,29 @@ if(Git_FOUND)
     if (RES EQUAL 0)
         set(BUILD_NUMBER ${COUNT})
     endif()
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --abbrev-ref HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE BRANCH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE RES
+    )
+    if (RES EQUAL 0)
+        set(BUILD_BRANCH ${BRANCH})
+    endif()
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-list --count --author=Nexesenex HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE NEXES_COUNT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE RES
+    )
+    if (RES EQUAL 0)
+        set(BUILD_NEXES_COMMITS ${NEXES_COUNT})
+    endif()
 endif()
+
+string(TIMESTAMP BUILD_DATE "%Y-%m-%d %H:%M:%S" UTC)
 
 if(MSVC)
     set(BUILD_COMPILER "${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")

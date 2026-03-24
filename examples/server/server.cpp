@@ -476,6 +476,13 @@ int main(int argc, char ** argv) {
         {"commit", LLAMA_COMMIT}
     });
 
+    LOG_INFO("build details", {
+        {"branch",       LLAMA_BUILD_BRANCH},
+        {"nexes_commits", LLAMA_NEXES_COMMITS},
+        {"compiler",     LLAMA_COMPILER},
+        {"build_date",  LLAMA_BUILD_DATE}
+    });
+
     LOG_INFO("system info", {
         {"n_threads",       params.n_threads},
         {"n_threads_batch", params.n_threads_batch},
