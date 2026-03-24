@@ -183,6 +183,9 @@ int main(int argc, char ** argv) {
 
     LOG_TEE("%s: build = %d (%s)\n",      __func__, LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
     LOG_TEE("%s: built with %s for %s\n", __func__, LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+    LOG_TEE("%s: branch = %s\n",           __func__, LLAMA_BUILD_BRANCH);
+    LOG_TEE("%s: date   = %s\n",           __func__, LLAMA_BUILD_DATE);
+    LOG_TEE("%s: Nexesenex commits = %d\n", __func__, LLAMA_NEXES_COMMITS);
 
     if (params.seed == LLAMA_DEFAULT_SEED) {
         params.seed = time(NULL);
