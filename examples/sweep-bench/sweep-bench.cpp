@@ -18,44 +18,6 @@
 #include <string>
 #include <vector>
 
-static void llama_selective_log_callback(ggml_log_level level, const char * text, void * user_data) {
-    (void) level;
-    (void) user_data;
-    const char * skip_patterns[] = {
-        "Setting default device in layer",
-        "llama_model_loader: Dumping metadata",
-        "llama_model_loader: - kv  ",
-        "llama_model_loader: - type ",
-        "validate_override:",
-        "load: printing all EOG",
-        "load:   - ",
-        "load: special tokens cache",
-        "load: token to piece cache",
-        "llm_load_print_meta:",
-        "print_info:",
-        "------------------- Layer sizes",
-        "Layer ",
-        "llm_load_tensors:",
-        "==========================",
-        "merging up/gate in layer",
-        "Concatenating up/gate experts weight in layer",
-    };
-    for (const char * pat : skip_patterns) {
-        if (strstr(text, pat) != nullptr) {
-            return;
-        }
-    }
-    // Skip incomplete/continuation lines
-    int i = 0;
-    while (text[i] == ' ' || text[i] == '\t') {
-        i++;
-    }
-    if (text[i] == ',' || text[i] == '(' || text[i] == ')'|| (text[i] >= '0' && text[i] <= '9')) {
-        return;
-    }
-    LOG_TEE("%s", text);
-}
-
 static void print_usage(int, char ** argv) {
     LOG_TEE("\nexample usage:\n");
     LOG_TEE("\n    %s -m model.gguf -c 8192 -b 2048 -ub 512\n", argv[0]);
@@ -72,9 +34,7 @@ int main(int argc, char ** argv) {
     }
     if (params.nrep < 1) params.nrep = 1;
 
-    if (params.minilog) {
-        llama_log_set(llama_selective_log_callback, nullptr);
-    }
+    common_params_minilog(params);
 
     // init LLM
 
