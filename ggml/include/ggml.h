@@ -905,11 +905,6 @@ extern "C" {
     GGML_API void    ggml_numa_init(enum ggml_numa_strategy numa); // call once for better performance on NUMA systems
     GGML_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node
 
-    // IK_OPENMP: batch thread threshold for barrier strategy
-    // expr format: ">N", "<N", ">=N", "<=N", "==N" (default: ">32")
-    GGML_API void    ggml_set_batch_thread_threshold(const char * expr);
-    GGML_API const char * ggml_get_batch_thread_threshold(void);
-
     GGML_API void    ggml_print_object (const struct ggml_object * obj);
     GGML_API void    ggml_print_objects(const struct ggml_context * ctx);
 
