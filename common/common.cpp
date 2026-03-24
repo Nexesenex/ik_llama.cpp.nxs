@@ -2946,6 +2946,56 @@ std::string gpt_params_get_system_info(const gpt_params & params) {
     return os.str();
 }
 
+static void common_minilog_callback(ggml_log_level level, const char * text, void * user_data) {
+    (void) level;
+    (void) user_data;
+    const char * skip_patterns[] = {
+        "Setting default device in layer",
+        "llama_model_loader: Dumping metadata",
+        "llama_model_loader: - kv  ",
+        "llama_model_loader: - type ",
+        "validate_override:",
+        "load: printing all EOG",
+        "load:   - ",
+        "load: special tokens cache",
+        "load: token to piece cache",
+        "llm_load_print_meta:",
+        "print_info:",
+        "------------------- Layer sizes",
+        "-------------------------------",
+        "Layer ",
+        "llm_load_tensors:",
+        "==========================",
+        "merging up/gate in layer",
+        "Tensor ",
+        "model has unused ",
+        "Setting default ",
+        "Concatenating up/gate experts weight in layer",
+        "GPU ",
+        "buffer type overriden to CPU",
+        "Oops: got unknown for tensor",
+    };
+    for (const char * pat : skip_patterns) {
+        if (strstr(text, pat) != nullptr) {
+            return;
+        }
+    }
+    int i = 0;
+    while (text[i] == ' ' || text[i] == '\t') {
+        i++;
+    }
+    if (text[i] == ',' || text[i] == '(' || text[i] == ')'|| (text[i] >= '0' && text[i] <= '9')) {
+        return;
+    }
+    LOG_TEE("%s", text);
+}
+
+void common_params_minilog(const gpt_params & params) {
+    if (params.minilog) {
+        llama_log_set(common_minilog_callback, nullptr);
+    }
+}
+
 //
 // String utils
 //
