@@ -3513,12 +3513,16 @@ static bool llm_load_tensors(
 
     if (fit) {
         if (ml.tensor_buft_overrides) {
-            throw std::runtime_error("Manual tensor overrides cannot be used with --fit");
+            LLAMA_LOG_WARN("--fit is disabled because tensor overrides (-ot) are specified\n");
+            fit = false;
         }
         if (ml.ncmoe > 0) {
-            throw std::runtime_error("-ncmoe | --n-cpu-moe cannot be used with --fit");
+            LLAMA_LOG_WARN("--fit is disabled because -ncmoe | --n-cpu-moe is specified\n");
+            fit = false;
         }
-        n_gpu_layers = 999;
+        if (fit) {
+            n_gpu_layers = 999;
+        }
     }
 
     model.split_mode   = split_mode;
@@ -3620,6 +3624,7 @@ static bool llm_load_tensors(
     model.default_layer_device = std::vector<int32_t>(hparams.n_layer+1, device_count-1);
     int act_gpu_layers = std::min(n_gpu_layers, (int)n_layer + 1);
     std::vector<llama_model_tensor_buft_override> overrides;
+    bool has_tensor_split = tensor_split != nullptr && std::any_of(tensor_split, tensor_split + device_count, [](float x) { return x != 0.0f; });
     // device_count comes from model.splits (at least 1), but device_mem below is sized by
     // model.devices, which is empty on a CPU-only run of a CUDA build (no GPU present or
     // -ngl 0). This block indexes device_mem[id] for id < device_count, so it reads out of
@@ -3664,7 +3669,7 @@ static bool llm_load_tensors(
                 }
             }
         }
-        if (device_count > 1) {
+        if (device_count > 1 && (model.split_mode == LLAMA_SPLIT_MODE_LAYER ? (fit || has_tensor_split) : fit)) {
             int n_last = n_layer;
             if (n_gpu_layers > n_layer) ++n_last;
             double sum = max_compute * device_count;
