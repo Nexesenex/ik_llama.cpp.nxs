@@ -2346,5 +2346,9 @@ int main(int argc, char ** argv) {
 
     llama_backend_free();
 
+#ifdef GGML_USE_CUDA
+    ggml_backend_cuda_pinned_mem_print_stats();
+#endif
+
     return 0;
 }

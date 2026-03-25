@@ -1249,12 +1249,22 @@ GGML_CALL static const char * ggml_backend_cuda_host_buffer_name(ggml_backend_bu
     GGML_UNUSED(buffer);
 }
 
+static size_t g_pinned_total_bytes = 0;
+static size_t g_pinned_peak_bytes = 0;
+static int    g_pinned_alloc_count = 0;
+static int    g_pinned_fallback_count = 0;
+
 GGML_CALL static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     CUDA_CHECK(cudaFreeHost(buffer->context));
+    g_pinned_total_bytes -= ggml_backend_buffer_get_size(buffer);
+    g_pinned_alloc_count--;
+    GGML_CUDA_LOG_INFO("%s: freed pinned buffer, total pinned: %.2f MiB, alloc_count: %d\n",
+        __func__, g_pinned_total_bytes / 1024.0 / 1024.0, g_pinned_alloc_count);
 }
 
 static void * ggml_cuda_host_malloc(size_t size) {
     if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
+        GGML_CUDA_LOG_INFO("%s: GGML_CUDA_NO_PINNED set, skipping pinned allocation\n", __func__);
         return nullptr;
     }
     constexpr double k_warn_limit = 8.0;
@@ -1286,8 +1296,22 @@ GGML_CALL static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_
 
     if (ptr == nullptr) {
         // fallback to cpu buffer
+        g_pinned_fallback_count++;
+        GGML_CUDA_LOG_INFO("%s: PINNED LIMIT REACHED - allocating %.2f MiB in regular CPU memory instead (fallback #%d)\n",
+            __func__, size / 1024.0 / 1024.0, g_pinned_fallback_count);
         return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
     }
+
+    g_pinned_total_bytes += size;
+    g_pinned_alloc_count++;
+    if (g_pinned_total_bytes > g_pinned_peak_bytes) {
+        g_pinned_peak_bytes = g_pinned_total_bytes;
+    }
+    GGML_CUDA_LOG_INFO("%s: allocated %.2f MiB PINNED, total pinned: %.2f MiB, peak: %.2f MiB, alloc_count: %d\n",
+        __func__, size / 1024.0 / 1024.0,
+        g_pinned_total_bytes / 1024.0 / 1024.0,
+        g_pinned_peak_bytes / 1024.0 / 1024.0,
+        g_pinned_alloc_count);
 
     ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
     buffer->buft = buft;
@@ -1311,6 +1335,15 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
     };
 
     return &ggml_backend_cuda_buffer_type_host;
+}
+
+void ggml_backend_cuda_pinned_mem_print_stats(void) {
+    fprintf(stderr, "\n=== PINNED MEMORY STATISTICS ===\n");
+    fprintf(stderr, "Peak pinned memory allocated: %.2f MiB\n", g_pinned_peak_bytes / 1024.0 / 1024.0);
+    fprintf(stderr, "Final pinned memory in use:  %.2f MiB\n", g_pinned_total_bytes / 1024.0 / 1024.0);
+    fprintf(stderr, "Total pinned allocations:   %d\n", g_pinned_alloc_count);
+    fprintf(stderr, "Fallback allocations (reg): %d\n", g_pinned_fallback_count);
+    fprintf(stderr, "================================\n\n");
 }
 
 //static bool ggml_backend_buffer_is_cuda_host(ggml_backend_buffer_t buffer) {
