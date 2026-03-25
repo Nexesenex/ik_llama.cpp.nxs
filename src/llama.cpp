@@ -2254,12 +2254,16 @@ static bool llm_load_tensors(
 
     if (fit) {
         if (ml.tensor_buft_overrides) {
-            throw std::runtime_error("Manual tensor overrides cannot be used with --fit");
+            LLAMA_LOG_WARN("--fit is disabled because tensor overrides (-ot) are specified\n");
+            fit = false;
         }
         if (ml.ncmoe > 0) {
-            throw std::runtime_error("-ncmoe | --n-cpu-moe cannot be used with --fit");
+            LLAMA_LOG_WARN("--fit is disabled because -ncmoe | --n-cpu-moe is specified\n");
+            fit = false;
         }
-        n_gpu_layers = 999;
+        if (fit) {
+            n_gpu_layers = 999;
+        }
     }
 
     model.split_mode   = split_mode;
@@ -2356,8 +2360,12 @@ static bool llm_load_tensors(
         }
         LLAMA_LOG_INFO("Memory required for model tensors + cache: %.f MiB\n", required_mem/(1024.*1024.));
         LLAMA_LOG_INFO("Memory available on all devices - compute: %.f MiB\n", available_mem/(1024.*1024.));
+
         // Do not adjust the splits if the use has provided their own
         if (required_mem > available_mem && !tensor_split) {
+
+        // if (fit && required_mem > available_mem && !tensor_split) {
+
             float sum = 0;
             for (int id = 0; id < device_count; ++id) {
                 device_mem[id] = device_mem[id] > max_compute ? device_mem[id] - max_compute : 0;
@@ -2370,7 +2378,7 @@ static bool llm_load_tensors(
                 }
             }
         }
-        if (device_count > 1) {
+        if (fit && device_count > 1) {
             int n_last = n_layer;
             if (n_gpu_layers > n_layer) ++n_last;
             double sum = max_compute * device_count;
