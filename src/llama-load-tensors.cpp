@@ -3528,18 +3528,30 @@ static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor
     }
 }
 
-static void adjust_split(std::vector<float> & split, const std::vector<size_t> & mem_used, int max_gpu_per_split) {
+static void adjust_split(std::vector<float> & split, const std::vector<size_t> & mem_used, int max_gpu_per_split,
+        const std::vector<size_t> & vram_free, bool vram_aware) {
     if (max_gpu_per_split < 1 || max_gpu_per_split >= int(split.size()) || split.size() != mem_used.size()) {
         return;
     }
     size_t tot_mem_used = 1;
     for (auto & mem : mem_used) tot_mem_used += mem;
     for (int i = split.size() - 1; i > 0; --i) split[i] -= split[i-1];
+
     std::vector<std::pair<float, int>> sorted(split.size());
-    for (int i = 0; i < int(split.size()); ++i) {
-        float mem_ideal = split[i]*tot_mem_used;
-        float err = mem_ideal - mem_used[i];
-        sorted[i] = {err, i};
+
+    if (vram_aware && !vram_free.empty() && vram_free.size() == split.size()) {
+        for (int i = 0; i < int(split.size()); ++i) {
+            float mem_ideal = split[i]*tot_mem_used;
+            float vram_available = (float)vram_free[i];
+            float err = vram_available - mem_ideal;
+            sorted[i] = {err, i};
+        }
+    } else {
+        for (int i = 0; i < int(split.size()); ++i) {
+            float mem_ideal = split[i]*tot_mem_used;
+            float err = mem_ideal - mem_used[i];
+            sorted[i] = {err, i};
+        }
     }
     std::partial_sort(sorted.begin(), sorted.begin() + max_gpu_per_split, sorted.end(), std::greater<std::pair<float,int>>{});
     for (auto & p : split) p = 0;
@@ -3982,6 +3994,7 @@ bool create_tensors_helper::create_tensors() {
         LLAMA_LOG_INFO("================================ max_gpu_per_split = %d\n", model.max_gpu_per_split);
         LLAMA_LOG_INFO("================================ split_adjust_step_frequency = %.2f\n", model.split_adjust_step_frequency);
         LLAMA_LOG_INFO("================================ split_memory_factor = %.2f\n", model.split_memory_factor);
+        LLAMA_LOG_INFO("================================ split_adjust_vram_aware = %s\n", model.split_adjust_vram_aware ? "true" : "false");
         std::vector<size_t> mem_used(model.splits.size(), 0);
         std::vector<size_t> vram_free(model.splits.size(), 0);
         std::vector<size_t> vram_total(model.splits.size(), 0);
@@ -4111,7 +4124,7 @@ bool create_tensors_helper::create_tensors() {
             }
             if (model.max_gpu_per_split > 0 && model.max_gpu_per_split < int(model.splits.size()) && il % adjust_step == 0) {
                 cur_splits = model.splits;
-                adjust_split(cur_splits, mem_used, model.max_gpu_per_split);
+                adjust_split(cur_splits, mem_used, model.max_gpu_per_split, vram_free, model.split_adjust_vram_aware);
                 LLAMA_LOG_INFO("Adjusted split at layer %2d:  ", il);
                 float last_split = 0;
                 for (int i = 0; i < (int)cur_splits.size(); ++i) {
