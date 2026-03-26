@@ -28,14 +28,18 @@ buffer_pattern = re.compile(r"Device\s+0:\s+([\d.]+)\s+MiB.*?Device\s+1:\s+([\d.
 for i, block in enumerate(command_blocks[1:], 1):
     ts_match = re.search(r"-ts\s+([\d,]+)", block)
     sasf_match = re.search(r"-sasf\s+([\d.]+)", block)
+    smf_match = re.search(r"-smf\s+([\d.]+)", block)
     mota_match = re.search(r"-mota", block)
+    sava_match = re.search(r"-sava", block)
     
     if not (ts_match and sasf_match):
         continue
     
     ts_values = ts_match.group(1).split(",")
     sasf_value = float(sasf_match.group(1))
+    smf_value = float(smf_match.group(1)) if smf_match else 1.0
     mota = "yes" if mota_match else "no"
+    sava = "yes" if sava_match else "no"
     
     output_start_idx = block.find("=== OUTPUT START")
     if output_start_idx == -1:
@@ -67,7 +71,9 @@ for i, block in enumerate(command_blocks[1:], 1):
         "ts_gpu1": int(ts_values[1]),
         "ts_gpu2": int(ts_values[2]),
         "sasf": sasf_value,
+        "smf": smf_value,
         "mota": mota,
+        "sava": sava,
         "split_gpu0": gpu0,
         "split_gpu1": gpu1,
         "split_gpu2": gpu2,
@@ -77,7 +83,10 @@ for i, block in enumerate(command_blocks[1:], 1):
         "buf_gpu2_mib": buf_gpu2
     })
 
-fieldnames = ["timestamp", "test_id", "total_tests", "ts_gpu0", "ts_gpu1", "ts_gpu2", "sasf", "mota", "split_gpu0", "split_gpu1", "split_gpu2", "total_splits", "buf_gpu0_mib", "buf_gpu1_mib", "buf_gpu2_mib"]
+fieldnames = ["timestamp", "test_id", "total_tests", "ts_gpu0", "ts_gpu1", "ts_gpu2", 
+              "sasf", "smf", "mota", "sava", 
+              "split_gpu0", "split_gpu1", "split_gpu2", "total_splits", 
+              "buf_gpu0_mib", "buf_gpu1_mib", "buf_gpu2_mib"]
 
 total_count = len(results)
 for r in results:

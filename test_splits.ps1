@@ -1,5 +1,6 @@
 $ts_values = @("24,24,12", "24,24,13", "24,24,14", "24,24,15", "24,24,16")
 $sasf_values = @("0.5", "0.33", "0.25", "0.20", "6", "7")
+$smf_values = @("1.0", "2.0", "0.5")  # split_memory_factor values
 
 $exe = "Q:\GitHub\ik_llama.cpp.fks\out\build\x64_Rel_MSVC_Cuda_Test\bin\llama-server"
 $model = "X:\text-generation-webui\models\Qwen3.5-397B-A17B\Qwen3.5-397B-A17B-IQ4_XS-00001-of-01099.gguf"
@@ -7,24 +8,32 @@ $EXEC_TIME = 3
 $INTERVAL_TIME = 3
 
 function Find-LastCompleted {
+    param([int]$ExpectedTotal = 0)
     $files = Get-ChildItem "Q:\GitHub\ik_llama.cpp.fks\test_results_*.txt" | Sort-Object LastWriteTime -Descending
-    if ($files.Count -eq 0) { return 0, $null }
+    if ($files.Count -eq 0) { return 0, $null, 0 }
     $latest = $files[0].FullName
     Write-Host "Found existing log: $latest"
     $content = Get-Content $latest -Raw
-    if ($content -match 'OUTPUT END \((\d+)/60\)') {
-        $last = [int]($matches[1] | Measure-Object -Maximum).Maximum
-        Write-Host "Resuming from iteration $last/60"
-        return $last, $latest
+    $matches = [regex]::Matches($content, 'OUTPUT END \((\d+)/(\d+)\)')
+    if ($matches.Count -gt 0) {
+        $last = ($matches | ForEach-Object { [int]$_.Groups[1].Value } | Measure-Object -Maximum).Maximum
+        $total = [int]$matches[0].Groups[2].Value
+        Write-Host "Resuming from iteration $last/$total"
+        return $last, $latest, $total
     }
-    return 0, $null
+    return 0, $null, 0
 }
 
-$start_iter, $resume_file = Find-LastCompleted
-if ($start_iter -ge 60) {
+$result = Find-LastCompleted
+$start_iter = $result[0]
+$resume_file = $result[1]
+$expected_total = $result[2]
+
+if ($start_iter -gt 0 -and $expected_total -gt 0 -and $start_iter -ge $expected_total) {
     Write-Host "Previous run complete, starting fresh"
     $start_iter = 0
     $resume_file = $null
+    $expected_total = 0
 } elseif ($start_iter -gt 0 -and $resume_file) {
     Write-Host "Backing up previous log..."
     Copy-Item $resume_file "$resume_file.bak"
@@ -74,7 +83,7 @@ $base_args = @(
 )
 
 $results = @()
-$total = $ts_values.Count * $sasf_values.Count * 2
+$total = $ts_values.Count * $sasf_values.Count * $smf_values.Count * 2 * 2  # 2 for mota, 2 for sava
 $count = 0
 
 function Write-Log {
@@ -92,21 +101,23 @@ if ($start_iter -eq 0) {
 }
 
 Write-Log "Starting tests: $total combinations"
+Write-Log "Parameters: ts x sasf x smf x mota x sava"
 Write-Log ("=" * 60)
 
 foreach ($ts in $ts_values) {
     foreach ($sasf in $sasf_values) {
-        $mota_values = @($false, $true)
-        foreach ($mota in $mota_values) {
-            $count++
-            if ($count -le $start_iter) { continue }
-            $mota_str = if ($mota) { "-mota" } else { "no-mota" }
-            Write-Log "Test $count/$total : ts=$ts sasf=$sasf $mota_str"
-            
-            $args = $base_args + @("-ts", $ts, "-sasf", $sasf)
-            if ($mota) {
-                $args += "-mota"
-            }
+        foreach ($smf in $smf_values) {
+            foreach ($mota in @($false, $true)) {
+                foreach ($sava in @($false, $true)) {
+                    $count++
+                    if ($count -le $start_iter) { continue }
+                    $mota_str = if ($mota) { "mota" } else { "no-mota" }
+                    $sava_str = if ($sava) { "sava" } else { "no-sava" }
+                    Write-Log "Test $count/$total : ts=$ts sasf=$sasf smf=$smf $mota_str $sava_str"
+                    
+                    $args = $base_args + @("-ts", $ts, "-sasf", $sasf, "-smf", $smf)
+                    if ($mota) { $args += "-mota" }
+                    if ($sava) { $args += "-sava" }
             
             $cmd_str = ($exe + " " + ($args -join " "))
             Write-Log "Command: $cmd_str"
@@ -144,9 +155,11 @@ foreach ($ts in $ts_values) {
             
             "=== OUTPUT END ($count/$total) ===" | Out-File -FilePath $log_file -Append -Encoding UTF8
             
-            Write-Log "Completed: $mota_str"
+            Write-Log "Completed: $mota_str $sava_str"
             
             Start-Sleep -Seconds $INTERVAL_TIME
+                }
+            }
         }
     }
 }

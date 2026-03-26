@@ -8,6 +8,7 @@ import re
 
 ts_values = ["24,24,12", "24,24,13", "24,24,14", "24,24,15", "24,24,16"]
 sasf_values = ["0.5", "0.33", "0.25", "0.20", "6", "7"]
+smf_values = ["1.0", "2.0", "0.5"]  # split_memory_factor values
 
 exe = r"Q:\GitHub\ik_llama.cpp.fks\out\build\x64_Rel_MSVC_Cuda_Test\bin\llama-server"
 model = r"X:\text-generation-webui\models\Qwen3.5-397B-A17B\Qwen3.5-397B-A17B-IQ4_XS-00001-of-01099.gguf"
@@ -30,18 +31,24 @@ def find_last_completed():
     with open(latest, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    matches = re.findall(r'OUTPUT END \((\d+)/60\)', content)
+    matches = re.findall(r'OUTPUT END \((\d+)/(\d+)\)', content)
     if matches:
-        last = max(int(m) for m in matches)
-        print("Resuming from iteration %d/60" % (last + 1))
-        return last, latest
-    return 0, None
+        last = max(int(m[0]) for m in matches)
+        total = int(matches[0][1])
+        print("Resuming from iteration %d/%d" % (last + 1, total))
+        return last, latest, total
+    return 0, None, None
 
-start_iter, resume_file = find_last_completed()
-if start_iter >= 60:
+result = find_last_completed()
+start_iter = result[0]
+resume_file = result[1]
+expected_total = result[2] if result[2] else 0
+
+if start_iter > 0 and expected_total > 0 and start_iter >= expected_total:
     print("Previous run complete, starting fresh")
     start_iter = 0
     resume_file = None
+    expected_total = 0
 elif start_iter > 0 and resume_file:
     print("Backing up previous log...")
     shutil.copy(resume_file, resume_file + ".bak")
@@ -87,7 +94,7 @@ base_args = [
 ]
 
 results = []
-total = len(ts_values) * len(sasf_values) * 2
+total = len(ts_values) * len(sasf_values) * len(smf_values) * 2 * 2  # 2 for mota, 2 for sava
 count = 0
 
 def log(msg):
@@ -104,20 +111,26 @@ if start_iter > 0:
 with open(log_file, "a" if start_iter > 0 else "w", encoding="utf-8") as f:
     if start_iter == 0:
         f.write("Starting tests: %d combinations\n" % total)
+        f.write("Parameters: ts x sasf x smf x mota x sava\n")
         f.write("=" * 60 + "\n")
 
 for ts in ts_values:
     for sasf in sasf_values:
-        for mota in [False, True]:
-            count += 1
-            if count <= start_iter:
-                continue
-            mota_str = "-mota" if mota else "no-mota"
-            log("Test %d/%d: ts=%s sasf=%s %s" % (count, total, ts, sasf, mota_str))
-            
-            args = base_args + ["-ts", ts, "-sasf", sasf]
-            if mota:
-                args.append("-mota")
+        for smf in smf_values:
+            for mota in [False, True]:
+                for sava in [False, True]:
+                    count += 1
+                    if count <= start_iter:
+                        continue
+                    mota_str = "mota" if mota else "no-mota"
+                    sava_str = "sava" if sava else "no-sava"
+                    log("Test %d/%d: ts=%s sasf=%s smf=%s %s %s" % (count, total, ts, sasf, smf, mota_str, sava_str))
+                    
+                    args = base_args + ["-ts", ts, "-sasf", sasf, "-smf", smf]
+                    if mota:
+                        args.append("-mota")
+                    if sava:
+                        args.append("-sava")
             
             cmd = [exe] + args
             cmd_str = " ".join(cmd)
@@ -141,7 +154,7 @@ for ts in ts_values:
                     f.write(output if output else "(no output)")
                     f.write("\n=== OUTPUT END (%d/%d) ===\n" % (count, total))
                 
-                log("Completed: %s" % mota_str)
+                log("Completed: %s %s" % (mota_str, sava_str))
             except Exception as e:
                 log("Error: %s" % str(e))
             
