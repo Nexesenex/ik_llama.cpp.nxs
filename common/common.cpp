@@ -269,6 +269,35 @@ int32_t cpu_get_num_math() {
     return cpu_get_num_physical_cores();
 }
 
+/**
+ * Parse a hex string CPU mask (e.g., "0x3F" or "3F") into a 512-bit mask array.
+ * Returns true if the mask is non-zero (affinity enabled).
+ */
+bool parse_cpu_mask(const std::string & hex_str, uint64_t mask[8]) {
+    memset(mask, 0, 8 * sizeof(uint64_t));
+
+    if (hex_str.empty() || hex_str == "0" || hex_str == "0x0") {
+        return false;  // No affinity
+    }
+
+    std::string hex = hex_str;
+    if (hex.substr(0, 2) == "0x" || hex.substr(0, 2) == "0X") {
+        hex = hex.substr(2);
+    }
+
+    // Parse up to 128 hex digits (512 bits)
+    size_t len = std::min(hex.length(), (size_t)128);
+    for (size_t i = 0; i < len; i++) {
+        char c = hex[len - 1 - i];  // Reverse order (LSB first)
+        int val = (c >= '0' && c <= '9') ? c - '0' :
+                  (c >= 'a' && c <= 'f') ? c - 'a' + 10 :
+                  (c >= 'A' && c <= 'F') ? c - 'A' + 10 : 0;
+        mask[i / 16] |= (uint64_t)val << ((i % 16) * 4);
+    }
+
+    return true;
+}
+
 //
 // Arg utils
 //
@@ -1511,6 +1540,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cuda_params = argv[i];
         return true;
     }
+    if (arg == "-C" || arg == "--cpu-mask") {
+        CHECK_ARG
+        params.cpu_mask = argv[i];
+        return true;
+    }
     if (arg == "-mtp" || arg == "--multi-token-prediction") {
         params.has_mtp = true;
         return true;
@@ -2723,6 +2757,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "backend" });
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
+    options.push_back({ "*",           "-C,    --cpu-mask HEX",         "CPU affinity mask (e.g., 0x3 for cores 0-1)" });
     options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
@@ -3776,6 +3811,9 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
 
     if (!params.offload_policy.empty()) cparams.offload_policy = (void *)&params.offload_policy;
     if (!params.cuda_params.empty()) cparams.cuda_params = (void *)params.cuda_params.data();
+
+    // Parse CPU affinity mask
+    parse_cpu_mask(params.cpu_mask, cparams.cpu_mask);
 
     return cparams;
 }

@@ -484,6 +484,8 @@ extern "C" {
         void *              abort_callback_data;
         void *              offload_policy;
         void *              cuda_params;
+
+        uint64_t            cpu_mask[8];    // CPU affinity mask (512 cores max)
     };
 
     // model quantization parameters

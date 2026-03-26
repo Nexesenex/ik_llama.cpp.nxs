@@ -810,6 +810,8 @@ struct ggml_backend_cpu_context {
 
     ggml_abort_callback abort_callback;
     void *              abort_callback_data;
+
+    uint64_t            cpu_mask[8];
 };
 
 GGML_CALL static const char * ggml_backend_cpu_name(ggml_backend_t backend) {
@@ -893,6 +895,7 @@ GGML_CALL static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t 
 
     cplan.abort_callback      = cpu_ctx->abort_callback;
     cplan.abort_callback_data = cpu_ctx->abort_callback_data;
+    memcpy(cplan.cpu_mask, cpu_ctx->cpu_mask, sizeof(cplan.cpu_mask));
 
     return ggml_graph_compute(cgraph, &cplan);
 }
@@ -960,6 +963,7 @@ ggml_backend_t ggml_backend_cpu_init(void) {
     ctx->work_size           = 0;
     ctx->abort_callback      = NULL;
     ctx->abort_callback_data = NULL;
+    memset(ctx->cpu_mask, 0, sizeof(ctx->cpu_mask));
 
     ggml_backend_t cpu_backend = (ggml_backend_t)malloc(sizeof(struct ggml_backend));
     if (cpu_backend == NULL) {
@@ -992,6 +996,13 @@ void ggml_backend_cpu_set_abort_callback(ggml_backend_t backend_cpu, ggml_abort_
     struct ggml_backend_cpu_context * ctx = (struct ggml_backend_cpu_context *)backend_cpu->context;
     ctx->abort_callback = abort_callback;
     ctx->abort_callback_data = abort_callback_data;
+}
+
+void ggml_backend_cpu_set_cpu_mask(ggml_backend_t backend_cpu, const uint64_t cpu_mask[8]) {
+    GGML_ASSERT(ggml_backend_is_cpu(backend_cpu));
+
+    struct ggml_backend_cpu_context * ctx = (struct ggml_backend_cpu_context *)backend_cpu->context;
+    memcpy(ctx->cpu_mask, cpu_mask, 8 * sizeof(uint64_t));
 }
 
 GGML_CALL ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) {

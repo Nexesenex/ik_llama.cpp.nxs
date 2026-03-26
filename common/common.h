@@ -81,6 +81,7 @@ struct llama_control_vector_load_info;
 
 int32_t cpu_get_num_physical_cores();
 int32_t cpu_get_num_math();
+bool    parse_cpu_mask(const std::string & hex_str, uint64_t mask[8]);
 
 enum llama_example {
     LLAMA_EXAMPLE_COMMON,
@@ -302,6 +303,7 @@ struct gpt_params {
     std::string rpc_servers          = ""; // comma separated list of RPC servers
 
     std::string cuda_params          = ""; // comma separated list of cuda parameters key=value1,key2=value2
+    std::string cpu_mask             = ""; // CPU affinity mask (hex string, e.g., "0x3" for cores 0-1)
 
     std::vector<std::string> in_files;     // all input files
     std::vector<std::string> antiprompt;   // strings upon which more user input is prompted (a.k.a. reverse prompts)

@@ -26241,11 +26241,38 @@ static void clear_numa_thread_affinity(void) {
 
     CPU_FREE(cpus);
 }
+
+// Set CPU affinity based on a 512-bit mask
+static void set_thread_affinity_from_mask(const uint64_t cpu_mask[8]) {
+    size_t setsize = CPU_ALLOC_SIZE(512);
+    cpu_set_t * cpus = CPU_ALLOC(512);
+    CPU_ZERO_S(setsize, cpus);
+
+    int cores_found = 0;
+    for (int i = 0; i < 512 && cores_found < 512; i++) {
+        int word = i / 64;
+        int bit = i % 64;
+        if (cpu_mask[word] & (1ULL << bit)) {
+            CPU_SET_S(i, setsize, cpus);
+            cores_found++;
+        }
+    }
+
+    if (cores_found > 0) {
+        int rv = pthread_setaffinity_np(pthread_self(), setsize, cpus);
+        if (rv) {
+            fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
+        }
+    }
+
+    CPU_FREE(cpus);
+}
 #else
 // TODO: Windows etc.
 // (the linux implementation may also work on BSD, someone should test)
 static void set_numa_thread_affinity(int thread_n) { UNUSED(thread_n);  }
 static void clear_numa_thread_affinity(void) {}
+static void set_thread_affinity_from_mask(const uint64_t cpu_mask[8]) { UNUSED(cpu_mask); }
 #endif
 
 static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
@@ -26709,7 +26736,20 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     const struct ggml_cgraph * cgraph = state->shared->cgraph;
     const struct ggml_cplan  * cplan  = state->shared->cplan;
 
-    set_numa_thread_affinity(state->ith);
+    // Check if CPU mask is specified
+    bool has_mask = false;
+    for (int i = 0; i < 8; i++) {
+        if (cplan->cpu_mask[i] != 0) {
+            has_mask = true;
+            break;
+        }
+    }
+
+    if (has_mask) {
+        set_thread_affinity_from_mask(cplan->cpu_mask);
+    } else {
+        set_numa_thread_affinity(state->ith);
+    }
 
     struct ggml_compute_params params = {
         /*.ith   =*/ state->ith,

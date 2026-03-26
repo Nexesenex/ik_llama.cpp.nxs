@@ -826,6 +826,9 @@ extern "C" {
         // abort ggml_graph_compute when true
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
+
+        // CPU affinity mask (512 cores max)
+        uint64_t            cpu_mask[8];
     };
 
     enum ggml_cgraph_eval_order {

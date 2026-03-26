@@ -3653,6 +3653,7 @@ static void llama_graph_compute(
     if (lctx.backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
+        ggml_backend_cpu_set_cpu_mask(lctx.backend_cpu, lctx.cparams.cpu_mask);
     }
 #ifdef GGML_USE_BLAS
     if (lctx.backend_blas != nullptr) {
@@ -4997,6 +4998,7 @@ struct llama_context_params llama_context_default_params() {
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
         /*.cuda_params                 =*/ nullptr,
+        /*.cpu_mask                    =*/ {0, 0, 0, 0, 0, 0, 0, 0},
     };
 
     return result;
@@ -5376,6 +5378,7 @@ struct llama_context * llama_init_from_model(
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
+    memcpy(cparams.cpu_mask, params.cpu_mask, sizeof(cparams.cpu_mask));
     cparams.mtp              = params.mtp;
 
     cparams.reduce_type      = params.type_reduce;
