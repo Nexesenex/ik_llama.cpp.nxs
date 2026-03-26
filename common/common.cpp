@@ -1419,6 +1419,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.split_adjust_step_frequency = std::stof(argv[i]);
         return true;
     }
+    else if (arg == "--split-memory-factor" || arg == "-smf") {
+        CHECK_ARG
+        params.split_memory_factor = std::stof(argv[i]);
+        return true;
+    }
     if (arg == "--split-mode" || arg == "-sm") {
         CHECK_ARG
         std::string arg_next = argv[i];
@@ -2782,6 +2787,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "or for intermediate results and KV (with split-mode = row) (default: %d)", params.main_gpu });
         options.push_back({ "*",           "--max-gpu-per-split i",               "max. number of GPUs to use at a time with split mode 'tensor parallel', (default: %d)", params.max_gpu_per_split });
         options.push_back({ "*",           "-sasf, --split-adjust-step-frequency f", "adjust every N layers (<1: legacy formula with 1/N, >=1: direct N) (default: %.1f)", params.split_adjust_step_frequency });
+        options.push_back({ "*",           "-smf, --split-memory-factor f", "memory term multiplier in split formula (>1: more memory balance, <1: less) (default: %.1f)", params.split_memory_factor });
     }
 
     options.push_back({ "model" });
@@ -3646,6 +3652,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.main_gpu        = params.main_gpu;
     mparams.max_gpu_per_split = params.max_gpu_per_split;
     mparams.split_adjust_step_frequency = params.split_adjust_step_frequency;
+    mparams.split_memory_factor = params.split_memory_factor;
     mparams.ncmoe           = params.ncmoe;
     mparams.fit             = params.fit;
     mparams.fit_margin      = params.fit_margin;
@@ -4699,6 +4706,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
     fprintf(stream, "max_gpu_per_split: %d # default: 0\n", params.max_gpu_per_split);
     fprintf(stream, "split_adjust_step_frequency: %.1f # default: 0.5 (<1: legacy formula, >=1: direct layer count)\n", params.split_adjust_step_frequency);
+    fprintf(stream, "split_memory_factor: %.1f # default: 1.0 (>1: more memory balance, <1: less)\n", params.split_memory_factor);
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
     fprintf(stream, "fit: %d # default: false\n", params.fit);
     fprintf(stream, "fit_margin: %d # default: 0\n", params.fit_margin);

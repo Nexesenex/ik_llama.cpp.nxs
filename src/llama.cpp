@@ -4904,6 +4904,7 @@ struct llama_model_params llama_model_default_params() {
         /*.main_gpu                    =*/ 0,
         /*.max_gpu_per_split           =*/ 0,
         /*.split_adjust_step_frequency =*/ 0.5f,
+        /*.split_memory_factor  =*/ 1.0f,
         /*.ncmoe                       =*/ 0,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,

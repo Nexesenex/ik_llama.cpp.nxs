@@ -395,6 +395,7 @@ struct llama_model {
     int main_gpu;
     int max_gpu_per_split = 0; // max. number of GPUs to use per layer for aplit mode "graph"
     float split_adjust_step_frequency = 0.5f; // < 1: legacy formula (inverted), >= 1: direct layer count
+    float split_memory_factor = 1.0f; // multiplier for memory ratio term in split adjustment formula
     int n_gpu_layers;
 
     bool split_output_tensor = false; // force split output tensor in split mode graph
