@@ -2175,7 +2175,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     double tot_model = 0, tot_cache = 0, max_compute = 0;
     for (int il = 0; il < n_layer; ++il) {
         auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, max_ctx_size, mla_attn, n_seq_max, flash_attn);
-        LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f   %9.2f  MiB\n", il, result[il]/1024./1024., kv_size/1024./1024., (result[il] + kv_size)/1024./1024., compute[il]/1024./1024.);
+        LLAMA_LOG_INFO("Layer %2d: %9.2f MiB layer, %9.2f MiB KV cache, %9.2f MiB L+KV, %9.2f MiB Compute\n", il, result[il]/1024./1024., kv_size/1024./1024., (result[il] + kv_size)/1024./1024., compute[il]/1024./1024.);
         max_compute = std::max(max_compute, compute[il]);
         tot_model += result[il];
         tot_cache += kv_size;
@@ -2184,11 +2184,11 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     size_t output_size = model.hparams.n_vocab * n_ubatch * sizeof(float);
     if (output_size < max_compute) output_size = max_compute;
     output_size -= max_compute;
-    LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f MiB (output layer)\n", n_layer, result[n_layer]/1024./1024., output_size/1024./1024., (result[n_layer] + output_size)/1024./1024.);
+    LLAMA_LOG_INFO("Layer %2d: %9.2f MiB ?, %9.2f MiB output, %9.2f MiB (? + output)\n", n_layer, result[n_layer]/1024./1024., output_size/1024./1024., (result[n_layer] + output_size)/1024./1024.);
     result[n_layer] += output_size;
     tot_cache += output_size;
     LLAMA_LOG_INFO("--------------------------------------------------------------------------\n");
-    LLAMA_LOG_INFO("Sizes   : %9.2f MiB Model, %9.2f MiB Predicted KV Cache, %9.2f MiB Predicted Total\n", tot_model/1024./1024., tot_cache/1024./1024., (tot_model + tot_cache)/1024./1024.);
+    LLAMA_LOG_INFO("Sizes   : %9.2f MiB Model, %9.2f MiB Estim° Cache, %9.2f MiB Estim° Total\n", tot_model/1024./1024., tot_cache/1024./1024., (tot_model + tot_cache)/1024./1024.);
     return std::make_pair(std::move(result), max_compute);
 }
 
