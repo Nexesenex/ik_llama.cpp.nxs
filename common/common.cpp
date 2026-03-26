@@ -1453,6 +1453,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.split_memory_factor = std::stof(argv[i]);
         return true;
     }
+    else if (arg == "--split-vram-factor" || arg == "-svf") {
+        CHECK_ARG
+        params.split_vram_factor = std::stof(argv[i]);
+        return true;
+    }
     else if (arg == "--split-adjust-vram-aware" || arg == "-sava") {
         params.split_adjust_vram_aware = true;
         return true;
@@ -2827,6 +2832,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "--max-gpu-per-split i",               "max. number of GPUs to use at a time with split mode 'tensor parallel', (default: %d)", params.max_gpu_per_split });
         options.push_back({ "*",           "-sasf, --split-adjust-step-frequency f", "adjust every N layers (<1: legacy formula with 1/N, >=1: direct N) (default: %.1f)", params.split_adjust_step_frequency });
         options.push_back({ "*",           "-smf, --split-memory-factor f", "memory term multiplier in split formula (>1: more memory balance, <1: less) (default: %.1f)", params.split_memory_factor });
+        options.push_back({ "*",           "-svf, --split-vram-factor f", "VRAM-aware multiplier for split formula (GPU-aware, multiplies -smf) (default: %.1f)", params.split_vram_factor });
         options.push_back({ "*",           "-sava, --split-adjust-vram-aware", "use VRAM-aware selection in adjust_split (respects -ts and -sasf) (default: %s)", params.split_adjust_vram_aware ? "true" : "false" });
     }
 
@@ -3693,6 +3699,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.max_gpu_per_split = params.max_gpu_per_split;
     mparams.split_adjust_step_frequency = params.split_adjust_step_frequency;
     mparams.split_memory_factor = params.split_memory_factor;
+    mparams.split_vram_factor = params.split_vram_factor;
     mparams.split_adjust_vram_aware = params.split_adjust_vram_aware;
     mparams.ncmoe           = params.ncmoe;
     mparams.fit             = params.fit;
@@ -4751,6 +4758,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "max_gpu_per_split: %d # default: 0\n", params.max_gpu_per_split);
     fprintf(stream, "split_adjust_step_frequency: %.1f # default: 0.5 (<1: legacy formula, >=1: direct layer count)\n", params.split_adjust_step_frequency);
     fprintf(stream, "split_memory_factor: %.1f # default: 1.0 (>1: more memory balance, <1: less)\n", params.split_memory_factor);
+    fprintf(stream, "split_vram_factor: %.1f # default: 1.0 (VRAM-aware multiplier, GPU-aware, multiplies -smf)\n", params.split_vram_factor);
     fprintf(stream, "split_adjust_vram_aware: %s # default: false\n", params.split_adjust_vram_aware ? "true" : "false");
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
     fprintf(stream, "fit: %d # default: false\n", params.fit);
