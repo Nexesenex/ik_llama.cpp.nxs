@@ -139,6 +139,7 @@ struct llm_build_context {
     ggml_tensor * build_inp_s_seq();
 
     ggml_cgraph * append_pooling(struct ggml_cgraph * gf);
+    ggml_cgraph * append_pooling_split_output(struct ggml_cgraph * gf);
 
     ggml_tensor * llm_build_pos_bucket(bool causal);
 
