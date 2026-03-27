@@ -1271,6 +1271,30 @@ static void * ggml_cuda_host_malloc(size_t size) {
 
     void * ptr = nullptr;
     double size_GiB = size/(1024.*1024.*1024.);
+
+    if (size_GiB > 4.0) {
+        constexpr size_t k_test_sizes[] = { 3072UL * 1024 * 1024, 4090UL * 1024 * 1024, 4096UL * 1024 * 1024 };
+        size_t max_pinned_test = 0;
+        for (size_t test_size : k_test_sizes) {
+            void * test_ptr = nullptr;
+            cudaError_t test_err = cudaMallocHost((void **) &test_ptr, test_size);
+            if (test_err == cudaSuccess) {
+                CUDA_CHECK(cudaFreeHost(test_ptr));
+                max_pinned_test = test_size;
+            } else {
+                cudaGetLastError();
+                break;
+            }
+        }
+        GGML_CUDA_LOG_INFO("%s: quick pinned memory test: max available = %.2f MiB, requested = %.2f MiB\n",
+            __func__, max_pinned_test / 1024.0 / 1024.0, size / 1024.0 / 1024.0);
+        if (max_pinned_test == 0 || size > max_pinned_test) {
+            GGML_CUDA_LOG_INFO("%s: skipping pinned allocation (requested %.2f MiB > available %.2f MiB)\n",
+                __func__, size / 1024.0 / 1024.0, max_pinned_test / 1024.0 / 1024.0);
+            return nullptr;
+        }
+    }
+
     auto tim1 = ggml_time_us();
     if (size_GiB > k_warn_limit) {
         GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory, this can take a while...\n", size_GiB);
