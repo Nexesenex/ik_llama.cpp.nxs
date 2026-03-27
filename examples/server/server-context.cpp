@@ -2902,8 +2902,8 @@ bool server_context::create_checkpoint(server_slot & slot) {
 
         llama_state_seq_get_data(ctx, cur.data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
-        SLT_WRN(slot, "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, size = %.3f MiB, took %.2f ms)\n",
-            (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024,
+        SLT_WRN(slot, "created context checkpoint %d of %d (timestamp=%lld, pos = %d <-> %d, size = %.3f MiB, took %.2f ms)\n",
+            (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, (int64_t)time(nullptr), cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024,
             (ggml_time_us() - t_start) / 1000.0);
     }
     return do_checkpoint;
@@ -3222,21 +3222,21 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
 
                 }
-                LOG_VERBOSE("prompt processing progress", {
-                    {"id_slot",  slot.id},
-                    {"n_past",   slot.n_past},
-                    {"n_ctx",    n_ctx},
-                    {"n_tokens", batch.n_tokens},
-                    {"progress", (float)slot.n_prompt_tokens_processed / slot.n_prompt_tokens},
-                    });
+                // LOG_INFO("prompt processing progress", {
+                    // {"id_slot",  slot.id},
+                    // {"n_past",   slot.n_past},
+                    // {"n_ctx",    n_ctx},
+                    // {"n_tokens", batch.n_tokens},
+                    // {"progress", (float)slot.n_prompt_tokens_processed / slot.n_prompt_tokens},
+                    // });
 
-                // LOG_INFO("PP", {
+                // LOG_INFO("PPB", {
                     // {"id_slot",  slot.id},
                     // {"n_past",   slot.n_past},
                     // {"n_ctx",    n_ctx},
                     // {"n_tokens", batch.n_tokens},
                     // {"total", slot.n_prompt_tokens},
-                    // {"%_past", (float) slot.n_past / slot.n_prompt_tokens * 100},
+                    // {"%_past", [](float v) { char b[16]; snprintf(b,sizeof(b),"%.2f",v); return std::string(b); }((float)slot.n_past/slot.n_prompt_tokens*100)},
                 // });
 
                 const int64_t t_current = ggml_time_us();
@@ -3258,9 +3258,11 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
 
                 if ((slot.n_prompt_tokens_processed - batch.n_tokens) >1) {
                     LOG_INFO("PP", {
-                        {"n_ptp",   slot.n_ptp_start + slot.n_prompt_tokens_processed - batch.n_tokens},
+                        // {"n_ptp",   slot.n_ptp_start + slot.n_prompt_tokens_processed - batch.n_tokens},
+                        {"n_past",   slot.n_past},
                         {"Tot", n_new_tokens},
-                        {"%_P", [&n_processed_total, &n_new_tokens]() { char buf[16]; snprintf(buf, sizeof(buf), "%.2f", (double)n_processed_total / n_new_tokens * 100); return std::string(buf); }()},
+                        // {"%_P", [&n_processed_total, &n_new_tokens]() { char buf[16]; snprintf(buf, sizeof(buf), "%.2f", (double)n_processed_total / n_new_tokens * 100); return std::string(buf); }()},
+                        {"%_P", [](float v) { char b[16]; snprintf(b,sizeof(b),"%.2f",v); return std::string(b); }((float)slot.n_past/slot.n_prompt_tokens*100)},
                         {"LB t/s",    std::round(lb_pp_tok_per_sec * 100) / 100},
                         {"CurPP t/s",    std::round(cur_pp_tok_per_sec * 100) / 100},
                     });
