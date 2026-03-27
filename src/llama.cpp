@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: MIT
 //
 
+#include <ctime>
+
 #include "llama-impl.h"
 #include "llama-vocab.h"
 #include "llama-grammar.h"
@@ -39,6 +41,9 @@ void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 #include "iqk/iqk_cpu_ops.h"
 
 #define IK_PRINT_TIMING 0
+
+static int64_t g_t_start_loading = 0;
+static int64_t g_t_start_ctx = 0;
 
 #ifdef GGML_USE_RPC
 #  include "ggml-rpc.h"
@@ -7697,6 +7702,14 @@ int64_t llama_time_us(void) {
     return ggml_time_us();
 }
 
+int64_t llama_get_start_loading_time_us(void) {
+    return g_t_start_loading;
+}
+
+int64_t llama_get_start_ctx_time_us(void) {
+    return g_t_start_ctx;
+}
+
 static std::string create_rpc_name(std::string endpoint, uint32_t device) {
     std::string dev_name = "RPC" + std::to_string(device) + "[" + std::string(endpoint) + "]";
     return dev_name;
@@ -7707,6 +7720,12 @@ struct llama_model * llama_model_load_from_file(
         struct llama_model_params   params) {
     ggml_time_init();
 
+    if (g_t_start_loading == 0) {
+        g_t_start_loading = ggml_time_us();
+    }
+    const int64_t t_start_load = ggml_time_us();
+    LLAMA_LOG_INFO("\nXXX Loading phase 1 (model) is starting. Timestamp : %lld ; Timer : 0 >>>\n", (long long)time(nullptr));
+
     llama_model * model = new llama_model;
 
     bool has_rpc = params.rpc_servers != nullptr && params.rpc_servers[0] != '\0';
@@ -7715,6 +7734,7 @@ struct llama_model * llama_model_load_from_file(
     }
 
     auto n_gpu = llama_get_device_count(*model, 0);
+
     if (params.n_gpu_layers < 0) {
         params.n_gpu_layers = n_gpu > 0 ? 999 : 0;
     } else if (n_gpu == 0) {
@@ -7819,6 +7839,10 @@ struct llama_model * llama_model_load_from_file(
 
     llama_all_loaded_models().push_back(model);
 
+    const int64_t t_end_load = ggml_time_us();
+    LLAMA_LOG_INFO(">>> Loading phase 1 (model) is complete. Timestamp : %lld ; Timer : %lld ; Loading time : %lld ms >>>\n",
+        (long long)time(nullptr), (long long)((t_end_load - t_start_load) / 1000000), (long long)((t_end_load - t_start_load) / 1000));
+
     return model;
 }
 
@@ -7919,6 +7943,9 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
 struct llama_context * llama_init_from_model(
                  struct llama_model * model,
         struct llama_context_params   params) {
+
+    g_t_start_ctx = ggml_time_us();
+    const int64_t t_start_ctx = g_t_start_ctx;
 
     if (!model) {
         LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
@@ -8697,6 +8724,10 @@ struct llama_context * llama_init_from_model(
             }
         }
     }
+
+    const int64_t t_end_ctx = ggml_time_us();
+    LLAMA_LOG_INFO(">>> Loading phase 2 (model, kv cache and compute) is complete. Timestamp : %lld ; Timer : %lld ; Loading time : %lld ms >>>\n",
+        (long long)time(nullptr), (long long)((t_end_ctx - g_t_start_loading) / 1000000), (long long)((t_end_ctx - t_start_ctx) / 1000));
 
     return ctx;
 }
