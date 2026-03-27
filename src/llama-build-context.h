@@ -140,6 +140,7 @@ struct llm_build_context {
     ggml_tensor * build_inp_s_seq();
 
     ggml_cgraph * append_pooling(struct ggml_cgraph * gf);
+    ggml_cgraph * append_pooling_split_output(struct ggml_cgraph * gf);
 
     ggml_tensor * llm_build_pos_bucket(bool causal);
 
@@ -448,3 +449,39 @@ llm_expert_gating_func_type   gating_op,
         struct ggml_tensor * rope_cache
     );
 };
+
+// Helper function to apply pooling operation to an input tensor
+// Handles MEAN, CLS, LAST, and NONE pooling types
+static ggml_tensor * apply_pooling(llm_build_context & llm, ggml_tensor * inp) {
+    ggml_context * ctx0 = llm.ctx0;
+    auto & pooling_type = llm.pooling_type;
+    auto & cb = llm.cb;
+
+    ggml_tensor * cur;
+
+    switch (pooling_type) {
+        case LLAMA_POOLING_TYPE_MEAN:
+            {
+                struct ggml_tensor * inp_mean = llm.build_inp_mean();
+                cur = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, inp)), inp_mean);
+            } break;
+        case LLAMA_POOLING_TYPE_CLS:
+        case LLAMA_POOLING_TYPE_LAST:
+            {
+                struct ggml_tensor * inp_cls = llm.build_inp_cls();
+                cur = ggml_get_rows(ctx0, inp, inp_cls);
+            } break;
+        case LLAMA_POOLING_TYPE_NONE:
+            {
+                cur = inp;
+            } break;
+        default:
+            {
+                GGML_ABORT("unknown pooling type");
+            }
+    }
+
+    cb(cur, "result_embd_pooled", -1);
+
+    return cur;
+}
