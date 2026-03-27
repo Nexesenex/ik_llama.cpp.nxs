@@ -1326,7 +1326,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
-    [GGML_TYPE_MXFP4] = {
+[GGML_TYPE_MXFP4] = {
         .type_name                = "mxfp4",
         .blck_size                = QK_MXFP4,
         .type_size                = sizeof(block_mxfp4),
@@ -1340,6 +1340,19 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_TQ3_0] = {
+        .type_name                = "tq3_0",
+        .blck_size                = QK_TQ3_0,
+        .type_size                = sizeof(block_tq3_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tq3_0,
+        .from_float               = quantize_row_tq3_0,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_tq3_0_ref,
+        .vec_dot                  = ggml_vec_dot_tq3_0_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -12822,6 +12835,7 @@ static void ggml_compute_forward_add(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_TQ3_0:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -13376,6 +13390,7 @@ static void ggml_compute_forward_add1(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_TQ3_0:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -13556,6 +13571,7 @@ static void ggml_compute_forward_acc(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_TQ3_0:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -17882,6 +17898,7 @@ static void ggml_compute_forward_out_prod(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_TQ3_0:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -18306,6 +18323,7 @@ static void ggml_compute_forward_set(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_TQ3_0:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -18636,6 +18654,7 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_TQ3_0:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -19394,6 +19413,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_TQ3_0:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -28473,6 +28493,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q6_0_R4: result = quantize_q6_0_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q8_0_R8: result = quantize_q8_0_r8(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_MXFP4:   result = quantize_mxfp4  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_TQ3_0:   result = quantize_tq3_0  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_XS:  result = quantize_iq4_xs (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_KS:  result = quantize_iq4_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_KS_R4:result = quantize_iq4_ks_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
