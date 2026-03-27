@@ -437,39 +437,53 @@ ggml_cgraph * llm_build_context::append_pooling(struct ggml_cgraph * gf) {
         inp = gf->nodes[i];
 
         if (strcmp(inp->name, "result_norm") == 0 || 
-            strcmp(inp->name, "result_embd") == 0 || 
+            strcmp(inp->name, "result_embd") == 0 ||
+            strcmp(inp->name, "result_output") == 0 ||
             strcmp(inp->name, "output_normed") == 0) { 
             break;
         }
         inp = nullptr;
     }
-    GGML_ASSERT(inp != nullptr && "missing result_norm/result_embd tensor");
+    GGML_ASSERT(inp != nullptr && "missing result_norm/result_embd/result_output tensor");
 
-    struct ggml_tensor * cur;
+    ggml_tensor * cur = apply_pooling(*this, inp);
 
-    switch (pooling_type) {
-        case LLAMA_POOLING_TYPE_MEAN:
-            {
-                struct ggml_tensor * inp_mean = build_inp_mean();
-                cur = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, inp)), inp_mean);
-            } break;
-        case LLAMA_POOLING_TYPE_CLS:
-        case LLAMA_POOLING_TYPE_LAST:
-            {
-                struct ggml_tensor * inp_cls = build_inp_cls();
-                cur = ggml_get_rows(ctx0, inp, inp_cls);
-            } break;
-        case LLAMA_POOLING_TYPE_NONE:
-            {
-                cur = inp;
-            } break;
-        default:
-            {
-                GGML_ABORT("unknown pooling type");
+    ggml_build_forward_expand(gf, cur);
+
+    return gf;
+}
+
+// Pre-MTP implementation for split_output_tensor
+// Handles the device-specific tensor naming (result_norm with id >= 1000)
+ggml_cgraph * llm_build_context::append_pooling_split_output(struct ggml_cgraph * gf) {
+    // find result_norm tensor for input
+    // For split_output_tensor, result_norm is named with device-specific IDs (e.g., id >= 1000)
+    // We need to search for any tensor that ends with "result_output" which is the final output
+    // after the concat operation in build_output() for split mode
+    struct ggml_tensor * inp = nullptr;
+    for (int i = gf->n_nodes - 1; i >= 0; --i) {
+        inp = gf->nodes[i];
+
+        // Check for result_output which is the final concatenated output in split mode
+        // or the standard result_norm, result_embd, output_normed
+        if (strcmp(inp->name, "result_output") == 0 ||
+            strcmp(inp->name, "result_norm") == 0 ||
+            strcmp(inp->name, "result_embd") == 0 ||
+            strcmp(inp->name, "output_normed") == 0) {
+            break;
+        }
+        // Also check for device-specific naming: result_norm with layer id >= 1000
+        if (strncmp(inp->name, "result_norm", 11) == 0 && strlen(inp->name) > 11) {
+            int layer_id = atoi(inp->name + 11);
+            if (layer_id >= 1000) {
+                break;
             }
+        }
+        inp = nullptr;
     }
+    GGML_ASSERT(inp != nullptr && "missing result_output/result_norm/result_embd tensor in split_output mode");
 
-    cb(cur, "result_embd_pooled", -1);
+    ggml_tensor * cur = apply_pooling(*this, inp);
 
     ggml_build_forward_expand(gf, cur);
 
@@ -9936,9 +9950,15 @@ ggml_cgraph * llm_build_context::llama_build_graph(
     result->n_batch = llm.n_tokens;
 
     // add on pooling layer
-    if (lctx.cparams.mtp_op_type == MTP_OP_NONE && (lctx.cparams.embeddings ||
-        (lctx.model.hparams.nextn_predict_layers > 0 || lctx.model.mtp))) {
-        result = llm.append_pooling(result);
+    // When split_output_tensor is enabled, use the pre-MTP implementation which handles
+    // the split output norm properly with device-specific tensor naming (id >= 1000)
+    if (lctx.cparams.mtp_op_type == MTP_OP_NONE &&
+        (lctx.cparams.embeddings || (lctx.model.hparams.nextn_predict_layers > 0 || lctx.model.mtp))) {
+        if (lctx.model.split_output_tensor) {
+            result = llm.append_pooling_split_output(result);
+        } else {
+            result = llm.append_pooling(result);
+        }
     }
 
     llm.free();
