@@ -6,6 +6,8 @@
 //
 
 #include "llama-impl.h"
+
+#include <ctime>
 #include "llama-vocab.h"
 #include "llama-grammar.h"
 #include "llama-sampling.h"
@@ -30,6 +32,9 @@
 #include "iqk/iqk_cpu_ops.h"
 
 #define IK_PRINT_TIMING 0
+
+static int64_t g_t_start_loading = 0;
+static int64_t g_t_start_ctx = 0;
 
 #ifdef GGML_USE_RPC
 #  include "ggml-rpc.h"
@@ -5606,6 +5611,14 @@ int64_t llama_time_us(void) {
     return ggml_time_us();
 }
 
+int64_t llama_get_start_loading_time_us(void) {
+    return g_t_start_loading;
+}
+
+int64_t llama_get_start_ctx_time_us(void) {
+    return g_t_start_ctx;
+}
+
 static std::string create_rpc_name(std::string endpoint, uint32_t device) {
     std::string dev_name = "RPC" + std::to_string(device) + "[" + std::string(endpoint) + "]";
     return dev_name;
@@ -5615,6 +5628,12 @@ struct llama_model * llama_model_load_from_file(
         const char * path_model,
         struct llama_model_params   params) {
     ggml_time_init();
+
+    if (g_t_start_loading == 0) {
+        g_t_start_loading = ggml_time_us();
+    }
+    const int64_t t_start_load = ggml_time_us();
+    LLAMA_LOG_INFO("\nXXX Loading phase 1 (model) is starting. Timestamp : %lld ; Timer : 0 >>>\n", (long long)time(nullptr));
 
     llama_model * model = new llama_model;
 
@@ -5712,6 +5731,10 @@ struct llama_model * llama_model_load_from_file(
         return nullptr;
     }
 
+    const int64_t t_end_load = ggml_time_us();
+    LLAMA_LOG_INFO(">>> Loading phase 1 (model) is complete. Timestamp : %lld ; Timer : %lld ; Loading time : %lld ms >>>\n",
+        (long long)time(nullptr), (long long)((t_end_load - t_start_load) / 1000000), (long long)((t_end_load - t_start_load) / 1000));
+
     return model;
 }
 
@@ -5802,6 +5825,9 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
 struct llama_context * llama_init_from_model(
                  struct llama_model * model,
         struct llama_context_params   params) {
+
+    g_t_start_ctx = ggml_time_us();
+    const int64_t t_start_ctx = g_t_start_ctx;
 
     if (!model) {
         LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
@@ -6348,6 +6374,10 @@ struct llama_context * llama_init_from_model(
             LLAMA_LOG_INFO("XXXXXXXX It may or might NOT infer properly due to unsupported combinations between SMGS and every possible tensor overrides.\n");
         }
     }
+
+    const int64_t t_end_ctx = ggml_time_us();
+    LLAMA_LOG_INFO(">>> Loading phase 2 (model, kv cache and compute) is complete. Timestamp : %lld ; Timer : %lld ; Loading time : %lld ms >>>\n",
+        (long long)time(nullptr), (long long)((t_end_ctx - g_t_start_loading) / 1000000), (long long)((t_end_ctx - t_start_ctx) / 1000));
 
     return ctx;
 }
