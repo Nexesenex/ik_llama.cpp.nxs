@@ -2130,6 +2130,12 @@ int main(int argc, char ** argv) {
 
     LOG_INFO("HTTP server listening", log_data);
 
+    const int64_t t_end_server = ggml_time_us();
+    LOG_INFO("Loading is complete!", {
+        {"Timer", (long long)((t_end_server - llama_get_start_loading_time_us()) / 1000000)},
+        {"Elapsed ms", (long long)((t_end_server - llama_get_start_loading_time_us()) / 1000)}
+    });
+
     // run the HTTP server in a thread - see comment below
     std::thread t([&]() {
         if (!svr->listen_after_bind()) {

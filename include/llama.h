@@ -580,6 +580,8 @@ extern "C" {
 
     LLAMA_API int64_t llama_time_us(void);
 
+    LLAMA_API int64_t llama_get_start_loading_time_us(void);
+
     LLAMA_API size_t llama_max_devices(void);
 
     LLAMA_API bool llama_supports_mmap       (void);
