@@ -47,7 +47,7 @@
     #define HAVE_FANCY_SIMD
 #endif
 #if defined HAVE_VNNI256
-    #undef HAVE_VNNI256
+   #undef HAVE_VNNI256
 #endif
 #if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
     #define HAVE_VNNI256
