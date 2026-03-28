@@ -1002,15 +1002,21 @@ inline __m256i accum_q4_0_quants(const __m256i * v, const int8_t * qs) {
     sumi = _mm256_dpbusd_epi32(sumi, v[6], _mm256_shuffle_epi32(yh, 0xaa));
     sumi = _mm256_dpbusd_epi32(sumi, v[7], _mm256_shuffle_epi32(yh, 0xff));
 #else
-    auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(v[0], _mm256_shuffle_epi32(yl, 0x00)),
-                                  _mm256_maddubs_epi16(v[1], _mm256_shuffle_epi32(yl, 0x55)));
-    auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(v[2], _mm256_shuffle_epi32(yl, 0xaa)),
-                                  _mm256_maddubs_epi16(v[3], _mm256_shuffle_epi32(yl, 0xff)));
-    auto sumi3 = _mm256_add_epi16(_mm256_maddubs_epi16(v[4], _mm256_shuffle_epi32(yh, 0x00)),
-                                  _mm256_maddubs_epi16(v[5], _mm256_shuffle_epi32(yh, 0x55)));
-    auto sumi4 = _mm256_add_epi16(_mm256_maddubs_epi16(v[6], _mm256_shuffle_epi32(yh, 0xaa)),
-                                  _mm256_maddubs_epi16(v[7], _mm256_shuffle_epi32(yh, 0xff)));
-    auto sumi = _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_add_epi16(_mm256_add_epi16(sumi1, sumi2), _mm256_add_epi16(sumi3, sumi4)));
+    auto yl00 = _mm256_shuffle_epi32(yl, 0x00);
+    auto yl55 = _mm256_shuffle_epi32(yl, 0x55);
+    auto ylaa = _mm256_shuffle_epi32(yl, 0xaa);
+    auto ylff = _mm256_shuffle_epi32(yl, 0xff);
+    auto yh00 = _mm256_shuffle_epi32(yh, 0x00);
+    auto yh55 = _mm256_shuffle_epi32(yh, 0x55);
+    auto yhaa = _mm256_shuffle_epi32(yh, 0xaa);
+    auto yhff = _mm256_shuffle_epi32(yh, 0xff);
+    auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(v[0], yl00), _mm256_maddubs_epi16(v[1], yl55));
+    auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(v[2], ylaa), _mm256_maddubs_epi16(v[3], ylff));
+    auto sumi3 = _mm256_add_epi16(_mm256_maddubs_epi16(v[4], yh00), _mm256_maddubs_epi16(v[5], yh55));
+    auto sumi4 = _mm256_add_epi16(_mm256_maddubs_epi16(v[6], yhaa), _mm256_maddubs_epi16(v[7], yhff));
+    sumi1 = _mm256_add_epi16(sumi1, sumi2);
+    sumi3 = _mm256_add_epi16(sumi3, sumi4);
+    auto sumi = _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_add_epi16(sumi1, sumi3));
 #endif
     return sumi;
 }
@@ -1139,15 +1145,23 @@ static void mul_mat_q4_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
         auto y8h = MM256_SET_M128I(y4h, y4h);
         auto yl = _mm512_inserti32x8(_mm512_castsi256_si512(y8l), y8l, 1);
         auto yh = _mm512_inserti32x8(_mm512_castsi256_si512(y8h), y8h, 1);
+        auto yl00 = _mm512_shuffle_epi32(yl, _MM_PERM_ENUM(0x00));
+        auto yl55 = _mm512_shuffle_epi32(yl, _MM_PERM_ENUM(0x55));
+        auto ylaa = _mm512_shuffle_epi32(yl, _MM_PERM_ENUM(0xaa));
+        auto ylff = _mm512_shuffle_epi32(yl, _MM_PERM_ENUM(0xff));
+        auto yh00 = _mm512_shuffle_epi32(yh, _MM_PERM_ENUM(0x00));
+        auto yh55 = _mm512_shuffle_epi32(yh, _MM_PERM_ENUM(0x55));
+        auto yhaa = _mm512_shuffle_epi32(yh, _MM_PERM_ENUM(0xaa));
+        auto yhff = _mm512_shuffle_epi32(yh, _MM_PERM_ENUM(0xff));
         auto sumi = _mm512_setzero_si512();
-        sumi = _mm512_dpbusd_epi32(sumi, qx[0], _mm512_shuffle_epi32(yl, _MM_PERM_ENUM(0x00)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[1], _mm512_shuffle_epi32(yl, _MM_PERM_ENUM(0x55)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[2], _mm512_shuffle_epi32(yl, _MM_PERM_ENUM(0xaa)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[3], _mm512_shuffle_epi32(yl, _MM_PERM_ENUM(0xff)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[4], _mm512_shuffle_epi32(yh, _MM_PERM_ENUM(0x00)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[5], _mm512_shuffle_epi32(yh, _MM_PERM_ENUM(0x55)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[6], _mm512_shuffle_epi32(yh, _MM_PERM_ENUM(0xaa)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[7], _mm512_shuffle_epi32(yh, _MM_PERM_ENUM(0xff)));
+        sumi = _mm512_dpbusd_epi32(sumi, qx[0], yl00);
+        sumi = _mm512_dpbusd_epi32(sumi, qx[1], yl55);
+        sumi = _mm512_dpbusd_epi32(sumi, qx[2], ylaa);
+        sumi = _mm512_dpbusd_epi32(sumi, qx[3], ylff);
+        sumi = _mm512_dpbusd_epi32(sumi, qx[4], yh00);
+        sumi = _mm512_dpbusd_epi32(sumi, qx[5], yh55);
+        sumi = _mm512_dpbusd_epi32(sumi, qx[6], yhaa);
+        sumi = _mm512_dpbusd_epi32(sumi, qx[7], yhff);
         return sumi;
     };
     float d8[8*nrc_y];
