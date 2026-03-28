@@ -1052,20 +1052,22 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + k);
 #ifdef HAVE_VNNI256
+                    auto y1 = _mm256_shuffle_epi32(y, 0x44);
+                    auto y2 = _mm256_shuffle_epi32(y, 0xee);
                     // 0,0, 1,1, 0,0, 1,1 as int32_t
-                    auto sumi1 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
-                                qx[0], _mm256_shuffle_epi32(y, 0x44)), qx[1], _mm256_shuffle_epi32(y, 0xee));
+                    auto sumi1 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[0], y1), qx[1], y2);
                     // 2,2, 3,3, 2,2, 3,3 as int32_t
-                    auto sumi2 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
-                                qx[2], _mm256_shuffle_epi32(y, 0x44)), qx[3], _mm256_shuffle_epi32(y, 0xee));
+                    auto sumi2 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[2], y1), qx[3], y2);
                     auto sumi = _mm256_packs_epi32(sumi1, sumi2);
 #else
+                    auto y1 = _mm256_shuffle_epi32(y, 0x44);
+                    auto y2 = _mm256_shuffle_epi32(y, 0xee);
                     // 4 x row 0, 4 x row 1, 4 x row 0, 4 x row 1
-                    auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[0], _mm256_shuffle_epi32(y, 0x44)),
-                                                  _mm256_maddubs_epi16(qx[1], _mm256_shuffle_epi32(y, 0xee)));
+                    auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[0], y1),
+                                                  _mm256_maddubs_epi16(qx[1], y2));
                     // 4 x row 2, 4 x row 3, 4 x row 2, 4 x row 3
-                    auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[2], _mm256_shuffle_epi32(y, 0x44)),
-                                                  _mm256_maddubs_epi16(qx[3], _mm256_shuffle_epi32(y, 0xee)));
+                    auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[2], y1),
+                                                  _mm256_maddubs_epi16(qx[3], y2));
                     // 0,0, 1,1, 0,0, 1,1  as int32_t
                     sumi1 = _mm256_madd_epi16(m1, sumi1);
                     // 2,2, 3,3, 2,2, 3,3  as int32_t
