@@ -687,14 +687,15 @@ void mul_mat_iq2_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
         return _mm256_cvtepi32_ps(dot[0]);
     };
 
-    auto compute_dot = [&dot, &xv] (const int8_t * y) {
+    __m256i xv_s[4];
+    auto compute_dot = [&dot, &xv, &xv_s] (const int8_t * y) {
         for (int k = 0; k < 4; ++k) {
             auto yv = _mm256_loadu_si256((const __m256i *)y + k);
 #ifdef HAVE_VNNI256
             //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
-            dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
+            dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv_s[k], _mm256_sign_epi8(yv, xv[k]));
 #else
-            auto p = _mm256_maddubs_epi16(_mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
+            auto p = _mm256_maddubs_epi16(xv_s[k], _mm256_sign_epi8(yv, xv[k]));
             dot[k] = _mm256_madd_epi16(p, _mm256_set1_epi16(1));
 #endif
         }
@@ -720,6 +721,7 @@ void mul_mat_iq2_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
             scales[1] = _mm256_set_m128(scales_h, scales_h);
             for (int i128 = 0; i128 < 2; ++i128) {
                 trellis.next_128(ql + 16*i128, 4096, xv);
+                for (int k = 0; k < 4; ++k) xv_s[k] = _mm256_sign_epi8(xv[k], xv[k]);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     const block_q8_2_x4& yb = y[iy][2*i+i128];
                     auto dy4 = _mm_castsi128_ps(_mm_slli_epi32(_mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)yb.d)), 16));
