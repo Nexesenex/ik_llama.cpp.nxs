@@ -170,7 +170,7 @@ struct Trellis3 {
             return _mm256_permutevar8x32_epi32(aux[0], shuffle);
         }
     }
-    IQK_ALWAYS_INLINE inline void next_128(const uint32_t * val, __m256i * result) const {
+    IQK_ALWAYS_INLINE void next_128(const uint32_t * val, __m256i * result) const {
         // Even though we only have 16 vector registers nn AVX2, this is still faster
         __m256i aux[16];
         auto perm = _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7);
@@ -212,7 +212,7 @@ struct Trellis3 {
             }
         }
     }
-    IQK_ALWAYS_INLINE inline void next_128(__m256i val, __m256i * result) const {
+    IQK_ALWAYS_INLINE void next_128(__m256i val, __m256i * result) const {
         // Even though we only have 16 vector registers nn AVX2, this is still faster
         __m256i aux[16];
         __m256i tmp[2];
@@ -262,7 +262,7 @@ struct Trellis3 {
             }
         }
     }
-    IQK_ALWAYS_INLINE inline void next_128(const uint16_t * val, uint32_t v0, __m256i * result) const {
+    IQK_ALWAYS_INLINE void next_128(const uint16_t * val, uint32_t v0, __m256i * result) const {
         // Even though we only have 16 vector registers nn AVX2, this is still faster
         __m256i aux[16];
         for (int k = 0; k < 4; ++k) {
