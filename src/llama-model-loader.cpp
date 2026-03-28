@@ -257,6 +257,10 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
     contexts.emplace_back(ctx);
 
+    LLAMA_LOG_INFO("%s: direct I/O is %s (requested: %s)\n", __func__,
+                   files.back()->has_direct_io() ? "enabled" : "disabled",
+                   use_direct_io ? "true" : "false");
+
     if (use_mmap && use_direct_io) {
         if (files.back()->has_direct_io()) {
             LLAMA_LOG_WARN("%s: direct I/O is enabled, disabling mmap\n", __func__);

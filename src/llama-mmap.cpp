@@ -62,6 +62,9 @@ static std::string llama_format_win_err(DWORD err) {
 struct llama_file::impl {
 #if defined(_WIN32)
     HANDLE fp_win32;
+    DWORD file_flags;
+    bool use_no_buffering;
+
     std::string GetErrorMessageWin32(DWORD error_code) const {
         std::string ret;
         LPSTR lpMsgBuf = NULL;
@@ -77,12 +80,54 @@ struct llama_file::impl {
         return ret;
     }
 
-    impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) {
+    impl(const char * fname, const char * mode, const bool use_direct_io = false) : use_no_buffering(false) {
+        file_flags = FILE_ATTRIBUTE_NORMAL;
         fp = ggml_fopen(fname, mode);
         if (fp == NULL) {
             throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
         }
-        fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
+
+        if (use_direct_io && std::strcmp(mode, "rb") == 0) {
+            std::fclose(fp);
+            fp = NULL;
+
+            DWORD desired_access = GENERIC_READ;
+            DWORD creation_disposition = OPEN_EXISTING;
+            DWORD share_mode = FILE_SHARE_READ;
+
+            fp_win32 = CreateFileA(fname, desired_access, share_mode, NULL, creation_disposition,
+                                    FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+
+            if (fp_win32 == INVALID_HANDLE_VALUE) {
+                DWORD err = GetLastError();
+                LLAMA_LOG_WARN("Failed to open '%s' with FILE_FLAG_SEQUENTIAL_SCAN (error %lu). Falling back to buffered I/O.\n",
+                               fname, err);
+                fp = ggml_fopen(fname, mode);
+                if (fp == NULL) {
+                    throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
+                }
+                fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
+            } else {
+                use_no_buffering = true;
+
+                LARGE_INTEGER li;
+                li.QuadPart = 0;
+                if (!GetFileSizeEx(fp_win32, &li)) {
+                    CloseHandle(fp_win32);
+                    throw std::runtime_error(format("failed to get file size: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+                }
+                size = li.QuadPart;
+
+                alignment = 4096;
+
+                LARGE_INTEGER zero = {0};
+                SetFilePointerEx(fp_win32, zero, NULL, FILE_BEGIN);
+                return;
+            }
+        } else {
+            fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
+        }
+
         seek(0, SEEK_END);
         size = tell();
         seek(0, SEEK_SET);
@@ -93,7 +138,7 @@ struct llama_file::impl {
         li.QuadPart = 0;
         BOOL ret = SetFilePointerEx(fp_win32, li, &li, FILE_CURRENT);
         if (!ret) {
-            throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+            throw std::runtime_error(format("tell error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
         }
 
         return li.QuadPart;
@@ -108,11 +153,12 @@ struct llama_file::impl {
         li.QuadPart = offset;
         BOOL ret = SetFilePointerEx(fp_win32, li, NULL, whence);
         if (!ret) {
-            throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+            throw std::runtime_error(format("seek error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
         }
     }
 
-    void read_raw(void * ptr, size_t len) {
+    void read_raw_unsafe(void * ptr, size_t len) {
+        if (len == 0) return;
         size_t bytes_read = 0;
         while (bytes_read < len) {
             size_t chunk_size = std::min<size_t>(len - bytes_read, 64*1024*1024);
@@ -127,6 +173,38 @@ struct llama_file::impl {
 
             bytes_read += chunk_read;
         }
+    }
+
+    void read_aligned_chunk(void * dest, size_t read_size) {
+        size_t offset = tell();
+        size_t aligned_offset = offset & ~(alignment - 1);
+        size_t offset_from_alignment = offset - aligned_offset;
+        size_t bytes_to_read = (offset_from_alignment + read_size + alignment - 1) & ~(alignment - 1);
+
+        static thread_local struct {
+            void*  ptr;
+            size_t buf_size;
+            size_t buf_align;
+        } cache = {nullptr, 0, 0};
+
+        if (!cache.ptr || cache.buf_size < bytes_to_read || cache.buf_align < alignment) {
+            if (cache.ptr) VirtualFree(cache.ptr, 0, MEM_RELEASE);
+            cache.ptr = VirtualAlloc(NULL, bytes_to_read, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+            if (!cache.ptr) {
+                throw std::runtime_error(format("VirtualAlloc failed for aligned buffer"));
+            }
+            cache.buf_size = bytes_to_read;
+            cache.buf_align = alignment;
+        }
+
+        seek(aligned_offset, SEEK_SET);
+        read_raw_unsafe(cache.ptr, bytes_to_read);
+
+        memcpy(dest, static_cast<char*>(cache.ptr) + offset_from_alignment, read_size);
+    }
+
+    void read_raw(void * ptr, size_t len) {
+        read_raw_unsafe(ptr, len);
     }
 
     uint32_t read_u32() {
@@ -157,11 +235,13 @@ struct llama_file::impl {
     }
 
     bool has_direct_io() const {
-        return true;
+        return use_no_buffering && alignment > 1;
     }
 
     ~impl() {
-        if (fp) {
+        if (use_no_buffering && fp_win32 != INVALID_HANDLE_VALUE) {
+            CloseHandle(fp_win32);
+        } else if (fp) {
             std::fclose(fp);
         }
     }
