@@ -841,11 +841,15 @@ static void mul_mat_iq4_nl_r4_q8_2(int n, const void * vx, size_t bx, const Data
     };
     auto dot = [&qx] (__m256i y8) {
         auto y = _mm512_inserti32x8(_mm512_castsi256_si512(y8), y8, 1);
+        auto y00 = _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x00));
+        auto y55 = _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x55));
+        auto yaa = _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xaa));
+        auto yff = _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xff));
         auto sumi = _mm512_setzero_si512();
-        sumi = _mm512_dpbusd_epi32(sumi, qx[0], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x00)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[1], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x55)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[2], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xaa)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[3], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xff)));
+        sumi = _mm512_dpbusd_epi32(sumi, qx[0], y00);
+        sumi = _mm512_dpbusd_epi32(sumi, qx[1], y55);
+        sumi = _mm512_dpbusd_epi32(sumi, qx[2], yaa);
+        sumi = _mm512_dpbusd_epi32(sumi, qx[3], yff);
         return sumi;
     };
     for (int ix = 0; ix < nrc_x; ix += 8) {
@@ -914,25 +918,31 @@ static void mul_mat_iq4_nl_r4_q8_2(int n, const void * vx, size_t bx, const Data
     };
 #ifdef HAVE_VNNI256
     auto dot = [&qs] (__m256i y) {
+        auto y00 = _mm256_shuffle_epi32(y, 0x00);
+        auto y55 = _mm256_shuffle_epi32(y, 0x55);
+        auto yaa = _mm256_shuffle_epi32(y, 0xaa);
+        auto yff = _mm256_shuffle_epi32(y, 0xff);
         auto sumi = _mm256_setzero_si256();
-        sumi = _mm256_dpbusd_epi32(sumi, _mm256_sign_epi8(qs[0], qs[0]), _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x00), qs[0]));
-        sumi = _mm256_dpbusd_epi32(sumi, _mm256_sign_epi8(qs[1], qs[1]), _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x55), qs[1]));
-        sumi = _mm256_dpbusd_epi32(sumi, _mm256_sign_epi8(qs[2], qs[2]), _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xaa), qs[2]));
-        sumi = _mm256_dpbusd_epi32(sumi, _mm256_sign_epi8(qs[3], qs[3]), _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xff), qs[3]));
+        sumi = _mm256_dpbusd_epi32(sumi, _mm256_sign_epi8(qs[0], qs[0]), _mm256_sign_epi8(y00, qs[0]));
+        sumi = _mm256_dpbusd_epi32(sumi, _mm256_sign_epi8(qs[1], qs[1]), _mm256_sign_epi8(y55, qs[1]));
+        sumi = _mm256_dpbusd_epi32(sumi, _mm256_sign_epi8(qs[2], qs[2]), _mm256_sign_epi8(yaa, qs[2]));
+        sumi = _mm256_dpbusd_epi32(sumi, _mm256_sign_epi8(qs[3], qs[3]), _mm256_sign_epi8(yff, qs[3]));
         return sumi;
     };
 #else
     auto dot = [&qs, &m1] (__m256i y) {
+        auto y00 = _mm256_shuffle_epi32(y, 0x00);
+        auto y55 = _mm256_shuffle_epi32(y, 0x55);
+        auto yaa = _mm256_shuffle_epi32(y, 0xaa);
+        auto yff = _mm256_shuffle_epi32(y, 0xff);
         auto u1 = _mm256_sign_epi8(qs[0], qs[0]);
         auto u2 = _mm256_sign_epi8(qs[1], qs[1]);
-        auto sumi1 = _mm256_add_epi32(
-                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(u1, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x00), qs[0]))),
-                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(u2, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x55), qs[1]))));
+        auto sumi1 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(u1, _mm256_sign_epi8(y00, qs[0])));
+        sumi1 = _mm256_add_epi32(sumi1, _mm256_madd_epi16(m1, _mm256_maddubs_epi16(u2, _mm256_sign_epi8(y55, qs[1]))));
         u1 = _mm256_sign_epi8(qs[2], qs[2]);
         u2 = _mm256_sign_epi8(qs[3], qs[3]);
-        auto sumi2 = _mm256_add_epi32(
-                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(u1, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xaa), qs[2]))),
-                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(u2, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xff), qs[3]))));
+        auto sumi2 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(u1, _mm256_sign_epi8(yaa, qs[2])));
+        sumi2 = _mm256_add_epi32(sumi2, _mm256_madd_epi16(m1, _mm256_maddubs_epi16(u2, _mm256_sign_epi8(yff, qs[3]))));
         return _mm256_add_epi32(sumi1, sumi2);
     };
 #endif
