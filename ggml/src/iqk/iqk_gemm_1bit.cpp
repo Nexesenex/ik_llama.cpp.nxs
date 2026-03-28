@@ -1148,12 +1148,14 @@ static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataI
                     auto y1 = _mm256_shuffle_epi32(y, 0x44);
                     auto y2 = _mm256_shuffle_epi32(y, 0xee);
 #ifdef HAVE_VNNI256
+                    auto ys0 = _mm256_sign_epi8(y1, qx[0]);
+                    auto ys1 = _mm256_sign_epi8(y2, qx[1]);
+                    auto ys2 = _mm256_sign_epi8(y1, qx[2]);
+                    auto ys3 = _mm256_sign_epi8(y2, qx[3]);
                     // 0,0, 1,1, 0,0, 1,1 as int32_t
-                    auto sumi1 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
-                                s0, _mm256_sign_epi8(y1, qx[0])), s1, _mm256_sign_epi8(y2, qx[1]));
+                    auto sumi1 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(), s0, ys0), s1, ys1);
                     // 2,2, 3,3, 2,2, 3,3 as int32_t
-                    auto sumi2 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
-                                s2, _mm256_sign_epi8(y1, qx[2])), s3, _mm256_sign_epi8(y2, qx[3]));
+                    auto sumi2 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(), s2, ys2), s3, ys3);
                     auto sumi = _mm256_packs_epi32(sumi1, sumi2);
 #else
                     // 4 x row 0, 4 x row 1, 4 x row 0, 4 x row 1
