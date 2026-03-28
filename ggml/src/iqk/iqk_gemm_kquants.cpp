@@ -1768,30 +1768,40 @@ static void mul_mat_q6_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i*)q8.y[iy][ibl].qs+ib);
 #ifdef HAVE_VNNI256
-                    auto sumi = _mm256_setzero_si256();
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[0], _mm256_shuffle_epi32(y, 0x00));
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[2], _mm256_shuffle_epi32(y, 0xaa));
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[3], _mm256_shuffle_epi32(y, 0xff));
+                    auto y00 = _mm256_shuffle_epi32(y, 0x00);
+                    auto y55 = _mm256_shuffle_epi32(y, 0x55);
+                    auto yaa = _mm256_shuffle_epi32(y, 0xaa);
+                    auto yff = _mm256_shuffle_epi32(y, 0xff);
+                    auto sumi = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[0], y00);
+                    sumi = _mm256_dpbusd_epi32(sumi, qx[1], y55);
+                    sumi = _mm256_dpbusd_epi32(sumi, qx[2], yaa);
+                    sumi = _mm256_dpbusd_epi32(sumi, qx[3], yff);
                     isum[iy] = _mm256_add_epi32(isum[iy], _mm256_mullo_epi32(iscales, sumi));
 #elif defined(HAVE_VNNI256)
-                    auto sumi = _mm256_setzero_si256();
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[0], _mm256_shuffle_epi32(y, 0x00));
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[2], _mm256_shuffle_epi32(y, 0xaa));
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[3], _mm256_shuffle_epi32(y, 0xff));
+                    auto y00 = _mm256_shuffle_epi32(y, 0x00);
+                    auto y55 = _mm256_shuffle_epi32(y, 0x55);
+                    auto yaa = _mm256_shuffle_epi32(y, 0xaa);
+                    auto yff = _mm256_shuffle_epi32(y, 0xff);
+                    auto sumi = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[0], y00);
+                    sumi = _mm256_dpbusd_epi32(sumi, qx[1], y55);
+                    sumi = _mm256_dpbusd_epi32(sumi, qx[2], yaa);
+                    sumi = _mm256_dpbusd_epi32(sumi, qx[3], yff);
                     if constexpr (nrc_y == 1) {
                         acc[iy] = _mm256_fmadd_ps(scales, _mm256_cvtepi32_ps(sumi), acc[iy]);
                     } else {
                         acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(scales, _mm256_set1_ps(q8.scale(iy, ibl))), _mm256_cvtepi32_ps(sumi), acc[iy]);
                     }
 #else
-                    auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[0], _mm256_shuffle_epi32(y, 0x00)),
-                                                  _mm256_maddubs_epi16(qx[1], _mm256_shuffle_epi32(y, 0x55)));
-                    auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[2], _mm256_shuffle_epi32(y, 0xaa)),
-                                                  _mm256_maddubs_epi16(qx[3], _mm256_shuffle_epi32(y, 0xff)));
-                    // Quants are in 0...63, so we can add at most 4 as int16_t to be sure of no int16_t overflow
-                    auto sumi = _mm256_add_epi32(_mm256_madd_epi16(m1, sumi1), _mm256_madd_epi16(m1, sumi2));
+                    auto y00 = _mm256_shuffle_epi32(y, 0x00);
+                    auto y55 = _mm256_shuffle_epi32(y, 0x55);
+                    auto yaa = _mm256_shuffle_epi32(y, 0xaa);
+                    auto yff = _mm256_shuffle_epi32(y, 0xff);
+                    auto sumi1 = _mm256_maddubs_epi16(qx[0], y00);
+                    sumi1 = _mm256_add_epi16(sumi1, _mm256_maddubs_epi16(qx[1], y55));
+                    auto sumi2 = _mm256_maddubs_epi16(qx[2], yaa);
+                    sumi2 = _mm256_add_epi16(sumi2, _mm256_maddubs_epi16(qx[3], yff));
+                    auto sumi = _mm256_madd_epi16(m1, sumi1);
+                    sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(m1, sumi2));
                     if constexpr (nrc_y == 1) {
                         acc[iy] = _mm256_fmadd_ps(scales, _mm256_cvtepi32_ps(sumi), acc[iy]);
                     } else {
