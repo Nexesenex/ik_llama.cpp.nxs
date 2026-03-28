@@ -301,7 +301,7 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
         value = _mm256_sign_epi8(value, _mm256_or_si256(signs, mone));
     }
 #if defined HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__
-    static IQK_ALWAYS_INLINE inline void sign_values_popcnt(const __m256i& data, __m256i * values) {
+    static IQK_ALWAYS_INLINE void sign_values_popcnt(const __m256i& data, __m256i * values) {
         auto partial_bits = _mm256_cvtepi16_epi8(_mm256_srli_epi16(data,  9));
         auto pcnt = _mm_popcnt_epi8(partial_bits);
         auto full_bits = _mm_or_si128(partial_bits, _mm_slli_epi16(_mm_and_si128(pcnt, _mm_set1_epi8(1)), 7));
@@ -313,7 +313,7 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
         values[3] = _mm256_mask_sub_epi8(values[3], m32[3], zero, values[3]);
     }
 #else
-    static IQK_ALWAYS_INLINE inline void sign_values_helper(const __m256i& data, const Helper& helper, __m256i * values) {
+    static IQK_ALWAYS_INLINE void sign_values_helper(const __m256i& data, const Helper& helper, __m256i * values) {
         auto psb1 = _mm256_srli_epi16(data,  9);
         auto psb2 = _mm256_srli_epi16(data, 13);
         auto psbc = _mm256_xor_si256(psb1, psb2);
@@ -329,7 +329,7 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
         sign_value(full_2, helper.shuff2, helper.mask, helper.mone, values[3]);
     }
 #endif
-    IQK_ALWAYS_INLINE inline void sign_values(const __m256i& data, __m256i * values) const {
+    IQK_ALWAYS_INLINE void sign_values(const __m256i& data, __m256i * values) const {
 #if defined HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__
         sign_values_popcnt(data, values);
 #else
@@ -362,7 +362,7 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
         for (int k = 0; k < 4; ++k) bits.values[k] = us[k];
         sign_values(q2, bits.values);
     }
-    IQK_ALWAYS_INLINE inline void prepare_signed(int i, int j, __m256i * us, __m256i * s) {
+    IQK_ALWAYS_INLINE void prepare_signed(int i, int j, __m256i * us, __m256i * s) {
         auto q2 = _mm256_loadu_si256((const __m256i *)x[i].qs+j);
         make4(q2, idx_mask, us);
         sign_values(q2, s);
