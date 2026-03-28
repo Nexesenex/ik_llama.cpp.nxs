@@ -590,6 +590,7 @@ extern "C" {
     LLAMA_API size_t llama_max_devices(void);
 
     LLAMA_API bool llama_supports_mmap       (void);
+    LLAMA_API bool llama_supports_direct_io  (void);
     LLAMA_API bool llama_supports_mlock      (void);
     LLAMA_API bool llama_supports_gpu_offload(void);
 

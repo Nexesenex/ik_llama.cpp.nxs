@@ -5069,6 +5069,14 @@ bool llama_supports_mmap(void) {
     return llama_mmap::SUPPORTED;
 }
 
+bool llama_supports_direct_io(void) {
+#if defined(_WIN32) || defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+    return true;
+#else
+    return false;
+#endif
+}
+
 bool llama_supports_mlock(void) {
     return llama_mlock::SUPPORTED;
 }

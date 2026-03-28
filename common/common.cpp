@@ -1776,8 +1776,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-dio" || arg == "--direct-io") {
-        params.use_direct_io = true;
-        params.use_mmap = false;
+        if (llama_supports_direct_io()) {
+            params.use_direct_io = true;
+            params.use_mmap = false;
+        } else {
+            fprintf(stderr, "warning: direct I/O is not available, --direct-io option will be ignored\n");
+        }
         return true;
     }
     if (arg == "-rtr" || arg == "--run-time-repack") {

@@ -64,6 +64,7 @@ struct llama_file::impl {
     HANDLE fp_win32;
     DWORD file_flags;
     bool use_no_buffering;
+    std::string name;
 
     std::string GetErrorMessageWin32(DWORD error_code) const {
         std::string ret;
@@ -80,7 +81,50 @@ struct llama_file::impl {
         return ret;
     }
 
-    impl(const char * fname, const char * mode, const bool use_direct_io = false) : use_no_buffering(false) {
+    size_t read_direct(void * ptr, size_t len, size_t offset) const {
+        SYSTEM_INFO siSysInfo;
+        GetSystemInfo(&siSysInfo);
+        DWORD dwPageSize = siSysInfo.dwPageSize;
+        GGML_ASSERT((uintptr_t) ptr % dwPageSize == 0);
+        GGML_ASSERT(len % dwPageSize == 0);
+        GGML_ASSERT(offset % dwPageSize == 0);
+
+        HANDLE hFile = ReOpenFile((HANDLE) _get_osfhandle(_fileno(fp)), GENERIC_READ, FILE_SHARE_READ, FILE_FLAG_NO_BUFFERING);
+        if (hFile == INVALID_HANDLE_VALUE) {
+            throw std::runtime_error(format("failed to open %s: %s", name.c_str(), llama_format_win_err(GetLastError()).c_str()));
+        }
+
+        size_t bytes_read = 0;
+        while (len > 0) {
+            OVERLAPPED oOverlap = {};
+            oOverlap.OffsetHigh = offset >> 32;
+            oOverlap.Offset = offset;
+            DWORD nBytesToRead = std::min(len, (size_t) 0xFFFFFFFF & ~(dwPageSize - 1));
+            DWORD count = 0;
+            if (!ReadFile(hFile, ptr, nBytesToRead, &count, &oOverlap)) {
+                if (GetLastError() == ERROR_HANDLE_EOF) {
+                    bytes_read += count;
+                    break;
+                }
+                throw std::runtime_error(format("direct read error: %s", llama_format_win_err(GetLastError()).c_str()));
+            }
+            bytes_read += count;
+            if (count < nBytesToRead) {
+                break;
+            }
+            ptr = (char *) ptr + count;
+            offset += count;
+            len -= count;
+        }
+
+        CloseHandle(hFile);
+
+        return bytes_read;
+    }
+
+    static constexpr bool DIRECT_IO_SUPPORTED = true;
+
+    impl(const char * fname, const char * mode, const bool use_direct_io = false) : use_no_buffering(false), name(fname) {
         file_flags = FILE_ATTRIBUTE_NORMAL;
         fp = ggml_fopen(fname, mode);
         if (fp == NULL) {
@@ -444,6 +488,51 @@ struct llama_file::impl {
         return fd != -1 && alignment > 1;
     }
 
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
+    size_t read_direct(void * ptr, size_t len, size_t offset) const {
+        int page_size = sysconf(_SC_PAGESIZE);
+        GGML_ASSERT((uintptr_t) ptr % page_size == 0);
+        GGML_ASSERT(len % page_size == 0);
+        GGML_ASSERT(offset % page_size == 0);
+#ifdef __APPLE__
+        int fddl = open(fname.c_str(), O_RDONLY);
+        if (fddl == -1) {
+            throw std::runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
+        }
+        if (fcntl(fddl, F_NOCACHE, 1) == -1) {
+            throw std::runtime_error(format("failed to enable direct I/O: %s", strerror(errno)));
+        }
+#else
+        int fddl = open(fname.c_str(), O_RDONLY | O_DIRECT);
+        if (fddl == -1) {
+            throw std::runtime_error(format("failed to open %s for direct I/O: %s", fname.c_str(), strerror(errno)));
+        }
+#endif
+        size_t bytes_read = 0;
+        while (len > 0) {
+            ssize_t count = pread(fddl, ptr, std::min(len, (size_t) INT_MAX & ~(page_size - 1)), offset);
+            if (count == -1) {
+                throw std::runtime_error(format("direct read error: %s", strerror(errno)));
+            }
+            if (count == 0) {
+                break;
+            }
+            ptr = (char *) ptr + count;
+            offset += count;
+            len -= count;
+            bytes_read += count;
+        }
+
+        close(fddl);
+
+        return bytes_read;
+    }
+
+    static constexpr bool DIRECT_IO_SUPPORTED = true;
+#else
+    static constexpr bool DIRECT_IO_SUPPORTED = false;
+#endif
+
     ~impl() {
         if (fd != -1) {
             close(fd);
@@ -497,6 +586,8 @@ void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw(ptr, 
 #else
 void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw_unsafe(ptr, len); }
 #endif
+void llama_file::read_aligned_chunk(void * dest, size_t size) { pimpl->read_aligned_chunk(dest, size); }
+size_t llama_file::read_direct(void * ptr, size_t len, size_t offset) const { return pimpl->read_direct(ptr, len, offset); }
 
 uint32_t llama_file::read_u32() { return pimpl->read_u32(); }
 
@@ -722,7 +813,7 @@ struct llama_mmap::impl {
 };
 
 llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa, bool use_thp) :
-    pimpl(std::make_unique<impl>(file, prefetch, numa, use_thp)) {}
+    pimpl(std::make_unique<impl>(file, prefetch, numa, use_thp)), prefetch(prefetch > 0) {}
 llama_mmap::~llama_mmap() = default;
 
 size_t llama_mmap::size() const { return pimpl->size; }
@@ -730,11 +821,143 @@ void * llama_mmap::addr() const { return pimpl->addr; }
 
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }
 
+void llama_mmap::populate(size_t first, size_t last) const {
+    GGML_UNUSED(first);
+    GGML_UNUSED(last);
+}
+
 #if defined(_POSIX_MEMLOCK_RANGE) || defined(_WIN32)
 const bool llama_mmap::SUPPORTED  = true;
 #else
 const bool llama_mmap::SUPPORTED  = false;
 #endif
+
+struct llama_anonymous_mmap {
+    llama_file * file;
+    void * addr;
+    size_t size;
+    bool prefetch;
+    std::vector<std::pair<size_t, size_t>> mapped_fragments;
+
+    llama_anonymous_mmap(const llama_anonymous_mmap &) = delete;
+
+    size_t get_size() const { return size; }
+    void * get_addr() const { return addr; }
+
+#ifdef _POSIX_MAPPED_FILES
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+    llama_anonymous_mmap(struct llama_file * file, bool prefetch) : file(file), prefetch(prefetch) {
+        size = file->size();
+        addr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        if (addr == MAP_FAILED) {
+            throw std::runtime_error(format("mmap(.., MAP_ANONYMOUS) failed: %s", strerror(errno)));
+        }
+#ifdef __linux__
+        if (madvise(addr, size, MADV_HUGEPAGE)) {
+            LLAMA_LOG_WARN("warning: madvise(.., MADV_HUGEPAGE) failed: %s\n", strerror(errno));
+        }
+#endif
+        mapped_fragments.emplace_back(0, size);
+    }
+
+    void populate(size_t first, size_t last) const {
+        int page_size = sysconf(_SC_PAGESIZE);
+
+        size_t first_aligned = first & ~(page_size - 1);
+        size_t last_aligned = (last + page_size - 1) & ~(page_size - 1);
+
+        size_t bytes_read = file->read_direct((char *) addr + first_aligned, last_aligned - first_aligned, first_aligned);
+        if (bytes_read != std::min(last_aligned, file->size) - first_aligned) {
+            throw std::runtime_error("unexpectedly reached end of file");
+        }
+    }
+
+    void unmap_fragment(size_t first, size_t last) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+    }
+
+#elif defined(_WIN32)
+    llama_anonymous_mmap(struct llama_file * file, bool prefetch) : file(file), prefetch(prefetch) {
+        size = file->size();
+
+        HANDLE hMapping = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, size >> 32, size, NULL);
+        if (hMapping == NULL) {
+            throw std::runtime_error(format("CreateFileMapping failed: %s", llama_format_win_err(GetLastError()).c_str()));
+        }
+
+        addr = MapViewOfFile(hMapping, FILE_MAP_ALL_ACCESS, 0, 0, size);
+        DWORD dwError = GetLastError();
+
+        CloseHandle(hMapping);
+
+        if (addr == NULL) {
+            throw std::runtime_error(format("MapViewOfFile failed: %s", llama_format_win_err(dwError).c_str()));
+        }
+    }
+
+    void populate(size_t first, size_t last) const {
+        SYSTEM_INFO siSysInfo;
+        GetSystemInfo(&siSysInfo);
+        DWORD dwPageSize = siSysInfo.dwPageSize;
+
+        size_t first_aligned = first & ~(dwPageSize - 1);
+        size_t last_aligned = (last + dwPageSize - 1) & ~(dwPageSize - 1);
+
+        size_t bytes_read = file->read_direct((char *) addr + first_aligned, last_aligned - first_aligned, first_aligned);
+        if (bytes_read != std::min<size_t>(last_aligned, file->size()) - first_aligned) {
+            throw std::runtime_error("unexpectedly reached end of file");
+        }
+    }
+
+    void unmap_fragment(size_t first, size_t last) {
+        SYSTEM_INFO siSysInfo;
+        GetSystemInfo(&siSysInfo);
+        DWORD dwPageSize = siSysInfo.dwPageSize;
+
+        size_t first_aligned = first & ~(dwPageSize - 1);
+        size_t last_aligned = (last + dwPageSize - 1) & ~(dwPageSize - 1);
+
+        DWORD (WINAPI *pOfferVirtualMemory) (PVOID, SIZE_T, DWORD);
+        HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+
+        pOfferVirtualMemory = reinterpret_cast<decltype(pOfferVirtualMemory)> (GetProcAddress(hKernel32, "OfferVirtualMemory"));
+
+        if (pOfferVirtualMemory) {
+            if (pOfferVirtualMemory((char *) addr + first_aligned, last_aligned - first_aligned, 0x00000004)) {
+                LLAMA_LOG_WARN("warning: OfferVirtualMemory failed: %s\n", llama_format_win_err(GetLastError()).c_str());
+            }
+        } else {
+            LLAMA_LOG_WARN("warning: OfferVirtualMemory unavailable: %s\n", llama_format_win_err(GetLastError()).c_str());
+            if (!VirtualAlloc((char *) addr + first_aligned, last_aligned - first_aligned, MEM_RESET, PAGE_READWRITE)) {
+                LLAMA_LOG_WARN("warning: VirtualAlloc(.., MEM_RESET) failed: %s\n", llama_format_win_err(GetLastError()).c_str());
+            }
+        }
+    }
+
+#else
+    llama_anonymous_mmap(struct llama_file * file, bool prefetch) {
+        GGML_UNUSED(file);
+        GGML_UNUSED(prefetch);
+
+        throw std::runtime_error("mmap not supported");
+    }
+
+    void populate(size_t first, size_t last) const {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+
+        throw std::runtime_error("mmap not supported");
+    }
+
+    void unmap_fragment(size_t first, size_t last) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+    }
+#endif
+};
 
 // llama_mlock
 

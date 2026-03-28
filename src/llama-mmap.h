@@ -27,6 +27,7 @@ struct llama_file {
     void read_raw(void * ptr, size_t len);
     void read_raw_unsafe(void * ptr, size_t len);
     void read_aligned_chunk(void * dest, size_t size);
+    size_t read_direct(void * ptr, size_t len, size_t offset) const;
     uint32_t read_u32();
 
     void write_raw(const void * ptr, size_t len) const;
@@ -34,6 +35,8 @@ struct llama_file {
 
     size_t read_alignment() const;
     bool has_direct_io() const;
+
+    static constexpr bool DIRECT_IO_SUPPORTED = true;
 
 private:
     struct impl;
@@ -48,7 +51,10 @@ struct llama_mmap {
     size_t size() const;
     void * addr() const;
 
-    void unmap_fragment(size_t first, size_t last);
+    virtual void unmap_fragment(size_t first, size_t last);
+    virtual void populate(size_t first, size_t last) const;
+
+    bool prefetch;
 
     static const bool SUPPORTED;
 
