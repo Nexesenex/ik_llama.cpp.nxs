@@ -1573,14 +1573,17 @@ static void mul_mat_iq2_s_r4_q8_k_16(int n, const void * vx, size_t bx, const Da
                 auto t4 = MM256_SET_M128I(_mm256_extracti128_si256(s4_16, 1), _mm256_extracti128_si256(s3_16, 1));  // 6,7 and 14,15 from each row
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto bsums = q8.load_bsums(iy, ibl);
-                    auto sumi = _mm256_setzero_si256();
 #ifdef HAVE_VNNI256
-                    sumi = _mm256_dpwssd_epi32(sumi, t1, _mm256_shuffle_epi32(bsums, 0x00));
-                    sumi = _mm256_dpwssd_epi32(sumi, t2, _mm256_shuffle_epi32(bsums, 0x55));
-                    sumi = _mm256_dpwssd_epi32(sumi, t3, _mm256_shuffle_epi32(bsums, 0xaa));
-                    sumi = _mm256_dpwssd_epi32(sumi, t4, _mm256_shuffle_epi32(bsums, 0xff));
+                    auto bsums00 = _mm256_shuffle_epi32(bsums, 0x00);
+                    auto bsums55 = _mm256_shuffle_epi32(bsums, 0x55);
+                    auto bsumsaa = _mm256_shuffle_epi32(bsums, 0xaa);
+                    auto bsumsff = _mm256_shuffle_epi32(bsums, 0xff);
+                    auto sumi = _mm256_dpwssd_epi32(_mm256_setzero_si256(), t1, bsums00);
+                    sumi = _mm256_dpwssd_epi32(sumi, t2, bsums55);
+                    sumi = _mm256_dpwssd_epi32(sumi, t3, bsumsaa);
+                    sumi = _mm256_dpwssd_epi32(sumi, t4, bsumsff);
 #else
-                    sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(t1, _mm256_shuffle_epi32(bsums, 0x00)));
+                    auto sumi = _mm256_madd_epi16(t1, _mm256_shuffle_epi32(bsums, 0x00));
                     sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(t2, _mm256_shuffle_epi32(bsums, 0x55)));
                     sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(t3, _mm256_shuffle_epi32(bsums, 0xaa)));
                     sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(t4, _mm256_shuffle_epi32(bsums, 0xff)));
