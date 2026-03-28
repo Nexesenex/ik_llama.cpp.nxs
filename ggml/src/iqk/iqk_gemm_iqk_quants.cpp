@@ -1892,18 +1892,23 @@ static void mul_mat_iq4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataI
 #endif
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i*)q8.y[iy][ibl].qs+ib);
+                    __m256i ys[4];
+                    ys[0] = _mm256_shuffle_epi32(y, 0x00);
+                    ys[1] = _mm256_shuffle_epi32(y, 0x55);
+                    ys[2] = _mm256_shuffle_epi32(y, 0xaa);
+                    ys[3] = _mm256_shuffle_epi32(y, 0xff);
 #ifdef HAVE_VNNI256
                     auto sumi = _mm256_setzero_si256();
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[0], _mm256_shuffle_epi32(y, 0x00));
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[2], _mm256_shuffle_epi32(y, 0xaa));
-                    sumi = _mm256_dpbusd_epi32(sumi, qx[3], _mm256_shuffle_epi32(y, 0xff));
+                    sumi = _mm256_dpbusd_epi32(sumi, qx[0], ys[0]);
+                    sumi = _mm256_dpbusd_epi32(sumi, qx[1], ys[1]);
+                    sumi = _mm256_dpbusd_epi32(sumi, qx[2], ys[2]);
+                    sumi = _mm256_dpbusd_epi32(sumi, qx[3], ys[3]);
                     isum[iy] = _mm256_add_epi32(isum[iy], _mm256_mullo_epi32(scales, sumi));
 #else
-                    auto sumi1 = _mm256_maddubs_epi16(s1, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x00), qx[0]));
-                    auto sumi2 = _mm256_maddubs_epi16(s2, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x55), qx[1]));
-                    auto sumi3 = _mm256_maddubs_epi16(s3, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xaa), qx[2]));
-                    auto sumi4 = _mm256_maddubs_epi16(s4, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xff), qx[3]));
+                    auto sumi1 = _mm256_maddubs_epi16(s1, _mm256_sign_epi8(ys[0], qx[0]));
+                    auto sumi2 = _mm256_maddubs_epi16(s2, _mm256_sign_epi8(ys[1], qx[1]));
+                    auto sumi3 = _mm256_maddubs_epi16(s3, _mm256_sign_epi8(ys[2], qx[2]));
+                    auto sumi4 = _mm256_maddubs_epi16(s4, _mm256_sign_epi8(ys[3], qx[3]));
                     isum[iy] = _mm256_add_epi32(isum[iy], _mm256_add_epi32(_mm256_madd_epi16(scales, sumi1), _mm256_madd_epi16(scales, sumi2)));
                     isum[iy] = _mm256_add_epi32(isum[iy], _mm256_add_epi32(_mm256_madd_epi16(scales, sumi3), _mm256_madd_epi16(scales, sumi4)));
 #endif
