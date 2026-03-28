@@ -831,14 +831,15 @@ void mul_mat_iq3_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
         return _mm256_cvtepi32_ps(dot[0]);
     };
 
-    auto compute_dot = [&dot, &xv, &sv] (const int8_t * y) {
+    __m256i sv_s[4];
+    auto compute_dot = [&dot, &xv, &sv, &sv_s] (const int8_t * y) {
         for (int k = 0; k < 4; ++k) {
             auto yv = _mm256_loadu_si256((const __m256i *)y + k);
 #ifdef HAVE_VNNI256
             //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
-            dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], _mm256_sign_epi8(yv, sv[k]));
+            dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], _mm256_sign_epi8(yv, sv_s[k]));
 #else
-            auto p = _mm256_maddubs_epi16(xv[k], _mm256_sign_epi8(yv, sv[k]));
+            auto p = _mm256_maddubs_epi16(xv[k], _mm256_sign_epi8(yv, sv_s[k]));
             dot[k] = _mm256_madd_epi16(p, _mm256_set1_epi16(1));
 #endif
         }
@@ -868,6 +869,7 @@ void mul_mat_iq3_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
                 for (int k = 0; k < 4; ++k) {
                     sv[k] = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(sign_bits, mask), mask), mask);
                     sign_bits = _mm256_srli_epi16(sign_bits, 1);
+                    sv_s[k] = _mm256_sign_epi8(sv[k], sv[k]);
                 }
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     const block_q8_2_x4& yb = y[iy][2*i+i128];
