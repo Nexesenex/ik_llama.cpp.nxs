@@ -829,7 +829,7 @@ static void mul_mat_qX_K_q8_2_X4_T(int n, const void * vx, size_t bx, const Data
 
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     const block_q8_2_x4& y = q8.y[iy][2*i+j];
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     auto sumi1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[0], _mm256_loadu_si256((const __m256i*)y.qs+0));
                     auto sumi2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[1], _mm256_loadu_si256((const __m256i*)y.qs+1));
                     auto sumi3 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[2], _mm256_loadu_si256((const __m256i*)y.qs+2));
@@ -983,7 +983,7 @@ static void mul_mat_qY_K_q8_2_X4_T(int n, const void * vx, size_t bx, const Data
 
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto qs = q8.y[iy][2*i+j].qs;
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     // 0...31
                     auto sumi1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), us[0], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+0), deq.bits.values[0]));
                     // 32...63
@@ -1245,7 +1245,7 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
     auto m03 = _mm256_set1_epi8(0x03);
     static const uint8_t k_shuff[32] = {0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15, 0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15};
     auto shuff = _mm256_loadu_si256((const __m256i *)k_shuff);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     __m256i isum[nrc_y] = {};
 #else
     auto m1 = _mm256_set1_epi16(1);
@@ -1277,7 +1277,7 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto bsums = q8.load_bsums(iy, ibl);
                     auto sumi = _mm256_setzero_si256();
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     sumi = _mm256_dpwssd_epi32(sumi, s1, _mm256_shuffle_epi32(bsums, 0x00));
                     sumi = _mm256_dpwssd_epi32(sumi, s2, _mm256_shuffle_epi32(bsums, 0x55));
                     sumi = _mm256_dpwssd_epi32(sumi, s3, _mm256_shuffle_epi32(bsums, 0xaa));
@@ -1303,7 +1303,7 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             _mm256_storeu_si256((__m256i *)scales+1, all_scales2);
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto iscales = _mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(scales + 8*ib)));
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
                 auto scales  = _mm256_mul_ps(d4, _mm256_cvtepi32_ps(iscales));
 #endif
                 auto lb = _mm256_loadu_si256((const __m256i *)iq2[ibl].qs+ib);
@@ -1313,7 +1313,7 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 qx[3] = _mm256_and_si256(_mm256_srli_epi16(lb, 6), m03);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i*)q8.y[iy][ibl].qs+ib);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     auto sumi = _mm256_setzero_si256();
                     sumi = _mm256_dpbusd_epi32(sumi, qx[0], _mm256_shuffle_epi32(y, 0x00));
                     sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
@@ -1335,7 +1335,7 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
 #endif
                 }
             }
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto d4y = _mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl)));
                 acc[iy] = _mm256_fmadd_ps(d4y, _mm256_cvtepi32_ps(isum[iy]), acc[iy]);
@@ -1362,7 +1362,7 @@ static void mul_mat_q3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
     auto m04 = _mm256_set1_epi8(0x04);
     static const uint8_t k_shuff[32] = {0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15, 0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15};
     auto shuff = _mm256_loadu_si256((const __m256i *)k_shuff);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     __m256i isum[nrc_y];
 #elif !defined(HAVE_VNNI256)
     auto m1 = _mm256_set1_epi16(1);
@@ -1376,7 +1376,7 @@ static void mul_mat_q3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq3[ibl].d));
             auto d4 = _mm256_set_m128(dl, dl);
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
             if constexpr (nrc_y == 1) {
                 d4 = _mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(0, ibl)));
             }
@@ -1389,7 +1389,7 @@ static void mul_mat_q3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             _mm256_storeu_si256((__m256i *)scales+0, scales1);
             _mm256_storeu_si256((__m256i *)scales+1, scales2);
             {
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
                 auto min = _mm256_mul_ps(d4, _mm256_set1_ps(-4.f));
 #endif
                 auto t1 = _mm256_shuffle_epi8(_mm256_cvtepi8_epi16(_mm256_extracti128_si256(scales1, 0)), shuff); // blocks  0,  1,  2,  3 for each row
@@ -1400,7 +1400,7 @@ static void mul_mat_q3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 auto s2 = MM256_SET_M128I(_mm256_extracti128_si256(t3, 1), _mm256_extracti128_si256(t1, 1)); // blocks 2, 3, 10, 11
                 auto s3 = MM256_SET_M128I(_mm256_extracti128_si256(t4, 0), _mm256_extracti128_si256(t2, 0)); // blocks 4, 5, 12, 13
                 auto s4 = MM256_SET_M128I(_mm256_extracti128_si256(t4, 1), _mm256_extracti128_si256(t2, 1)); // blocks 6, 7, 14, 15
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 s1 = _mm256_mullo_epi16(s1, _mm256_set1_epi16(-4));
                 s2 = _mm256_mullo_epi16(s2, _mm256_set1_epi16(-4));
                 s3 = _mm256_mullo_epi16(s3, _mm256_set1_epi16(-4));
@@ -1409,7 +1409,7 @@ static void mul_mat_q3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto bsums = q8.load_bsums(iy, ibl);
                     auto sumi = _mm256_setzero_si256();
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     sumi = _mm256_dpwssd_epi32(sumi, s1, _mm256_shuffle_epi32(bsums, 0x00));
                     sumi = _mm256_dpwssd_epi32(sumi, s2, _mm256_shuffle_epi32(bsums, 0x55));
                     sumi = _mm256_dpwssd_epi32(sumi, s3, _mm256_shuffle_epi32(bsums, 0xaa));
@@ -1440,7 +1440,7 @@ static void mul_mat_q3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             }
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto iscales = _mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(scales + 8*ib)));
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
                 auto scales  = _mm256_mul_ps(d4, _mm256_cvtepi32_ps(iscales));
 #endif
                 auto lb = _mm256_loadu_si256((const __m256i *)iq3[ibl].qs+ib);
@@ -1452,7 +1452,7 @@ static void mul_mat_q3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 qx[3] = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(lb, 6), m03), _mm256_and_si256(m04, _mm256_srli_epi16(hb, 5)));
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i*)q8.y[iy][ibl].qs+ib);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     auto sumi = _mm256_setzero_si256();
                     sumi = _mm256_dpbusd_epi32(sumi, qx[0], _mm256_shuffle_epi32(y, 0x00));
                     sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
@@ -1486,7 +1486,7 @@ static void mul_mat_q3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
 
                 }
             }
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto d4y = _mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl)));
                 acc[iy] = _mm256_fmadd_ps(d4y, _mm256_cvtepi32_ps(isum[iy]), acc[iy]);
@@ -1682,7 +1682,7 @@ static void mul_mat_q6_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
     auto m3 = _mm256_set1_epi8(0x30);
     static const uint8_t k_shuff[32] = {0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15, 0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15};
     auto shuff = _mm256_loadu_si256((const __m256i *)k_shuff);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     __m256i isum[nrc_y];
 #elif !defined(HAVE_VNNI256)
     auto m1 = _mm256_set1_epi16(1);
@@ -1701,7 +1701,7 @@ static void mul_mat_q6_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             }
 #endif
             {
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
                 auto min = _mm256_mul_ps(d4, _mm256_set1_ps(-32.f));
 #endif
                 auto t1 = _mm256_shuffle_epi8(_mm256_cvtepi8_epi16(_mm_loadu_si128((const __m128i *)iq6[ibl].scales+0)), shuff); // blocks  0,  1,  2,  3 for each row
@@ -1712,7 +1712,7 @@ static void mul_mat_q6_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 auto s2 = MM256_SET_M128I(_mm256_extracti128_si256(t3, 1), _mm256_extracti128_si256(t1, 1)); // blocks 2, 3, 10, 11
                 auto s3 = MM256_SET_M128I(_mm256_extracti128_si256(t4, 0), _mm256_extracti128_si256(t2, 0)); // blocks 4, 5, 12, 13
                 auto s4 = MM256_SET_M128I(_mm256_extracti128_si256(t4, 1), _mm256_extracti128_si256(t2, 1)); // blocks 6, 7, 14, 15
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 s1 = _mm256_mullo_epi16(s1, _mm256_set1_epi16(-32));
                 s2 = _mm256_mullo_epi16(s2, _mm256_set1_epi16(-32));
                 s3 = _mm256_mullo_epi16(s3, _mm256_set1_epi16(-32));
@@ -1721,7 +1721,7 @@ static void mul_mat_q6_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto bsums = q8.load_bsums(iy, ibl);
                     auto sumi = _mm256_setzero_si256();
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     sumi = _mm256_dpwssd_epi32(sumi, s1, _mm256_shuffle_epi32(bsums, 0x00));
                     sumi = _mm256_dpwssd_epi32(sumi, s2, _mm256_shuffle_epi32(bsums, 0x55));
                     sumi = _mm256_dpwssd_epi32(sumi, s3, _mm256_shuffle_epi32(bsums, 0xaa));
@@ -1753,7 +1753,7 @@ static void mul_mat_q6_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             const uint32_t * scales = (const uint32_t *)iq6[ibl].scales;
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto iscales = _mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(scales + 2*ib)));
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
                 auto scales  = _mm256_mul_ps(d4, _mm256_cvtepi32_ps(iscales));
 #endif
                 auto lbits1 = _mm256_loadu_si256((const __m256i *)iq6[ibl].ql+2*ib+0);
@@ -1765,7 +1765,7 @@ static void mul_mat_q6_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 qx[3] = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(lbits2, 4), m4), _mm256_and_si256(m3, _mm256_srli_epi16(hbits, 2)));
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i*)q8.y[iy][ibl].qs+ib);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     auto sumi = _mm256_setzero_si256();
                     sumi = _mm256_dpbusd_epi32(sumi, qx[0], _mm256_shuffle_epi32(y, 0x00));
                     sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
@@ -1798,7 +1798,7 @@ static void mul_mat_q6_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
 #endif
                 }
             }
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto d4y = _mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl)));
                 acc[iy] = _mm256_fmadd_ps(d4y, _mm256_cvtepi32_ps(isum[iy]), acc[iy]);
@@ -1937,20 +1937,20 @@ static void mul_mat_q8_KV_q8_KV(int n, const void * vx, size_t bx, const DataInf
     GGML_ASSERT(nrc_x%4 == 0);
     GGML_ASSERT(n%32 == 0);
     __m256i qx[4];
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
     __m256i sx[4];
     auto m1 = _mm256_set1_epi16(1);
 #endif
     __m256i acc[nrc_y] = {};
     float dy[nrc_y];
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     int32_t sy[nrc_y];
 #endif
     const int8_t * q8y[nrc_y];
     for (int iy = 0; iy < nrc_y; ++iy) {
         auto dptr = (const float *)info.src1_row(iy);
         dy[iy] = dptr[0];
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         auto iptr = (const int32_t *)(dptr + 1);
         sy[iy] = -127*iptr[0];
 #endif
@@ -1970,7 +1970,7 @@ static void mul_mat_q8_KV_q8_KV(int n, const void * vx, size_t bx, const DataInf
             auto t1 = _mm256_unpacklo_epi32(qx[2], qx[3]);
             auto t2 = _mm256_unpackhi_epi32(qx[0], qx[1]);
             auto t3 = _mm256_unpackhi_epi32(qx[2], qx[3]);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             qx[0] = _mm256_add_epi8(_mm256_unpacklo_epi64(t0, t1), _mm256_set1_epi8(127));
             qx[1] = _mm256_add_epi8(_mm256_unpackhi_epi64(t0, t1), _mm256_set1_epi8(127));
             qx[2] = _mm256_add_epi8(_mm256_unpacklo_epi64(t2, t3), _mm256_set1_epi8(127));
@@ -1983,7 +1983,7 @@ static void mul_mat_q8_KV_q8_KV(int n, const void * vx, size_t bx, const DataInf
 #endif
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto y = _mm256_loadu_si256((const __m256i *)q8y[iy] + i);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[0], _mm256_shuffle_epi32(y, 0x00));
                 acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[1], _mm256_shuffle_epi32(y, 0x55));
                 acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[2], _mm256_shuffle_epi32(y, 0xaa));
@@ -2002,7 +2002,7 @@ static void mul_mat_q8_KV_q8_KV(int n, const void * vx, size_t bx, const DataInf
         auto scales_x = _mm_loadu_ps(dx);
         for (int iy = 0; iy < nrc_y; ++iy) {
             auto sumi = _mm_add_epi32(_mm256_castsi256_si128(acc[iy]), _mm256_extracti128_si256(acc[iy], 1));
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             sumi = _mm_add_epi32(sumi, _mm_set1_epi32(sy[iy]));
 #endif
             auto scale = _mm_mul_ps(scales_x, _mm_set1_ps(dy[iy]));
@@ -2017,21 +2017,21 @@ template <int nrc_y>
 static void mul_mat_q8_KV_r8_q8_KV(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(n%32 == 0);
     GGML_ASSERT(nrc_x%8 == 0);
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
     auto m1 = _mm256_set1_epi16(1);
 #endif
     int nb = n / 16;
     __m256i acc[nrc_y] = {};
     __m256i qx[4];
     float dy[nrc_y];
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     float sy[nrc_y];
 #endif
     const int8_t * q8y[nrc_y];
     for (int iy = 0; iy < nrc_y; ++iy) {
         auto dptr = (const float *)info.src1_row(iy);
         dy[iy] = dptr[0];
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         auto iptr = (const int32_t *)(dptr + 1);
         sy[iy] = -127*iptr[0];
 #endif
@@ -2046,7 +2046,7 @@ static void mul_mat_q8_KV_r8_q8_KV(int n, const void * vx, size_t bx, const Data
             qx[1] = _mm256_loadu_si256((const __m256i *)q8x+4*ib+1);
             qx[2] = _mm256_loadu_si256((const __m256i *)q8x+4*ib+2);
             qx[3] = _mm256_loadu_si256((const __m256i *)q8x+4*ib+3);
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
             auto s0 = _mm256_sign_epi8(qx[0], qx[0]);
             auto s1 = _mm256_sign_epi8(qx[1], qx[1]);
             auto s2 = _mm256_sign_epi8(qx[2], qx[2]);
@@ -2060,7 +2060,7 @@ static void mul_mat_q8_KV_r8_q8_KV(int n, const void * vx, size_t bx, const Data
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto y128 = _mm_loadu_si128((const __m128i*)q8y[iy]+ib);
                 auto y = MM256_SET_M128I(y128, y128);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[0], _mm256_shuffle_epi32(y, 0x00));
                 acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[1], _mm256_shuffle_epi32(y, 0x55));
                 acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[2], _mm256_shuffle_epi32(y, 0xaa));
@@ -2078,7 +2078,7 @@ static void mul_mat_q8_KV_r8_q8_KV(int n, const void * vx, size_t bx, const Data
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
             auto scale = _mm256_mul_ps(dx, _mm256_set1_ps(dy[iy]));
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             acc[iy] = _mm256_add_epi32(acc[iy], _mm256_set1_epi32(sy[iy]));
 #endif
             info.store(ix, iy, _mm256_mul_ps(scale, _mm256_cvtepi32_ps(acc[iy])));
@@ -2093,7 +2093,7 @@ typedef struct {
 } block_q8_1_r8;
 
 void iqk_convert_q2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else
@@ -2499,7 +2499,7 @@ void iqk_convert_q3_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int 
 }
 
 void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else
@@ -2617,7 +2617,7 @@ void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
 // TODO: move this to iqk_gemm_iquants
 void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
 
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else
@@ -2743,7 +2743,7 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
 #endif
         case GGML_TYPE_Q8_KV:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_KV_q8_KV, kernels)
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             func16 = mul_mat_q8_KV_q8_KV<16>;
 #endif
             break;
@@ -4601,7 +4601,7 @@ static void mul_mat_q8_KV_q8_KV_1(int n, const void * vx, size_t bx, const DataI
     __m256i qx[2];
     __m256i acc[2*nrc_y] = {};
     float   dy[nrc_y];
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     int32_t sy[nrc_y];
 #else
     __m256i sx[2];
@@ -4611,7 +4611,7 @@ static void mul_mat_q8_KV_q8_KV_1(int n, const void * vx, size_t bx, const DataI
     for (int iy = 0; iy < nrc_y; ++iy) {
         auto dptr = (const float *)info.src1_row(iy);
         dy[iy] = dptr[0];
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         auto iptr = (const int32_t *)(dptr+1);
         sy[iy] = -127*iptr[0];
 #endif
@@ -4622,7 +4622,7 @@ static void mul_mat_q8_KV_q8_KV_1(int n, const void * vx, size_t bx, const DataI
         auto q8x = (const int8_t *)(dx + 2);
         for (int i = 0; i < n/64; ++i) {
             for (int j = 0; j < 2; ++j) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 qx[j] = _mm256_add_epi8(_mm256_loadu_si256((const __m256i *)q8x + 2*i + j), _mm256_set1_epi8(127));
 #else
                 qx[j] = _mm256_loadu_si256((const __m256i *)q8x + 2*i + j);
@@ -4631,7 +4631,7 @@ static void mul_mat_q8_KV_q8_KV_1(int n, const void * vx, size_t bx, const DataI
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
                 for (int j = 0; j < 2; ++j) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     acc[2*iy+j] = _mm256_dpbusd_epi32(acc[2*iy+j], qx[j], _mm256_loadu_si256((const __m256i *)q8y[iy] + 2*i + j));
 #else
                     auto dot = _mm256_maddubs_epi16(sx[j], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)q8y[iy] + 2*i + j), qx[j]));
@@ -4641,14 +4641,14 @@ static void mul_mat_q8_KV_q8_KV_1(int n, const void * vx, size_t bx, const DataI
             }
         }
         if (int i = 2*(n/64); i < n/32) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             qx[0] = _mm256_add_epi8(_mm256_loadu_si256((const __m256i *)q8x + i), _mm256_set1_epi8(127));
 #else
             qx[0] = _mm256_loadu_si256((const __m256i *)q8x + i);
             sx[0] = _mm256_sign_epi8(qx[0], qx[0]);
 #endif
             for (int iy = 0; iy < nrc_y; ++iy) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 acc[2*iy] = _mm256_dpbusd_epi32(acc[2*iy], qx[0], _mm256_loadu_si256((const __m256i *)q8y[iy] + i));
 #else
                 auto dot = _mm256_maddubs_epi16(sx[0], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)q8y[iy] + i), qx[0]));
@@ -4658,7 +4658,7 @@ static void mul_mat_q8_KV_q8_KV_1(int n, const void * vx, size_t bx, const DataI
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
             auto sumi = hsum_i32_8(_mm256_add_epi32(acc[2*iy], acc[2*iy+1]));
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             info.store(ix, iy, dx[0]*dy[iy]*(sumi+sy[iy]));
 #else
             info.store(ix, iy, dx[0]*dy[iy]*sumi);
