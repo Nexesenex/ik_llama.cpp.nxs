@@ -502,6 +502,7 @@ static std::mutex ggml_cuda_lock;
 static std::condition_variable ggml_cuda_lock_cv;
 //static std::atomic<int> ggml_cuda_lock_counter;
 static int ggml_cuda_lock_counter = 0;
+static std::string ggml_cuda_user_cslq; // User-provided CUDA_SCALE_LAUNCH_QUEUES from -cuda cslq=X
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)) {
@@ -756,15 +757,22 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
 
         // Set CUDA_SCALE_LAUNCH_QUEUES before any CUDA API call to improve multi-GPU pipeline parallelism performance
         // PR: https://github.com/ggml-org/llama.cpp/pull/19042
+        // User can override via -cuda cslq=X argument (e.g., cslq=2x, cslq=4x)
+        const char * user_cslq = ggml_cuda_user_cslq.empty() ? nullptr : ggml_cuda_user_cslq.c_str();
         if (getenv("CUDA_SCALE_LAUNCH_QUEUES") == nullptr) {
+            const char * cslq_value = user_cslq ? user_cslq : "1x";
 #ifdef _WIN32
-            _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "2x");
+            _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", cslq_value);
 #else
-            setenv("CUDA_SCALE_LAUNCH_QUEUES", "2x", 0); // don't overwrite if already set
+            setenv("CUDA_SCALE_LAUNCH_QUEUES", cslq_value, 0); // don't overwrite if already set
 #endif // _WIN32
-            GGML_CUDA_LOG_WARN("==================================================================================\n");
-            GGML_CUDA_LOG_WARN("CUDA_SCALE_LAUNCH_QUEUES=2x EnVar has been enabled for increased Multi-GPUs perfs.\n");
-            GGML_CUDA_LOG_WARN("==================================================================================\n");
+            if (!user_cslq) {
+                GGML_CUDA_LOG_WARN("==================================================================================\n");
+                GGML_CUDA_LOG_WARN("CUDA_SCALE_LAUNCH_QUEUES=1x EnVar has been enabled for increased Multi-GPUs perfs.\n");
+                GGML_CUDA_LOG_WARN("==================================================================================\n");
+            } else {
+                GGML_CUDA_LOG_INFO("CUDA_SCALE_LAUNCH_QUEUES=%s EnVar has been enabled via -cuda cslq argument.\n", cslq_value);
+            }
         }
 
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; i++) {
@@ -4942,6 +4950,7 @@ struct cuda_params {
     bool use_cuda_graph = false;
 #endif
     bool enable_p2p = true;
+    std::string cslq; // CUDA_SCALE_LAUNCH_QUEUES: "1x", "2x", "4x"
 };
 
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
@@ -5007,6 +5016,10 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                 is_good = read_value(parsed[1], params.use_cuda_graph);
             }
 #endif
+            else if (parsed[0] == "cslq") {
+                params.cslq = parsed[1];
+                is_good = !params.cslq.empty();
+            }
         }
         if (!is_good) {
             GGML_CUDA_LOG_WARN("%s: invalid parameter %s (%d) -> ignored\n", __func__, value.c_str(), (int)parsed.size());
@@ -5036,6 +5049,11 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
     bool enable_p2p = true;
     if (param_string) {
         [[maybe_unused]] auto params = ggml_cuda_parse_params((const char *)param_string);
+        // Store user-provided cslq for use in buffer type init (must be set before first CUDA call)
+        if (!params.cslq.empty()) {
+            ggml_cuda_user_cslq = params.cslq;
+            GGML_CUDA_LOG_INFO("=========================== %s: setting CUDA_SCALE_LAUNCH_QUEUES to %s\n", __func__, params.cslq.c_str());
+        }
         if (params.fusion != ctx->fusion) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting fusion to %d\n", __func__, params.fusion);
             ctx->fusion             = params.fusion;
@@ -5149,4 +5167,11 @@ GGML_CALL int ggml_backend_cuda_reg_devices() {
         ggml_backend_register(name, ggml_backend_reg_cuda_init, ggml_backend_cuda_buffer_type(i), (void *) (intptr_t) i);
     }
     return device_count;
+}
+
+GGML_CALL void ggml_backend_cuda_set_cslq(const char * cslq) {
+    if (cslq && strlen(cslq) > 0) {
+        ggml_cuda_user_cslq = cslq;
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_cslq: CUDA_SCALE_LAUNCH_QUEUES will be set to %s\n", cslq);
+    }
 }
