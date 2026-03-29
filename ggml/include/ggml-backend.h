@@ -221,6 +221,9 @@ extern "C" {
     GGML_API void                 ggml_backend_prefetch_register_mapping(const void * addr, size_t size);
     GGML_API void                 ggml_backend_prefetch_unregister_mapping(const void * addr);
 
+    // set max number of parallel copies for pipeline parallelism (must be called before scheduler init)
+    GGML_API void                 ggml_backend_sched_set_n_copies(int n_copies);
+
     //
     // Utils
     //
