@@ -1535,7 +1535,7 @@ static __device__ __forceinline__ void vec_dot_q3_K_q8_1_dp4a(
     const int   * y_qs = (const int   *) y + 4;
     const float * y_df = (const float *) y;
 
-// #pragma unroll
+#pragma unroll
     for (int k01 = 0; k01 < WARP_SIZE; k01 += QR3_K*VDR_Q3_K_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
@@ -1674,7 +1674,7 @@ static __device__ __forceinline__ void vec_dot_q4_K_q8_1_dp4a(
     const int   * y_qs = (const int   *) y + 4;
     const half2 * y_ds = (const half2 *) y;
 
-// #pragma unroll
+#pragma unroll
     for (int k01 = 0; k01 < WARP_SIZE; k01 += QR4_K*VDR_Q4_K_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
@@ -1815,7 +1815,7 @@ static __device__ __forceinline__ void vec_dot_q5_K_q8_1_dp4a(
     const int   * y_qs = (const int   *) y + 4;
     const half2 * y_ds = (const half2 *) y;
 
-// #pragma unroll
+#pragma unroll
     for (int k01 = 0; k01 < WARP_SIZE; k01 += QR5_K*VDR_Q5_K_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
@@ -1930,7 +1930,7 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_dp4a(
     const int   * y_qs = (const int   *) y + 4;
     const float * y_df = (const float *) y;
 
-// #pragma unroll
+#pragma unroll
     for (int k01 = 0; k01 < WARP_SIZE; k01 += QR6_K*VDR_Q6_K_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
