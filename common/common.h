@@ -395,6 +395,7 @@ struct gpt_params {
     bool monolithic_output_tensor_accounted = false; // if true, account for monolithic output tensor location in mem_used calculation for split_mode_tensor_parallel
     //bool split_mode_f16    = true;  // if true, intermediate results will be cast to f16 before copying to other GPUs to perform reduce ops
     bool scheduler_async   = false; // if true, in split mode graph the scheduler will use multiple threads to evaluate the graph
+    int  sched_max_copies  = -1;    // GGML_SCHED_MAX_COPIES override (-1 = default from cmake)
     int  fused_delta_net   = 0;     // use fused delta-net if number of tokens in the batch is less than this value
     bool has_mtp           = false; // enable MTP if supported by the model
 
