@@ -844,18 +844,24 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_dp4a(
 #pragma unroll
     for (int k01 = 0; k01 < WARP_SIZE; k01 += VDR_Q8_0_Q8_1_MMQ) {
         const int k0 = k00 + k01;
+        const int k0_mod = k0 % WARP_SIZE;
+        const int k0_qi8_0 = k0 / QI8_0;
+        const int k0_qi8_1_mod = (k0 / QI8_1) % (WARP_SIZE / QI8_1);
 
 #pragma unroll
         for (int j0 = 0; j0 < mmq_x; j0 += nwarps) {
             const int j = j0 + threadIdx.y;
+            const int j_offset = j * MMQ_TILE_Y_K;
 
 #pragma unroll
             for (int i0 = 0; i0 < mmq_y; i0 += WARP_SIZE) {
                 const int i = i0 + threadIdx.x;
+                const int i_xqs = i * (2 * WARP_SIZE + 1);
+                const int i_xdf = i * (2 * WARP_SIZE / QI8_0) + i / (QI8_0 / 2);
 
-                sum[j0/nwarps*mmq_y/WARP_SIZE + i0/WARP_SIZE] += vec_dot_q8_0_q8_1_impl<float, VDR_Q8_0_Q8_1_MMQ>
-                    (&x_qs[i*(2*WARP_SIZE + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k0 % WARP_SIZE],
-                     x_df[i*(2*WARP_SIZE/QI8_0) + i/(QI8_0/2) + k0/QI8_0], y_df[j*MMQ_TILE_Y_K + (k0/QI8_1) % (WARP_SIZE/QI8_1)]);
+                sum[j0 / nwarps * mmq_y / WARP_SIZE + i0 / WARP_SIZE] += vec_dot_q8_0_q8_1_impl<float, VDR_Q8_0_Q8_1_MMQ>
+                    (&x_qs[i_xqs + k0], &y_qs[j_offset + k0_mod],
+                     x_df[i_xdf + k0_qi8_0], y_df[j_offset + k0_qi8_1_mod]);
             }
         }
     }
@@ -1061,20 +1067,24 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_dp4a(
 #pragma unroll
     for (int k01 = 0; k01 < WARP_SIZE; k01 += QI8_0) {
         const int k0 = k00 + k01;
+        const int k0_qi8_0_div2 = k0 / (QI8_0 / 2);
 
 #pragma unroll
         for (int j0 = 0; j0 < mmq_x; j0 += nwarps) {
             const int j = j0 + threadIdx.y;
+            const int j_offset = j * MMQ_TILE_Y_K;
 
 #pragma unroll
             for (int i0 = 0; i0 < mmq_y; i0 += WARP_SIZE) {
                 const int i = i0 + threadIdx.x;
+                const int i_xqs = i * (2 * WARP_SIZE + 1);
+                const int i_xdf = i * (2 * WARP_SIZE * 2 / QI8_0) + i / (QI8_0 / 4);
 
-                sum[j0/nwarps*mmq_y/WARP_SIZE + i0/WARP_SIZE] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(
-                    &x_qs[i*(2*WARP_SIZE + 1) + k0],
-                    &y_qs[j*MMQ_TILE_Y_K + k01],
-                    &x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],
-                    y_df[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                sum[j0 / nwarps * mmq_y / WARP_SIZE + i0 / WARP_SIZE] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(
+                    &x_qs[i_xqs + k0],
+                    &y_qs[j_offset + k01],
+                    &x_df[i_xdf + k0_qi8_0_div2],
+                    y_df[j_offset + k01 / QI8_1]);
             }
         }
     }
