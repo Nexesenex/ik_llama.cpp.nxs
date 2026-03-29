@@ -4676,7 +4676,21 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     }
 
     if (!params.offload_policy.empty()) cparams.offload_policy = (void *)&params.offload_policy;
-    if (!params.cuda_params.empty()) cparams.cuda_params = (void *)params.cuda_params.data();
+    if (!params.cuda_params.empty()) {
+        cparams.cuda_params = (void *)params.cuda_params.data();
+#if defined(GGML_USE_CUDA)
+        // Set CUDA_SCALE_LAUNCH_QUEUES before buffer type init (must be called before ggml_backend_cuda_buffer_type)
+        size_t pos = params.cuda_params.find("cslq=");
+        if (pos != std::string::npos) {
+            size_t start = pos + 5;
+            size_t end = params.cuda_params.find(",", start);
+            std::string cslq = params.cuda_params.substr(start, end - start);
+            if (!cslq.empty()) {
+                ggml_backend_cuda_set_cslq(cslq.c_str());
+            }
+        }
+#endif
+    }
 
     return cparams;
 }
