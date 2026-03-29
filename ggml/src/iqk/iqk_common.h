@@ -949,6 +949,15 @@ inline int popcount(uint8_t x) { return __popcnt(x); }
 inline int popcount(uint16_t x) { return __popcnt(x); }
 inline int popcount(uint32_t x) { return __popcnt(x); }
 inline int popcount(uint64_t x) { return _mm_popcnt_u64(x); }
+#if defined(__AVX512F__) && defined(__AVX512VL__) && !defined(__AVX512VNNI__)
+inline __m512i mm512_sign_epi8(__m512i a, __m512i b) {
+    __m512i zero = _mm512_setzero_si512();
+    __m512i mask = _mm512_cmpgt_epi8(zero, b);
+    __m512i a_neg = _mm512_sub_epi8(zero, a);
+    return _mm512_blendv_epi8(a, a_neg, mask);
+}
+#define _mm512_sign_epi8(a, b) mm512_sign_epi8(a, b)
+#endif
 #else
 constexpr int popcount(uint8_t x) { return __builtin_popcount(x); }
 constexpr int popcount(uint16_t x) { return __builtin_popcount(x); }
