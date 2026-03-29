@@ -5,6 +5,7 @@ set(BUILD_TARGET "unknown")
 set(BUILD_BRANCH "unknown")
 set(BUILD_DATE "unknown")
 set(BUILD_NEXES_COMMITS 0)
+set(BUILD_CUDA_VERSION "unknown")
 
 # Look for git
 find_package(Git)

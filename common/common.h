@@ -40,6 +40,7 @@
 #define print_build_info() do {                                                                     \
     fprintf(stderr, "%s: build = %d (%s)\n",      __func__, LLAMA_BUILD_NUMBER, LLAMA_COMMIT);      \
     fprintf(stderr, "%s: built with %s for %s\n", __func__, LLAMA_COMPILER, LLAMA_BUILD_TARGET);    \
+    fprintf(stderr, "%s: cuda = %s\n",           __func__, LLAMA_CUDA_VERSION);                     \
 } while(0)
 
 #define DEFAULT_MODEL_PATH "models/7B/ggml-model-f16.gguf"
@@ -72,6 +73,7 @@ extern char const * LLAMA_COMPILER;
 extern char const * LLAMA_BUILD_TARGET;
 extern char const * LLAMA_BUILD_BRANCH;
 extern char const * LLAMA_BUILD_DATE;
+extern char const * LLAMA_CUDA_VERSION;
 
 struct llama_control_vector_load_info;
 

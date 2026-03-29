@@ -122,6 +122,10 @@ llama_option_depr(WARNING     LLAMA_SYCL                GGML_SYCL)
 llama_option_depr(WARNING     LLAMA_SYCL_F16            GGML_SYCL_F16)
 llama_option_depr(WARNING     LLAMA_CANN                GGML_CANN)
 
+if (GGML_CUDA)
+    find_package(CUDAToolkit)
+endif()
+
 if (NOT MSVC)
     if (LLAMA_SANITIZE_THREAD)
         message(STATUS "Using -fsanitize=thread")
@@ -152,6 +156,14 @@ endif()
 if (NOT TARGET ggml)
     add_subdirectory(ggml)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
+endif()
+
+if (GGML_CUDA)
+    if (CUDAToolkit_FOUND)
+        set(BUILD_CUDA_VERSION "${CUDAToolkit_VERSION}")
+    elseif (CMAKE_CUDA_COMPILER_VERSION)
+        set(BUILD_CUDA_VERSION "${CMAKE_CUDA_COMPILER_VERSION}")
+    endif()
 endif()
 
 #

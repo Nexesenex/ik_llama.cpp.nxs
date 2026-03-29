@@ -186,6 +186,7 @@ int main(int argc, char ** argv) {
     LOG_TEE("%s: branch = %s\n",           __func__, LLAMA_BUILD_BRANCH);
     LOG_TEE("%s: date   = %s\n",           __func__, LLAMA_BUILD_DATE);
     LOG_TEE("%s: Nexesenex commits = %d\n", __func__, LLAMA_NEXES_COMMITS);
+    LOG_TEE("%s: CUDA version = %s\n",     __func__, LLAMA_CUDA_VERSION);
 
     if (params.seed == LLAMA_DEFAULT_SEED) {
         params.seed = time(NULL);
