@@ -838,7 +838,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_dp4a(
     const int   * y_qs = (const int   *) y + 4;
     const float * y_df = (const float *) y;
 
-// #pragma unroll
+#pragma unroll
     for (int k01 = 0; k01 < WARP_SIZE; k01 += VDR_Q8_0_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
@@ -1055,7 +1055,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_dp4a(
     const int   * y_qs = (const int   *) y + 4;
     const float * y_df = (const float *) y;
 
-// #pragma unroll
+#pragma unroll
     for (int k01 = 0; k01 < WARP_SIZE; k01 += QI8_0) {
         const int k0 = k00 + k01;
 
