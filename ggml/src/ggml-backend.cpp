@@ -1136,6 +1136,12 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #define GGML_SCHED_MAX_COPIES 1
 #endif
 
+static int ggml_sched_max_copies = GGML_SCHED_MAX_COPIES;
+
+void ggml_backend_sched_set_n_copies(int n_copies) {
+    ggml_sched_max_copies = n_copies;
+}
+
 struct ggml_backend_sched_split {
     int backend_id;
     int i_start;
@@ -2444,7 +2450,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->debug = getenv("GGML_SCHED_DEBUG") != NULL;
     sched->n_backends = n_backends;
-    sched->n_copies = parallel ? GGML_SCHED_MAX_COPIES : 1;
+    sched->n_copies = parallel ? ggml_sched_max_copies : 1;
 
     // initialize hash table
     // FIXME: needs to be size*2 to account for leafs (do it in graph_split instead)
