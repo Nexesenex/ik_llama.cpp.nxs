@@ -1054,10 +1054,13 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
                 mma_C C;
                 C.mma_K8(A[n][k01/QI8_1], B);
 
+                const int sum_i_base = (j0/mma_C::J + n)*mma_C::ne;
+                const int k01_qi8_1 = k01/QI8_1;
+
 #pragma unroll
                 for (int l = 0; l < mma_C::ne; ++l) {
-                    sum[(j0/mma_C::J + n)*mma_C::ne + l] += dmA[n][l/2][k01/QI8_1].x*dsB[l%2].x*C.x[l];
-                    sum[(j0/mma_C::J + n)*mma_C::ne + l] += dmA[n][l/2][k01/QI8_1].y*dsB[l%2].y;
+                    sum[sum_i_base + l] += dmA[n][l/2][k01_qi8_1].x*dsB[l%2].x*C.x[l];
+                    sum[sum_i_base + l] += dmA[n][l/2][k01_qi8_1].y*dsB[l%2].y;
                 }
             }
         }
