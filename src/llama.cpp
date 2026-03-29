@@ -5021,6 +5021,7 @@ struct llama_context_params llama_context_default_params() {
         /*.split_mode_tensor_parallel_scheduling =*/ false,
         // /*.split_mode_f16           =*/ true,
         /*.scheduler_async             =*/ false,
+        /*.sched_max_copies            =*/ -1,
         /*.mtp                         =*/ false,
         /*.mtp_op_type                 =*/ MTP_OP_NONE,
         /*.abort_callback              =*/ nullptr,
@@ -5424,6 +5425,7 @@ struct llama_context * llama_init_from_model(
     cparams.split_mode_tensor_parallel_scheduling = params.split_mode_tensor_parallel_scheduling;
     //cparams.split_mode_f16   = params.split_mode_f16;
     cparams.scheduler_async  = params.scheduler_async;
+    cparams.sched_max_copies = params.sched_max_copies;
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
@@ -5817,6 +5819,10 @@ struct llama_context * llama_init_from_model(
             // currently this is only implemented in the CUDA backend
             pipeline_parallel = false;
 #endif
+            // Set GGML_SCHED_MAX_COPIES before scheduler init (must be called before scheduler creation)
+            if (cparams.sched_max_copies > 0) {
+                ggml_backend_sched_set_n_copies(cparams.sched_max_copies);
+            }
             ctx->sched = ggml_backend_sched_new(ctx->backends.data(), backend_buft.data(), ctx->backends.size(), max_nodes, pipeline_parallel);
 
             if (pipeline_parallel) {
