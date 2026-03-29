@@ -485,6 +485,12 @@ int main(int argc, char ** argv) {
         {"build_date",  LLAMA_BUILD_DATE}
     });
 
+#ifdef GGML_USE_CUDA
+    LOG_INFO("build details", {
+        {"cuda_version", LLAMA_CUDA_VERSION}
+    });
+#endif
+
     LOG_INFO("system info", {
         {"n_threads",       params.n_threads},
         {"n_threads_batch", params.n_threads_batch},
