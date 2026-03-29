@@ -2253,6 +2253,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.scheduler_async = true;
         return true;
     }
+    if (arg == "-smc" || arg == "--sched-max-copies") {
+        CHECK_ARG
+        params.sched_max_copies = std::atoi(argv[i]);
+        return true;
+    }
     if (arg == "-fdn" || arg == "--fused-delta-net") {
         CHECK_ARG
         fprintf(stderr, "=================== %s has been deprecated\n", arg.c_str());
@@ -3110,6 +3115,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-smtps, -smgs, --split-mode-tensor-parallel-scheduling, --split-mode-graph-scheduling,", "Force Split Mode Tensor Parallel (Graph) Scheduling (default: %d)", params.split_mode_tensor_parallel_scheduling});
     options.push_back({ "*",         "-sot, --split-output-tensor,",    "Force split of the Output Tensor in Split Mode Graph (default: %d)", params.split_output_tensor});
     options.push_back({ "*",         "-sas,  --scheduler_async,",       "Async evaluation of compute graphs: %d)", params.scheduler_async});
+    options.push_back({ "*",         "-smc,  --sched-max-copies,",     "Max graph parallel copies (default: %d)", params.sched_max_copies});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
                                                                         "in conversation mode, this will be used as system prompt\n"
@@ -4411,6 +4417,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.split_mode_tensor_parallel_scheduling = params.split_mode_tensor_parallel_scheduling;
     //cparams.split_mode_f16    = params.split_mode_f16;
     cparams.scheduler_async   = params.scheduler_async;
+    cparams.sched_max_copies  = params.sched_max_copies;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
     cparams.only_active_experts = params.only_active_exps;
