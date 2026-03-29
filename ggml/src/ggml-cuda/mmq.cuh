@@ -347,7 +347,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #endif // INT8_MMA_AVAILABLE
     }
 
-    const int blocks_per_tile_x_row = WARP_SIZE / QI4_0;
+    constexpr int blocks_per_tile_x_row = WARP_SIZE / QI4_0;
     const int kbxd = threadIdx.x % blocks_per_tile_x_row;
 
 #pragma unroll
@@ -363,7 +363,8 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0       + kbxd] = bxi->d;
 #else
-        x_df[i*(WARP_SIZE/QI4_0) + i/QI4_0 + kbxd] = bxi->d;
+        const int i_dm = i/QI4_0;
+        x_df[i*blocks_per_tile_x_row + i_dm + kbxd] = bxi->d;
 #endif // INT8_MMA_AVAILABLE
     }
 }
@@ -510,7 +511,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #endif // INT8_MMA_AVAILABLE
     }
 
-    const int blocks_per_tile_x_row = WARP_SIZE / QI4_1;
+    constexpr int blocks_per_tile_x_row = WARP_SIZE / QI4_1;
     const int kbxd = threadIdx.x % blocks_per_tile_x_row;
 
 #pragma unroll
@@ -526,7 +527,8 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #ifdef INT8_MMA_AVAILABLE
         x_dm[i*MMQ_MMA_TILE_X_K_Q8_1       + kbxd] = bxi->dm;
 #else
-        x_dm[i*(WARP_SIZE/QI4_1) + i/QI4_1 + kbxd] = bxi->dm;
+        const int i_dm = i/QI4_1;
+        x_dm[i*blocks_per_tile_x_row + i_dm + kbxd] = bxi->dm;
 #endif // INT8_MMA_AVAILABLE
     }
 }
@@ -622,7 +624,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #endif // INT8_MMA_AVAILABLE
     }
 
-    const int blocks_per_tile_x_row = WARP_SIZE / QI5_0;
+    constexpr int blocks_per_tile_x_row = WARP_SIZE / QI5_0;
     const int kbxd = threadIdx.x % blocks_per_tile_x_row;
 
 #pragma unroll
@@ -638,7 +640,8 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0       + kbxd] = bxi->d;
 #else
-        x_df[i*(WARP_SIZE/QI5_0) + i/QI5_0 + kbxd] = bxi->d;
+        const int i_dm = i/QI5_0;
+        x_df[i*blocks_per_tile_x_row + i_dm + kbxd] = bxi->d;
 #endif // INT8_MMA_AVAILABLE
     }
 }
@@ -692,7 +695,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #endif // INT8_MMA_AVAILABLE
     }
 
-    const int blocks_per_tile_x_row = WARP_SIZE / QI5_1;
+    constexpr int blocks_per_tile_x_row = WARP_SIZE / QI5_1;
     const int kbxd = threadIdx.x % blocks_per_tile_x_row;
 
 #pragma unroll
@@ -708,7 +711,8 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #ifdef INT8_MMA_AVAILABLE
         x_dm[i*MMQ_MMA_TILE_X_K_Q8_1       + kbxd] = bxi->dm;
 #else
-        x_dm[i*(WARP_SIZE/QI5_1) + i/QI5_1 + kbxd] = bxi->dm;
+        const int i_dm = i/QI5_1;
+        x_dm[i*blocks_per_tile_x_row + i_dm + kbxd] = bxi->dm;
 #endif // INT8_MMA_AVAILABLE
     }
 }
@@ -755,7 +759,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #endif // INT8_MMA_AVAILABLE
     }
 
-    const int blocks_per_tile_x_row = WARP_SIZE / QI6_0;
+    constexpr int blocks_per_tile_x_row = WARP_SIZE / QI6_0;
     const int kbxd = threadIdx.x % blocks_per_tile_x_row;
 
 #pragma unroll
@@ -771,7 +775,8 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0       + kbxd] = bxi->d;
 #else
-        x_df[i*(WARP_SIZE/QI6_0) + i/QI6_0 + kbxd] = bxi->d;
+        const int i_dm = i/QI6_0;
+        x_df[i*blocks_per_tile_x_row + i_dm + kbxd] = bxi->d;
 #endif // INT8_MMA_AVAILABLE
     }
 }
