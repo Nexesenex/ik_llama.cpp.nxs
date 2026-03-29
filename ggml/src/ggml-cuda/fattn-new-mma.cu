@@ -603,6 +603,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     tile_B_16     * Q_B_16   = (tile_B_16     *) Q_B;
     tile_C_VKQ_16 * VKQ_C_16 = (tile_C_VKQ_16 *) VKQ_C;
     tile_C_KQ_16  * KQ_C_16  = (tile_C_KQ_16  *) KQ_C;
+    if constexpr (ntiles == 1) {
+        GGML_UNUSED(VKQ_C_16);
+    }
 
     if constexpr (nstages > 1) {
         static_assert(!mla, "multi-stage loading not implemented for MLA");
