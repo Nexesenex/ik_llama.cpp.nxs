@@ -51,6 +51,7 @@ struct llama_cparams {
     bool split_mode_graph_scheduling;
     //bool split_mode_f16;
     bool scheduler_async;
+    int  sched_max_copies;
     int  min_experts;
     float thresh_experts;
     size_t moe_cache_size = 0;
