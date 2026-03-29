@@ -1141,24 +1141,29 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
         const int k0 = k00 + k01;
+        const int k0_qi8_0 = k0 / QI8_0;
+        const int k01_qi8_1 = k01 / QI8_1;
 
         tile_A A[ntx];
 #pragma unroll
         for (int n = 0; n < ntx; ++n) {
-            load_generic(A[n], x_qs + (i0 + n*tile_A::I)*MMQ_MMA_TILE_X_K_Q8_0 + k0, MMQ_MMA_TILE_X_K_Q8_0);
+            const int n_i_base = (i0 + n*tile_A::I) * MMQ_MMA_TILE_X_K_Q8_0;
+            load_generic(A[n], x_qs + n_i_base + k0, MMQ_MMA_TILE_X_K_Q8_0);
         }
 
 #pragma unroll
         for (int j0 = 0; j0 < mmq_x; j0 += ntx*tile_C::J) {
+            const int j0_offset = j0 * MMQ_TILE_Y_K;
             tile_B B;
-            load_generic(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+            load_generic(B, y_qs + j0_offset + k01, MMQ_TILE_Y_K);
 
             float dB;
             const int j = j0 + tile_C::get_j(0);
+            const int j_offset = j * MMQ_TILE_Y_K;
             if (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
-                dB = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
+                dB = y_df[j_offset + k01_qi8_1];
             } else {
-                dB = __low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                dB = __low2float(y_ds[j_offset + k01_qi8_1]);
             }
 
 #pragma unroll
@@ -1169,7 +1174,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_A::I + tile_C::get_i(l);
-                    const float dA = x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + k0/QI8_0];
+                    const float dA = x_df[i * MMQ_MMA_TILE_X_K_Q8_0 + k0_qi8_0];
                     sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l]*dA*dB;
                 }
             }
@@ -1498,10 +1503,14 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(
                 tile_C C;
                 mma(C, A[n], B[0]);
 
+                const int i0_n = i0 + n*tile_C::I;
+                const int sum_i = (j0/tile_C::J + n)*tile_C::ne;
+                const int k0_4 = k0/4;
+
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
-                    const int i = i0 + n*tile_C::I + tile_C::get_i(l);
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l] * x_df[i*MMQ_MMA_TILE_X_K_Q3_K + k0/4] * dB;
+                    const int i = i0_n + tile_C::get_i(l);
+                    sum[sum_i + l] += C.x[l] * x_df[i*MMQ_MMA_TILE_X_K_Q3_K + k0_4] * dB;
                 }
             }
         }
