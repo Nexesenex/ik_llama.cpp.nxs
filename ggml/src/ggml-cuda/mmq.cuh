@@ -1278,23 +1278,29 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_dp4a(
 #pragma unroll
         for (int j0 = 0; j0 < mmq_x; j0 += nwarps) {
             const int j = j0 + threadIdx.y;
+            const int j_offset = j*MMQ_TILE_Y_K;
+            const int y_df_idx = j0/nwarps;
+            const int y_ds_offset = j_offset + (1 + k01/QI8_1);
 
 #pragma unroll
             for (int i0 = 0; i0 < mmq_y; i0 += WARP_SIZE) {
                 const int i = i0 + threadIdx.x;
+                const int i_qs_offset = i*(2*WARP_SIZE + 1);
+                const int i_dm_offset = i*(WARP_SIZE + 1);
+                const int sum_i = j0/nwarps*mmq_y/WARP_SIZE + i0/WARP_SIZE;
 
                 if (k01 < WARP_SIZE/2) {
                     constexpr int ns = 2;
-                    sum[j0/nwarps*mmq_y/WARP_SIZE + i0/WARP_SIZE] += vec_dot_q2_K_q8_1_impl_mmq<ns>(
-                        &x_qs[i*(2*WARP_SIZE + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k01],
-                        &x_dm[i*(WARP_SIZE + 1) + k0/4], k01 < WARP_SIZE/2 ? y_df[j0/nwarps].x : y_df[j0/nwarps].y,
-                        &y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
+                    sum[sum_i] += vec_dot_q2_K_q8_1_impl_mmq<ns>(
+                        &x_qs[i_qs_offset + k0], &y_qs[j_offset + k01],
+                        &x_dm[i_dm_offset + k0/4], y_df[y_df_idx].x,
+                        &y_ds[y_ds_offset]);
                 } else {
                     constexpr int ns = 1;
-                    sum[j0/nwarps*mmq_y/WARP_SIZE + i0/WARP_SIZE] += vec_dot_q2_K_q8_1_impl_mmq<ns>(
-                        &x_qs[i*(2*WARP_SIZE + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k01],
-                        &x_dm[i*(WARP_SIZE + 1) + k0/4], k01 < WARP_SIZE/2 ? y_df[j0/nwarps].x : y_df[j0/nwarps].y,
-                        &y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
+                    sum[sum_i] += vec_dot_q2_K_q8_1_impl_mmq<ns>(
+                        &x_qs[i_qs_offset + k0], &y_qs[j_offset + k01],
+                        &x_dm[i_dm_offset + k0/4], y_df[y_df_idx].y,
+                        &y_ds[y_ds_offset]);
                 }
             }
         }
