@@ -999,6 +999,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
     tile_B_16     * Q_B_16   = (tile_B_16     *) Q_B;
     tile_C_VKQ_16 * VKQ_C_16 = (tile_C_VKQ_16 *) VKQ_C;
+    if constexpr (ntiles == 1) {
+        GGML_UNUSED(Q_B_16);
+    }
 
     float KQ_rowsum[cols_per_thread] = {0.0f};
     float KQ_max[cols_per_thread];
