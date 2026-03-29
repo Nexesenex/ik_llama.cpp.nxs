@@ -1278,14 +1278,18 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_dp4a(
 #pragma unroll
         for (int j0 = 0; j0 < mmq_x; j0 += nwarps) {
             const int j = j0 + threadIdx.y;
+            const int j_offset = j*MMQ_TILE_Y_K;
 
 #pragma unroll
             for (int i0 = 0; i0 < mmq_y; i0 += warp_size) {
                 const int i = i0 + threadIdx.x;
+                const int i_qs_offset = i*(2*MMQ_TILE_NE_K + 1);
+                const int i_dm_offset = i*(MMQ_TILE_NE_K/QI5_1) + i/QI5_1;
+                const int sum_i = j0/nwarps*mmq_y/warp_size + i0/warp_size;
 
-                sum[j0/nwarps*mmq_y/warp_size + i0/warp_size] += vec_dot_q8_1_q8_1_impl<QR5_1*VDR_Q5_1_Q8_1_MMQ>
-                    (&x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k01],
-                    x_dm[i*(MMQ_TILE_NE_K/QI5_1) + i/QI5_1 + k0/QI8_1], y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                sum[sum_i] += vec_dot_q8_1_q8_1_impl<QR5_1*VDR_Q5_1_Q8_1_MMQ>
+                    (&x_qs[i_qs_offset + k0], &y_qs[j_offset + k01],
+                    x_dm[i_dm_offset + k0/QI8_1], y_ds[j_offset + k01/QI8_1]);
             }
         }
     }
