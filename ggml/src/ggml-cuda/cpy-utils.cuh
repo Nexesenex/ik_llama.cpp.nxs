@@ -109,16 +109,28 @@ static __device__ void quantize_f32_q5_0_block(const float * __restrict__ x, blo
     y->d = d;
 
     uint32_t qh = 0;
+    float sumqx = 0, sumq2 = 0;
     for (int j = 0; j < QK5_0/2; ++j) {
-        const float x0 = x[0       + j]*id;
-        const float x1 = x[QK5_0/2 + j]*id;
+        const float v0 = x[0       + j];
+        const float v1 = x[QK5_0/2 + j];
+        const float x0 = v0*id;
+        const float x1 = v1*id;
 
         const uint8_t xi0 = min(31, (int8_t)(x0 + 16.5f));
         const uint8_t xi1 = min(31, (int8_t)(x1 + 16.5f));
+        float q0 = xi0 - 16;
+        float q1 = xi1 - 16;
+        float w0 = v0*v0;
+        float w1 = v1*v1;
+        sumqx += w0*q0*v0 + w1*q1*v1;
+        sumq2 += w0*q0*q0 + w1*q1*q1;
 
         y->qs[j]  = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
         qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
         qh |= ((xi1 & 0x10u) >> 4) << (j + QK5_0/2);
+    }
+    if (sumq2 > 0) {
+        y->d = sumqx/sumq2;
     }
     memcpy(y->qh, &qh, sizeof(qh));
 }
