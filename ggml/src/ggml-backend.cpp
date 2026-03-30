@@ -2214,6 +2214,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         if (!has_cpu_work) {
         // IK_OPENMP: Standard parallel region without proc_bind
         // proc_bind(close) tested and showed worse performance on Intel 265K
+
+            // Pre-allocate vectors outside the parallel region to avoid per-iteration allocation overhead
+            std::vector<std::vector<int32_t>> ids_per_thread(sched->n_backends);
+            std::vector<std::vector<uint32_t>> unique_ids_per_thread(sched->n_backends);
+            std::vector<ggml_tensor*> last_ids_tensor_per_thread(sched->n_backends, nullptr);
+
         #pragma omp parallel num_threads(sched->n_backends)
         {
 
@@ -2221,10 +2227,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             int ith = omp_get_thread_num();
 
             struct ggml_backend_sched_split * splits = sched->splits;
-
-            std::vector<int32_t> ids;
-            std::vector<uint32_t> unique_ids;
-            ggml_tensor * last_ids_tensor = nullptr;
 
             for (int i = 0; i < sched->n_splits; i++) {
 #if IK_PRINT_TIMING
@@ -2243,7 +2245,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (split->n_inputs > 0) {
                     int copy_thread = last_reduce >= 0 ? last_reduce : 0;
                     if (ith == copy_thread) {
-                        ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
+                        ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids_per_thread[ith], unique_ids_per_thread[ith], last_ids_tensor_per_thread[ith]);
                     }
                     #pragma omp barrier
                 }
@@ -2291,13 +2293,13 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         if (!work_done) {
 
         std::barrier barrier(sched->n_backends);
-        auto compute = [sched, &barrier, first_reduce] (int ith) {
+        // Pre-allocate vectors outside the lambda to avoid per-iteration allocation overhead
+        std::vector<std::vector<int32_t>> ids_per_thread(sched->n_backends);
+        std::vector<std::vector<uint32_t>> unique_ids_per_thread(sched->n_backends);
+        std::vector<ggml_tensor*> last_ids_tensor_per_thread(sched->n_backends, nullptr);
+        auto compute = [sched, &barrier, first_reduce, &ids_per_thread, &unique_ids_per_thread, &last_ids_tensor_per_thread] (int ith) {
 
             struct ggml_backend_sched_split * splits = sched->splits;
-
-            std::vector<int32_t> ids;
-            std::vector<uint32_t> unique_ids;
-            ggml_tensor * last_ids_tensor = nullptr;
 
             int last_reduce = first_reduce;
 
@@ -2318,7 +2320,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (split->n_inputs > 0) {
                     int copy_thread = last_reduce >= 0 ? last_reduce : 0;
                     if (ith == copy_thread) {
-                        ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
+                        ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids_per_thread[ith], unique_ids_per_thread[ith], last_ids_tensor_per_thread[ith]);
                     }
                     barrier.arrive_and_wait();
                 }
