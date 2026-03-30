@@ -18273,7 +18273,6 @@ static int ggml_compute_forward_mul_mat(
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
-
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
     const struct ggml_tensor * ids = dst->src[2];
@@ -18304,8 +18303,9 @@ static void ggml_compute_forward_mul_mat_id(
     GGML_ASSERT(nb2 <= nb3);
 
     // row groups
-    const int n_ids = ids->ne[0]; // n_expert_used
-    const int n_as  = ne02;       // n_expert
+    const int n_ids    = ids->ne[0]; // n_expert_used
+    const int n_as     = ne02;       // n_expert
+    const int64_t mmid_stride = ids->ne[1]; // n_tokens (stride between expert row entries)
 
     // kick off read-ahead of the selected experts before src1 quantization, so storage reads overlap that work
     if (params->shared->cplan && params->shared->cplan->moe_expert_prefetch) {
@@ -18322,9 +18322,10 @@ static void ggml_compute_forward_mul_mat_id(
     };
 
     int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end); // [n_as]
-    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne11]
+    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as] /[ne11] or [n_tokens] ?
 
     if (src1->type != vec_dot_type) {
+
         char * wdata = params->wdata;
 
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
@@ -18334,18 +18335,20 @@ static void ggml_compute_forward_mul_mat_id(
         assert(params->wsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
-        for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                               (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                               ne10);
+        if (ith == 0) {
+            for (int64_t i13 = 0; i13 < ne13; ++i13) {
+                for (int64_t i12 = 0; i12 < ne12; ++i12) {
+                    for (int64_t i11 = 0; i11 < ne11; ++i11) {
+                        from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                                   (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                                   ne10);
+                    }
                 }
             }
         }
     }
 
-#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
+#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*mmid_stride + (i1)]
 
     GGML_ASSERT(ids->ne[1] == dst->ne[2]);
     for (int64_t iid1 = ith; iid1 < ids->ne[1]; iid1 += nth) {
@@ -18375,6 +18378,33 @@ static void ggml_compute_forward_mul_mat_id(
                 matrix_row_counts[i02] += 1;
             }
         }
+        // Build active-expert list and weighted chunk-start prefix sum.
+        // Experts with more assigned tokens get proportionally more chunks
+        // (adaptive chunk sizing) for better load balancing.
+        int32_t * pool_start    = (int32_t *)(matrix_rows + n_as * mmid_stride);
+        int32_t * count_p       = pool_start;          // [0] = active_count
+        int32_t * active_list   = pool_start + 1;       // [1..n_active-1] = expert indices
+        int32_t * chunk_start   = active_list + n_as;   // [n_active+1] prefix-sum of chunks
+        int64_t total_rows = 0;
+        int n_active = 0;
+        for (int a = 0; a < n_as; a++) {
+            if (matrix_row_counts[a] <= 0) continue;
+            active_list[n_active] = a;
+            total_rows += matrix_row_counts[a];
+            n_active++;
+        }
+        const int base_chunks = MAX(1, MIN(nth, (int)(ne01 / 16)));
+        int sum_chunks = 0;
+        chunk_start[0] = 0;
+        for (int i = 0; i < n_active; i++) {
+            const int a = active_list[i];
+            int c = (int)((int64_t)base_chunks * n_active * matrix_row_counts[a] / total_rows);
+            c = MAX(1, MIN(nth, c));
+            sum_chunks += c;
+            chunk_start[i + 1] = sum_chunks;
+        }
+        count_p[0] = n_active;
+        // total_chunks = sum_chunks (stored as chunk_start[n_active])
     }
 
     // Use dynamic expert scheduling: threads claim experts via atomic counter.
@@ -18388,31 +18418,37 @@ static void ggml_compute_forward_mul_mat_id(
 
     const void * wdata_mm    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
     const size_t row_size_mm = ggml_row_size(vec_dot_type, ne10);
+    const int32_t * active_list = NULL;
+    const int32_t * chunk_start = NULL;
+    int             active_count = 0;
+#if GGML_USE_IQK_MULMAT
+    {
+        const int32_t * pool_start = (const int32_t *)(matrix_rows + n_as * mmid_stride);
+        active_count = pool_start[0];
+        active_list  = pool_start + 1;
+        chunk_start  = active_list + n_as;
+    }
+#endif
 
 #if GGML_USE_IQK_MULMAT
     if (ne13 == 1 && dst->type == GGML_TYPE_F32) {
-        // Cross-expert chunk pooling: divide each active expert into chunks,
-        // then use atomic work-stealing across the unified chunk pool.
-        const int chunks_per_expert = MAX(1, MIN(nth, (int)(ne01 / 16)));
-
-        int total_chunks = 0;
-        for (int a = 0; a < n_as; a++) {
-            if (matrix_row_counts[a] > 0) total_chunks += chunks_per_expert;
-        }
+        // Cross-expert chunk pooling with adaptive chunk sizing.
+        // Each expert receives chunks proportional to its token count.
+        const int total_chunks = chunk_start[active_count];
 
         int chunk_id;
         while ((chunk_id = atomic_fetch_add(&params->shared->current_chunk, 1)) < total_chunks) {
-            // Map global chunk_id to (expert_index, local_chunk_index)
-            int acc = 0, cur_a = -1, local_chunk = 0;
-            for (int a = 0; a < n_as; a++) {
-                if (matrix_row_counts[a] == 0) continue;
-                if (chunk_id < acc + chunks_per_expert) {
-                    cur_a = a;
-                    local_chunk = chunk_id - acc;
-                    break;
-                }
-                acc += chunks_per_expert;
+            // Binary search on chunk_start prefix-sum (O(log active_count))
+            int lo = 0, hi = active_count;
+            while (lo < hi) {
+                const int mid = (lo + hi) / 2;
+                if (chunk_start[mid] <= chunk_id) { lo = mid + 1; }
+                else                               { hi = mid;     }
             }
+            const int idx   = lo - 1;
+            const int cur_a = active_list[idx];
+            const int local_chunk = chunk_id - chunk_start[idx];
+            const int chunks_for_expert = chunk_start[idx + 1] - chunk_start[idx];
 
             const char * src0_cur = (const char *) src0->data + cur_a*nb02;
 
@@ -18420,7 +18456,7 @@ static void ggml_compute_forward_mul_mat_id(
                         src0->type, src0_cur, nb01,
                         vec_dot_type, (const char *)wdata_mm, row_size_mm,
                         (float *)dst->data, nb1, nb2,
-                        matrix_rows + cur_a*ne12, local_chunk, chunks_per_expert)) goto IQK_MulMat_Not_Available;
+                        matrix_rows + cur_a*mmid_stride, local_chunk, chunks_for_expert)) goto IQK_MulMat_Not_Available;
         }
         goto IQK_MulMat_Done;
     }
@@ -18597,6 +18633,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     const struct ggml_tensor * src0 = src0_1; // so GGML_TENSOR_BINARY_OP_LOCALS works
 
     GGML_TENSOR_BINARY_OP_LOCALS
+    const int64_t nr0_base = src0_2 ? ne01 : ne01/2;
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -18622,6 +18659,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     // row groups
     const int n_ids = ids->ne[0]; // n_expert_used
     const int n_as  = ne02;       // n_expert
+    const int64_t mmid_stride = ids->ne[1]; // n_tokens (stride between expert row entries)
 
     // read-ahead of the selected experts for both the up and gate weight tensors
     // (gate is null when up/gate are merged into a single tensor)
@@ -18639,7 +18677,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     };
 
     int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end); // [n_as]
-    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne11]
+    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as] /[ne11] or [n_tokens] ?
 
     if (src1->type != vec_dot_type) {
 
@@ -18654,18 +18692,20 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         assert(params->wsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
-        for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                               (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                               ne10);
+        if (ith == 0) {
+            for (int64_t i13 = 0; i13 < ne13; ++i13) {
+                for (int64_t i12 = 0; i12 < ne12; ++i12) {
+                    for (int64_t i11 = 0; i11 < ne11; ++i11) {
+                        from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                                   (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                                   ne10);
+                    }
                 }
             }
         }
     }
 
-#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
+#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*mmid_stride + (i1)]
 
     GGML_ASSERT(ids->ne[1] == dst->ne[2]);
     for (int64_t iid1 = ith; iid1 < ids->ne[1]; iid1 += nth) {
@@ -18695,6 +18735,30 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                 matrix_row_counts[i02] += 1;
             }
         }
+        // Build active-expert list and weighted chunk-start prefix sum.
+        int32_t * pool_start    = (int32_t *)(matrix_rows + n_as * mmid_stride);
+        int32_t * count_p       = pool_start;
+        int32_t * active_list   = pool_start + 1;
+        int32_t * chunk_start   = active_list + n_as;
+        int64_t total_rows = 0;
+        int n_active = 0;
+        for (int a = 0; a < n_as; a++) {
+            if (matrix_row_counts[a] <= 0) continue;
+            active_list[n_active] = a;
+            total_rows += matrix_row_counts[a];
+            n_active++;
+        }
+        const int base_chunks = MAX(1, MIN(nth, (int)(nr0_base / 16)));
+        int sum_chunks = 0;
+        chunk_start[0] = 0;
+        for (int i = 0; i < n_active; i++) {
+            const int a = active_list[i];
+            int c = (int)((int64_t)base_chunks * n_active * matrix_row_counts[a] / total_rows);
+            c = MAX(1, MIN(nth, c));
+            sum_chunks += c;
+            chunk_start[i + 1] = sum_chunks;
+        }
+        count_p[0] = n_active;
     }
 
     // Use dynamic expert scheduling: threads claim experts via atomic counter.
@@ -18708,28 +18772,27 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
     const void * wdata_ug    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
     const size_t row_size_ug = ggml_row_size(vec_dot_type, ne10);
-    const int64_t nr0_base = src0_2 ? ne01 : ne01/2;
+    const int32_t * pool_start   = (const int32_t *)(matrix_rows + n_as * mmid_stride);
+    const int      active_count  = pool_start[0];
+    const int32_t * active_list  = pool_start + 1;
+    const int32_t * chunk_start  = active_list + n_as;
 
-    // Cross-expert chunk pooling for fused up/gate
-    const int chunks_per_expert_ug = MAX(1, MIN(nth, (int)(nr0_base / 16)));
-
-    int total_chunks_ug = 0;
-    for (int a = 0; a < n_as; a++) {
-        if (matrix_row_counts[a] > 0) total_chunks_ug += chunks_per_expert_ug;
-    }
+    // Cross-expert chunk pooling with adaptive chunk sizing.
+    const int total_chunks_ug = chunk_start[active_count];
 
     int chunk_id_ug;
     while ((chunk_id_ug = atomic_fetch_add(&params->shared->current_chunk, 1)) < total_chunks_ug) {
-        int acc = 0, cur_a = -1, local_chunk = 0;
-        for (int a = 0; a < n_as; a++) {
-            if (matrix_row_counts[a] == 0) continue;
-            if (chunk_id_ug < acc + chunks_per_expert_ug) {
-                cur_a = a;
-                local_chunk = chunk_id_ug - acc;
-                break;
-            }
-            acc += chunks_per_expert_ug;
+        // Binary search on chunk_start prefix-sum
+        int lo = 0, hi = active_count;
+        while (lo < hi) {
+            const int mid = (lo + hi) / 2;
+            if (chunk_start[mid] <= chunk_id_ug) { lo = mid + 1; }
+            else                                  { hi = mid;     }
         }
+        const int idx   = lo - 1;
+        const int cur_a = active_list[idx];
+        const int local_chunk = chunk_id_ug - chunk_start[idx];
+        const int chunks_for_expert = chunk_start[idx + 1] - chunk_start[idx];
 
         const char *src0_1_cur, *src0_2_cur, *up_b_cur = NULL, *gate_b_cur = NULL;
         if (src0_2) {
@@ -18752,10 +18815,216 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             vec_dot_type, (const char *)wdata_ug, row_size_ug,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, limit, local_chunk, chunks_per_expert_ug)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*mmid_stride, limit, local_chunk, chunks_for_expert)) GGML_ABORT("fatal error");
+
+#if defined(_MSC_VER) || defined(__SSE__)
+        if (local_chunk + 1 >= chunks_for_expert) {
+            const int next_idx = idx + 1;
+            if (next_idx < active_count) {
+                const int next_a = active_list[next_idx];
+                if (src0_2) {
+                    _mm_prefetch((const char *) src0_1->data + next_a * nb02, _MM_HINT_T0);
+                    _mm_prefetch((const char *) src0_2->data + next_a * nb02, _MM_HINT_T0);
+                } else {
+                    _mm_prefetch((const char *) src0_1->data + next_a * nb02, _MM_HINT_T0);
+                    _mm_prefetch((const char *) src0_1->data + next_a * nb02 + nb02/2, _MM_HINT_T0);
+                }
+            }
+        }
+#endif
     }
 
 #undef MMID_MATRIX_ROW
+}
+
+static void ggml_compute_forward_fused_moe_silu(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * node0,
+        struct ggml_tensor * node1,
+        struct ggml_tensor * glu_node) {
+
+    const struct ggml_tensor * weights_gate;
+    const struct ggml_tensor * weights_up;
+
+    if (glu_node->src[0] == node0) {
+        weights_gate = node0->src[0];
+        weights_up = node1->src[0];
+    } else {
+        weights_gate = node1->src[0];
+        weights_up = node0->src[0];
+    }
+
+    const struct ggml_tensor * src1 = node0->src[1];
+    const struct ggml_tensor * ids = node0->src[2];
+
+    const int64_t ne00 = weights_gate->ne[0];
+    const int64_t ne01 = weights_gate->ne[1];
+
+    const size_t gate_nb01 = weights_gate->nb[1];
+    const size_t gate_nb02 = weights_gate->nb[2];
+    const size_t up_nb01 = weights_up->nb[1];
+    const size_t up_nb02 = weights_up->nb[2];
+
+    const int64_t ne10 = src1->ne[0];
+    const int64_t ne11 = src1->ne[1];
+    const size_t nb11 = src1->nb[1];
+
+    const size_t glu_nb1 = glu_node->nb[1];
+    const size_t glu_nb2 = glu_node->nb[2];
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const enum ggml_type type = weights_gate->type;
+
+    ggml_vec_dot_t const vec_dot = type_traits[type].vec_dot;
+    enum ggml_type const vec_dot_type = type_traits[type].vec_dot_type;
+    ggml_from_float_t const from_float = type_traits[vec_dot_type].from_float;
+
+    const int n_ids = ids->ne[0];
+    const int n_as = weights_gate->ne[2];
+    const int64_t n_tokens = ids->ne[1];
+
+    const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+
+    const int64_t nr0 = ne01;
+
+    void * wdata_cur = params->wdata;
+
+    // Mapping data stored at start of scratch space:
+    //   matrix_row_counts: n_as * int64_t
+    //   matrix_rows:       n_as * n_tokens * {int32_t id, int32_t iid1}
+    //   pool_start:        active_count + active_list[n_as] + chunk_start[n_as+1]
+    struct mmid_row_mapping_fused {
+        int32_t i1;
+        int32_t i2;
+    };
+    int64_t * matrix_row_counts = (int64_t *)wdata_cur;
+    struct mmid_row_mapping_fused * mmid_rows = (struct mmid_row_mapping_fused *)(matrix_row_counts + n_as);
+    int32_t * pool_start = (int32_t *)(mmid_rows + n_as * n_tokens);
+    const size_t mapping_end = n_as * sizeof(int64_t) +
+        n_as * n_tokens * sizeof(struct mmid_row_mapping_fused) +
+        (2 * n_as + 2) * sizeof(int32_t);
+    const size_t quant_off = (mapping_end + CACHE_LINE_SIZE - 1) & ~(CACHE_LINE_SIZE - 1);
+
+    const char * src1_q = (const char *) src1->data;
+    if (src1->type != vec_dot_type) {
+        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+        if (ith == 0) {
+            char * base = (char *)wdata_cur + quant_off;
+            for (int64_t i11 = 0; i11 < ne11; ++i11) {
+                from_float((float *)((char *) src1->data + i11*nb11),
+                           (void *)(base + i11*row_size), ne10);
+            }
+        }
+    }
+
+    // Zero out output slots with invalid expert indices (matching MUL_MAT_ID's clear-before-compute)
+    for (int64_t iid1 = ith; iid1 < n_tokens; iid1 += nth) {
+        for (int id = 0; id < n_ids; ++id) {
+            const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+            if (i02 < 0 || i02 >= n_as) {
+                memset((char *)glu_node->data + id*glu_nb1 + iid1*glu_nb2, 0, glu_node->ne[0]*sizeof(float));
+            }
+        }
+    }
+
+    if (ith == 0) {
+        // Build per-expert (token, slot) mapping
+        memset(matrix_row_counts, 0, n_as * sizeof(int64_t));
+        for (int64_t iid1 = 0; iid1 < n_tokens; ++iid1) {
+            for (int id = 0; id < n_ids; ++id) {
+                const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+                if (i02 < 0 || i02 >= n_as) continue;
+                mmid_rows[i02 * n_tokens + matrix_row_counts[i02]] = (struct mmid_row_mapping_fused){(int32_t)id, (int32_t)iid1};
+                matrix_row_counts[i02] += 1;
+            }
+        }
+        // Build active_experts list and chunk_start prefix-sum
+        int32_t * active_list = pool_start + 1;
+        int32_t * chunk_start = active_list + n_as;
+        int64_t total_pairs = 0;
+        int n_active = 0;
+        for (int a = 0; a < n_as; a++) {
+            if (matrix_row_counts[a] <= 0) continue;
+            active_list[n_active] = a;
+            total_pairs += matrix_row_counts[a];
+            n_active++;
+        }
+        const int base_chunks = MAX(1, MIN(nth, (int)(nr0 / 16)));
+        int sum_chunks = 0;
+        chunk_start[0] = 0;
+        for (int i = 0; i < n_active; i++) {
+            const int a = active_list[i];
+            int c = (int)((int64_t)base_chunks * n_active * matrix_row_counts[a] / total_pairs);
+            c = MAX(1, MIN(nth, c));
+            sum_chunks += c;
+            chunk_start[i + 1] = sum_chunks;
+        }
+        pool_start[0] = n_active;
+
+        atomic_store(&params->shared->current_chunk, 0);
+    }
+
+    ggml_barrier(params->shared);
+
+    if (src1->type != vec_dot_type) {
+        src1_q = (const char *)wdata_cur + quant_off;
+    }
+
+    // Cross-expert chunk pooling: threads steal row-chunks from a unified pool
+    const int32_t active_count = pool_start[0];
+    const int32_t * active_list = pool_start + 1;
+    const int32_t * chunk_start = active_list + n_as;
+    const int total_chunks = chunk_start[active_count];
+
+    int chunk_id;
+    while ((chunk_id = atomic_fetch_add(&params->shared->current_chunk, 1)) < total_chunks) {
+        int lo = 0, hi = active_count;
+        while (lo < hi) {
+            const int mid = (lo + hi) / 2;
+            if (chunk_start[mid] <= chunk_id) { lo = mid + 1; }
+            else                               { hi = mid;     }
+        }
+        const int idx   = lo - 1;
+        const int cur_a = active_list[idx];
+        const int local_chunk = chunk_id - chunk_start[idx];
+        const int chunks_for_expert = chunk_start[idx + 1] - chunk_start[idx];
+
+        const char * gate_cur = (const char *) weights_gate->data + cur_a * gate_nb02;
+        const char * up_cur   = (const char *) weights_up->data   + cur_a * up_nb02;
+
+        const int64_t dr0 = (nr0 + chunks_for_expert - 1) / chunks_for_expert;
+        const int64_t ir0_start = dr0 * local_chunk;
+        const int64_t ir0_end = MIN(ir0_start + dr0, nr0);
+
+        for (int64_t j = 0; j < matrix_row_counts[cur_a]; ++j) {
+            const struct mmid_row_mapping_fused mapping = mmid_rows[cur_a * n_tokens + j];
+            const int       id   = mapping.i1;
+            const int64_t   iid1 = mapping.i2;
+
+            const char * token_activations = src1_q + iid1 * row_size;
+            float * glu_col = (float *) ((char *) glu_node->data + id*glu_nb1 + iid1*glu_nb2);
+
+            for (int64_t ir0 = ir0_start; ir0 < ir0_end; ++ir0) {
+                float gate_val, up_val;
+                vec_dot(ne00, &gate_val, 0, gate_cur + ir0*gate_nb01, 0, token_activations, 0, 1);
+                vec_dot(ne00, &up_val, 0, up_cur + ir0*up_nb01, 0, token_activations, 0, 1);
+                glu_col[ir0] = ggml_silu_f32(gate_val) * up_val;
+            }
+        }
+
+#if defined(_MSC_VER) || defined(__SSE__)
+        if (local_chunk + 1 >= chunks_for_expert) {
+            const int next_idx = idx + 1;
+            if (next_idx < active_count) {
+                const int next_a = active_list[next_idx];
+                _mm_prefetch((const char *) weights_gate->data + next_a * gate_nb02, _MM_HINT_T0);
+                _mm_prefetch((const char *) weights_up->data   + next_a * up_nb02,   _MM_HINT_T0);
+            }
+        }
+#endif
+    }
 }
 
 static void ggml_compute_forward_mul_mat_up_gate(
@@ -28345,7 +28614,22 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const int n_as = src0->ne[2];
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
-                    cur += n_as * src1->ne[2] * sizeof(int64_t); // matrix_rows
+                    cur += n_as * ggml_nrows(src1) * sizeof(int64_t); // matrix_rows [n_as][n_tokens]
+                    cur += (2 * n_as + 2) * sizeof(int32_t);  // active_count + active_experts[] + chunk_start[] (prefix-sum)
+                    // Fused MoE silu path (ggml_compute_forward_fused_moe_silu) uses a
+                    // larger scratch layout: mapping data + shared quant buffer.
+                    if (src1 && (int)ggml_nrows(src1) <= cgraph->n_batch && src1->type != vec_dot_type) {
+                        const size_t row_size  = ggml_row_size(vec_dot_type, src1->ne[0]);
+                        const int64_t n_tokens = ggml_nrows(src1);
+                        const size_t full_quant = row_size * n_tokens;
+                        const size_t fused_cur =
+                            n_as * sizeof(int64_t) +                                 // matrix_row_counts
+                            n_as * n_tokens * sizeof(int64_t) +                      // matrix_rows
+                            (2 * n_as + 2) * sizeof(int32_t) +                       // active_pool
+                            CACHE_LINE_SIZE +                                         // alignment
+                            full_quant;                                               // shared quant buffer
+                        cur = MAX((size_t)cur, fused_cur);
+                    }
                 } break;
             case GGML_OP_MOE_FUSED_UP_GATE:
                 {
@@ -28353,13 +28637,16 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const struct ggml_tensor * src0 = node->src[0];
                     const struct ggml_tensor * src2 = node->src[2];
                     const enum ggml_type vec_dot_type = type_traits[src0->type].vec_dot_type;
-                    if (src2->type != vec_dot_type) {
-                        cur += ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
-                    }
+                    // if (src2->type != vec_dot_type) {
+                        // quant_buf = ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
+                    // if (src1 && src1->type != vec_dot_type) {
+                    cur += ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
+                    // }
                     const int n_as = src0->ne[2];
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
-                    cur += n_as * src2->ne[2] * sizeof(int64_t); // matrix_rows
+                    cur += n_as * ggml_nrows(src2) * sizeof(int64_t); // matrix_rows [n_as][n_tokens]
+                    cur += (2 * n_as + 2) * sizeof(int32_t);  // active_count + active_experts[] + chunk_start[] (prefix-sum)
                 } break;
             case GGML_OP_FUSED_UP_GATE:
                 {
@@ -28532,7 +28819,26 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #if IK_PRINT_TIMING
         int64_t tim1 = ggml_time_us();
 #endif
-        node_n = ggml_compute_forward(&params, node, cgraph, node_n);
+        int fused_nodes = 0;
+        if (node->op == GGML_OP_MUL_MAT_ID) {
+            if (node_n + 2 < cgraph->n_nodes) {
+                struct ggml_tensor * node1 = cgraph->nodes[node_n + 1];
+                struct ggml_tensor * glu = cgraph->nodes[node_n + 2];
+                if (node1->op == GGML_OP_MUL_MAT_ID && glu->op == GGML_OP_GLU &&
+                    node->src[1] == node1->src[1] && node->src[2] == node1->src[2] &&
+                    (int)ggml_nrows(node->src[1]) <= params.shared->n_batch &&
+                    node->src[1]->type != type_traits[node->src[0]->type].vec_dot_type &&
+                    ggml_get_glu_op(glu) == GGML_GLU_OP_SWIGLU) {
+                    ggml_compute_forward_fused_moe_silu(&params, node, node1, glu);
+                    fused_nodes = 2;
+                }
+            }
+        }
+        if (fused_nodes == 0) {
+            node_n = ggml_compute_forward(&params, node, cgraph, node_n);
+        } else {
+            node_n += fused_nodes;
+        }
 #if IK_PRINT_TIMING
         int64_t tim2 = ggml_time_us();
         t_eval += tim2 - tim1;
