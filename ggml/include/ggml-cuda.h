@@ -42,6 +42,24 @@ GGML_API GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t *
 // Use: ggml_backend_cuda_set_cslq("2x") or ggml_backend_cuda_set_cslq("4x")
 GGML_API GGML_CALL void ggml_backend_cuda_set_cslq(const char * cslq);
 
+// Set stream-k efficiency threshold (0-100, default 75)
+// Lower values use stream-k more aggressively, higher values prefer wave attention
+// Use: ggml_backend_cuda_set_stream_k_thresh(50) for more stream-k
+GGML_API GGML_CALL void ggml_backend_cuda_set_stream_k_thresh(int thresh);
+
+// Get stream-k efficiency threshold for a specific device (default 75)
+// device: GPU device index (0, 1, 2, ...)
+GGML_API GGML_CALL int ggml_backend_cuda_get_stream_k_thresh(int device);
+
+// Set stream-k efficiency threshold for a specific device
+// device: GPU device index (0, 1, 2, ...)
+// thresh: efficiency threshold (0-100)
+GGML_API GGML_CALL void ggml_backend_cuda_set_stream_k_thresh_for_device(int device, int thresh);
+
+// Get recommended stream-k threshold based on device VRAM (in GiB)
+// Returns: 85 for 18-200GiB, 70 for 14-18GiB, 60 for 9-14GiB, 50 for 5-9GiB, 40 for <5GiB
+GGML_API GGML_CALL int ggml_backend_cuda_get_default_stream_k_thresh(int device_vram_gib);
+
 GGML_API GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_API GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
