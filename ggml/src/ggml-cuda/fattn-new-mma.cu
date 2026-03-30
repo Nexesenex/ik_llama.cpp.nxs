@@ -2094,7 +2094,7 @@ static void launch_fattn_new_mma(
             ? (nblocks_stream_k_raw / ntiles_dst) * ntiles_dst
             : nblocks_stream_k_raw;
 
-        const bool use_stream_k = cc >= CC_ADA_LOVELACE || tiles_efficiency_percent < 75;
+        const bool use_stream_k = cc >= CC_ADA_LOVELACE || tiles_efficiency_percent < ggml_backend_cuda_get_stream_k_thresh();
 
         blocks_num.x = use_stream_k ? nblocks_stream_k : ntiles_dst;
         blocks_num.y = 1;

@@ -3851,6 +3851,21 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
                 ggml_backend_cuda_set_cslq(cslq.c_str());
             }
         }
+        // Set stream-k efficiency threshold before kernel launch
+        size_t pos_sk = params.cuda_params.find("stream_k_thresh=");
+        if (pos_sk != std::string::npos) {
+            size_t start = pos_sk + 16;
+            size_t end = params.cuda_params.find(",", start);
+            std::string sk_thresh_str = params.cuda_params.substr(start, end - start);
+            if (!sk_thresh_str.empty()) {
+                try {
+                    int sk_thresh = std::stoi(sk_thresh_str);
+                    ggml_backend_cuda_set_stream_k_thresh(sk_thresh);
+                } catch (...) {
+                    // Invalid value, keep default
+                }
+            }
+        }
 #endif
     }
 

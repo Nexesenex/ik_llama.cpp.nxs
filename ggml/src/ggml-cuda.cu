@@ -503,6 +503,7 @@ static std::condition_variable ggml_cuda_lock_cv;
 //static std::atomic<int> ggml_cuda_lock_counter;
 static int ggml_cuda_lock_counter = 0;
 static std::string ggml_cuda_user_cslq; // User-provided CUDA_SCALE_LAUNCH_QUEUES from -cuda cslq=X
+static int ggml_cuda_user_stream_k_thresh = 75; // User-provided stream-k efficiency threshold from -cuda stream_k_thresh=X
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)) {
@@ -4951,6 +4952,7 @@ struct cuda_params {
 #endif
     bool enable_p2p = true;
     std::string cslq; // CUDA_SCALE_LAUNCH_QUEUES: "1x", "2x", "4x"
+    int stream_k_thresh = 75; // Stream-k efficiency threshold: 0-100
 };
 
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
@@ -5020,6 +5022,13 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                 params.cslq = parsed[1];
                 is_good = !params.cslq.empty();
             }
+            else if (parsed[0] == "stream_k_thresh") {
+                is_good = read_value(parsed[1], params.stream_k_thresh);
+                if (!is_good || params.stream_k_thresh < 0 || params.stream_k_thresh > 100) {
+                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...100]\n", __func__, parsed[0].c_str(), params.stream_k_thresh);
+                    is_good = false;
+                }
+            }
         }
         if (!is_good) {
             GGML_CUDA_LOG_WARN("%s: invalid parameter %s (%d) -> ignored\n", __func__, value.c_str(), (int)parsed.size());
@@ -5053,6 +5062,11 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         if (!params.cslq.empty()) {
             ggml_cuda_user_cslq = params.cslq;
             GGML_CUDA_LOG_INFO("=========================== %s: setting CUDA_SCALE_LAUNCH_QUEUES to %s\n", __func__, params.cslq.c_str());
+        }
+        // Store user-provided stream_k_thresh for use in FA kernel
+        if (params.stream_k_thresh != 75) {
+            ggml_cuda_user_stream_k_thresh = params.stream_k_thresh;
+            GGML_CUDA_LOG_INFO("=========================== %s: setting stream_k_thresh to %d\n", __func__, params.stream_k_thresh);
         }
         if (params.fusion != ctx->fusion) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting fusion to %d\n", __func__, params.fusion);
@@ -5174,4 +5188,17 @@ GGML_CALL void ggml_backend_cuda_set_cslq(const char * cslq) {
         ggml_cuda_user_cslq = cslq;
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_cslq: CUDA_SCALE_LAUNCH_QUEUES will be set to %s\n", cslq);
     }
+}
+
+GGML_CALL void ggml_backend_cuda_set_stream_k_thresh(int thresh) {
+    if (thresh >= 0 && thresh <= 100) {
+        ggml_cuda_user_stream_k_thresh = thresh;
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_stream_k_thresh: stream_k_thresh will be set to %d\n", thresh);
+    } else {
+        GGML_CUDA_LOG_WARN("ggml_backend_cuda_set_stream_k_thresh: invalid value %d, must be in [0,100], keeping %d\n", thresh, ggml_cuda_user_stream_k_thresh);
+    }
+}
+
+GGML_CALL int ggml_backend_cuda_get_stream_k_thresh(void) {
+    return ggml_cuda_user_stream_k_thresh;
 }
