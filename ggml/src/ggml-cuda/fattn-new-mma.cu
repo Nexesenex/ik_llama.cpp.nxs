@@ -1897,6 +1897,8 @@ static void launch_fattn_new_mma(
     int max_blocks_per_sm = 1; // Max. number of active blocks limited by occupancy.
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
 
+    const int ntiles_KV = (K->ne[1] + FATTN_KQ_STRIDE - 1) / FATTN_KQ_STRIDE;
+
     dim3 blocks_num;
     if (stream_k) {
         // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
@@ -1904,7 +1906,7 @@ static void launch_fattn_new_mma(
         const int tiles_nwaves = (ntiles_dst + max_blocks - 1) / max_blocks;
         const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
 
-        const int nblocks_stream_k = max_blocks;
+        const int nblocks_stream_k = std::min(max_blocks, ntiles_KV*ntiles_dst);
 
         const bool use_stream_k = cc >= CC_ADA_LOVELACE || tiles_efficiency_percent < 75;
 
@@ -1915,20 +1917,19 @@ static void launch_fattn_new_mma(
         dst_tmp_meta.alloc(blocks_num.x*ncols * (2*2 + DV) * sizeof(float));
     } else {
         GGML_ASSERT(K->ne[1] % KQ_row_granularity == 0);
-        const int ntiles_KQ = K->ne[1] / KQ_row_granularity; // Max. number of parallel blocks limited by tensor size.
 
         // parallel_blocks should be at least large enough to achieve max. occupancy for a single wave:
         parallel_blocks = std::max((nsm * max_blocks_per_sm) / ntiles_dst, 1);
 
         // parallel_blocks must not be larger than what the tensor size allows:
-        parallel_blocks = std::min(parallel_blocks, ntiles_KQ);
+        parallel_blocks = std::min(parallel_blocks, ntiles_KV);
 
         // If ntiles_dst % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
         // Test whether parallel_blocks can be set to a higher value for better efficiency.
         const int blocks_per_wave = nsm * max_blocks_per_sm;
         int nwaves_best = 0;
         int efficiency_percent_best = 0;
-        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= ntiles_KQ; ++parallel_blocks_test) {
+        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= ntiles_KV; ++parallel_blocks_test) {
             const int nblocks_total = ntiles_dst * parallel_blocks_test;
             const int nwaves = (nblocks_total + blocks_per_wave - 1) / blocks_per_wave;
             const int efficiency_percent = 100 * nblocks_total / (nwaves*blocks_per_wave);
