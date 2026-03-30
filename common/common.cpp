@@ -3858,9 +3858,12 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
             size_t end = params.cuda_params.find(",", start);
             std::string sk_thresh_str = params.cuda_params.substr(start, end - start);
             if (!sk_thresh_str.empty()) {
-                // Check if starts with "auto"
-                bool is_auto = (sk_thresh_str.substr(0, 4) == "auto");
-                if (is_auto) {
+                // Check if pure "auto" (no colon, no equals)
+                bool is_pure_auto = (sk_thresh_str == "auto");
+                // Check if contains equals sign (per-device manual values)
+                bool is_per_device = (sk_thresh_str.find("=") != std::string::npos);
+
+                if (is_pure_auto) {
                     // Auto-detect for all devices
                     int n_devices = ggml_backend_cuda_get_device_count();
                     for (int device = 0; device < n_devices; ++device) {
@@ -3871,24 +3874,26 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
                         ggml_backend_cuda_set_stream_k_thresh_for_device(device, recommended);
                         printf("stream_k_thresh: device %d auto-detected %d GiB VRAM -> using %d\n", device, vram_gib, recommended);
                     }
-                    // Parse per-device overrides: auto:0=85:1=70
-                    size_t pos_override = sk_thresh_str.find(":");
-                    if (pos_override != std::string::npos) {
-                        std::string overrides = sk_thresh_str.substr(pos_override + 1);
-                        size_t pos = 0;
-                        while (pos < overrides.size()) {
-                            size_t eq_pos = overrides.find("=", pos);
-                            if (eq_pos == std::string::npos) break;
-                            int device = std::stoi(overrides.substr(pos, eq_pos - pos));
-                            int thresh = std::stoi(overrides.substr(eq_pos + 1));
-                            ggml_backend_cuda_set_stream_k_thresh_for_device(device, thresh);
-                            printf("stream_k_thresh: override device %d -> %d\n", device, thresh);
-                            pos = overrides.find(":", pos + 1);
-                            if (pos == std::string::npos) break;
-                            pos++;
-                        }
+                } else if (is_per_device) {
+                    // Per-device manual values: 0:85;1:70;2:60
+                    // Format: device:threshold;device:threshold
+                    // First set all to default 75
+                    ggml_backend_cuda_set_stream_k_thresh(75);
+                    // Then apply per-device overrides
+                    size_t pos = 0;
+                    while (pos < sk_thresh_str.size()) {
+                        size_t colon_pos = sk_thresh_str.find(":", pos);
+                        if (colon_pos == std::string::npos) break;
+                        int device = std::stoi(sk_thresh_str.substr(pos, colon_pos - pos));
+                        size_t semicolon_pos = sk_thresh_str.find(";", colon_pos);
+                        int thresh = std::stoi(sk_thresh_str.substr(colon_pos + 1, semicolon_pos - colon_pos - 1));
+                        ggml_backend_cuda_set_stream_k_thresh_for_device(device, thresh);
+                        printf("stream_k_thresh: device %d -> %d\n", device, thresh);
+                        if (semicolon_pos == std::string::npos) break;
+                        pos = semicolon_pos + 1;
                     }
                 } else {
+                    // Single global value
                     try {
                         int sk_thresh = std::stoi(sk_thresh_str);
                         ggml_backend_cuda_set_stream_k_thresh(sk_thresh);
