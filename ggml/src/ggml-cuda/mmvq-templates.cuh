@@ -40,7 +40,7 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) 
     }
 }
 
-static constexpr __device__ int get_vdr_mmvq(ggml_type type) {
+static constexpr __host__ __device__ int get_vdr_mmvq(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0    : return VDR_Q4_0_Q8_1_MMVQ;
         case GGML_TYPE_Q4_1    : return VDR_Q4_1_Q8_1_MMVQ;
@@ -65,7 +65,7 @@ static constexpr __device__ int get_vdr_mmvq(ggml_type type) {
     }
 }
 
-template <ggml_type type, int ncols_y, int nwarps>
+template <ggml_type type, int ncols_y, int nwarps, bool small_k = false>
 static __device__ void mul_mat_vec_q(
     const void * __restrict__ vx, const void * __restrict__ vy,
     const float * bias, float * __restrict__ dst,
@@ -83,7 +83,7 @@ static __device__ void mul_mat_vec_q(
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
     constexpr int rows_per_cuda_block = 1;
 #else
-    constexpr int rows_per_cuda_block = ncols_y < 4 ? 1 : 2;
+    constexpr int rows_per_cuda_block = ncols_y < 4 ? 1 : (small_k ? nwarps : 2);
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA2) && !defined(RDNA3)
 
     const     int tid = WARP_SIZE*threadIdx.y + threadIdx.x;
@@ -149,7 +149,7 @@ static __device__ void mul_mat_vec_q(
     }
 }
 
-template <ggml_type type, int ncols_y, int nwarps>
+template <ggml_type type, int ncols_y, int nwarps, bool small_k = false>
 static __device__ void fused_mul_mat_vec_q(
     const void * __restrict__ vup, const void * __restrict__ vgate,
     const float * __restrict__ bias_u, const float * __restrict__ bias_g,
@@ -168,7 +168,7 @@ static __device__ void fused_mul_mat_vec_q(
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
     constexpr int rows_per_cuda_block = 1;
 #else
-    constexpr int rows_per_cuda_block = ncols_y < 4 ? 1 : 2;
+    constexpr int rows_per_cuda_block = ncols_y < 4 ? 1 : (small_k ? nwarps : 2);
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA2) && !defined(RDNA3)
 
     const     int tid = WARP_SIZE*threadIdx.y + threadIdx.x;
@@ -271,7 +271,7 @@ static __device__ void fused_mul_mat_vec_q(
     }
 }
 
-template <ggml_type type, int ncols_y, int nwarps>
+template <ggml_type type, int ncols_y, int nwarps, bool small_k = false>
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 // tell the compiler to use as many registers as it wants, see nwarps definition below
 __launch_bounds__(nwarps*WARP_SIZE, 1)
@@ -291,10 +291,10 @@ static __global__ void mul_mat_vec_q(
     const char * cx = (const char *)vx + i02*nb02;
     const char * cy = (const char *)vy + i2*nb12;
     const float * b = (const float *)(bias ? ids_data ? (const char *)bias + i02*bias_nb1 : bias : nullptr);
-    mul_mat_vec_q<type, ncols_y, nwarps>(cx, cy, b, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst);
+    mul_mat_vec_q<type, ncols_y, nwarps, small_k>(cx, cy, b, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
 
-template <ggml_type type, int ncols_y, int nwarps>
+template <ggml_type type, int ncols_y, int nwarps, bool small_k = false>
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 // tell the compiler to use as many registers as it wants, see nwarps definition below
 __launch_bounds__(nwarps*WARP_SIZE, 1)
@@ -317,7 +317,7 @@ static __global__ void fused_mul_mat_vec_q(
     const float * cx_u_b = bias_u ? (const float *)((const char *)bias_u + i02*bias_nb1) : nullptr;
     const float * cx_g_b = bias_g ? (const float *)((const char *)bias_g + i02*bias_nb1) : nullptr;
     const char * cy = (const char *)vy + i2*nb12;
-    fused_mul_mat_vec_q<type, ncols_y, nwarps>(cx_u, cx_g, cx_u_b, cx_g_b, cy, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst,
+    fused_mul_mat_vec_q<type, ncols_y, nwarps, small_k>(cx_u, cx_g, cx_u_b, cx_g_b, cy, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst,
             unary_op, limit);
 }
 
@@ -338,12 +338,29 @@ static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
 
     if (args.vx_u && args.vx_g && args.unary_op != GGML_UNARY_OP_COUNT) {
     switch (args.ncols_y) {
-        case 1:
-            fused_mul_mat_vec_q<type, 1, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
-                    args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
-                    args.unary_op, args.limit);
+        case 1: {
+            constexpr int qk = ggml_cuda_type_traits<type>::qk;
+            constexpr int qi = ggml_cuda_type_traits<type>::qi;
+            constexpr int vdr = get_vdr_mmvq(type);
+            const int blocks_per_row_x = args.ncols_x / qk;
+            const int blocks_per_iter_1warp = vdr * WARP_SIZE / qi;
+            const bool use_small_k = nwarps > 1 && blocks_per_row_x < nwarps * blocks_per_iter_1warp;
+            if (use_small_k) {
+                const int64_t rows_per_cuda_block_small_k = nwarps;
+                const int64_t nblocks_small_k = (args.nrows_x + rows_per_cuda_block_small_k - 1) / rows_per_cuda_block_small_k;
+                const dim3 block_nums_small_k(nblocks_small_k, args.ne2, 1);
+                fused_mul_mat_vec_q<type, 1, nwarps, true><<<block_nums_small_k, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
+                        args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
+                        args.unary_op, args.limit);
+            } else {
+                fused_mul_mat_vec_q<type, 1, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
+                        args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
+                        args.unary_op, args.limit);
+            }
             break;
+        }
         case 2:
             fused_mul_mat_vec_q<type, 2, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
                     args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
@@ -392,10 +409,25 @@ static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
     }
     } else {
     switch (args.ncols_y) {
-        case 1:
-            mul_mat_vec_q<type, 1, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
-                    args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+        case 1: {
+            constexpr int qk = ggml_cuda_type_traits<type>::qk;
+            constexpr int qi = ggml_cuda_type_traits<type>::qi;
+            constexpr int vdr = get_vdr_mmvq(type);
+            const int blocks_per_row_x = args.ncols_x / qk;
+            const int blocks_per_iter_1warp = vdr * WARP_SIZE / qi;
+            const bool use_small_k = nwarps > 1 && blocks_per_row_x < nwarps * blocks_per_iter_1warp;
+            if (use_small_k) {
+                const int64_t rows_per_cuda_block_small_k = nwarps;
+                const int64_t nblocks_small_k = (args.nrows_x + rows_per_cuda_block_small_k - 1) / rows_per_cuda_block_small_k;
+                const dim3 block_nums_small_k(nblocks_small_k, args.ne2, 1);
+                mul_mat_vec_q<type, 1, nwarps, true><<<block_nums_small_k, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            } else {
+                mul_mat_vec_q<type, 1, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
             break;
+        }
         case 2:
             mul_mat_vec_q<type, 2, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
