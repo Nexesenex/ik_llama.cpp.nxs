@@ -1667,6 +1667,181 @@ static __global__ void flash_attn_stream_k_fixup(
     *dst = dst_val / rowsum;
 }
 
+// Optimized fixup kernel for when nblocks_stream_k is a multiple of ntiles_dst (== gridDim.x)
+// Each block processes one output tile, iterating over all stream_k blocks for that tile
+template<int D, int ncols1, int ncols2> // D == head size
+__launch_bounds__(D, 1)
+static __global__ void flash_attn_stream_k_fixup(
+        float * __restrict__ dst, const float2 * __restrict__ dst_fixup, const int ne01, const int ne02, const int ne03,
+        const int ne11, const int ne12, const int nbatch_fa, const int nblocks_stream_k) {
+    constexpr int ncols = ncols1*ncols2;
+
+    const int tile_idx = blockIdx.x; // One block per output tile.
+    const int j = blockIdx.y;
+    const int c = blockIdx.z;
+    const int jc = j*ncols2 + c;
+    const int tid = threadIdx.x;
+
+    // nblocks_stream_k is a multiple of ntiles_dst (== gridDim.x), so each tile gets the same number of blocks.
+    const int blocks_per_tile = nblocks_stream_k / gridDim.x;
+
+    const int b_first = tile_idx * blocks_per_tile;
+    const int b_last = b_first + blocks_per_tile - 1;
+
+    const float * dst_fixup_data = ((const float *) dst_fixup) + nblocks_stream_k*(2*2*ncols);
+
+    const int gqa_ratio = ne02 / ne12;
+
+    const int iter_j = (ne01 + (ncols1 - 1)) / ncols1;
+    const int iter_z_gqa = (gqa_ratio + (ncols2 - 1)) / ncols2;
+
+    // z_KV == K/V head index, zt_gqa = Q head start index per K/V head, jt = token position start index
+    const int sequence = tile_idx /(iter_j*iter_z_gqa*ne12);
+    const int z_KV = (tile_idx - iter_j*iter_z_gqa*ne12 * sequence)/(iter_j*iter_z_gqa);
+    const int zt_gqa = (tile_idx - iter_j*iter_z_gqa*ne12 * sequence - iter_j*iter_z_gqa * z_KV)/iter_j;
+    const int jt = tile_idx - iter_j*iter_z_gqa*ne12 * sequence - iter_j*iter_z_gqa * z_KV - iter_j * zt_gqa;
+
+    const int zt_Q = z_KV*gqa_ratio + zt_gqa*ncols2; // Global Q head start index.
+
+    if (jt*ncols1 + j >= ne01 || zt_gqa*ncols2 + c >= gqa_ratio) {
+        return;
+    }
+
+    dst += sequence*ne02*ne01*D + jt*ne02*(ncols1*D) + zt_Q*D + (j*ne02 + c)*D + tid;
+
+    // Load the partial result that needs a fixup
+    float dst_val = *dst;
+    float max_val;
+    float rowsum;
+    {
+        const float2 tmp = dst_fixup[b_last*ncols + jc];
+        max_val = tmp.x;
+        rowsum = tmp.y;
+    }
+
+    // Combine with all previous blocks in this tile.
+    for (int bidx = b_last - 1; bidx >= b_first; --bidx) {
+        const float dst_add = dst_fixup_data[bidx*ncols*D + jc*D + tid];
+
+        const float2 tmp = dst_fixup[(nblocks_stream_k + bidx)*ncols + jc];
+
+        const float max_val_new = fmaxf(max_val, tmp.x);
+
+        const float diff_val = max_val - max_val_new;
+        const float diff_add = tmp.x - max_val_new;
+
+        const float scale_val = diff_val >= SOFTMAX_FTZ_THRESHOLD ? expf(diff_val) : 0.0f;
+        const float scale_add = diff_add >= SOFTMAX_FTZ_THRESHOLD ? expf(diff_add) : 0.0f;
+
+        dst_val = scale_val*dst_val + scale_add*dst_add;
+        rowsum = scale_val*rowsum + scale_add*tmp.y;
+
+        max_val = max_val_new;
+    }
+
+    // Write back final result:
+    *dst = dst_val / rowsum;
+}
+
+// Fallback fixup kernel for when nblocks_stream_k < 2 * ntiles_dst (blocks_num.x not a multiple of ntiles_dst)
+template<int D, int ncols1, int ncols2>
+__launch_bounds__(D, 1)
+static __global__ void flash_attn_stream_k_fixup_fallback(
+        float * __restrict__ dst, const float2 * __restrict__ dst_fixup, const int ne01, const int ne02, const int ne03,
+        const int ne11, const int ne12, const int nbatch_fa) {
+    constexpr int ncols = ncols1*ncols2;
+
+    const int bidx0 = blockIdx.x;
+    const int j     = blockIdx.y;
+    const int c     = blockIdx.z;
+    const int jc    = j*ncols2 + c;
+    const int tid   = threadIdx.x;
+
+    const float * dst_fixup_data = ((const float *) dst_fixup) + gridDim.x*(2*2*ncols);
+
+    const int gqa_ratio = ne02/ne12;
+
+    const int iter_k = ne11 / FATTN_KQ_STRIDE;
+    const int iter_j = (ne01 + (ncols1 - 1)) / ncols1;
+    const int iter_z = (gqa_ratio + (ncols2 - 1)) / ncols2;
+
+    const int kbc0      = (int64_t(bidx0 + 0)*iter_k*iter_j*iter_z*ne12*ne03) / gridDim.x;
+    const int kbc0_stop = (int64_t(bidx0 + 1)*iter_k*iter_j*iter_z*ne12*ne03) / gridDim.x;
+
+    const bool did_not_have_any_data   = kbc0 == kbc0_stop;
+    const bool wrote_beginning_of_tile = kbc0 % iter_k == 0;
+    const bool did_not_write_last      = kbc0/iter_k == kbc0_stop/iter_k && kbc0_stop % iter_k != 0;
+    if (did_not_have_any_data || wrote_beginning_of_tile || did_not_write_last) {
+        return;
+    }
+
+    const int sequence =  kbc0 /(iter_k*iter_j*iter_z*ne12);
+    const int z_KV     = (kbc0 - iter_k*iter_j*iter_z*ne12 * sequence)/(iter_k*iter_j*iter_z);
+    const int zt_gqa   = (kbc0 - iter_k*iter_j*iter_z*ne12 * sequence - iter_k*iter_j*iter_z * z_KV)/(iter_k*iter_j);
+    const int jt       = (kbc0 - iter_k*iter_j*iter_z*ne12 * sequence - iter_k*iter_j*iter_z * z_KV - iter_k*iter_j * zt_gqa) / iter_k;
+
+    const int zt_Q = z_KV*gqa_ratio + zt_gqa*ncols2; // Global Q head start index.
+
+    if (jt*ncols1 + j >= ne01 || zt_gqa*ncols2 + c >= gqa_ratio) {
+        return;
+    }
+
+    dst += sequence*ne02*ne01*D + jt*ne02*(ncols1*D) + zt_Q*D + (j*ne02 + c)*D + tid;
+
+    // Load the partial result that needs a fixup:
+    float dst_val = 0.0f;
+    float max_val = 0.0f;
+    float rowsum  = 0.0f;
+    {
+        dst_val = *dst;
+
+        const float2 tmp = dst_fixup[bidx0*ncols + jc];
+        max_val = tmp.x;
+        rowsum  = tmp.y;
+    }
+
+    // Iterate over previous blocks and compute the combined results.
+    // All CUDA blocks that get here must have a previous block that needs a fixup.
+    int bidx = bidx0 - 1;
+    int kbc_stop = kbc0;
+    while(true) {
+        const int kbc = int64_t(bidx)*(iter_k*iter_j*iter_z*ne12*ne03) / gridDim.x;
+        if (kbc == kbc_stop) { // Did not have any data.
+            bidx--;
+            kbc_stop = kbc;
+            continue;
+        }
+
+        const float dst_add = dst_fixup_data[bidx*ncols*D + jc*D + tid];
+
+        const float2 tmp = dst_fixup[(gridDim.x + bidx)*ncols + jc];
+
+        // Scale the current and new value accumulators depending on the max. values.
+        const float max_val_new = fmaxf(max_val, tmp.x);
+
+        const float diff_val = max_val - max_val_new;
+        const float diff_add = tmp.x   - max_val_new;
+
+        const float scale_val = diff_val >= SOFTMAX_FTZ_THRESHOLD ? expf(diff_val) : 0.0f;
+        const float scale_add = diff_add >= SOFTMAX_FTZ_THRESHOLD ? expf(diff_add) : 0.0f;
+
+        dst_val = scale_val*dst_val + scale_add*dst_add;
+        rowsum  = scale_val*rowsum  + scale_add*tmp.y;
+
+        max_val = max_val_new;
+
+        // If this block started in a previous tile we are done and don't need to combine additional partial results.
+        if (kbc % iter_k == 0 || kbc/iter_k < kbc0/iter_k) {
+            break;
+        }
+        bidx--;
+        kbc_stop = kbc;
+    }
+
+    // Write back final result:
+    *dst = dst_val / rowsum;
+}
+
 template<int D> // D == head size
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 __launch_bounds__(D, 1)
@@ -1897,8 +2072,7 @@ static void launch_fattn_new_mma(
     int max_blocks_per_sm = 1; // Max. number of active blocks limited by occupancy.
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
 
-    const int ntiles_KV = (K->ne[1] + FATTN_KQ_STRIDE - 1) / FATTN_KQ_STRIDE;
-
+    const int ntiles_KV = (K->ne[1] + FATTN_KQ_STRIDE - 1) / FATTN_KQ_STRIDE; // Max. number of parallel blocks limited by tensor size.
     dim3 blocks_num;
     if (stream_k) {
         // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
@@ -1906,7 +2080,13 @@ static void launch_fattn_new_mma(
         const int tiles_nwaves = (ntiles_dst + max_blocks - 1) / max_blocks;
         const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
 
-        const int nblocks_stream_k = std::min(max_blocks, ntiles_KV*ntiles_dst);
+        const int nblocks_stream_k_raw = std::min(max_blocks, ntiles_KV*ntiles_dst);
+
+        // Round down to a multiple of ntiles_dst so that each output tile gets the same number of blocks.
+        // Only do this if nblocks_stream_k_raw is at least 2x ntiles_dst to avoid excessive loss of occupancy
+        const int nblocks_stream_k = nblocks_stream_k_raw > 2 * ntiles_dst
+            ? (nblocks_stream_k_raw / ntiles_dst) * ntiles_dst
+            : nblocks_stream_k_raw;
 
         const bool use_stream_k = cc >= CC_ADA_LOVELACE || tiles_efficiency_percent < 75;
 
@@ -1994,13 +2174,22 @@ static void launch_fattn_new_mma(
     CUDA_CHECK(cudaGetLastError());
 
     if (stream_k) {
-        if (ntiles_dst % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
+        if (blocks_num.x % ntiles_dst == 0 && blocks_num.x > ntiles_dst) {
+            // Optimized fixup: nblocks_stream_k is a multiple of ntiles_dst, launch one block per tile.
             const dim3 block_dim_combine(DV, 1, 1);
-            const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
+            const dim3 blocks_num_combine = {(unsigned)ntiles_dst, ncols1, ncols2};
 
             flash_attn_stream_k_fixup<DV, ncols1, ncols2>
                 <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
-                ((float *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], K->ne[1], K->ne[2]);
+                ((float *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], 1, K->ne[1], K->ne[2], 0, (int)blocks_num.x);
+        } else if (ntiles_dst % blocks_num.x != 0) {
+            // Fallback fixup for the cases where nblocks_stream_k < ntiles_dst.
+            const dim3 block_dim_combine(DV, 1, 1);
+            const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
+
+            flash_attn_stream_k_fixup_fallback<DV, ncols1, ncols2>
+                <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
+                ((float *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], 1, K->ne[1], K->ne[2], 0);
         }
     } else if (parallel_blocks > 1) {
         const dim3 block_dim_combine(DV, 1, 1);
