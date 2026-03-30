@@ -1872,7 +1872,7 @@ static void launch_fattn_new_mma(
     const int ntiles_x     = ((Q->ne[1] + ncols1 - 1) / ncols1);
     const int gqa_ratio    = Q->ne[2] / K->ne[2];
     const int ntiles_z     = ((gqa_ratio + ncols2 - 1) / ncols2);
-    const int ntiles_total = ntiles_x * ntiles_z * K->ne[2] * Q->ne[3];
+    const int ntiles_dst   = ntiles_x * ntiles_z * K->ne[2] * Q->ne[3];
 
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
@@ -1901,14 +1901,14 @@ static void launch_fattn_new_mma(
     if (stream_k) {
         // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
         const int max_blocks = max_blocks_per_sm*nsm;
-        const int tiles_nwaves = (ntiles_total + max_blocks - 1) / max_blocks;
-        const int tiles_efficiency_percent = 100 * ntiles_total / (max_blocks*tiles_nwaves);
+        const int tiles_nwaves = (ntiles_dst + max_blocks - 1) / max_blocks;
+        const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
 
         const int nblocks_stream_k = max_blocks;
 
         const bool use_stream_k = cc >= CC_ADA_LOVELACE || tiles_efficiency_percent < 75;
 
-        blocks_num.x = use_stream_k ? nblocks_stream_k : ntiles_total;
+        blocks_num.x = use_stream_k ? nblocks_stream_k : ntiles_dst;
         blocks_num.y = 1;
         blocks_num.z = 1;
 
@@ -1918,18 +1918,18 @@ static void launch_fattn_new_mma(
         const int ntiles_KQ = K->ne[1] / KQ_row_granularity; // Max. number of parallel blocks limited by tensor size.
 
         // parallel_blocks should be at least large enough to achieve max. occupancy for a single wave:
-        parallel_blocks = std::max((nsm * max_blocks_per_sm) / ntiles_total, 1);
+        parallel_blocks = std::max((nsm * max_blocks_per_sm) / ntiles_dst, 1);
 
         // parallel_blocks must not be larger than what the tensor size allows:
         parallel_blocks = std::min(parallel_blocks, ntiles_KQ);
 
-        // If ntiles_total % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
+        // If ntiles_dst % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
         // Test whether parallel_blocks can be set to a higher value for better efficiency.
         const int blocks_per_wave = nsm * max_blocks_per_sm;
         int nwaves_best = 0;
         int efficiency_percent_best = 0;
         for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= ntiles_KQ; ++parallel_blocks_test) {
-            const int nblocks_total = ntiles_total * parallel_blocks_test;
+            const int nblocks_total = ntiles_dst * parallel_blocks_test;
             const int nwaves = (nblocks_total + blocks_per_wave - 1) / blocks_per_wave;
             const int efficiency_percent = 100 * nblocks_total / (nwaves*blocks_per_wave);
 
@@ -1993,7 +1993,7 @@ static void launch_fattn_new_mma(
     CUDA_CHECK(cudaGetLastError());
 
     if (stream_k) {
-        if (ntiles_total % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
+        if (ntiles_dst % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
             const dim3 block_dim_combine(DV, 1, 1);
             const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
 
