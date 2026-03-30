@@ -5025,8 +5025,8 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
             }
             else if (parsed[0] == "stream_k_thresh") {
                 is_good = read_value(parsed[1], params.stream_k_thresh);
-                if (!is_good || params.stream_k_thresh < 0 || params.stream_k_thresh > 100) {
-                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...100]\n", __func__, parsed[0].c_str(), params.stream_k_thresh);
+                if (!is_good || params.stream_k_thresh < -1 || params.stream_k_thresh > 100) {
+                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [-1...100]\n", __func__, parsed[0].c_str(), params.stream_k_thresh);
                     is_good = false;
                 }
             }
@@ -5066,7 +5066,10 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         }
         // Store user-provided stream_k_thresh for use in FA kernel
         if (params.stream_k_thresh != 75) {
-            ggml_cuda_user_stream_k_thresh = params.stream_k_thresh;
+            ggml_cuda_user_stream_k_thresh_global = params.stream_k_thresh;
+            for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+                ggml_cuda_user_stream_k_thresh[i] = params.stream_k_thresh;
+            }
             GGML_CUDA_LOG_INFO("=========================== %s: setting stream_k_thresh to %d\n", __func__, params.stream_k_thresh);
         }
         if (params.fusion != ctx->fusion) {
@@ -5192,14 +5195,18 @@ GGML_CALL void ggml_backend_cuda_set_cslq(const char * cslq) {
 }
 
 GGML_CALL void ggml_backend_cuda_set_stream_k_thresh(int thresh) {
-    if (thresh >= 0 && thresh <= 100) {
+    if (thresh >= -1 && thresh <= 100) {
         ggml_cuda_user_stream_k_thresh_global = thresh;
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
             ggml_cuda_user_stream_k_thresh[i] = thresh;
         }
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_stream_k_thresh: stream_k_thresh will be set to %d for all devices\n", thresh);
+        if (thresh == -1) {
+            GGML_CUDA_LOG_INFO("=========================== ggml_backend_cuda_set_stream_k_thresh: stream_k_thresh will be auto-detected based on VRAM\n");
+        } else {
+            GGML_CUDA_LOG_INFO("=========================== ggml_backend_cuda_set_stream_k_thresh: stream_k_thresh will be set to %d for all devices\n", thresh);
+        }
     } else {
-        GGML_CUDA_LOG_WARN("ggml_backend_cuda_set_stream_k_thresh: invalid value %d, must be in [0,100], keeping %d\n", thresh, ggml_cuda_user_stream_k_thresh_global);
+        GGML_CUDA_LOG_WARN("ggml_backend_cuda_set_stream_k_thresh: invalid value %d, must be in [-1,100], keeping %d\n", thresh, ggml_cuda_user_stream_k_thresh_global);
     }
 }
 
@@ -5213,9 +5220,18 @@ GGML_CALL int ggml_backend_cuda_get_stream_k_thresh(int device) {
 }
 
 GGML_CALL void ggml_backend_cuda_set_stream_k_thresh_for_device(int device, int thresh) {
-    if (device >= 0 && device < GGML_CUDA_MAX_DEVICES && thresh >= 0 && thresh <= 100) {
+    if (device >= 0 && device < GGML_CUDA_MAX_DEVICES && thresh >= -1 && thresh <= 100) {
         ggml_cuda_user_stream_k_thresh[device] = thresh;
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_stream_k_thresh_for_device: device %d -> stream_k_thresh = %d\n", device, thresh);
+        if (thresh == -1) {
+            size_t total_vram = 0;
+            ggml_backend_cuda_get_device_memory(device, nullptr, &total_vram);
+            int vram_gib = (int)(total_vram / (1024 * 1024 * 1024));
+            int recommended = ggml_backend_cuda_get_default_stream_k_thresh(vram_gib);
+            ggml_cuda_user_stream_k_thresh[device] = recommended;
+            GGML_CUDA_LOG_INFO("=========================== ggml_backend_cuda_set_stream_k_thresh: device %d (%d GiB) -> %d (tiles efficiency < %d%%)\n", device, vram_gib, recommended, recommended);
+        } else {
+            GGML_CUDA_LOG_INFO("=========================== ggml_backend_cuda_set_stream_k_thresh: device %d -> %d (tiles efficiency < %d%%)\n", device, thresh, thresh);
+        }
     } else {
         GGML_CUDA_LOG_WARN("ggml_backend_cuda_set_stream_k_thresh_for_device: invalid device %d or thresh %d\n", device, thresh);
     }

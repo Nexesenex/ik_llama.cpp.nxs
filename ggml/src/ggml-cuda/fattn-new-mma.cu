@@ -2097,12 +2097,6 @@ static void launch_fattn_new_mma(
         const int stream_k_thresh = ggml_backend_cuda_get_stream_k_thresh(id);
         const bool use_stream_k = cc >= CC_ADA_LOVELACE || tiles_efficiency_percent < stream_k_thresh;
 
-        static bool logged[GGML_CUDA_MAX_DEVICES] = {false};
-        if (!logged[id]) {
-            GGML_CUDA_LOG_INFO("%s: device %d using stream_k_thresh = %d\n", __func__, id, stream_k_thresh);
-            logged[id] = true;
-        }
-
         blocks_num.x = use_stream_k ? nblocks_stream_k : ntiles_dst;
         blocks_num.y = 1;
         blocks_num.z = 1;
