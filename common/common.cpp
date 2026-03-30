@@ -3858,12 +3858,12 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
             size_t end = params.cuda_params.find(",", start);
             std::string sk_thresh_str = params.cuda_params.substr(start, end - start);
             if (!sk_thresh_str.empty()) {
-                // Check if pure "auto" (no colon, no equals)
-                bool is_pure_auto = (sk_thresh_str == "auto");
-                // Check if contains equals sign (per-device manual values)
-                bool is_per_device = (sk_thresh_str.find("=") != std::string::npos);
+                // Check if "-1" means auto-detect
+                bool is_auto = (sk_thresh_str == "-1");
+                // Check if contains colon (per-device manual values: 0:85;1:70)
+                bool is_per_device = (sk_thresh_str.find(":") != std::string::npos);
 
-                if (is_pure_auto) {
+                if (is_auto) {
                     // Auto-detect for all devices
                     int n_devices = ggml_backend_cuda_get_device_count();
                     for (int device = 0; device < n_devices; ++device) {
