@@ -3858,11 +3858,21 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
             size_t end = params.cuda_params.find(",", start);
             std::string sk_thresh_str = params.cuda_params.substr(start, end - start);
             if (!sk_thresh_str.empty()) {
-                try {
-                    int sk_thresh = std::stoi(sk_thresh_str);
-                    ggml_backend_cuda_set_stream_k_thresh(sk_thresh);
-                } catch (...) {
-                    // Invalid value, keep default
+                if (sk_thresh_str == "auto") {
+                    // Auto-detect based on GPU VRAM
+                    size_t total_vram = 0;
+                    ggml_backend_cuda_get_device_memory(0, nullptr, &total_vram);
+                    int vram_gib = (int)(total_vram / (1024 * 1024 * 1024));
+                    int recommended = ggml_backend_cuda_get_default_stream_k_thresh(vram_gib);
+                    ggml_backend_cuda_set_stream_k_thresh(recommended);
+                    printf("stream_k_thresh: auto-detected %d GiB VRAM -> using %d\n", vram_gib, recommended);
+                } else {
+                    try {
+                        int sk_thresh = std::stoi(sk_thresh_str);
+                        ggml_backend_cuda_set_stream_k_thresh(sk_thresh);
+                    } catch (...) {
+                        // Invalid value, keep default
+                    }
                 }
             }
         }

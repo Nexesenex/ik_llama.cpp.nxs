@@ -50,6 +50,10 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_stream_k_thresh(int thresh);
 // Get stream-k efficiency threshold (default 75)
 GGML_API GGML_CALL int ggml_backend_cuda_get_stream_k_thresh(void);
 
+// Get recommended stream-k threshold based on device VRAM (in GiB)
+// Returns: 85 for 18-200GiB, 70 for 14-18GiB, 60 for 9-14GiB, 50 for 5-9GiB, 40 for <5GiB
+GGML_API GGML_CALL int ggml_backend_cuda_get_default_stream_k_thresh(int device_vram_gib);
+
 GGML_API GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_API GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 

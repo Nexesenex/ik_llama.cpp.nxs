@@ -5202,3 +5202,17 @@ GGML_CALL void ggml_backend_cuda_set_stream_k_thresh(int thresh) {
 GGML_CALL int ggml_backend_cuda_get_stream_k_thresh(void) {
     return ggml_cuda_user_stream_k_thresh;
 }
+
+GGML_CALL int ggml_backend_cuda_get_default_stream_k_thresh(int device_vram_gib) {
+    if (device_vram_gib >= 18) {
+        return 85;  // RTX 3090, RTX 4090, H100, etc. (18-200 GiB)
+    } else if (device_vram_gib >= 14) {
+        return 70;  // RTX A4000 (16 GiB)
+    } else if (device_vram_gib >= 9) {
+        return 60;  // RTX 3060 (12 GiB)
+    } else if (device_vram_gib >= 5) {
+        return 50;  // RTX 3050 (6-8 GiB)
+    } else {
+        return 40;  // Very small GPUs (< 5 GiB)
+    }
+}
