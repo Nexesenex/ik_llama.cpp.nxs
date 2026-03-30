@@ -2188,7 +2188,15 @@ static void launch_fattn_new_mma(
             flash_attn_stream_k_fixup<DV, ncols1, ncols2>
                 <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
                 ((float *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], 1, K->ne[1], K->ne[2], 0, (int)blocks_num.x);
-        } else if (ntiles_dst % blocks_num.x != 0) {
+        } else if (blocks_num.x > ntiles_dst) {
+            // Some tiles get more blocks than others, need fallback fixup.
+            const dim3 block_dim_combine(DV, 1, 1);
+            const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
+
+            flash_attn_stream_k_fixup_fallback<DV, ncols1, ncols2>
+                <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
+                ((float *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], 1, K->ne[1], K->ne[2], 0);
+        } else if (blocks_num.x < ntiles_dst) {
             // Fallback fixup for the cases where nblocks_stream_k < ntiles_dst.
             const dim3 block_dim_combine(DV, 1, 1);
             const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
