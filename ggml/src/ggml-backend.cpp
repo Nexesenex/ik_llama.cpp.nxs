@@ -2378,8 +2378,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                 // record the event of this copy
                 if (split->n_inputs > 0) {
+#ifndef NDEBUG
+                    printf("Recording event %d, %d\n", split_backend_id, sched->cur_copy);
+#endif
                     if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                        printf("Recording event %d, %d\n", split_backend_id, sched->cur_copy);
                         ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
                     }
                 }
