@@ -1202,6 +1202,11 @@ struct ggml_backend_sched {
     bool is_async = false;
     bool debug;
     bool has_reduce = false;
+
+    // Cached values for async path to avoid per-compute lookups
+    bool has_cpu_work_cached = false;
+    int first_reduce_cached = -1;
+    bool async_cache_valid = false;
 };
 
 void ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op op, bool on_or_off) {
@@ -1425,6 +1430,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
     sched->n_graph_inputs = 0;
     sched->is_reset = false;
     sched->has_reduce = false;
+    sched->async_cache_valid = false;  // Invalidate async cache on graph change
 
     struct ggml_init_params params = {
         /* .mem_size =   */ sched->context_buffer_size,
@@ -2184,34 +2190,48 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         int first_reduce = -1;
         bool work_done = false;
-#ifdef GGML_USE_OPENMP
-        //This may not be available in old OpenMP versions
-        //if (int nlevels = omp_get_max_active_levels(); nlevels < 2) {
-        //    omp_set_max_active_levels(nlevels+1);
-        //    //printf("%s: Setting omp max active levels to 2\n", __func__);
-        //}
+
+        // Use cached values if available, otherwise compute and cache
         bool has_cpu_work = false;
-        for (int i = 0; i < sched->n_backends; ++i) {
-            if (!sched->backend_splits[i].empty()) {
-                auto split = sched->backend_splits[i].front();
-                if (ggml_backend_is_cpu(sched->backends[split->backend_id])) {
-                    //printf("CPU backend %d has %d splits\n", split->backend_id, (int)sched->backend_splits[i].size());
-                    if (sched->backend_splits[i].size() > 1) {
-                        has_cpu_work = true;
-                        break;
+        if (sched->async_cache_valid) {
+            has_cpu_work = sched->has_cpu_work_cached;
+            first_reduce = sched->first_reduce_cached;
+        } else {
+#ifdef GGML_USE_OPENMP
+            //This may not be available in old OpenMP versions
+            //if (int nlevels = omp_get_max_active_levels(); nlevels < 2) {
+            //    omp_set_max_active_levels(nlevels+1);
+            //    //printf("%s: Setting omp max active levels to 2\n", __func__);
+            //}
+            has_cpu_work = false;
+            for (int i = 0; i < sched->n_backends; ++i) {
+                if (!sched->backend_splits[i].empty()) {
+                    auto split = sched->backend_splits[i].front();
+                    if (ggml_backend_is_cpu(sched->backends[split->backend_id])) {
+                        //printf("CPU backend %d has %d splits\n", split->backend_id, (int)sched->backend_splits[i].size());
+                        if (sched->backend_splits[i].size() > 1) {
+                            has_cpu_work = true;
+                            break;
+                        }
                     }
                 }
             }
-        }
-        for (int i = 0; i < sched->n_splits; i++) {
-            auto split = &sched->splits[i];
-            if (split->graph.n_nodes == 1 && split->graph.nodes[0]->op == GGML_OP_REDUCE) {
-                first_reduce = split->backend_id;
-                break;
+            for (int i = 0; i < sched->n_splits; i++) {
+                auto split = &sched->splits[i];
+                if (split->graph.n_nodes == 1 && split->graph.nodes[0]->op == GGML_OP_REDUCE) {
+                    first_reduce = split->backend_id;
+                    break;
+                }
             }
+            // Cache the computed values
+            sched->has_cpu_work_cached = has_cpu_work;
+            sched->first_reduce_cached = first_reduce;
+            sched->async_cache_valid = true;
+#endif
         }
 
         if (!has_cpu_work) {
+#ifdef GGML_USE_OPENMP
         // IK_OPENMP: Standard parallel region without proc_bind
         // proc_bind(close) tested and showed worse performance on Intel 265K
 
