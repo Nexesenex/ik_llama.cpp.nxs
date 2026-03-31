@@ -505,6 +505,7 @@ static int ggml_cuda_lock_counter = 0;
 static std::string ggml_cuda_user_cslq; // User-provided CUDA_SCALE_LAUNCH_QUEUES from -cuda cslq=X
 static int ggml_cuda_user_stream_k_thresh[GGML_CUDA_MAX_DEVICES] = {}; // Per-device stream-k threshold (0 = use default 75)
 static int ggml_cuda_user_stream_k_thresh_global = 75; // Global default if not set per-device
+static bool ggml_cuda_pin_token_embd_only = false; // When true, only pin token_embd, skip pinning for CPU tensor overrides
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)) {
@@ -1285,14 +1286,37 @@ static void * ggml_cuda_host_malloc(size_t size) {
 
     void * ptr = nullptr;
     double size_GiB = size/(1024.*1024.*1024.);
+    double size_MiB = size/(1024.*1024.);
     auto tim1 = ggml_time_us();
-    if (size_GiB > k_warn_limit) {
-        GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory, this can take a while...\n", size_GiB);
+    bool is_large = (size_GiB > k_warn_limit);
+    if (is_large) {
+        if (ggml_cuda_pin_token_embd_only) {
+            GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory (token_embd only, pinemb=1), this can take a while...\n", size_GiB);
+        } else {
+            GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory, this can take a while...\n", size_GiB);
+        }
+    } else {
+        if (ggml_cuda_pin_token_embd_only) {
+            GGML_CUDA_LOG_INFO("Allocating %.2f MiB of pinned host memory (token_embd only, pinemb=1)...\n", size_MiB);
+        } else {
+            GGML_CUDA_LOG_INFO("Allocating %.2f MiB of pinned host memory...\n", size_MiB);
+        }
     }
     cudaError_t err = cudaMallocHost((void **) &ptr, size);
-    if (size_GiB > k_warn_limit) {
+    if (is_large) {
         auto tim2 = ggml_time_us();
-        GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n", size_GiB, 1e-3*(tim2-tim1));
+        if (ggml_cuda_pin_token_embd_only) {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB (token_embd only) in %.1f ms\n", size_GiB, 1e-3*(tim2-tim1));
+        } else {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n", size_GiB, 1e-3*(tim2-tim1));
+        }
+    } else {
+        auto tim2 = ggml_time_us();
+        if (ggml_cuda_pin_token_embd_only) {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB (token_embd only) in %.1f ms\n", size_MiB, 1e-3*(tim2-tim1));
+        } else {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB in %.1f ms\n", size_MiB, 1e-3*(tim2-tim1));
+        }
     }
     if (err != cudaSuccess) {
         // clear the error
@@ -4897,6 +4921,7 @@ struct cuda_params {
     bool enable_p2p = true;
     std::string cslq; // CUDA_SCALE_LAUNCH_QUEUES: "1x", "2x", "4x"
     int stream_k_thresh = 75; // Stream-k efficiency threshold: 0-100
+    int pinemb = 0; // pin_token_embd_only: 0=pin all host buffers, 1=pin only token_embd
 };
 
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
@@ -4973,6 +4998,13 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                     is_good = false;
                 }
             }
+            else if (parsed[0] == "pinemb") {
+                is_good = read_value(parsed[1], params.pinemb);
+                if (!is_good || params.pinemb < 0 || params.pinemb > 1) {
+                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...1]\n", __func__, parsed[0].c_str(), params.pinemb);
+                    is_good = false;
+                }
+            }
         }
         if (!is_good) {
             GGML_CUDA_LOG_WARN("%s: invalid parameter %s (%d) -> ignored\n", __func__, value.c_str(), (int)parsed.size());
@@ -5014,6 +5046,10 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
                 ggml_cuda_user_stream_k_thresh[i] = params.stream_k_thresh;
             }
             GGML_CUDA_LOG_INFO("=========================== %s: setting stream_k_thresh to %d\n", __func__, params.stream_k_thresh);
+        }
+        // Store user-provided pinemb for use in buffer type allocation
+        if (params.pinemb != 0) {
+            ggml_backend_cuda_set_pinemb(params.pinemb);
         }
         if (params.fusion != ctx->fusion) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting fusion to %d\n", __func__, params.fusion);
@@ -5192,4 +5228,17 @@ GGML_CALL int ggml_backend_cuda_get_default_stream_k_thresh(int device_vram_gib)
     } else {
         return 40;  // Very small GPUs (< 5 GiB)
     }
+}
+
+GGML_CALL void ggml_backend_cuda_set_pinemb(int val) {
+    ggml_cuda_pin_token_embd_only = (val != 0);
+    if (ggml_cuda_pin_token_embd_only) {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinemb: pin_token_embd_only enabled - only token_embd will use pinned memory, CPU tensor overrides will use non-pinned allocation\n");
+    } else {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinemb: pin_token_embd_only disabled - all host buffers will use pinned memory\n");
+    }
+}
+
+GGML_CALL bool ggml_backend_cuda_get_pin_token_embd_only(void) {
+    return ggml_cuda_pin_token_embd_only;
 }
