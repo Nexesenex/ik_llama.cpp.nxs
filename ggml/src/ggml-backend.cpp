@@ -2396,14 +2396,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         // record the event of this copy
-        if (split->n_inputs > 0) {
+        // Batch optimization: only check event recording when n_copies > 1 (pipeline parallelism)
+        // For single-copy mode (n_copies == 1), events are not used and can be skipped
+        if (sched->n_copies > 1 && split->n_inputs > 0) {
             if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                 ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
             }
         }
     }
 
-    sched->cur_copy = (sched->cur_copy + 1) % sched->n_copies;
+    if (sched->n_copies > 1) {
+        sched->cur_copy = (sched->cur_copy + 1) % sched->n_copies;
+    }
 
     return GGML_STATUS_SUCCESS;
 }
