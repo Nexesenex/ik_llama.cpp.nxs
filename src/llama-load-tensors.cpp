@@ -231,13 +231,53 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
 
     default_cpu_buft = llama_default_buffer_type_cpu(true);
 
+#if defined(GGML_USE_CUDA)
+    const int pinmem = ggml_backend_cuda_get_pinmem();
+    LLAMA_LOG_INFO("%s: ggml_backend_cuda_get_pinmem() = %d\n", __func__, pinmem);
+    if (pinmem == 1) {
+        LLAMA_LOG_INFO("%s: pinmem=1 mode enabled - CPU tensor overrides will use non-pinned allocation\n", __func__);
+        // Ensure non-pinned CPU buffer type has a context for tensor overrides
+        buft_layer_count[ggml_backend_cpu_buffer_type()]++;
+    } else if (pinmem == 0) {
+        LLAMA_LOG_INFO("%s: pinmem=0 mode enabled - all pinned memory disabled\n", __func__);
+        // Ensure non-pinned CPU buffer type has a context for tensor overrides
+        buft_layer_count[ggml_backend_cpu_buffer_type()]++;
+    }
+#else
+    const int pinmem = 0;
+#endif
+
     if (ml.tensor_buft_overrides) {
+        size_t override_count = 0;
+        for (const auto * o = ml.tensor_buft_overrides; o->pattern != nullptr; ++o) override_count++;
+        LLAMA_LOG_DEBUG("%s: tensor_buft_overrides count = %zu\n", __func__, override_count);
         for (const auto * o = ml.tensor_buft_overrides; o->pattern != nullptr; ++o) {
+            LLAMA_LOG_DEBUG("%s:   pattern: '%s' -> buft: %s\n", __func__, o->pattern, ggml_backend_buft_name(o->buft));
             auto buft = o->buft;
+#if defined(GGML_USE_CUDA)
+            if (ggml_backend_buft_is_host(buft)) {
+                if (pinmem != 2) {
+                    buft = ggml_backend_cpu_buffer_type();
+                    LLAMA_LOG_DEBUG("%s: override '%s' -> using non-pinned CPU buffer\n", __func__, o->pattern);
+                } else {
+                    buft = default_cpu_buft;
+                    LLAMA_LOG_DEBUG("%s: override '%s' -> using pinned CPU buffer\n", __func__, o->pattern);
+                }
+            }
+#else
             if (ggml_backend_buft_is_host(buft)) buft = default_cpu_buft;
+#endif
             overrides.emplace_back(std::make_pair(std::regex(o->pattern), buft));
         }
+    } else {
+        LLAMA_LOG_DEBUG("%s: tensor_buft_overrides is NULL\n", __func__);
     }
+
+#if defined(GGML_USE_CUDA)
+    if (ggml_backend_cuda_get_pinmem() == 1) {
+        LLAMA_LOG_INFO("%s: token_embd buffer type: %s (pinned)\n", __func__, ggml_backend_buft_name(model.buft_input.buft));
+    }
+#endif
 
     if (ml.ncmoe > 0) {
         auto buft = llama_default_buffer_type_cpu(true);

@@ -503,6 +503,7 @@ static std::condition_variable ggml_cuda_lock_cv;
 //static std::atomic<int> ggml_cuda_lock_counter;
 static int ggml_cuda_lock_counter = 0;
 static std::string ggml_cuda_user_cslq; // User-provided CUDA_SCALE_LAUNCH_QUEUES from -cuda cslq=X
+static int ggml_cuda_pinmem = 0; // pinmem: 0=disabled (default), 1=token_embd only, 2=all
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)) {
@@ -1279,21 +1280,48 @@ static void * ggml_cuda_host_malloc(size_t size) {
     if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
         return nullptr;
     }
+    // pinmem=0: disable all pinned memory allocation
+    if (ggml_cuda_pinmem == 0) {
+        return nullptr;
+    }
     constexpr double k_warn_limit = 8.0;
 
     void * ptr = nullptr;
     double size_GiB = size/(1024.*1024.*1024.);
+    double size_MiB = size/(1024.*1024.);
     auto tim1 = ggml_time_us();
-    if (size_GiB > k_warn_limit) {
-        GGML_CUDA_LOG_INFO("\n\nAllocating %.2f GiB of pinned host memory, this may take a while.\n", size_GiB);
-        GGML_CUDA_LOG_INFO("Using pinned host memory improves PP performance by a significant margin.\n");
-        GGML_CUDA_LOG_INFO("But if it takes too long for your model and amount of patience, kill the process and run using\n\n");
-        GGML_CUDA_LOG_INFO("GGML_CUDA_NO_PINNED=1 your_command_goes_here\n");
+    bool is_large = (size_GiB > k_warn_limit);
+    if (is_large) {
+        if (ggml_cuda_pinmem == 1) {
+            GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory (token_embd only, pinmem=1), this can take a while...\n", size_GiB);
+        } else {
+            GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory, this can take a while.\n", size_GiB);
+            GGML_CUDA_LOG_INFO("Using pinned host memory improves PP performance by a significant margin.\n");
+            GGML_CUDA_LOG_INFO("But if it takes too long for your model and amount of patience, kill the process and run using\n\n");
+            GGML_CUDA_LOG_INFO("GGML_CUDA_NO_PINNED=1 your_command_goes_here\n");
+        }
+    } else {
+        if (ggml_cuda_pinmem == 1) {
+            GGML_CUDA_LOG_INFO("Allocating %.2f MiB of pinned host memory (token_embd only, pinmem=1)...\n", size_MiB);
+        } else {
+            GGML_CUDA_LOG_INFO("Allocating %.2f MiB of pinned host memory...\n", size_MiB);
+        }
     }
     cudaError_t err = cudaMallocHost((void **) &ptr, size);
-    if (size_GiB > k_warn_limit) {
+    if (is_large) {
         auto tim2 = ggml_time_us();
-        GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
+        if (ggml_cuda_pinmem == 1) {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB (token_embd only) in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
+        } else {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
+        }
+    } else {
+        auto tim2 = ggml_time_us();
+        if (ggml_cuda_pinmem == 1) {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB (token_embd only) in %.1f ms\n\n", size_MiB, 1e-3*(tim2-tim1));
+        } else {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB in %.1f ms\n\n", size_MiB, 1e-3*(tim2-tim1));
+        }
     }
     if (err != cudaSuccess) {
         // clear the error
@@ -4912,6 +4940,7 @@ struct cuda_params {
 #endif
     bool enable_p2p = true;
     std::string cslq; // CUDA_SCALE_LAUNCH_QUEUES: "1x", "2x", "4x"
+    int pinmem = 0; // pinmem: 0=disabled (default), 1=token_embd only, 2=all
 };
 
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
@@ -4981,6 +5010,22 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                 params.cslq = parsed[1];
                 is_good = !params.cslq.empty();
             }
+            else if (parsed[0] == "pinmem") {
+                is_good = read_value(parsed[1], params.pinmem);
+                if (!is_good || params.pinmem < 0 || params.pinmem > 2) {
+                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...2]\n", __func__, parsed[0].c_str(), params.pinmem);
+                    is_good = false;
+                }
+            }
+            else if (parsed[0] == "pinemb") {
+                is_good = read_value(parsed[1], params.pinmem);
+                if (!is_good || params.pinmem < 0 || params.pinmem > 2) {
+                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...2] (pinemb is deprecated, use pinmem instead)\n", __func__, parsed[0].c_str(), params.pinmem);
+                    is_good = false;
+                } else {
+                    GGML_CUDA_LOG_INFO("pinemb is deprecated, please use pinmem instead\n");
+                }
+            }
         }
         if (!is_good) {
             GGML_CUDA_LOG_WARN("%s: invalid parameter %s (%d) -> ignored\n", __func__, value.c_str(), (int)parsed.size());
@@ -5014,6 +5059,10 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         if (!params.cslq.empty()) {
             ggml_cuda_user_cslq = params.cslq;
             GGML_CUDA_LOG_INFO("=========================== %s: setting CUDA_SCALE_LAUNCH_QUEUES to %s\n", __func__, params.cslq.c_str());
+        }
+        // Store user-provided pinmem for use in buffer type allocation
+        if (params.pinmem != 0) {
+            ggml_backend_cuda_set_pinmem(params.pinmem);
         }
         if (params.fusion != ctx->fusion) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting fusion to %d\n", __func__, params.fusion);
@@ -5135,4 +5184,19 @@ GGML_CALL void ggml_backend_cuda_set_cslq(const char * cslq) {
         ggml_cuda_user_cslq = cslq;
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_cslq: CUDA_SCALE_LAUNCH_QUEUES will be set to %s\n", cslq);
     }
+}
+
+GGML_CALL void ggml_backend_cuda_set_pinmem(int val) {
+    ggml_cuda_pinmem = val;
+    if (val == 0) {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=0 - pinned memory disabled, both token_embd and CPU tensor overrides use non-pinned allocation\n");
+    } else if (val == 1) {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=1 - token_embd only, CPU tensor overrides use non-pinned allocation\n");
+    } else {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=2 - all host buffers use pinned memory (default)\n");
+    }
+}
+
+GGML_CALL int ggml_backend_cuda_get_pinmem(void) {
+    return ggml_cuda_pinmem;
 }

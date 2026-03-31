@@ -348,7 +348,10 @@ ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer) {
 
 #if defined(GGML_USE_CUDA)
     // host buffers should only be used when data is expected to be copied to/from the GPU
-    if (host_buffer) {
+    // when pinmem=0 (default), no pinned memory is used
+    // when pinmem=1, only token_embd uses pinned memory
+    // when pinmem=2, all host buffers use pinned memory
+    if (host_buffer && ggml_backend_cuda_get_pinmem() != 0) {
         buft = ggml_backend_cuda_host_buffer_type();
     }
 #elif defined(GGML_USE_SYCL)
@@ -369,6 +372,20 @@ ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer) {
     return buft;
 
     GGML_UNUSED(host_buffer);
+}
+
+ggml_backend_buffer_type_t llama_default_buffer_type_cpu_pinned(void) {
+#if defined(GGML_USE_CUDA)
+    return ggml_backend_cuda_host_buffer_type();
+#elif defined(GGML_USE_SYCL)
+    return ggml_backend_sycl_host_buffer_type();
+#elif defined(GGML_USE_CPU_HBM)
+    return ggml_backend_cpu_hbm_buffer_type();
+#elif defined(GGML_USE_VULKAN)
+    return ggml_backend_vk_host_buffer_type();
+#else
+    return ggml_backend_cpu_buffer_type();
+#endif
 }
 
 //
@@ -2727,7 +2744,13 @@ static bool llm_load_tensors(
     bool use_mmap_buffer = true;
 
     // there is very little benefit to offloading the input layer, so always keep it on the CPU
+
+#if defined(GGML_USE_CUDA)
+    // use pinned memory for token_embd to enable efficient CPU->GPU transfer
+    model.buft_input = llama_default_buffer_type_cpu_pinned();
+#else
     model.buft_input = llama_default_buffer_type_cpu(true);
+#endif
 
     model.buft_layer.resize(n_layer);
 
