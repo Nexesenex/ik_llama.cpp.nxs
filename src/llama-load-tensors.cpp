@@ -500,7 +500,7 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
         } \
         ctx_input        = ctx_map.at(model.buft_input.buft); \
         ctx_output       = ctx_map.at(model.buft_output.buft); \
-        ctx_output_split = ctx_map.at(model.buft_output.buft_matrix); \
+        ctx_output_split = model.split_output_tensor ? ctx_map.at(model.buft_output.buft_matrix) : ctx_output; \
         model.layers.resize(n_layer);\
         bool use_mmap_buffer = true;
 
