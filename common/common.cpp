@@ -3827,6 +3827,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.split_mode_tensor_parallel_scheduling = params.split_mode_tensor_parallel_scheduling;
     //cparams.split_mode_f16    = params.split_mode_f16;
     cparams.scheduler_async   = params.scheduler_async;
+    cparams.lightweight_pipelining = params.lightweight_pipelining;
     cparams.sched_max_copies  = params.sched_max_copies;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;

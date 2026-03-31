@@ -2407,6 +2407,110 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
     }
 
+    // Lightweight pipelining: copy next split's inputs while current is computing
+    // This provides copy/compute overlap without thread complexity
+    if (sched->lightweight_pipelining && sched->n_backends >= 2 && sched->split_mode_tensor_parallel) {
+        struct ggml_backend_sched_split * splits = sched->splits;
+
+        // Vectors for current and next split copies
+        std::vector<int32_t> ids_curr, ids_next;
+        std::vector<uint32_t> unique_ids_curr, unique_ids_next;
+        ggml_tensor * last_ids_tensor_curr = nullptr;
+        ggml_tensor * last_ids_tensor_next = nullptr;
+
+        // Track which tensors were pre-copied from previous iteration to avoid double-copy
+        std::vector<ggml_tensor*> pre_copied_inputs;
+        pre_copied_inputs.reserve(16);
+
+        for (int i = 0; i < sched->n_splits; i++) {
+            struct ggml_backend_sched_split * split = &splits[i];
+            int split_backend_id = split->backend_id;
+            ggml_backend_t split_backend = sched->backends[split_backend_id];
+
+            // Clear pre-copied tracking for this split
+            pre_copied_inputs.clear();
+
+            // If previous iteration pre-copied our inputs, skip copying
+            // The pre-copy from previous iteration is already in the target buffer
+
+            // Check if inputs need to be copied (not pre-copied)
+            bool needs_copy = false;
+            for (int j = 0; j < split->n_inputs; ++j) {
+                ggml_tensor * input = split->inputs[j];
+                // Simple heuristic: if not already on correct backend, copy
+                if (tensor_backend_id(input) != split_backend_id) {
+                    needs_copy = true;
+                    break;
+                }
+            }
+
+            // Copy current split's inputs if needed
+            if (needs_copy) {
+                ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids_curr, unique_ids_curr, last_ids_tensor_curr);
+
+                if (split->n_inputs > 0 && !sched->own_cpy[split_backend_id]) {
+                    sched->needs_sync[split_backend_id] = true;
+                } else {
+                    for (int j = 0; j < split->n_inputs; ++j) {
+                        if (ggml_backend_buffer_is_host(split->inputs[j]->buffer)) {
+                            sched->needs_sync[split_backend_id] = true;
+                        }
+                    }
+                }
+            }
+
+            // Compute current split
+            auto ec = ggml_backend_sched_eval(sched, split_backend, split);
+            if (ec != GGML_STATUS_SUCCESS) {
+                return ec;
+            }
+
+            // Record event for pipeline parallelism
+            if (sched->n_copies > 1 && split->n_inputs > 0) {
+                if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                    ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
+                }
+            }
+
+            // Pre-copy next split's inputs while computing current (lookahead)
+            if (i + 1 < sched->n_splits) {
+                struct ggml_backend_sched_split * next_split = &splits[i + 1];
+
+                // Check if next split needs copies
+                bool next_needs_copy = false;
+                for (int j = 0; j < next_split->n_inputs; ++j) {
+                    ggml_tensor * input = next_split->inputs[j];
+                    if (tensor_backend_id(input) != next_split->backend_id) {
+                        next_needs_copy = true;
+                        break;
+                    }
+                }
+
+                if (next_needs_copy) {
+                    // Pre-copy next split's inputs
+                    ggml_backend_sched_copy_inputs(sched, next_split, sched->needs_sync, ids_next, unique_ids_next, last_ids_tensor_next);
+
+                    // Mark next split's inputs as needing sync
+                    int next_backend_id = next_split->backend_id;
+                    if (next_split->n_inputs > 0 && !sched->own_cpy[next_backend_id]) {
+                        sched->needs_sync[next_backend_id] = true;
+                    } else {
+                        for (int j = 0; j < next_split->n_inputs; ++j) {
+                            if (ggml_backend_buffer_is_host(next_split->inputs[j]->buffer)) {
+                                sched->needs_sync[next_backend_id] = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (sched->n_copies > 1) {
+            sched->cur_copy = (sched->cur_copy + 1) % sched->n_copies;
+        }
+        return GGML_STATUS_SUCCESS;
+    }
+
     struct ggml_backend_sched_split * splits = sched->splits;
 
     std::vector<int32_t> ids;
