@@ -2184,7 +2184,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
     for (auto & item : sched->needs_sync) item = true;
 
-    if (sched->is_async && sched->n_backends > 2 && sched->split_mode_tensor_parallel && sched->has_reduce) {
+    // Lightweight pipelining: enable async for 2+ GPUs (was previously 3+)
+    // This allows parallel execution of graph splits across multiple GPUs
+    if (sched->is_async && sched->n_backends >= 2 && sched->split_mode_tensor_parallel && sched->has_reduce) {
 
         for (auto & s : sched->statuses) s = GGML_STATUS_SUCCESS;
 
