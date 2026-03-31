@@ -5295,6 +5295,23 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     if (!params.poller_sync_interval_ms.empty()) {
         ggml_backend_cuda_set_poller_sync(params.poller_sync_interval_ms.data(), (int) params.poller_sync_interval_ms.size());
     }
+    // Parse pinmem from cuda_params early, before model loading
+    if (!params.cuda_params.empty()) {
+        size_t pos_pinmem = params.cuda_params.find("pinmem=");
+        if (pos_pinmem != std::string::npos) {
+            size_t start = pos_pinmem + 7;
+            size_t end = params.cuda_params.find(",", start);
+            std::string pinmem_str = params.cuda_params.substr(start, end - start);
+            if (!pinmem_str.empty()) {
+                try {
+                    int pinmem_val = std::stoi(pinmem_str);
+                    ggml_backend_cuda_set_pinmem(pinmem_val);
+                } catch (...) {
+                    // Invalid value, keep default
+                }
+            }
+        }
+    }
 #endif
 
     if (params.n_gpu_layers != -1) {

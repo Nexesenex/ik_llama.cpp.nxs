@@ -243,6 +243,16 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_poller_active(bool val);
 // FMA disables the pulse entirely.
 GGML_API GGML_CALL void ggml_backend_cuda_set_poller_prompt_len(int n_prompt, int n_ctx);
 
+// Set pinmem mode for pinned memory allocation (default: 3)
+// pinmem=0: Disable both pinning paths - no pinned memory at all
+// pinmem=1: Only pin token_embd, CPU tensor overrides use non-pinned allocation
+// pinmem=2: Try to pin all host buffers, stop on first failure, rest unpinned
+// pinmem=3: Pin all host buffers (default behavior)
+GGML_API GGML_CALL void ggml_backend_cuda_set_pinmem(int val);
+
+// Get current pinmem setting (0=disabled, 1=token_embd only, 2=stop on fail, 3=all)
+GGML_API GGML_CALL int ggml_backend_cuda_get_pinmem(void);
+
 GGML_API GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_API GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
