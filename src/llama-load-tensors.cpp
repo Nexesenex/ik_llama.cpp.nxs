@@ -189,8 +189,9 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     ggml_backend_buffer_type_t default_cpu_buft;
     bool has_buft_overrides = false;
-    bool has_non_cpu_buft_overrides = false;
-    bool has_non_cpu_non_output_overrides = false;
+    bool has_cpu_overrides = false;
+    bool has_gpu_overrides = false;
+    bool has_gpu_non_output_overrides = false;
 
     std::unordered_set<ggml_tensor *> split_tensors;
 
@@ -420,10 +421,11 @@ ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx,
         if (std::regex_search(name, o.first)) {
             if (o.second == default_cpu_buft) {
                 has_buft_overrides = true;
+                has_cpu_overrides = true;
             } else {
-                has_non_cpu_buft_overrides = true;
+                has_gpu_overrides = true;
                 if (name.find("output") == std::string::npos) {
-                    has_non_cpu_non_output_overrides = true;
+                    has_gpu_non_output_overrides = true;
                 }
             }
             const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
@@ -3995,7 +3997,7 @@ bool create_tensors_helper::create_tensors() {
     }
 
     if (getenv("GGML_CUDA_NO_PINNED") == nullptr) {
-        use_mmap_buffer &= !has_non_cpu_non_output_overrides;
+        use_mmap_buffer &= !has_gpu_non_output_overrides;
     }
 
     if (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
