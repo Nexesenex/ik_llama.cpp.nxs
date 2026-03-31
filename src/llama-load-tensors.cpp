@@ -4001,7 +4001,7 @@ bool create_tensors_helper::create_tensors() {
     }
 
     if (getenv("GGML_CUDA_NO_PINNED") == nullptr) {
-        if (has_ffn_down_cpu_override) {
+        if (has_ffn_down_cpu_override && ml.use_mmap) {
             use_mmap_buffer = true;
         } else {
             use_mmap_buffer &= !has_gpu_non_output_overrides;
