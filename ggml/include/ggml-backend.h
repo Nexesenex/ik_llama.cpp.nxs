@@ -214,6 +214,7 @@ extern "C" {
     GGML_API void                 ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op op, bool on_or_off);
     GGML_API void                 ggml_backend_sched_set_only_active_experts(ggml_backend_sched_t sched, bool on_or_off);
     GGML_API void                 ggml_backend_sched_set_split_mode_tensor_parallel(ggml_backend_sched_t sched, bool on_or_off, bool async);
+    GGML_API void                 ggml_backend_sched_set_lightweight_pipelining(ggml_backend_sched_t sched, bool enable);
     GGML_API void                 ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extra_alloc_MiB);
 
     // set max number of parallel copies for pipeline parallelism (must be called before scheduler init)

@@ -1200,6 +1200,7 @@ struct ggml_backend_sched {
     bool only_active_experts;
     bool split_mode_tensor_parallel;
     bool is_async = false;
+    bool lightweight_pipelining = false;  // 1-split lookahead in sync path
     bool debug;
     bool has_reduce = false;
 
@@ -1235,6 +1236,11 @@ void ggml_backend_sched_set_split_mode_tensor_parallel(ggml_backend_sched_t sche
     if (!sched) return;
     sched->split_mode_tensor_parallel = on_or_off;
     sched->is_async = async;
+}
+
+void ggml_backend_sched_set_lightweight_pipelining(ggml_backend_sched_t sched, bool enable) {
+    if (!sched) return;
+    sched->lightweight_pipelining = enable;
 }
 
 void ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extra_alloc_MiB) {

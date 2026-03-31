@@ -1831,6 +1831,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.scheduler_async = true;
         return true;
     }
+    if (arg == "-lp" || arg == "--lightweight-pipelining") {
+        params.lightweight_pipelining = true;
+        return true;
+    }
     if (arg == "-smc" || arg == "--sched-max-copies") {
         CHECK_ARG
         params.sched_max_copies = std::atoi(argv[i]);
@@ -2611,6 +2615,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-mota, --monolithic-output-tensor-accounted,", "Account for monolithic output tensor location in mem_used (default: %d)", params.monolithic_output_tensor_accounted});
     options.push_back({ "*",         "-smts, --split-mode-tensor-parallel-scheduling,", "Force Split Mode Tensor Parallel Scheduling (default: %d)", params.split_mode_tensor_parallel_scheduling});
     options.push_back({ "*",         "-sas,  --scheduler_async,",       "Async evaluation of compute graphs: %d)", params.scheduler_async});
+    options.push_back({ "*",         "-lp,   --lightweight-pipelining,", "Enable 1-split lookahead pipelining in sync path: %d)", params.lightweight_pipelining});
     options.push_back({ "*",         "-smc,  --sched-max-copies,",     "Max graph parallel copies (default: %d)", params.sched_max_copies});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
@@ -4915,6 +4920,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");
+    fprintf(stream, "lightweight_pipelining: %s # default: false\n", params.lightweight_pipelining ? "true" : "false");
     fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 
