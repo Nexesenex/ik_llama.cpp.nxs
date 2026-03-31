@@ -2721,7 +2721,7 @@ static bool llm_load_tensors(
         }
 
         if (bufs.empty()) {
-            LLAMA_LOG_WARN("No tensors in buffer type %s\n", ggml_backend_buft_name(buft));
+            LLAMA_LOG_WARN("No monolithic tensors in buffer type %s\n", ggml_backend_buft_name(buft));
             continue;
             //throw std::runtime_error("failed to allocate buffer (1)");
         }
