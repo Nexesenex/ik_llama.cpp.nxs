@@ -1233,7 +1233,14 @@ bool llama_model_loader::load_all_data(
             }
 
             GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
+#if defined(GGML_USE_CUDA)
+            // When pinmem=0 (default), no pinned memory is used, only use mmap optimization if tensor's buffer matches
+            // When pinmem=1 or 2, use original behavior that always uses mmap optimization
+            // This handles the case where tensor overrides redirect tensors to different buffer types
+            if (buf_mmap && cur->data == nullptr && (ggml_backend_cuda_get_pinmem() != 0 || cur->buffer == buf_mmap)) {
+#else
             if (buf_mmap && cur->data == nullptr) {
+#endif
                 ggml_backend_tensor_alloc(buf_mmap, cur, data);
                 if (lmlocks) {
                     const auto & lmlock = lmlocks->at(weight->idx);
@@ -1244,6 +1251,8 @@ bool llama_model_loader::load_all_data(
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
+                // Tensor buffer doesn't match mmap buffer (e.g., tensor override redirected it)
+                // Use direct load instead of mmap optimization
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }
         } else {
