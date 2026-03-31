@@ -60,6 +60,14 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_stream_k_thresh_for_device(int dev
 // Returns: 85 for 18-200GiB, 70 for 14-18GiB, 60 for 9-14GiB, 50 for 5-9GiB, 40 for <5GiB
 GGML_API GGML_CALL int ggml_backend_cuda_get_default_stream_k_thresh(int device_vram_gib);
 
+// Set pin_token_embd_only mode for pinned memory allocation (default: 0)
+// When set to 1: only token_embd uses pinned memory, CPU tensor overrides (-ot) use non-pinned allocation
+// When set to 0: all host buffers use pinned memory (default behavior)
+GGML_API GGML_CALL void ggml_backend_cuda_set_pinemb(int val);
+
+// Get current pin_token_embd_only setting
+GGML_API GGML_CALL bool ggml_backend_cuda_get_pin_token_embd_only(void);
+
 GGML_API GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_API GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
