@@ -17769,11 +17769,6 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 #undef MMID_MATRIX_ROW
 }
 
-struct ggml_mmid_row_mapping {
-    int32_t i1;
-    int32_t i2;
-};
-
 static void ggml_compute_forward_fused_moe_silu(
         const struct ggml_compute_params * params,
         struct ggml_tensor * node0,
@@ -17822,11 +17817,15 @@ static void ggml_compute_forward_fused_moe_silu(
 
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
+    const int64_t nr0 = ne01;
+    const int64_t nchunk0_calc = (nr0 + 64 - 1) / 64;
+    const int64_t nchunk0 = (nchunk0_calc < (int64_t)nth * 4 && !ggml_is_numa()) ? nchunk0_calc : nth;
+
     void * wdata_cur = params->wdata;
 
     const char * src1_q = (const char *) src1->data;
     if (src1->type != vec_dot_type) {
-        char * quant_base = (char *) ((int64_t)wdata_cur + GGML_PAD(ggml_row_size(vec_dot_type, ggml_nelements(src1)) + CACHE_LINE_SIZE, sizeof(int64_t))*nth);
+        char * quant_base = (char *) ((int64_t)wdata_cur + GGML_PAD(ggml_row_size(vec_dot_type, ggml_nelements(src1)) + CACHE_LINE_SIZE, sizeof(int64_t))*nchunk0);
 
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
         char * wdata = quant_base + ith * (ne11 * row_size + CACHE_LINE_SIZE);
@@ -17839,7 +17838,6 @@ static void ggml_compute_forward_fused_moe_silu(
     }
 
     wdata_cur = (char *)wdata_cur + GGML_PAD(n_as * sizeof(int64_t), sizeof(int64_t));
-    wdata_cur = (char *)wdata_cur + GGML_PAD(n_as * ids->ne[0] * ids->ne[1] * sizeof(struct ggml_mmid_row_mapping), sizeof(int64_t));
 
     char (*atomic_current_chunk)[CACHE_LINE_SIZE] = (char (*)[CACHE_LINE_SIZE])((char *)wdata_cur + CACHE_LINE_SIZE * n_as);
 
@@ -17847,20 +17845,12 @@ static void ggml_compute_forward_fused_moe_silu(
         for (int id = 0; id < n_ids; ++id) {
             const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + id*ids->nb[0]);
             atomic_int * ctr = (atomic_int *)(atomic_current_chunk + expert_idx);
-            atomic_store(ctr, nth);
+            atomic_store(ctr, (int)nchunk0);
         }
     }
 
     ggml_barrier(params->shared);
 
-    const int64_t nr0 = ne01;
-    const int chunk_size = 64;
-    const bool disable_chunking = ggml_is_numa();
-
-    int64_t nchunk0 = (nr0 + chunk_size - 1) / chunk_size;
-    if (nchunk0 < (int64_t)(nth * 4) || disable_chunking) {
-        nchunk0 = nth;
-    }
     const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
 
     for (int id = 0; id < n_ids; ++id) {
@@ -26881,8 +26871,10 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * src2->ne[2] * sizeof(int64_t); // matrix_rows
-                    if (src1 && src1->ne[2] == 1) {
-                        quant_buf = (quant_buf + CACHE_LINE_SIZE) * n_tasks;
+                    if (src2 && ggml_nrows(src2) == 1) {
+                        const int64_t nr0 = src0->ne[1];
+                        const int64_t nchunk0 = (nr0 + 64 - 1) / 64;
+                        quant_buf = (quant_buf + CACHE_LINE_SIZE) * (nchunk0 < n_tasks ? nchunk0 : n_tasks);
                     }
                     cur += quant_buf + sizeof(int64_t);
                 } break;
