@@ -2083,8 +2083,9 @@ static void launch_fattn_new_mma(
         const int nblocks_stream_k_raw = std::min(max_blocks, ntiles_KV*ntiles_dst);
 
         // Round down to a multiple of ntiles_dst so that each output tile gets the same number of blocks.
-        // Only do this if nblocks_stream_k_raw is at least 4x ntiles_dst to avoid excessive loss of occupancy
-        const int nblocks_stream_k = nblocks_stream_k_raw > 4 * ntiles_dst
+        // Only do this if nblocks_stream_k_raw is at least nblocks_stream_k_raw_thresh * ntiles_dst
+        const int nblocks_stream_k_raw_thresh = ggml_backend_cuda_get_nblocks_stream_k_raw_thresh();
+        const int nblocks_stream_k = nblocks_stream_k_raw > nblocks_stream_k_raw_thresh * ntiles_dst
             ? (nblocks_stream_k_raw / ntiles_dst) * ntiles_dst
             : nblocks_stream_k_raw;
 
