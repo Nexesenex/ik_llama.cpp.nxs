@@ -342,6 +342,7 @@ struct gpt_params {
     bool   kl_divergence    = false; // compute KL divergence
 
     bool usage             = false; // print usage
+    bool warn_invalid_params = false; // print warning for invalid params and continue
     bool use_color         = false; // use color to distinguish generations and inputs
     bool special           = false; // enable special token output
     bool interactive       = false; // interactive mode

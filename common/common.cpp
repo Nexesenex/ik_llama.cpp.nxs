@@ -447,9 +447,21 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
             std::replace(arg.begin(), arg.end(), '_', '-');
         }
         if (!gpt_params_find_arg(argc, argv, arg, params, i, invalid_param)) {
+            if (params.warn_invalid_params) {
+                fprintf(stderr, "\nwarning: unknown argument: %s\n", arg.c_str());
+                gpt_params_print_usage(argc, argv, params);
+                invalid_param = false;
+                continue;
+            }
             throw std::invalid_argument("error: unknown argument: " + arg);
         }
         if (invalid_param) {
+            if (params.warn_invalid_params) {
+                fprintf(stderr, "\nwarning: invalid parameter for argument: %s\n", arg.c_str());
+                gpt_params_print_usage(argc, argv, params);
+                invalid_param = false;
+                continue;
+            }
             throw std::invalid_argument("error: invalid parameter for argument: " + arg);
         }
     }
@@ -1995,6 +2007,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.dry_run = true;
         return true;
     }
+    if (arg == "--warn-invalid-params") {
+        params.warn_invalid_params = true;
+        return true;
+    }
     if (arg == "--in-prefix-bos") {
         params.input_prefix_bos = true;
         params.enable_chat_template = false;
@@ -2516,6 +2532,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --verbosity N",          "set specific verbosity level (default: %d)", params.verbosity });
     options.push_back({ "*",           "       --verbose-prompt",       "print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false" });
     options.push_back({ "*",           "-dr,   --dry-run",       "skip loading tensors in the files"});
+    options.push_back({ "*",           "       --warn-invalid-params", "print warning and continue on invalid parameters (default: %s)", params.warn_invalid_params ? "true" : "false" });
     options.push_back({ "*",           "       --no-display-prompt",    "don't print prompt at generation (default: %s)", !params.display_prompt ? "true" : "false" });
     options.push_back({ "*",           "-co,   --color",                "colorise output to distinguish prompt and user input from generations (default: %s)", params.use_color ? "true" : "false" });
     options.push_back({ "*",           "-s,    --seed SEED",            "RNG seed (default: %d, use random seed for < 0)", params.seed });
