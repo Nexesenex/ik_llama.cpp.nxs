@@ -69,6 +69,13 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_stream_k_thresh_for_device(int dev
 // Returns: 85 for 18-200GiB, 70 for 14-18GiB, 60 for 9-14GiB, 50 for 5-9GiB, 40 for <5GiB
 GGML_API GGML_CALL int ggml_backend_cuda_get_default_stream_k_thresh(int device_vram_gib);
 
+// Get nblocks_stream_k_raw threshold multiplier (default 4)
+GGML_API GGML_CALL int ggml_backend_cuda_get_nblocks_stream_k_raw_thresh(void);
+
+// Set nblocks_stream_k_raw threshold multiplier (1-64)
+// Controls when nblocks_stream_k rounds down to multiple of ntiles_dst
+// nblocks_stream_k > X * ntiles_dst triggers rounding
+GGML_API GGML_CALL void ggml_backend_cuda_set_nblocks_stream_k_raw_thresh(int thresh);
 GGML_API GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_API GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
