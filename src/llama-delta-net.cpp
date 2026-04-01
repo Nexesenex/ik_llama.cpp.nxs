@@ -532,13 +532,16 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
                 gated_output = ggml_add(ctx0, gated_output, input);
                 input_added = true;
             }
-            if (gated_output->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+            if (lctx.cparams.reduce_type != GGML_TYPE_F32 && gated_output->type != lctx.cparams.reduce_type) {
                 gated_output = ggml_cast(ctx0, gated_output, lctx.cparams.reduce_type);
             }
             ggml_build_forward_expand(gf, gated_output);
             results[id] = gated_output;
         }
         auto cur = ggml_reduce(ctx0, results.data(), n_device, GGML_OP_ADD);
+        if (lctx.cparams.reduce_type != GGML_TYPE_F32 && cur->type != lctx.cparams.reduce_type) {
+            cur = ggml_cast(ctx0, cur, lctx.cparams.reduce_type);
+        }
         ggml_build_forward_expand(gf, cur);
         return cur;
     }
