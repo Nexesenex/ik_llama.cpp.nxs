@@ -798,7 +798,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
                 // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
                 ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
             }
-            if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+            if (lctx.cparams.reduce_type != GGML_TYPE_F32 && cur->type != lctx.cparams.reduce_type) {
                 cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type);
             }
             if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1) {
@@ -824,6 +824,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             cb(ffn[id_last], "ffn_with_inp", il);
         }
         auto cur = ggml_reduce(ctx, ffn.data(), u->n_device, GGML_OP_ADD);
+        if (lctx.cparams.reduce_type != GGML_TYPE_F32 && cur->type != lctx.cparams.reduce_type) {
+            cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type);
+        }
         cb(cur, "ffn_combined", il);
         ggml_build_forward_expand(graph, cur);
         return cur;
@@ -1369,7 +1372,7 @@ llm_expert_gating_func_type   gating_op,
                         shared_out = ggml_add(ctx, shared_out, routed_out);
                         cb(shared_out, "ffn_shared_routed_added", il);
                     }
-                    if (shared_out->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+                    if (lctx.cparams.reduce_type != GGML_TYPE_F32 && shared_out->type != lctx.cparams.reduce_type) {
                         shared_out = ggml_cast(ctx, shared_out, lctx.cparams.reduce_type);
                     }
                     ggml_build_forward_expand(graph, shared_out);
@@ -1378,6 +1381,9 @@ llm_expert_gating_func_type   gating_op,
                 }
                 GGML_ASSERT(!results.empty());
                 cur = ggml_reduce(ctx, results.data(), split_up_shexp->n_device, GGML_OP_ADD);
+                if (lctx.cparams.reduce_type != GGML_TYPE_F32 && cur->type != lctx.cparams.reduce_type) {
+                    cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type);
+                }
                 cb(cur, "ffn_out", il);
             } else {
                 auto shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
@@ -1487,9 +1493,8 @@ llm_expert_gating_func_type   gating_op,
         } else {
             cur = routed_out;
         }
-        if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+        if (lctx.cparams.reduce_type != GGML_TYPE_F32 && cur->type != lctx.cparams.reduce_type) {
             cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type);
-            cb(cur, "ffn_out_f16", il_cb);
         }
         ggml_build_forward_expand(graph, cur);
         results[id] = cur;
@@ -1503,6 +1508,9 @@ llm_expert_gating_func_type   gating_op,
     }
 
     auto cur = ggml_reduce(ctx, results.data(), n_device, GGML_OP_ADD);
+    if (lctx.cparams.reduce_type != GGML_TYPE_F32 && cur->type != lctx.cparams.reduce_type) {
+        cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type);
+    }
     cb(cur, "moe_ffn_combined", il);
     ggml_build_forward_expand(graph, cur);
 
@@ -9378,7 +9386,7 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                     input_added = true;
                 }
 
-                if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+                if (lctx.cparams.reduce_type != GGML_TYPE_F32 && cur->type != lctx.cparams.reduce_type) {
                     cur = ggml_cast(ctx0, cur, lctx.cparams.reduce_type);
                 }
                 ggml_build_forward_expand(gf, cur);
@@ -9386,6 +9394,9 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
             }
 
             cur = ggml_reduce(ctx0, attn.data(), n_device, GGML_OP_ADD);
+            if (lctx.cparams.reduce_type != GGML_TYPE_F32 && cur->type != lctx.cparams.reduce_type) {
+                cur = ggml_cast(ctx0, cur, lctx.cparams.reduce_type);
+            }
             ggml_build_forward_expand(gf, cur);
             cb(cur, "attn_combined", il);
 
@@ -10224,7 +10235,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     cb(cur, "kqv_wo_biased", il_cb);
                     output_bias_added = true;
                 }
-                if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+                if (lctx.cparams.reduce_type != GGML_TYPE_F32 && cur->type != lctx.cparams.reduce_type) {
                     cur = ggml_cast(ctx0, cur, lctx.cparams.reduce_type);
                 }
                 ggml_build_forward_expand(gf, cur);
@@ -10242,6 +10253,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             }
 
             auto cur = ggml_reduce(ctx0, attn.data(), wq->n_device, GGML_OP_ADD);
+            if (lctx.cparams.reduce_type != GGML_TYPE_F32 && cur->type != lctx.cparams.reduce_type) {
+                cur = ggml_cast(ctx0, cur, lctx.cparams.reduce_type);
+            }
             ggml_build_forward_expand(gf, cur);
             cb(cur, "attn_combined", il);
             return cur;
