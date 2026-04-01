@@ -505,6 +505,7 @@ static int ggml_cuda_lock_counter = 0;
 static std::string ggml_cuda_user_cslq; // User-provided CUDA_SCALE_LAUNCH_QUEUES from -cuda cslq=X
 static int ggml_cuda_user_stream_k_thresh[GGML_CUDA_MAX_DEVICES] = {}; // Per-device stream-k threshold (0 = use default 75)
 static int ggml_cuda_user_stream_k_thresh_global = 75; // Global default if not set per-device
+static int ggml_cuda_user_nblocks_stream_k_raw_thresh = 4; // Threshold multiplier for nblocks_stream_k rounding (default 4)
 static bool ggml_cuda_pin_token_embd_only = false; // When true, only pin token_embd, skip pinning for CPU tensor overrides
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
@@ -4921,6 +4922,7 @@ struct cuda_params {
     bool enable_p2p = true;
     std::string cslq; // CUDA_SCALE_LAUNCH_QUEUES: "1x", "2x", "4x"
     int stream_k_thresh = 75; // Stream-k efficiency threshold: 0-100
+    int nblocks_stream_k_raw_thresh = 4; // Threshold multiplier for nblocks_stream_k rounding: 1-64
     int pinemb = 0; // pin_token_embd_only: 0=pin all host buffers, 1=pin only token_embd
 };
 
@@ -4998,6 +5000,13 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                     is_good = false;
                 }
             }
+            else if (parsed[0] == "nblocks_stream_k_raw_thresh") {
+                is_good = read_value(parsed[1], params.nblocks_stream_k_raw_thresh);
+                if (!is_good || params.nblocks_stream_k_raw_thresh < 1 || params.nblocks_stream_k_raw_thresh > 64) {
+                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [1...64]\n", __func__, parsed[0].c_str(), params.nblocks_stream_k_raw_thresh);
+                    is_good = false;
+                }
+            }
             else if (parsed[0] == "pinemb") {
                 is_good = read_value(parsed[1], params.pinemb);
                 if (!is_good || params.pinemb < 0 || params.pinemb > 1) {
@@ -5046,6 +5055,11 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
                 ggml_cuda_user_stream_k_thresh[i] = params.stream_k_thresh;
             }
             GGML_CUDA_LOG_INFO("=========================== %s: setting stream_k_thresh to %d\n", __func__, params.stream_k_thresh);
+        }
+        // Store user-provided nblocks_stream_k_raw_thresh for use in FA kernel
+        if (params.nblocks_stream_k_raw_thresh != 4) {
+            ggml_cuda_user_nblocks_stream_k_raw_thresh = params.nblocks_stream_k_raw_thresh;
+            GGML_CUDA_LOG_INFO("=========================== %s: setting nblocks_stream_k_raw_thresh to %d\n", __func__, params.nblocks_stream_k_raw_thresh);
         }
         // Store user-provided pinemb for use in buffer type allocation
         if (params.pinemb != 0) {
@@ -5227,6 +5241,19 @@ GGML_CALL int ggml_backend_cuda_get_default_stream_k_thresh(int device_vram_gib)
         return 50;  // RTX 3050 (6-8 GiB)
     } else {
         return 40;  // Very small GPUs (< 5 GiB)
+    }
+}
+
+GGML_CALL int ggml_backend_cuda_get_nblocks_stream_k_raw_thresh(void) {
+    return ggml_cuda_user_nblocks_stream_k_raw_thresh;
+}
+
+GGML_CALL void ggml_backend_cuda_set_nblocks_stream_k_raw_thresh(int thresh) {
+    if (thresh >= 1 && thresh <= 10) {
+        ggml_cuda_user_nblocks_stream_k_raw_thresh = thresh;
+        GGML_CUDA_LOG_INFO("=========================== ggml_backend_cuda_set_nblocks_stream_k_raw_thresh: setting to %d\n", thresh);
+    } else {
+        GGML_CUDA_LOG_WARN("ggml_backend_cuda_set_nblocks_stream_k_raw_thresh: invalid value %d, must be in [1,64], keeping %d\n", thresh, ggml_cuda_user_nblocks_stream_k_raw_thresh);
     }
 }
 
