@@ -747,6 +747,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.top_k = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "-mc" || arg == "--max-candidates") {
+        CHECK_ARG
+        sparams.max_candidates = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "-c" || arg == "--ctx-size") {
         CHECK_ARG
         params.n_ctx = std::stoi(argv[i]);
@@ -2586,6 +2591,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --penalize-nl",          "penalize newline tokens (default: %s)", sparams.penalize_nl ? "true" : "false" });
     options.push_back({ "*",           "       --temp N",               "temperature (default: %.1f)", (double)sparams.temp });
     options.push_back({ "*",           "       --top-k N",              "top-k sampling (default: %d, 0 = disabled)", sparams.top_k });
+    options.push_back({ "*",           "       --max-candidates N",     "max candidates to keep as prefilter (default: %d, 0 = disabled)", sparams.max_candidates });
     options.push_back({ "*",           "       --top-p N",              "top-p sampling (default: %.1f, 1.0 = disabled)", (double)sparams.top_p });
     options.push_back({ "*",           "       --min-p N",              "min-p sampling (default: %.1f, 0.0 = disabled)", (double)sparams.min_p });
     options.push_back({ "*",           "       --tfs N",                "tail free sampling, parameter z (default: %.1f, 1.0 = disabled)", (double)sparams.tfs_z });
