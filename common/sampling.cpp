@@ -331,6 +331,11 @@ static void sampler_queue(
     common_sampler * ctx_sampling,
     llama_token_data_array& cur_p,
     size_t   min_keep) {
+    const int32_t max_candidates = params.max_candidates;
+    if (max_candidates > 0) {
+        llama_sample_top_k(ctx_main, &cur_p, max_candidates, 1);
+    }
+
     const float         temp = params.temp;
     const float         dynatemp_range = params.dynatemp_range;
     const float         dynatemp_exponent = params.dynatemp_exponent;
@@ -393,6 +398,11 @@ static llama_token llama_sampling_sample_impl(
     std::vector<float> original_logits;
     llama_sampling_prepare(ctx_sampling, ctx_main, ctx_cfg, idx, /* apply_grammar= */ is_resampling, &original_logits);
     llama_token_data_array & cur_p = ctx_sampling->cur_p;
+    const int32_t max_candidates = params.max_candidates;
+    if (max_candidates > 0) {
+        llama_sample_top_k(ctx_main, &cur_p, max_candidates, 1);
+    }
+
     if (ctx_sampling->grammar != NULL && !is_resampling) {
         GGML_ASSERT(!original_logits.empty());
     }
