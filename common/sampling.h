@@ -84,6 +84,7 @@ inline bool common_grammar_needs_prefill(const common_grammar & g) {
 
 #define X_COMMON_PARAMS_SAMPLING                                 /*  \
     */  X( int32_t , min_keep            , 0     , std::round )  /*  0 = disabled, otherwise samplers should return at least min_keep tokens \
+    */  X( int32_t , max_candidates      , 0     , std::round )  /*  0 = disabled, otherwise maximum candidates to keep after prefilter \
     */  X( int32_t , top_k               , 40    , std::round )  /*  <= 0 to use vocab size \
     */  X( float   , top_p               , 0.95f ,            )  /*  1.0 = disabled \
     */  X( float   , min_p               , 0.05f ,            )  /*  0.0 = disabled \
