@@ -359,6 +359,20 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
 
 static std::vector<int> create_split(int nr, int granularity, const std::vector<float> & splits, const std::vector<size_t> & mem_used,
         const std::vector<size_t> & vram_free, const std::vector<size_t> & vram_total, float split_tensor_split_factor, float split_vram_free_factor, float split_usage_penalty_factor, bool verbose = false) {
+    // VRAM allocation tracking:
+    // - vram_total[i]: constant total VRAM of GPU i
+    // - mem_used[i]: model tensors currently assigned to GPU i (accumulates during loading)
+    // - vram_free[i]: current free VRAM on GPU i (initially from CUDA, adjusted when monolithic output is accounted)
+    //
+    // Key relationships:
+    // - At start: vram_free[i] = initial free VRAM from CUDA
+    // - After accounting for output: vram_free[i] -= output_size (line 4163)
+    // - At any point: remaining_vram[i] = vram_total[i] - mem_used[i]
+    // - For logging: vram_free[i] tracks current free VRAM (what CUDA reports after allocations)
+    //
+    // Note: vram_free and (vram_total - mem_used) may differ during loading because
+    // vram_free reflects actual CUDA state while vram_total - mem_used tracks our allocation.
+    // We use vram_total - mem_used for ceiling/remaining_ratio calculations for consistency.
     GGML_ASSERT(nr % granularity == 0);
     GGML_ASSERT(!splits.empty());
     if (granularity < 0) return std::vector<int>(splits.size(), nr);
@@ -386,7 +400,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
         float p0 = p;
         p += (p - 1.f*mem_used[i]/tot_memory_used);
         if (split_tensor_split_factor != 1.0f || split_vram_free_factor != 0.0f || split_usage_penalty_factor != 0.0f) {
-            float remaining_ratio = (vram_free[i] - mem_used[i]) / float(tot_vram_total);
+            float remaining_ratio = (vram_total[i] - mem_used[i]) / float(tot_vram_total);
             float usage_penalty = 1.f * mem_used[i] / tot_memory_used;
             p = p * split_tensor_split_factor + remaining_ratio * split_vram_free_factor - usage_penalty * split_usage_penalty_factor;
         }
@@ -420,7 +434,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
                 float p = splits[i] - last_split;
                 p += (p - 1.f*mem_used[i]/tot_memory_used);
                 if (split_tensor_split_factor != 1.0f || split_vram_free_factor != 0.0f || split_usage_penalty_factor != 0.0f) {
-                    float remaining_ratio = (vram_free[i] - mem_used[i]) / float(tot_vram_total);
+                    float remaining_ratio = (vram_total[i] - mem_used[i]) / float(tot_vram_total);
                     float usage_penalty = 1.f * mem_used[i] / tot_memory_used;
                     p = p * split_tensor_split_factor + remaining_ratio * split_vram_free_factor - usage_penalty * split_usage_penalty_factor;
                 }
@@ -459,7 +473,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
             float p = splits[i] - last_split;
             p += (p - 1.f*mem_used[i]/tot_memory_used);
             if (split_tensor_split_factor != 1.0f || split_vram_free_factor != 0.0f || split_usage_penalty_factor != 0.0f) {
-                float remaining_ratio = (vram_free[i] - mem_used[i]) / float(tot_vram_total);
+                float remaining_ratio = (vram_total[i] - mem_used[i]) / float(tot_vram_total);
                 float usage_penalty = 1.f * mem_used[i] / tot_memory_used;
                 p = p * split_tensor_split_factor + remaining_ratio * split_vram_free_factor - usage_penalty * split_usage_penalty_factor;
             }
@@ -4191,8 +4205,8 @@ bool create_tensors_helper::create_tensors() {
         LLAMA_LOG_INFO("================================ split_usage_penalty_factor = %.2f (neutral: 0.0, ventilation: 1.0)\n", model.split_usage_penalty_factor);
         std::vector<int> mirror(model.splits.size(), 1);
         std::vector<size_t> mem_used(model.splits.size(), 0);
-        std::vector<size_t> vram_free(model.splits.size(), 0);
-        std::vector<size_t> vram_total(model.splits.size(), 0);
+        std::vector<size_t> vram_free(model.splits.size(), 0); // tracks current free VRAM (adjusted during loading)
+        std::vector<size_t> vram_total(model.splits.size(), 0); // constant total VRAM per GPU
 #if defined(GGML_USE_CUDA)
         for (int i = 0; i < int(model.splits.size()); ++i) {
             size_t free; size_t total;
