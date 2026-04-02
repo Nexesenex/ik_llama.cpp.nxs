@@ -5477,9 +5477,9 @@ bool create_tensors_helper::create_tensors() {
                         }
                     }
                     if (!ok) {
-                        LLAMA_LOG_INFO("=== exp/shexp mismatch in layer %d\n", il);
-                        LLAMA_LOG_INFO("    experts:"); for (auto& s : ffn_split) LLAMA_LOG_INFO(" %d", s); LLAMA_LOG_INFO("\n");
-                        LLAMA_LOG_INFO(" sh_experts:"); for (auto& s : split    ) LLAMA_LOG_INFO(" %d", s); LLAMA_LOG_INFO("\n");
+                        fprintf(stderr, "=== exp/shexp mismatch in layer %d\n", il);
+                        fprintf(stderr, "    experts:"); for (auto& s : ffn_split) fprintf(stderr, " %d", s); fprintf(stderr, "\n");
+                        fprintf(stderr, " sh_experts:"); for (auto& s : split    ) fprintf(stderr, " %d", s); fprintf(stderr, "\n");
                         std::vector<float> aux(ffn_split.size());
                         float sum = 0;
                         for (int j = 0; j < int(ffn_split.size()); ++j) {
@@ -5488,7 +5488,7 @@ bool create_tensors_helper::create_tensors() {
                         }
                         for (auto& s : aux) s /= sum;
                         split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, aux, mem_used);
-                        LLAMA_LOG_INFO("        new:"); for (auto& s : split    ) LLAMA_LOG_INFO(" %d", s); LLAMA_LOG_INFO("\n");
+                        fprintf(stderr, "        new:"); for (auto& s : split    ) fprintf(stderr, " %d", s); fprintf(stderr, "\n");
                     } else {
                         LLAMA_LOG_DEBUG("  split_ffn_shexps:"); for ([[maybe_unused]] auto s : split) LLAMA_LOG_DEBUG(" %d", s);
                         LLAMA_LOG_DEBUG("\n");
