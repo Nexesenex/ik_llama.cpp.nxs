@@ -2230,6 +2230,11 @@ static bool llm_load_tensors(
         float split_vram_free_factor,
         float split_usage_penalty_factor,
         const float * tensor_split,
+        const float * ssm_split,
+        const float * shexp_split,
+        const float * attn_split,
+        const float * norm_split,
+        const float * all_but_exps_split,
         ggml_type cache_type_k,
         ggml_type cache_type_v,
         uint32_t max_ctx_size,
@@ -2358,6 +2363,23 @@ static bool llm_load_tensors(
         model.splits = std::move(splits);
     } else {
         model.splits = { 1.0f };
+    }
+
+    // Copy selective split vectors to model if provided
+    if (ssm_split) {
+        model.ssm_split.assign(ssm_split, ssm_split + model.splits.size());
+    }
+    if (shexp_split) {
+        model.shexp_split.assign(shexp_split, shexp_split + model.splits.size());
+    }
+    if (attn_split) {
+        model.attn_split.assign(attn_split, attn_split + model.splits.size());
+    }
+    if (norm_split) {
+        model.norm_split.assign(norm_split, norm_split + model.splits.size());
+    }
+    if (all_but_exps_split) {
+        model.all_but_exps_split.assign(all_but_exps_split, all_but_exps_split + model.splits.size());
     }
 
     int device_count = model.splits.size();
@@ -2961,6 +2983,11 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             params.split_vram_free_factor,
             params.split_usage_penalty_factor,
             params.tensor_split,
+            params.ssm_split,
+            params.shexp_split,
+            params.attn_split,
+            params.norm_split,
+            params.all_but_exps_split,
             params.type_k,
             params.type_v,
             params.max_ctx_size,
@@ -4982,6 +5009,11 @@ struct llama_model_params llama_model_default_params() {
         /*.fit                         =*/ false,
         /*.worst_graph_tokens          =*/ 0,
         /*.tensor_split                =*/ nullptr,
+        /*.ssm_split                   =*/ nullptr,
+        /*.shexp_split                 =*/ nullptr,
+        /*.attn_split                  =*/ nullptr,
+        /*.norm_split                  =*/ nullptr,
+        /*.all_but_exps_split          =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,

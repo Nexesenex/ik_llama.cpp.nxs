@@ -484,6 +484,12 @@ struct llama_model {
     ggml_backend_buffer_type_t default_buffer_type_offload(int device) const;
 
     std::vector<float> splits;
+    // Selective split vectors: if empty, use default splits
+    std::vector<float> ssm_split;   // SSM/recurrent tensors
+    std::vector<float> shexp_split;  // Shared expert tensors
+    std::vector<float> attn_split;   // Attention tensors
+    std::vector<float> norm_split;   // Norm tensors
+    std::vector<float> all_but_exps_split; // All tensors except experts
     ggml_backend_buffer_type_t split_buft = nullptr;
 };
 

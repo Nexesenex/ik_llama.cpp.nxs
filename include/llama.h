@@ -390,6 +390,16 @@ extern "C" {
 
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
+        // selective split: split SSM/recurrent tensors only on specific GPUs
+        const float * ssm_split;
+        // selective split: split shared expert tensors only on specific GPUs
+        const float * shexp_split;
+        // selective split: split attention tensors only on specific GPUs
+        const float * attn_split;
+        // selective split: split norm tensors only on specific GPUs
+        const float * norm_split;
+        // selective split: all tensors except experts on specific GPUs
+        const float * all_but_exps_split;
 
         // comma separated list of RPC servers to use for offloading
         const char * rpc_servers;

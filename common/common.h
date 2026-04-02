@@ -260,6 +260,11 @@ struct gpt_params {
     bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)
     int32_t worst_graph_tokens    =       0; // number of tokens to use when reserving the worst graph
     float   tensor_split[128]     =     {0}; // how split tensors should be distributed across GPUs
+    float   ssm_split[128]        =     {0}; // selective split for SSM/recurrent tensors
+    float   shexp_split[128]      =     {0}; // selective split for shared expert tensors
+    float   attn_split[128]       =     {0}; // selective split for attention tensors
+    float   norm_split[128]       =     {0}; // selective split for norm tensors
+    float   all_but_exps_split[128] = {0}; // selective split for all but expert tensors
     int32_t grp_attn_n            =       1; // group-attention factor
     int32_t grp_attn_w            =     512; // group-attention width
     int32_t n_print               =      -1; // print token count every n tokens (-1 = disabled)

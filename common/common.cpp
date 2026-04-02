@@ -1510,6 +1510,121 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
 #endif // GGML_USE_CUDA_SYCL_VULKAN
         return true;
     }
+    // Selective split: split SSM/recurrent tensors only on specific GPUs
+    else if (arg == "--ssm-split" || arg == "-ssms") {
+        CHECK_ARG
+        std::string arg_next = argv[i];
+        const std::regex regex{ R"([,/]+)" };
+        std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
+        std::vector<std::string> split_arg{ it, {} };
+        if (split_arg.size() >= llama_max_devices()) {
+            invalid_param = true;
+            return true;
+        }
+        for (size_t j = 0; j < llama_max_devices(); ++j) {
+            if (j < split_arg.size()) {
+                params.ssm_split[j] = std::stof(split_arg[j]);
+            } else {
+                params.ssm_split[j] = 0.0f;
+            }
+        }
+#ifndef GGML_USE_CUDA_SYCL_VULKAN
+        fprintf(stderr, "warning: llama.cpp was compiled without CUDA/SYCL/Vulkan. Setting a ssm split has no effect.\n");
+#endif // GGML_USE_CUDA_SYCL_VULKAN
+        return true;
+    }
+    // Selective split: split shared expert tensors only on specific GPUs
+    else if (arg == "--shexp-split" || arg == "-shs") {
+        CHECK_ARG
+        std::string arg_next = argv[i];
+        const std::regex regex{ R"([,/]+)" };
+        std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
+        std::vector<std::string> split_arg{ it, {} };
+        if (split_arg.size() >= llama_max_devices()) {
+            invalid_param = true;
+            return true;
+        }
+        for (size_t j = 0; j < llama_max_devices(); ++j) {
+            if (j < split_arg.size()) {
+                params.shexp_split[j] = std::stof(split_arg[j]);
+            } else {
+                params.shexp_split[j] = 0.0f;
+            }
+        }
+#ifndef GGML_USE_CUDA_SYCL_VULKAN
+        fprintf(stderr, "warning: llama.cpp was compiled without CUDA/SYCL/Vulkan. Setting a shexp split has no effect.\n");
+#endif // GGML_USE_CUDA_SYCL_VULKAN
+        return true;
+    }
+    // Selective split: split attention tensors only on specific GPUs
+    else if (arg == "--attn-split" || arg == "-ats") {
+        CHECK_ARG
+        std::string arg_next = argv[i];
+        const std::regex regex{ R"([,/]+)" };
+        std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
+        std::vector<std::string> split_arg{ it, {} };
+        if (split_arg.size() >= llama_max_devices()) {
+            invalid_param = true;
+            return true;
+        }
+        for (size_t j = 0; j < llama_max_devices(); ++j) {
+            if (j < split_arg.size()) {
+                params.attn_split[j] = std::stof(split_arg[j]);
+            } else {
+                params.attn_split[j] = 0.0f;
+            }
+        }
+#ifndef GGML_USE_CUDA_SYCL_VULKAN
+        fprintf(stderr, "warning: llama.cpp was compiled without CUDA/SYCL/Vulkan. Setting an attn split has no effect.\n");
+#endif // GGML_USE_CUDA_SYCL_VULKAN
+        return true;
+    }
+    // Selective split: split norm tensors only on specific GPUs
+    else if (arg == "--norm-split" || arg == "-nrs") {
+        CHECK_ARG
+        std::string arg_next = argv[i];
+        const std::regex regex{ R"([,/]+)" };
+        std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
+        std::vector<std::string> split_arg{ it, {} };
+        if (split_arg.size() >= llama_max_devices()) {
+            invalid_param = true;
+            return true;
+        }
+        for (size_t j = 0; j < llama_max_devices(); ++j) {
+            if (j < split_arg.size()) {
+                params.norm_split[j] = std::stof(split_arg[j]);
+            } else {
+                params.norm_split[j] = 0.0f;
+            }
+        }
+#ifndef GGML_USE_CUDA_SYCL_VULKAN
+        fprintf(stderr, "warning: llama.cpp was compiled without CUDA/SYCL/Vulkan. Setting a norm split has no effect.\n");
+#endif // GGML_USE_CUDA_SYCL_VULKAN
+        return true;
+    }
+    // Selective split: split all tensors except experts on specific GPUs
+    else if (arg == "--all-but-exps-split" || arg == "-abes") {
+        CHECK_ARG
+        std::string arg_next = argv[i];
+        const std::regex regex{ R"([,/]+)" };
+        std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
+        std::vector<std::string> split_arg{ it, {} };
+        if (split_arg.size() >= llama_max_devices()) {
+            invalid_param = true;
+            return true;
+        }
+        for (size_t j = 0; j < llama_max_devices(); ++j) {
+            if (j < split_arg.size()) {
+                params.all_but_exps_split[j] = std::stof(split_arg[j]);
+            } else {
+                params.all_but_exps_split[j] = 0.0f;
+            }
+        }
+#ifndef GGML_USE_CUDA_SYCL_VULKAN
+        fprintf(stderr, "warning: llama.cpp was compiled without CUDA/SYCL/Vulkan. Setting all-but-exps split has no effect.\n");
+#endif // GGML_USE_CUDA_SYCL_VULKAN
+        return true;
+    }
     if (arg == "--rpc") {
         CHECK_ARG
 #ifdef GGML_USE_RPC
@@ -2847,6 +2962,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "-stpf, --split-tensor-split-factor f", "factor for proportional split (neutral: 1.0, you can test: 0.75)", params.split_tensor_split_factor });
         options.push_back({ "*",           "-svff, --split-vram-free-factor f", "factor for VRAM availability (neutral: 0.0, you can test: 0.75)", params.split_vram_free_factor });
         options.push_back({ "*",           "-supf, --split-usage-penalty-factor f", "factor for memory usage penalty (neutral: 0.0, you can test: 0.25)", params.split_usage_penalty_factor });
+        options.push_back({ "*",           "-ssms, --ssm-split SPLIT",          "split SSM/recurrent tensors only on specific GPUs (default: all GPUs)" });
+        options.push_back({ "*",           "-shs,  --shexp-split SPLIT",         "split shared expert tensors only on specific GPUs (default: all GPUs)" });
+        options.push_back({ "*",           "-ats,  --attn-split SPLIT",          "split attention tensors only on specific GPUs (default: all GPUs)" });
     }
 
     options.push_back({ "model" });
@@ -3749,6 +3867,11 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.amb             = params.attn_max_batch;
     mparams.split_mode      = params.split_mode;
     mparams.tensor_split    = params.tensor_split;
+    mparams.ssm_split       = params.ssm_split;
+    mparams.shexp_split     = params.shexp_split;
+    mparams.attn_split      = params.attn_split;
+    mparams.norm_split     = params.norm_split;
+    mparams.all_but_exps_split = params.all_but_exps_split;
     mparams.use_mmap        = params.use_mmap;
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
@@ -4937,6 +5060,21 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
 
     const std::vector<float> tensor_split_vector(params.tensor_split, params.tensor_split + llama_max_devices());
     yaml_dump_vector_float(stream, "tensor_split", tensor_split_vector);
+
+    const std::vector<float> ssm_split_vector(params.ssm_split, params.ssm_split + llama_max_devices());
+    yaml_dump_vector_float(stream, "ssm_split", ssm_split_vector);
+
+    const std::vector<float> shexp_split_vector(params.shexp_split, params.shexp_split + llama_max_devices());
+    yaml_dump_vector_float(stream, "shexp_split", shexp_split_vector);
+
+    const std::vector<float> attn_split_vector(params.attn_split, params.attn_split + llama_max_devices());
+    yaml_dump_vector_float(stream, "attn_split", attn_split_vector);
+
+    const std::vector<float> norm_split_vector(params.norm_split, params.norm_split + llama_max_devices());
+    yaml_dump_vector_float(stream, "norm_split", norm_split_vector);
+
+    const std::vector<float> all_but_exps_split_vector(params.all_but_exps_split, params.all_but_exps_split + llama_max_devices());
+    yaml_dump_vector_float(stream, "all_but_exps_split", all_but_exps_split_vector);
 
     fprintf(stream, "tfs: %f # default: 1.0\n", sparams.tfs_z);
     fprintf(stream, "threads: %d # default: %u\n", params.n_threads, std::thread::hardware_concurrency());
