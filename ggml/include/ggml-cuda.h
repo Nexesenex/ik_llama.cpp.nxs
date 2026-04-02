@@ -38,6 +38,10 @@ GGML_API GGML_CALL int  ggml_backend_cuda_get_device_count(void);
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size);
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total);
 
+// Get device properties for compute-aware GPU selection
+// Returns: compute_capability (e.g. 86 for 8.6), memory_bandwidth_GB/s, num_sm, p2p_supported
+GGML_API GGML_CALL void ggml_backend_cuda_get_device_props(int device, int * compute_capability, size_t * memory_bandwidth_GBs, int * num_sm, bool * p2p_supported);
+
 // Set CUDA_SCALE_LAUNCH_QUEUES before buffer type init (must be called before any ggml_backend_cuda_buffer_type call)
 // Use: ggml_backend_cuda_set_cslq("2x") or ggml_backend_cuda_set_cslq("4x")
 GGML_API GGML_CALL void ggml_backend_cuda_set_cslq(const char * cslq);

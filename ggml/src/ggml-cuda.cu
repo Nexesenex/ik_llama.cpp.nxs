@@ -5126,6 +5126,38 @@ GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, si
     CUDA_CHECK(cudaMemGetInfo(free, total));
 }
 
+GGML_CALL void ggml_backend_cuda_get_device_props(int device, int * compute_capability, size_t * memory_bandwidth_GBs, int * num_sm, bool * p2p_supported) {
+    ggml_cuda_set_device(device);
+
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
+
+    if (compute_capability) {
+        *compute_capability = prop.major * 10 + prop.minor;
+    }
+    if (num_sm) {
+        *num_sm = prop.multiProcessorCount;
+    }
+    if (memory_bandwidth_GBs) {
+        // memoryBandwidth = (memoryBusWidth / 8) * memoryClockRate (in Hz) -> GB/s
+        // Use a typical value if not available, or compute from clock rate
+        *memory_bandwidth_GBs = (size_t)((prop.memoryBusWidth / 8.0) * prop.memoryClockRate / 1e6);
+    }
+    if (p2p_supported) {
+        *p2p_supported = false;
+#if CUDART_VERSION >= 4000
+        int peer_device = (device + 1) % ggml_backend_cuda_get_device_count();
+        if (peer_device != device) {
+            int can_access = 0;
+            cudaError_t err = cudaDeviceCanAccessPeer(&can_access, device, peer_device);
+            if (err == cudaSuccess) {
+                *p2p_supported = (can_access != 0);
+            }
+        }
+#endif
+    }
+}
+
 GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
     if (getenv("GGML_CUDA_REGISTER_HOST") == nullptr) {
         return false;
