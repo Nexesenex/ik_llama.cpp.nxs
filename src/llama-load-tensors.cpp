@@ -4239,8 +4239,9 @@ bool create_tensors_helper::create_tensors() {
                 continue;
             }
 
-            // Create a limited split for non-expert tensors when max_gpu_per_split > 1
-            // Non-expert tensors use (max_gpu_per_split - 1) GPUs, experts use all GPUs
+            // Create limited_splits: use (max_gpu_per_split - 1) fastest GPUs for non-expert tensors
+            // This is simpler than -abes and achieves the same result: keep non-experts on fewer GPUs
+            // Expert tensors (ffn_exps) use all GPUs via cur_splits
             std::vector<float> limited_splits;
             if (model.max_gpu_per_split > 1 && model.max_gpu_per_split <= int(cur_splits.size())) {
                 limited_splits = cur_splits;
@@ -4258,25 +4259,10 @@ bool create_tensors_helper::create_tensors() {
                 }
             }
 
+            // Adjust cur_splits at configured intervals
             if (model.max_gpu_per_split > 0 && model.max_gpu_per_split < int(model.splits.size()) && il % adjust_step == 0) {
                 cur_splits = model.splits;
                 adjust_split(cur_splits, mem_used, vram_free, vram_total, model.max_gpu_per_split, model.split_vram_free_factor > 0.0f);
-                // Update limited_splits with the adjusted cur_splits
-                if (model.max_gpu_per_split > 1 && model.max_gpu_per_split <= int(cur_splits.size())) {
-                    limited_splits = cur_splits;
-                    std::vector<std::pair<float, int>> sorted(limited_splits.size());
-                    for (int i = 0; i < int(limited_splits.size()); ++i) {
-                        sorted[i] = {limited_splits[i], i};
-                    }
-                    std::partial_sort(sorted.begin(), sorted.begin() + model.max_gpu_per_split - 1, sorted.end(), std::greater<std::pair<float,int>>{});
-                    for (auto & p : limited_splits) p = 0;
-                    for (int j = 0; j < model.max_gpu_per_split - 1; ++j) limited_splits[sorted[j].second] = 1;
-                    float sum = 0;
-                    for (auto & p : limited_splits) {
-                        sum += p/(model.max_gpu_per_split - 1);
-                        p = sum;
-                    }
-                }
                 LLAMA_LOG_INFO("Adjusted split at layer %2d:  ", il);
                 float last_split = 0;
                 for (int i = 0; i < (int)cur_splits.size(); ++i) {
@@ -4292,7 +4278,8 @@ bool create_tensors_helper::create_tensors() {
                 LLAMA_LOG_INFO("\n");
             }
 
-            // Use limited_splits for non-expert tensors, cur_splits for expert tensors
+            // Use limited_splits for non-expert tensors (attention, norm, rope, ffn, shexp, gate_inp)
+            // Expert tensors (ffn_exps) continue using cur_splits (all GPUs)
             const std::vector<float> & non_expert_splits = limited_splits.empty() ? cur_splits : limited_splits;
 
             LLAMA_LOG_DEBUG("=== Layer %2d. Mem used so far:", il);
