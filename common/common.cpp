@@ -1428,7 +1428,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
 #endif // GGML_USE_CUDA_SYCL_VULKAN
         return true;
     }
-    else if (arg == "--max-gpu-per-split") {
+    else if (arg == "--max-gpu-per-split" || arg == "-mgps") {
         CHECK_ARG
         params.max_gpu_per_split = std::stoi(argv[i]);
         return true;
@@ -2817,7 +2817,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                          "Example: CUDA0,CUDA1,RPC[192.168.0.1:8080]\n" });
         options.push_back({ "*",           "-mg,   --main-gpu i",       "the GPU to use for the model (with split-mode = none),\n"
                                                                         "or for intermediate results and KV (with split-mode = row) (default: %d)", params.main_gpu });
-        options.push_back({ "*",           "--max-gpu-per-split i",               "max. number of GPUs to use at a time with split mode 'tensor parallel', (default: %d)", params.max_gpu_per_split });
+        options.push_back({ "*",           "-mgps, --max-gpu-per-split i",        "max. number of GPUs to use at a time with split mode 'tensor parallel', (default: %d)", params.max_gpu_per_split });
         options.push_back({ "*",           "-sasf, --split-adjust-step-frequency f", "adjust every N layers (<1: legacy formula with 1/N, >=1: direct N) (default: %.1f)", params.split_adjust_step_frequency });
     }
 
