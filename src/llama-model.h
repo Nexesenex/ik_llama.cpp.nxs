@@ -410,6 +410,15 @@ struct llama_model {
     std::vector<int32_t> devices;
     std::vector<int32_t> default_layer_device;
 
+    // GPU properties for compute-aware split selection
+    struct gpu_props {
+        int compute_capability = 0;      // e.g., 86 for compute capability 8.6
+        size_t memory_bandwidth_GBs = 0;  // memory bandwidth in GB/s
+        int num_sm = 0;                   // number of streaming multiprocessors
+        bool p2p_supported = false;       // peer-to-peer access supported
+    };
+    std::vector<gpu_props> gpu_props;
+
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
 
