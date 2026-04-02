@@ -388,7 +388,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
     int min_vram_gpu_index = 0;
     size_t min_vram_gpu_vram_free = vram_free[0];
     for (int i = 0; i < (int)vram_free.size(); ++i) {
-        tot_vram_free += vram_free[i] - mem_used[i];
+        tot_vram_free += vram_free[i];
         if (vram_free[i] < min_vram_gpu_vram_free) { min_vram_gpu_vram_free = vram_free[i]; min_vram_gpu_index = i; }
     }
     int nchunk = nr / granularity;
