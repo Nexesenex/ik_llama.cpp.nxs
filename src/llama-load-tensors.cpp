@@ -4582,60 +4582,72 @@ bool create_tensors_helper::create_tensors() {
                                  split_tensors.find(layer.ffn_up_shexp)   != split_tensors.end();
                 if (use_split) {
                     std::vector<int> split;
-                    if (!ffn_split.empty() && ffn_split.size() > 1) {
-                        split = ffn_split;
-                    } else if (!ffn_split.empty()) {
-                        int ffn_granularity = 16;
-                        if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
-                            auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
-                            if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
-                        }
-                        std::vector<float> ratios(ffn_split.size());
-                        float sum = 0;
-                        for (int j = 0; j < int(ffn_split.size()); ++j) {
-                            sum += ffn_split[j];
-                            ratios[j] = sum;
-                        }
-                        for (auto& s : ratios) s /= sum;
-                        split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, ratios, mem_used, vram_free, vram_total,
-                            model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
-                    } else {
-                        int ffn_granularity = 16;
-                        if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
-                            auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
-                            if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
-                        }
-                        split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, cur_splits, mem_used, vram_free, vram_total,
-                            model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
-                        bool ok = true;
-                        if (!ffn_split.empty()) {
-                            ok = split.size() == ffn_split.size();
-                            if (ok) {
-                                for (int j = 0; j < int(ffn_split.size()); ++j) {
-                                    if ((split[j] == 0 && ffn_split[j] > 0) || (split[j] > 0 && ffn_split[j] == 0)) {
-                                        ok = false; break;
-                                    }
-                                }
+                    bool use_ratio = false;
+                    if (!ffn_split.empty() && ffn_split.size() > 1 && layer.ffn_down_exps) {
+                        int shexp_rows = layer.ffn_down_shexp->ne[0];
+                        int exp_rows = layer.ffn_down_exps->ne[0];
+                        if (exp_rows > 0 && shexp_rows % exp_rows == 0) {
+                            int ratio = shexp_rows / exp_rows;
+                            split.resize(ffn_split.size());
+                            for (size_t i = 0; i < ffn_split.size(); ++i) {
+                                split[i] = ffn_split[i] * ratio;
                             }
+                            use_ratio = true;
                         }
-                        if (!ok) {
-                            fprintf(stderr, "=== exp/shexp mismatch in layer %d\n", il);
-                            fprintf(stderr, "    experts:"); for (auto& s : ffn_split) fprintf(stderr, " %d", s); fprintf(stderr, "\n");
-                            fprintf(stderr, " sh_experts:"); for (auto& s : split    ) fprintf(stderr, " %d", s); fprintf(stderr, "\n");
-                            std::vector<float> aux(ffn_split.size());
+                    }
+                    if (!use_ratio) {
+                        if (!ffn_split.empty() && ffn_split.size() > 1) {
+                            split = ffn_split;
+                        } else if (!ffn_split.empty()) {
+                            int ffn_granularity = 16;
+                            if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
+                                auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
+                                if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
+                            }
+                            std::vector<float> ratios(ffn_split.size());
                             float sum = 0;
                             for (int j = 0; j < int(ffn_split.size()); ++j) {
                                 sum += ffn_split[j];
-                                aux[j] = sum;
+                                ratios[j] = sum;
                             }
-                            for (auto& s : aux) s /= sum;
-                            split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, aux, mem_used, vram_free, vram_total,
-                            model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
-                            fprintf(stderr, "        new:"); for (auto& s : split    ) fprintf(stderr, " %d", s); fprintf(stderr, "\n");
+                            for (auto& s : ratios) s /= sum;
+                            split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, ratios, mem_used, vram_free, vram_total,
+                                model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                         } else {
-                        LLAMA_LOG_DEBUG("  split_ffn_shexps:"); for ([[maybe_unused]] auto s : split) LLAMA_LOG_DEBUG(" %d", s);
-                        LLAMA_LOG_DEBUG("\n");
-                        } 
+                            int ffn_granularity = 16;
+                            if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
+                                auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
+                                if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
+                            }
+                            split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, cur_splits, mem_used, vram_free, vram_total,
+                                model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
+                            bool ok = true;
+                            if (!ffn_split.empty()) {
+                                ok = split.size() == ffn_split.size();
+                                if (ok) {
+                                    for (int j = 0; j < int(ffn_split.size()); ++j) {
+                                        if ((split[j] == 0 && ffn_split[j] > 0) || (split[j] > 0 && ffn_split[j] == 0)) {
+                                            ok = false; break;
+                                        }
+                                    }
+                                }
+                            }
+                            if (!ok) {
+                                fprintf(stderr, "=== exp/shexp mismatch in layer %d\n", il);
+                                fprintf(stderr, "    experts:"); for (auto& s : ffn_split) fprintf(stderr, " %d", s); fprintf(stderr, "\n");
+                                fprintf(stderr, " sh_experts:"); for (auto& s : split    ) fprintf(stderr, " %d", s); fprintf(stderr, "\n");
+                                std::vector<float> aux(ffn_split.size());
+                                float sum = 0;
+                                for (int j = 0; j < int(ffn_split.size()); ++j) {
+                                    sum += ffn_split[j];
+                                    aux[j] = sum;
+                                }
+                                for (auto& s : aux) s /= sum;
+                                split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, aux, mem_used, vram_free, vram_total,
+                                    model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
+                                fprintf(stderr, "        new:"); for (auto& s : split    ) fprintf(stderr, " %d", s); fprintf(stderr, "\n");
+                            }
+                        }
                     }
                     prepare_split_tensors(0, ctx_split, layer.ffn_down_shexp, layer.split_ffn_down_shexp, split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up_shexp,   layer.split_ffn_up_shexp,   split, mem_used);
@@ -4648,38 +4660,83 @@ bool create_tensors_helper::create_tensors() {
 
             if (layer.ffn_gate_inp) {
                 if (auto it = split_tensors.find(layer.ffn_gate_inp); it != split_tensors.end()) {
-                    std::vector<int> shared_split;
-                    if (!ffn_split.empty() && ffn_split.size() > 1) {
-                        shared_split = ffn_split;
-                    } else {
-                        shared_split = create_split(ggml_nrows(layer.ffn_gate_inp), -1, cur_splits, mem_used, vram_free, vram_total,
-                            model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
+                    std::vector<int> split;
+                    bool use_ratio = false;
+                    if (!ffn_split.empty() && ffn_split.size() > 1 && layer.ffn_down_exps) {
+                        int gate_rows = layer.ffn_gate_inp->ne[1];
+                        int exp_rows = layer.ffn_down_exps->ne[0];
+                        if (gate_rows > 0 && exp_rows > 0 && gate_rows % exp_rows == 0) {
+                            int ratio = gate_rows / exp_rows;
+                            split.resize(ffn_split.size());
+                            for (size_t i = 0; i < ffn_split.size(); ++i) {
+                                split[i] = ffn_split[i] * ratio;
+                            }
+                            use_ratio = true;
+                        }
                     }
-                    prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp, layer.split_ffn_gate_inp, shared_split, mem_used);
+                    if (!use_ratio) {
+                        if (!ffn_split.empty() && ffn_split.size() > 1) {
+                            split = ffn_split;
+                        } else {
+                            split = create_split(ggml_nrows(layer.ffn_gate_inp), -1, cur_splits, mem_used, vram_free, vram_total,
+                                model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
+                        }
+                    }
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp, layer.split_ffn_gate_inp, split, mem_used);
                 }
             }
             if (layer.ffn_gate_inp_b) {
                 if (auto it = split_tensors.find(layer.ffn_gate_inp_b); it != split_tensors.end()) {
-                    std::vector<int> shared_split;
-                    if (!ffn_split.empty() && ffn_split.size() > 1) {
-                        shared_split = ffn_split;
-                    } else {
-                        shared_split = create_split(ggml_nrows(layer.ffn_gate_inp_b), -1, cur_splits, mem_used, vram_free, vram_total,
-                            model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
+                    std::vector<int> split;
+                    bool use_ratio = false;
+                    if (!ffn_split.empty() && ffn_split.size() > 1 && layer.ffn_down_exps) {
+                        int gate_rows = layer.ffn_gate_inp_b->ne[0];
+                        int exp_rows = layer.ffn_down_exps->ne[0];
+                        if (gate_rows > 0 && exp_rows > 0 && gate_rows % exp_rows == 0) {
+                            int ratio = gate_rows / exp_rows;
+                            split.resize(ffn_split.size());
+                            for (size_t i = 0; i < ffn_split.size(); ++i) {
+                                split[i] = ffn_split[i] * ratio;
+                            }
+                            use_ratio = true;
+                        }
                     }
-                    prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp_b, layer.split_ffn_gate_inp_b, shared_split, mem_used);
+                    if (!use_ratio) {
+                        if (!ffn_split.empty() && ffn_split.size() > 1) {
+                            split = ffn_split;
+                        } else {
+                            split = create_split(ggml_nrows(layer.ffn_gate_inp_b), -1, cur_splits, mem_used, vram_free, vram_total,
+                                model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
+                        }
+                    }
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp_b, layer.split_ffn_gate_inp_b, split, mem_used);
                 }
             }
             if (layer.ffn_exp_probs_b) {
                 if (auto it = split_tensors.find(layer.ffn_exp_probs_b); it != split_tensors.end()) {
-                    std::vector<int> shared_split;
-                    if (!ffn_split.empty() && ffn_split.size() > 1) {
-                        shared_split = ffn_split;
-                    } else {
-                        shared_split = create_split(ggml_nrows(layer.ffn_exp_probs_b), -1, cur_splits, mem_used, vram_free, vram_total,
-                            model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
+                    std::vector<int> split;
+                    bool use_ratio = false;
+                    if (!ffn_split.empty() && ffn_split.size() > 1 && layer.ffn_down_exps) {
+                        int probs_rows = layer.ffn_exp_probs_b->ne[0];
+                        int exp_rows = layer.ffn_down_exps->ne[0];
+                        if (probs_rows > 0 && exp_rows > 0 && probs_rows % exp_rows == 0) {
+                            int ratio = probs_rows / exp_rows;
+                            split.resize(ffn_split.size());
+                            for (size_t i = 0; i < ffn_split.size(); ++i) {
+                                split[i] = ffn_split[i] * ratio;
+                            }
+                            use_ratio = true;
+                        }
                     }
-                    prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, shared_split, mem_used);
+                    if (!use_ratio) {
+                        if (!ffn_split.empty() && ffn_split.size() > 1) {
+                            split = ffn_split;
+                        } else {
+                            split = create_split(ggml_nrows(layer.ffn_exp_probs_b), -1, cur_splits, mem_used, vram_free, vram_total,
+                                model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
+                        }
+                    }
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, split, mem_used);
                 }
             }
 
