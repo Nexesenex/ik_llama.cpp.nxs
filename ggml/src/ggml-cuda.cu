@@ -9,6 +9,9 @@
 #include "ggml.h"
 #include "ggml-backend-impl.h"
 
+#include <set>
+#include <mutex>
+
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/arange.cuh"
@@ -507,6 +510,10 @@ static int ggml_cuda_user_stream_k_thresh[GGML_CUDA_MAX_DEVICES] = {}; // Per-de
 static int ggml_cuda_user_stream_k_thresh_global = 75; // Global default if not set per-device
 static int ggml_cuda_user_nblocks_stream_k_raw_thresh = 4; // Threshold multiplier for nblocks_stream_k rounding (default 4)
 static bool ggml_cuda_pin_token_embd_only = false; // When true, only pin token_embd, skip pinning for CPU tensor overrides
+static bool ggml_cuda_pinemb_logged = false; // Track if pinemb log has been printed
+static std::set<std::string> ggml_cuda_invalid_params_logged; // Track which invalid param names have been logged
+static std::set<std::string> ggml_cuda_init_params_logged; // Track which init param settings have been logged
+static std::mutex ggml_cuda_log_mutex; // Mutex for thread-safe logging
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)) {
@@ -5016,7 +5023,11 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
             }
         }
         if (!is_good) {
-            GGML_CUDA_LOG_WARN("%s: invalid parameter %s (%d) -> ignored\n", __func__, value.c_str(), (int)parsed.size());
+            std::lock_guard<std::mutex> lock(ggml_cuda_log_mutex);
+            if (ggml_cuda_invalid_params_logged.find(value) == ggml_cuda_invalid_params_logged.end()) {
+                ggml_cuda_invalid_params_logged.insert(value);
+                GGML_CUDA_LOG_WARN("%s: invalid parameter %s (%d) -> ignored\n", __func__, value.c_str(), (int)parsed.size());
+            }
         }
     }
     return params;
@@ -5041,12 +5052,15 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
     };
 
     bool enable_p2p = true;
+    static bool first_init = true;
     if (param_string) {
         [[maybe_unused]] auto params = ggml_cuda_parse_params((const char *)param_string);
         // Store user-provided cslq for use in buffer type init (must be set before first CUDA call)
         if (!params.cslq.empty()) {
             ggml_cuda_user_cslq = params.cslq;
-            GGML_CUDA_LOG_INFO("=========================== %s: setting CUDA_SCALE_LAUNCH_QUEUES to %s\n", __func__, params.cslq.c_str());
+            if (first_init) {
+                GGML_CUDA_LOG_INFO("=========================== %s: setting CUDA_SCALE_LAUNCH_QUEUES to %s\n", __func__, params.cslq.c_str());
+            }
         }
         // Store user-provided stream_k_thresh for use in FA kernel
         if (params.stream_k_thresh != 75) {
@@ -5054,40 +5068,55 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
             for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
                 ggml_cuda_user_stream_k_thresh[i] = params.stream_k_thresh;
             }
-            GGML_CUDA_LOG_INFO("=========================== %s: setting stream_k_thresh to %d\n", __func__, params.stream_k_thresh);
+            if (first_init) {
+                GGML_CUDA_LOG_INFO("=========================== %s: setting stream_k_thresh to %d\n", __func__, params.stream_k_thresh);
+            }
         }
         // Store user-provided nblocks_stream_k_raw_thresh for use in FA kernel
         if (params.nblocks_stream_k_raw_thresh != 4) {
             ggml_cuda_user_nblocks_stream_k_raw_thresh = params.nblocks_stream_k_raw_thresh;
-            GGML_CUDA_LOG_INFO("=========================== %s: setting nblocks_stream_k_raw_thresh to %d\n", __func__, params.nblocks_stream_k_raw_thresh);
+            if (first_init) {
+                GGML_CUDA_LOG_INFO("=========================== %s: setting nblocks_stream_k_raw_thresh to %d\n", __func__, params.nblocks_stream_k_raw_thresh);
+            }
         }
         // Store user-provided pinemb for use in buffer type allocation
         if (params.pinemb != 0) {
             ggml_backend_cuda_set_pinemb(params.pinemb);
         }
         if (params.fusion != ctx->fusion) {
-            GGML_CUDA_LOG_INFO(" =========================== %s: setting fusion to %d\n", __func__, params.fusion);
+            if (first_init) {
+                GGML_CUDA_LOG_INFO(" =========================== %s: setting fusion to %d\n", __func__, params.fusion);
+            }
             ctx->fusion             = params.fusion;
         }
         if (params.offload_batch_size != ctx->offload_batch_size) {
-            GGML_CUDA_LOG_INFO(" =========================== %s: setting offload_batch_size to %d\n", __func__, params.offload_batch_size);
+            if (first_init) {
+                GGML_CUDA_LOG_INFO(" =========================== %s: setting offload_batch_size to %d\n", __func__, params.offload_batch_size);
+            }
             ctx->offload_batch_size = params.offload_batch_size;
         }
         if (params.mmq_id_thresh != ctx->mmq_id_thresh) {
-            GGML_CUDA_LOG_INFO(" =========================== %s: setting mmq_id_thresh to %d\n", __func__, params.mmq_id_thresh);
+            if (first_init) {
+                GGML_CUDA_LOG_INFO(" =========================== %s: setting mmq_id_thresh to %d\n", __func__, params.mmq_id_thresh);
+            }
             ctx->mmq_id_thresh      = params.mmq_id_thresh;
         }
         if (params.fa_offset != ctx->fa_offset) {
-            GGML_CUDA_LOG_INFO(" =========================== %s: setting fa_offset to %g\n", __func__, params.fa_offset);
+            if (first_init) {
+                GGML_CUDA_LOG_INFO(" =========================== %s: setting fa_offset to %g\n", __func__, params.fa_offset);
+            }
             ctx->fa_offset = params.fa_offset;
         }
         enable_p2p = params.enable_p2p;
 #ifdef USE_CUDA_GRAPH
         if (params.use_cuda_graph != ctx->use_cuda_graph) {
-            GGML_CUDA_LOG_INFO(" =========================== %s: setting use_cuda_graph to %d\n", __func__, params.use_cuda_graph);
+            if (first_init) {
+                GGML_CUDA_LOG_INFO(" =========================== %s: setting use_cuda_graph to %d\n", __func__, params.use_cuda_graph);
+            }
             ctx->use_cuda_graph = params.use_cuda_graph;
         }
 #endif
+        first_init = false;
     }
 
 #ifdef GGML_USE_NCCL
@@ -5259,10 +5288,13 @@ GGML_CALL void ggml_backend_cuda_set_nblocks_stream_k_raw_thresh(int thresh) {
 
 GGML_CALL void ggml_backend_cuda_set_pinemb(int val) {
     ggml_cuda_pin_token_embd_only = (val != 0);
-    if (ggml_cuda_pin_token_embd_only) {
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinemb: pin_token_embd_only enabled - only token_embd will use pinned memory, CPU tensor overrides will use non-pinned allocation\n");
-    } else {
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinemb: pin_token_embd_only disabled - all host buffers will use pinned memory\n");
+    if (!ggml_cuda_pinemb_logged) {
+        ggml_cuda_pinemb_logged = true;
+        if (ggml_cuda_pin_token_embd_only) {
+            GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinemb: pin_token_embd_only enabled - only token_embd will use pinned memory, CPU tensor overrides will use non-pinned allocation\n");
+        } else {
+            GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinemb: pin_token_embd_only disabled - all host buffers will use pinned memory\n");
+        }
     }
 }
 
