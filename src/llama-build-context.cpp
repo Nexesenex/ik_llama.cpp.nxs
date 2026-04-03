@@ -7367,27 +7367,22 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
 }
 
 ggml_cgraph * llm_build_context::build_glm4_moe() {
-    LLAMA_LOG_INFO("build_glm4_moe: started\n");
     // create a new graph
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model, n_tokens), false);
 
     const int64_t n_embd_head = hparams.n_embd_head_v;
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
-    LLAMA_LOG_INFO("build_glm4_moe: n_embd_head=%lld\n", (long long)n_embd_head);
 
     ggml_tensor * cur;
 
     // position embeddings
     struct ggml_tensor * inp_pos = build_inp_pos();
-    LLAMA_LOG_INFO("build_glm4_moe: after build_inp_pos\n");
 
     auto rope_cache = model.split_mode != LLAMA_SPLIT_MODE_TENSOR_PARALLEL && cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
-    LLAMA_LOG_INFO("build_glm4_moe: after rope_cache\n");
 
     if (cparams.mtp_op_type != MTP_OP_NONE) {
-        LLAMA_LOG_INFO("build_glm4_moe: mtp_op_type not none\n");
         ggml_tensor* hidden_states_from_main_model;
 
         if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
@@ -7404,30 +7399,24 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
         const auto & mtp_layer = model.layers[il_mtp];
 
         cur = build_mtp_tail(mtp_layer, hidden_states_from_main_model, n_embd_head, gf, inp_pos, rope_cache);
-        LLAMA_LOG_INFO("build_glm4_moe: after build_mtp_tail\n");
 
     } else {
         struct ggml_tensor * inpL;
 
         // input embeddings
         inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
-        LLAMA_LOG_INFO("build_glm4_moe: after llm_build_inp_embd\n");
 
         struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
-        LLAMA_LOG_INFO("build_glm4_moe: after build_inp_KQ_mask\n");
 
         // output token IDs (for last layer cropping)
         struct ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp) ? build_inp_out_ids() : nullptr;
-        LLAMA_LOG_INFO("build_glm4_moe: after build_inp_out_ids\n");
 
         float kq_scale = 1.0f/sqrtf(float(n_embd_head));
 
         // Only process up to last layer (skip final NextN layer)
         // Final layer tensors are loaded but not processed in forward pass
         const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
-        LLAMA_LOG_INFO("build_glm4_moe: n_transformer_layers=%d\n", n_transformer_layers);
         for (int il = 0; il < n_transformer_layers; ++il) {
-            LLAMA_LOG_INFO("build_glm4_moe: starting layer %d\n", il);
             struct ggml_tensor * inpSA = inpL;
 
             // self-attention
@@ -9648,7 +9637,6 @@ ggml_cgraph * llm_build_context::llama_build_graph(
      const llama_batch & batch,
                   bool   worst_case,
                   int    n_outputs) {
-    LLAMA_LOG_INFO("llama_build_graph: started\n");
     const auto & model = lctx.model;
 
 #if IK_PRINT_TIMING
@@ -9708,7 +9696,6 @@ ggml_cgraph * llm_build_context::llama_build_graph(
     struct llm_build_context llm(lctx, batch, cb, worst_case, is_warming_up, n_outputs);
 
     llm.init();
-    LLAMA_LOG_INFO("llama_build_graph: after init\n");
 
     switch (model.arch) {
         case LLM_ARCH_LLAMA:
@@ -9716,70 +9703,56 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building llama\n");
                 result = llm.build_llama();
-                LLAMA_LOG_INFO("llama_build_graph: after build_llama\n");
             } break;
         case LLM_ARCH_DECI:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building deci\n");
                 result = llm.build_deci();
             } break;
         case LLM_ARCH_BAICHUAN:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building baichuan\n");
                 result = llm.build_baichuan();
             } break;
         case LLM_ARCH_FALCON:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building falcon\n");
                 result = llm.build_falcon();
             } break;
         case LLM_ARCH_GROK:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building grok\n");
                 result = llm.build_grok();
             } break;
         case LLM_ARCH_STARCODER:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building starcoder\n");
                 result = llm.build_starcoder();
             } break;
         case LLM_ARCH_REFACT:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building refact\n");
                 result = llm.build_refact();
             } break;
         case LLM_ARCH_BERT:
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_NOMIC_BERT:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building bert\n");
                 result = llm.build_bert();
             } break;
         case LLM_ARCH_BLOOM:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building bloom\n");
                 result = llm.build_bloom();
             } break;
         case LLM_ARCH_MPT:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building mpt\n");
                 result = llm.build_mpt();
             } break;
          case LLM_ARCH_STABLELM:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building stable lm\n");
                 result = llm.build_stablelm();
             } break;
         case LLM_ARCH_QWEN:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building qwen\n");
                 result = llm.build_qwen();
             } break;
         case LLM_ARCH_QWEN2:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building qwen2\n");
                 result = llm.build_qwen2();
             } break;
         case LLM_ARCH_QWEN2VL:
@@ -9910,15 +9883,11 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             } break;
         case LLM_ARCH_GLM4:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building glm4\n");
                 result = llm.build_glm4();
-                LLAMA_LOG_INFO("llama_build_graph: after build_glm4\n");
             } break;
         case LLM_ARCH_GLM4_MOE:
             {
-                LLAMA_LOG_INFO("llama_build_graph: building glm4_moe\n");
                 result = llm.build_glm4_moe();
-                LLAMA_LOG_INFO("llama_build_graph: after build_glm4_moe\n");
             } break;
         case LLM_ARCH_BITNET:
             {
