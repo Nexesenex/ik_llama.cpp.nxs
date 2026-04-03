@@ -75,6 +75,7 @@ if (MSVC)
 endif()
 # target_link_libraries(${TARGET} PRIVATE "/STACK:104857600")
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR}/ggml/include)
 #target_link_libraries(${TARGET} PRIVATE common ${CMAKE_THREAD_LIBS_INIT})
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)

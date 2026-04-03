@@ -4,6 +4,7 @@
 #include "chat.h"
 
 #include "common.h"
+#include "console.h"
 #include "speculative.h"
 #include "mtmd.h"
 #include "sampling.h"
@@ -37,7 +38,9 @@
 #include <memory>
 #include <random>
 #include <algorithm>
+#include <sstream>
 #include <src/llama-impl.h>
+#include "../ggml/include/ggml-cuda.h"
 #ifdef SQLITE3_MODERN_CPP_SUPPORT
 #include <sqlite_modern_cpp.h>
 
@@ -2136,6 +2139,19 @@ int main(int argc, char ** argv) {
         {"Elapsed ms", (long long)((t_end_server - llama_get_start_ctx_time_us()) / 1000)}
     });
 
+    fprintf(stderr, "\n");
+    fprintf(stderr, "===========================================\n");
+    fprintf(stderr, "  NOW, A CONSOLE IS AVAILABLE FOR COMMANDS\n");
+    fprintf(stderr, "===========================================\n");
+    fprintf(stderr, "Type 'help' for available commands\n");
+    fprintf(stderr, "Type 'quit' to exit the server\n");
+    fprintf(stderr, "===========================================\n\n");
+    fflush(stderr);
+
+    // Initialize console for interactive mode
+    console::init(false, false);
+    atexit([]() { console::cleanup(); });
+
     // run the HTTP server in a thread - see comment below
     std::thread t([&]() {
         if (!svr->listen_after_bind()) {
@@ -2179,7 +2195,120 @@ int main(int argc, char ** argv) {
     SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
 
+    std::atomic<bool> cmd_thread_running(true);
+    auto local_shutdown = [&]() { shutdown_handler(SIGINT); };
+    std::thread cmd_thread([&cmd_thread_running, &ctx_server, &local_shutdown]() {
+#if defined(_WIN32)
+        HANDLE hConIn = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD dwMode = 0;
+        if (hConIn != INVALID_HANDLE_VALUE && GetConsoleMode(hConIn, &dwMode)) {
+            _setmode(_fileno(stdin), _O_WTEXT);
+            dwMode |= ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
+            SetConsoleMode(hConIn, dwMode);
+        }
+#endif
+        std::string line;
+        while (cmd_thread_running.load()) {
+            std::string input;
+            if (!std::getline(std::cin, input)) {
+                break;
+            }
+            line = input;
+            std::istringstream iss(line);
+            std::string cmd;
+            iss >> cmd;
+            if (cmd == "help" || cmd == "?") {
+                LOG_INFO("Runtime Commands:", {});
+                LOG_INFO("streamk <0-100> - Set stream-k efficiency threshold", {});
+                LOG_INFO("nblocks <1-64> - Set nblocks_stream_k_raw threshold", {});
+                LOG_INFO("pinemb <0|1> - Set pin token embd only mode", {});
+                LOG_INFO("cslq <2x|4x|auto> - Set CUDA scale launch queues", {});
+                LOG_INFO("faoffset <float> - Show fa_offset reload info", {});
+                LOG_INFO("threads <n> - Set CPU thread count", {});
+                LOG_INFO("clearkv - Clear KV cache", {});
+                LOG_INFO("defragkv - Defragment KV cache", {});
+                LOG_INFO("seed <n> - Set RNG seed", {});
+                LOG_INFO("quit/exit - Shutdown server", {});
+            } else if (cmd == "streamk" || cmd == "stream_k") {
+                int val;
+                if (iss >> val && val >= 0 && val <= 100) {
+                    ggml_backend_cuda_set_stream_k_thresh(val);
+                    LOG_INFO(("stream-k threshold set to " + std::to_string(val)).c_str(), {});
+                } else {
+                    LOG_INFO("streamk <0-100>", {});
+                }
+            } else if (cmd == "nblocks") {
+                int val;
+                if (iss >> val && val >= 1 && val <= 64) {
+                    ggml_backend_cuda_set_nblocks_stream_k_raw_thresh(val);
+                    LOG_INFO(("nblocks_stream_k_raw threshold set to " + std::to_string(val)).c_str(), {});
+                } else {
+                    LOG_INFO("nblocks <1-64>", {});
+                }
+            } else if (cmd == "cslq") {
+                std::string val;
+                if (iss >> val) {
+                    ggml_backend_cuda_set_cslq(val.c_str());
+                    LOG_INFO(("cslq set to " + val + " (may require reload)").c_str(), {});
+                } else {
+                    LOG_INFO("cslq <2x|4x|auto>", {});
+                }
+            } else if (cmd == "faoffset" || cmd == "fa_offset") {
+                float val;
+                if (iss >> val && val > 0.0f) {
+                    LOG_INFO(("fa_offset change requires reload - restart with -cuda fa-offset=" + std::to_string(val)).c_str(), {});
+                } else {
+                    LOG_INFO("faoffset <positive_float> (requires reload)", {});
+                }
+            } else if (cmd == "pinemb") {
+                int val;
+                if (iss >> val && (val == 0 || val == 1)) {
+                    ggml_backend_cuda_set_pinemb(val);
+                    LOG_INFO(("pinemb set to " + std::to_string(val)).c_str(), {});
+                } else {
+                    LOG_INFO("pinemb <0|1>", {});
+                }
+            } else if (cmd == "threads" || cmd == "t") {
+                int val;
+                if (iss >> val && val > 0 && val <= 256) {
+                    llama_set_n_threads(ctx_server.ctx, val, val);
+                    LOG_INFO(("threads set to " + std::to_string(val)).c_str(), {});
+                } else {
+                    LOG_INFO("threads <1-256>", {});
+                }
+            } else if (cmd == "clearkv" || cmd == "clearkv cache") {
+                llama_kv_cache_clear(ctx_server.ctx);
+                if (ctx_server.ctx_draft) {
+                    llama_kv_cache_clear(ctx_server.ctx_draft);
+                }
+                LOG_INFO("KV cache cleared", {});
+            } else if (cmd == "defragkv" || cmd == "defrag") {
+                llama_kv_cache_defrag(ctx_server.ctx);
+                LOG_INFO("KV cache defragmented", {});
+            } else if (cmd == "seed" || cmd == "s") {
+                int val;
+                if (iss >> val && val >= 0) {
+                    llama_set_rng_seed(ctx_server.ctx, val);
+                    LOG_INFO(("RNG seed set to " + std::to_string(val)).c_str(), {});
+                } else {
+                    LOG_INFO("seed <non-negative-int>", {});
+                }
+            } else if (cmd == "quit" || cmd == "exit" || cmd == "q") {
+                LOG_INFO("shutdown requested from terminal", {});
+                local_shutdown();
+                break;
+            } else if (!cmd.empty()) {
+                LOG_INFO(("unknown command '" + cmd + "'. Type 'help' for commands.").c_str(), {});
+            }
+        }
+    });
+
     ctx_server.queue_tasks.start_loop();
+
+    cmd_thread_running.store(false);
+    if (cmd_thread.joinable()) {
+        cmd_thread.join();
+    }
 
     svr->stop();
     t.join();
