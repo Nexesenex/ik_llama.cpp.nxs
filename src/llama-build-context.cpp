@@ -1275,7 +1275,6 @@ llm_expert_gating_func_type   gating_op,
             llm_ffn_op_type   type_op_shexp,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input,
          ggml_tensor * up_gate_exps, ggml_tensor * up_gate_exps_b,
-         ggml_tensor * up_gate_shexp, ggml_tensor * up_gate_shexp_b,
          ggml_tensor * shexp_gate) {
 
     auto split_up_exps    = up_exps ? (ggml_split_tensor_t *)up_exps->extra : nullptr;
@@ -1288,7 +1287,6 @@ llm_expert_gating_func_type   gating_op,
     auto split_gate_b_shexp = gate_b_shexp ? (ggml_split_tensor_t *)gate_b_shexp : nullptr;
     auto split_down_b_shexp = down_b_shexp ? (ggml_split_tensor_t *)down_b_shexp : nullptr;
     auto split_up_gate_exps = up_gate_exps ? (ggml_split_tensor_t *)up_gate_exps->extra : nullptr;
-    auto split_up_gate_shexp = up_gate_shexp ? (ggml_split_tensor_t *)up_gate_shexp->extra : nullptr;
     if (!split_up_exps && !split_gate_exps && !split_up_gate_exps && !split_down_exps) {
         auto cur = input;
         if (ffn_norm) {
@@ -1382,11 +1380,9 @@ llm_expert_gating_func_type   gating_op,
                 cur = ggml_reduce(ctx, results.data(), split_up_shexp->n_device, GGML_OP_ADD);
                 cb(cur, "ffn_out", il);
             } else {
-                ggml_tensor * shexp_up = up_gate_shexp ? up_gate_shexp : up_shexp;
-                ggml_tensor * shexp_gate = up_gate_shexp ? nullptr : gate_shexp;
                 auto shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
-                        shexp_up,   up_b_shexp,   nullptr,
-                        shexp_gate, gate_b_shexp, nullptr,
+                        up_shexp,   up_b_shexp,   nullptr,
+                        gate_shexp, gate_b_shexp, nullptr,
                         down_shexp, down_b_shexp, nullptr,
                         nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
                 cb(shared_out, "ffn_shexp_out", il);
@@ -1421,9 +1417,8 @@ llm_expert_gating_func_type   gating_op,
         GGML_ASSERT(split_up_exps->n_device == n_device && split_gate_exps->n_device == n_device);
     }
     std::vector<ggml_tensor *> results(n_device, nullptr);
-    GGML_ASSERT((!split_up_shexp && !split_gate_shexp && !split_down_shexp && !split_up_gate_shexp) ||
-                ( split_up_shexp &&  split_gate_shexp &&  split_down_shexp && !split_up_gate_shexp) ||
-                (!split_up_shexp && !split_gate_shexp &&  split_down_shexp &&  split_up_gate_shexp));
+    GGML_ASSERT((!split_up_shexp && !split_gate_shexp && !split_down_shexp) ||
+                ( split_up_shexp &&  split_gate_shexp &&  split_down_shexp));
     auto split_gate_inp = (ggml_split_tensor_t *)gate_inp->extra;
     GGML_ASSERT(split_gate_inp && split_gate_inp->n_device == n_device);
     auto split_exp_probs_b = exp_probs_b ? (ggml_split_tensor_t *)exp_probs_b->extra : nullptr;
@@ -1464,23 +1459,13 @@ llm_expert_gating_func_type   gating_op,
                     split_exps_up_gate_b ? split_exps_up_gate_b->splits[id] : nullptr);
         cb(routed_out, "routed_out", il_cb);
 
-        if (split_up_shexp || split_up_gate_shexp) {
+        if (split_up_shexp) {
             GGML_ASSERT(!split_up_b_shexp   || split_up_b_shexp->n_device   == n_device);
             GGML_ASSERT(!split_gate_b_shexp || split_gate_b_shexp->n_device == n_device);
             GGML_ASSERT(!split_down_b_shexp || split_down_b_shexp->n_device == n_device);
-            ggml_tensor * shared_up_shexp_t = split_up_gate_shexp ? split_up_gate_shexp->splits[id] : split_up_shexp->splits[id];
-            ggml_tensor * shared_up_b_shexp_t = nullptr;
-            if (split_up_gate_shexp && up_gate_shexp_b) {
-                auto split_up_gate_shexp_b = (ggml_split_tensor_t *)up_gate_shexp_b->extra;
-                shared_up_b_shexp_t = split_up_gate_shexp_b ? split_up_gate_shexp_b->splits[id] : nullptr;
-            } else if (split_up_b_shexp) {
-                shared_up_b_shexp_t = split_up_b_shexp->splits[id];
-            }
-            ggml_tensor * shared_gate_shexp_t = split_up_gate_shexp ? nullptr : split_gate_shexp->splits[id];
-            ggml_tensor * shared_gate_b_shexp_t = split_up_gate_shexp ? nullptr : (split_gate_b_shexp ? split_gate_b_shexp->splits[id] : nullptr);
             auto shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
-                    shared_up_shexp_t,   shared_up_b_shexp_t, nullptr,
-                    shared_gate_shexp_t, shared_gate_b_shexp_t, nullptr,
+                    split_up_shexp->splits[id],   split_up_b_shexp   ? split_up_b_shexp->splits[id]   : nullptr, nullptr,
+                    split_gate_shexp->splits[id], split_gate_b_shexp ? split_gate_b_shexp->splits[id] : nullptr, nullptr,
                     split_down_shexp->splits[id], !down_bias_added && split_down_b_shexp ? split_down_b_shexp->splits[id] : nullptr, nullptr,
                     nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
             cb(shared_out, "ffn_shexp_out", il_cb);
@@ -2339,14 +2324,13 @@ ggml_cgraph * llm_build_context::build_mistral3() {
                     model.layers[il].ffn_gate_exps, nullptr,
                     model.layers[il].ffn_down_exps, nullptr,
                     model.layers[il].ffn_exp_probs_b,
-                    nullptr,  nullptr,
+                    nullptr,  nullptr, // we don't have shared experts
                     nullptr,  nullptr,
                     nullptr,  nullptr,
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, true, false, 0.0f,
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    LLM_FFN_SILU, cb, il, gf, false,
-                    nullptr, nullptr, nullptr, nullptr, nullptr);
+                    LLM_FFN_SILU, cb, il, gf);
         }
         cur = ggml_add(ctx0, cur, ffn_inp);
         cb(cur, "ffn_out", il);
@@ -3859,8 +3843,7 @@ ggml_cgraph * llm_build_context::build_step35() {
                     LLM_FFN_SILU, norm_w, scale_w, w_scale,
                     LLM_EXPERT_GATING_FUNC_SIGMOID,
                     //(llm_expert_gating_func_type) hparams.expert_gating_func,
-                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr,
-                    model.layers[il].ffn_up_gate_shexp, nullptr, model.layers[il].ffn_gate_inp_shexp);
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
         }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
@@ -4440,14 +4423,14 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
                 model.layers[il].ffn_gate_exps, nullptr,
                 model.layers[il].ffn_down_exps, nullptr,
                 model.layers[il].ffn_exp_probs_b,
-                nullptr,  nullptr,
+                nullptr,  nullptr, // we don't have shared expert biases?
                 nullptr,  nullptr,
                 nullptr,  nullptr,
                 n_expert, n_expert_used,
                 LLM_FFN_SILU, true, false, 0.0f,
                 LLM_EXPERT_GATING_FUNC_SOFTMAX,
                 LLM_FFN_SILU, cb, il, gf, true,
-                model.layers[il].ffn_up_gate_exps, nullptr, nullptr, nullptr, nullptr);
+                model.layers[il].ffn_up_gate_exps);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
@@ -4534,8 +4517,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, true, false, 0.0f,
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr,
-                    model.layers[il].ffn_up_gate_shexp, nullptr, model.layers[il].ffn_gate_inp_shexp);
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr, model.layers[il].ffn_gate_inp_shexp);
         }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
@@ -7500,8 +7482,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
                         n_expert, n_expert_used,
                         LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
                         (llm_expert_gating_func_type) hparams.expert_gating_func,
-                        LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr,
-                        model.layers[il].ffn_up_gate_shexp, nullptr, model.layers[il].ffn_gate_inp_shexp);
+                        LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
             }
 
             // residual and context vector
@@ -8886,15 +8867,13 @@ ggml_cgraph * llm_build_context::build_ernie4_5_moe() {
                     model.layers[il].ffn_gate_exps, model.layers[il].ffn_gate_exps_b,
                     model.layers[il].ffn_down_exps, model.layers[il].ffn_down_exps_b,
                     model.layers[il].ffn_exp_probs_b,
-                    model.layers[il].ffn_up_shexp,    nullptr,
+                    model.layers[il].ffn_up_shexp,    nullptr, // we don't have shared expert biases?
                     model.layers[il].ffn_gate_shexp,  nullptr,
                     model.layers[il].ffn_down_shexp,  nullptr,
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, true, false, 0.0f,
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    LLM_FFN_SILU, cb, il, gf, true,
-                    model.layers[il].ffn_up_gate_exps, nullptr,
-                    model.layers[il].ffn_up_gate_shexp, nullptr, model.layers[il].ffn_gate_inp_shexp);
+                    LLM_FFN_SILU, cb, il, gf, true);
         }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
@@ -8944,14 +8923,13 @@ ggml_cgraph * llm_build_context::build_hunyuan_moe() {
                 model.layers[il].ffn_gate_exps, nullptr,
                 model.layers[il].ffn_down_exps, nullptr,
                 nullptr,
-                model.layers[il].ffn_up_shexp,    nullptr,
+                model.layers[il].ffn_up_shexp,    nullptr, // we don't have shared expert biases?
                 model.layers[il].ffn_gate_shexp,  nullptr,
                 model.layers[il].ffn_down_shexp,  nullptr,
                 n_expert, n_expert_used,
                 LLM_FFN_SILU, true, false, 0.0f,
                 LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr,
-                model.layers[il].ffn_up_gate_shexp, nullptr, model.layers[il].ffn_gate_inp_shexp);
+                LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
@@ -9015,14 +8993,13 @@ ggml_cgraph * llm_build_context::build_mimo2() {
                     model.layers[il].ffn_gate_exps, nullptr,
                     model.layers[il].ffn_down_exps, nullptr,
                     model.layers[il].ffn_exp_probs_b,
-                    nullptr,  nullptr,
+                    nullptr,  nullptr, // we don't have shared expert biases?
                     nullptr,  nullptr,
                     nullptr,  nullptr,
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, true, false, 0.0f,
                     LLM_EXPERT_GATING_FUNC_SIGMOID,
-                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr,
-                    nullptr, nullptr, nullptr);
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
         }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
@@ -9470,11 +9447,11 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 model.layers[il].ffn_gate_exps, nullptr,
                 model.layers[il].ffn_down_exps, nullptr,
                 model.layers[il].ffn_exp_probs_b,
-                nullptr,  nullptr, nullptr,  nullptr, nullptr,  nullptr,
+                nullptr,  nullptr, nullptr,  nullptr, nullptr,  nullptr, // no shared experts
                 n_expert, n_expert_used,
                 LLM_FFN_SILU, true, false, 0.0f,
                 (llm_expert_gating_func_type)hparams.expert_gating_func,
-                LLM_FFN_SILU, cb, il, gf, true, nullptr, nullptr, nullptr, nullptr, nullptr);
+                LLM_FFN_SILU, cb, il, gf, true, nullptr);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
