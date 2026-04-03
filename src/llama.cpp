@@ -5917,15 +5917,21 @@ struct llama_context * llama_init_from_model(
             }
 
             llama_concatenate_up_gate_exps(*ctx);
+            LLAMA_LOG_INFO("=== After exps concatenation ===\n");
             llama_concatenate_up_gate_shexp(*ctx);
+            LLAMA_LOG_INFO("=== After shexp concatenation ===\n");
 
             // build worst-case graph
             int n_past = cparams.n_ctx - n_tokens;
             llama_token token = llama_token_bos(&ctx->model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
+            LLAMA_LOG_INFO("=== Before llama_build_graph ===\n");
             ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true, cparams.worst_graph_tokens);
+            LLAMA_LOG_INFO("=== After llama_build_graph ===\n");
 
             // initialize scheduler with the worst-case graph
+            LLAMA_LOG_INFO("=== Before ggml_backend_sched_reserve ===\n");
             bool gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
+            LLAMA_LOG_INFO("=== After ggml_backend_sched_reserve ===\n");
             if (!gf_success)
             {
                 if (pipeline_parallel) {
