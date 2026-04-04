@@ -592,6 +592,12 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
         return free;
     }
     // CPU-only build: report free host RAM instead of the 1-byte placeholder.
+    // The host is the device, so prefer the CPU backend's available RAM, then
+    // fall back to the per-OS query below if the backend cannot report it.
+    ggml_backend_cpu_get_memory(&free, &total);
+    if (free != 0) {
+        return free;
+    }
 #if defined(_WIN32)
     MEMORYSTATUSEX st = {};
     st.dwLength = sizeof(st);
