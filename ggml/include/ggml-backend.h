@@ -109,6 +109,8 @@ extern "C" {
 
     GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void);
 
+    GGML_API GGML_CALL void ggml_backend_cpu_get_memory(size_t * free_mem, size_t * total_mem);
+
 #ifdef GGML_USE_CPU_HBM
     GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_hbm_buffer_type(void);
 #endif
