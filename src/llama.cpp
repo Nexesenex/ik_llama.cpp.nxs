@@ -543,7 +543,10 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     ggml_backend_cann_get_device_memory(device, &free, &total);
     return free;
 #else
-    return 1;
+    size_t total;
+    size_t free;
+    ggml_backend_cpu_get_memory(&free, &total);
+    return free;
 #endif
     GGML_UNUSED(model);
     GGML_UNUSED(device);

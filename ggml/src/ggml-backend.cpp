@@ -20,6 +20,13 @@
 #include <omp.h>
 #endif
 
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 #define IK_PRINT_TIMING 0
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -745,6 +752,21 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void) {
     };
 
     return &ggml_backend_cpu_buffer_type;
+}
+
+GGML_CALL void ggml_backend_cpu_get_memory(size_t * free_mem, size_t * total_mem) {
+#ifdef _WIN32
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    GlobalMemoryStatusEx(&status);
+    *total_mem = status.ullTotalPhys;
+    *free_mem = status.ullAvailPhys;
+#else
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    *total_mem = (size_t)pages * (size_t)page_size;
+    *free_mem = *total_mem;
+#endif
 }
 
 #ifdef GGML_USE_CPU_HBM
