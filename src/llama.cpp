@@ -671,7 +671,12 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     ggml_backend_metal_get_device_memory(&free, &total);
     return free;
 #else
-    // CPU-only build: report free host RAM instead of the 1-byte placeholder.
+    size_t total;
+    size_t free;
+    ggml_backend_cpu_get_memory(&free, &total);
+    return free;
+    // CPU-only build: the host is the device, so report free system RAM
+    // instead of the legacy 1-byte placeholder that tripped every warning.
 #if defined(_WIN32)
     MEMORYSTATUSEX st = {};
     st.dwLength = sizeof(st);
