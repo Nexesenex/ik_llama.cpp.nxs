@@ -49,6 +49,7 @@ struct llama_cparams {
     bool split_mode_tensor_parallel_scheduling;
     //bool split_mode_f16;
     bool scheduler_async;
+    int  pipeline;
     int  sched_max_copies;
     int  min_experts;
     float thresh_experts;
