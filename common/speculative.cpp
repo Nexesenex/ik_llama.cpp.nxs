@@ -1905,6 +1905,9 @@ bool common_speculative_load_draft_model(
     params_dft.n_gpu_layers     = params.n_gpu_layers;
     params_dft.cache_type_k     = params.cache_type_k.empty() ? params_base.cache_type_k : params.cache_type_k;
     params_dft.cache_type_v     = params.cache_type_v.empty() ? params_base.cache_type_v : params.cache_type_v;
+    params_dft.flash_attn       = params_base.flash_attn;
+    params_dft.k_cache_hadamard = params_base.k_cache_hadamard;
+    params_dft.v_cache_hadamard = params_base.v_cache_hadamard;
 
     if (!params.params.empty()) {
         auto [argc, argv] = parse_command_line("llama-server " + params.params);
