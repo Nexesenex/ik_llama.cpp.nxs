@@ -69,11 +69,9 @@ lcov-report/
 
 # Models
 
-/models/*
-/models-mnt
-!/models/.editorconfig
-!/models/ggml-vocab-*.gguf*
-!/models/templates
+models-mnt
+!models/.editorconfig
+!models/ggml-vocab-*.gguf*
 
 # Zig
 
@@ -162,3 +160,6 @@ a.out
 a.out.*
 .dev
 .github
+
+opencode.json
+.opencode/opencode.json
