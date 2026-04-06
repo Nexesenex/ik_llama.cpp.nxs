@@ -30,7 +30,7 @@ static  __global__ void conv_transpose_1d_kernel(
             float kernel_weight = src0[kernel_offset + weight_idx];
             float input_value =  src1[input_offset+i];
 
-            accumulator += kernel_weight * input_value;
+            ggml_cuda_mad(accumulator, kernel_weight, input_value);
         }
     }
     dst[global_index] = accumulator;

@@ -3,16 +3,19 @@
 static __global__ void upscale_f32(const float * x, float * dst,
         const int nb00, const int nb01, const int nb02, const int nb03,
         const int ne10, const int ne11, const int ne12, const int ne13,
-        const float sf0, const float sf1, const float sf2, const float sf3) {
+        const float sf0, const float sf1, const float sf2, const float sf3,
+        const uint3 ne10_fd, const uint3 ne11_fd, const uint3 ne12_fd) {
     int index = threadIdx.x + blockIdx.x * blockDim.x;
     if (index >= ne10 * ne11 * ne12 * ne13) {
         return;
     }
 
-    int i10 = index % ne10;
-    int i11 = (index / ne10) % ne11;
-    int i12 = (index / (ne10 * ne11)) % ne12;
-    int i13 = (index / (ne10 * ne11 * ne12)) % ne13;
+    const int i10 = fastmodulo((uint32_t)index, ne10_fd);
+    const uint32_t t1 = fastdiv((uint32_t)index, ne10_fd);
+    const int i11 = fastmodulo(t1, ne11_fd);
+    const uint32_t t2 = fastdiv(t1, ne11_fd);
+    const int i12 = fastmodulo(t2, ne12_fd);
+    const int i13 = fastdiv(t2, ne12_fd);
 
     int i00 = i10 / sf0;
     int i01 = i11 / sf1;
@@ -43,7 +46,7 @@ static __global__ void upscale_f32_bicubic(const float * x, float * dst,
         const int ne00_src, const int ne01_src,
         const int ne10_dst, const int ne11_dst, const int ne12_dst, const int ne13_dst,
         const float sf0, const float sf1, const float sf2, const float sf3,
-        const float pixel_offset) {
+        const float pixel_offset, const uint3 ne10_fd, const uint3 ne11_fd, const uint3 ne12_fd) {
     using bicubic_interpolation::bicubic;
 
     const int64_t index              = threadIdx.x + blockIdx.x * blockDim.x;
@@ -53,10 +56,12 @@ static __global__ void upscale_f32_bicubic(const float * x, float * dst,
         return;
     }
 
-    const int i10_dst = index % ne10_dst;
-    const int i11_dst = (index / ne10_dst) % ne11_dst;
-    const int i12_dst = (index / (ne10_dst * ne11_dst)) % ne12_dst;
-    const int i13_dst = index / (ne10_dst * ne11_dst * ne12_dst);
+    const int i10_dst = fastmodulo((uint32_t)index, ne10_fd);
+    const uint32_t t1 = fastdiv((uint32_t)index, ne10_fd);
+    const int i11_dst = fastmodulo(t1, ne11_fd);
+    const uint32_t t2 = fastdiv(t1, ne11_fd);
+    const int i12_dst = fastmodulo(t2, ne12_fd);
+    const int i13_dst = fastdiv(t2, ne12_fd);
 
     const int i02_src = (int)(i12_dst / sf2);
     const int i03_src = (int)(i13_dst / sf3);
@@ -94,7 +99,11 @@ static void upscale_f32_cuda(const float * x, float * dst,
     int dst_size = ne10 * ne11 * ne12 * ne13;
     int num_blocks = (dst_size + CUDA_UPSCALE_BLOCK_SIZE - 1) / CUDA_UPSCALE_BLOCK_SIZE;
 
-    upscale_f32<<<num_blocks, CUDA_UPSCALE_BLOCK_SIZE,0,stream>>>(x, dst, nb00, nb01, nb02, nb03, ne10, ne11, ne12, ne13, sf0, sf1, sf2, sf3);
+    const uint3 ne10_fd = init_fastdiv_values((uint32_t)ne10);
+    const uint3 ne11_fd = init_fastdiv_values((uint32_t)ne11);
+    const uint3 ne12_fd = init_fastdiv_values((uint32_t)ne12);
+
+    upscale_f32<<<num_blocks, CUDA_UPSCALE_BLOCK_SIZE,0,stream>>>(x, dst, nb00, nb01, nb02, nb03, ne10, ne11, ne12, ne13, sf0, sf1, sf2, sf3, ne10_fd, ne11_fd, ne12_fd);
 }
 
 static void upscale_f32_bicubic_cuda(const float * x, float * dst,
@@ -106,7 +115,11 @@ static void upscale_f32_bicubic_cuda(const float * x, float * dst,
     const int64_t dst_size   = ne10_dst * ne11_dst * ne12_dst * ne13_dst;
     const int64_t num_blocks = (dst_size + CUDA_UPSCALE_BLOCK_SIZE - 1) / CUDA_UPSCALE_BLOCK_SIZE;
 
-    upscale_f32_bicubic<<<num_blocks, CUDA_UPSCALE_BLOCK_SIZE,0,stream>>>(x, dst, nb00, nb01, nb02, nb03, ne00_src, ne01_src, ne10_dst, ne11_dst, ne12_dst, ne13_dst, sf0, sf1, sf2, sf3, pixel_offset);
+    const uint3 ne10_fd = init_fastdiv_values((uint32_t)ne10_dst);
+    const uint3 ne11_fd = init_fastdiv_values((uint32_t)ne11_dst);
+    const uint3 ne12_fd = init_fastdiv_values((uint32_t)ne12_dst);
+
+    upscale_f32_bicubic<<<num_blocks, CUDA_UPSCALE_BLOCK_SIZE,0,stream>>>(x, dst, nb00, nb01, nb02, nb03, ne00_src, ne01_src, ne10_dst, ne11_dst, ne12_dst, ne13_dst, sf0, sf1, sf2, sf3, pixel_offset, ne10_fd, ne11_fd, ne12_fd);
 }
 
 void ggml_cuda_op_upscale(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

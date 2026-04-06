@@ -294,11 +294,21 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 }
 
 static __device__ __forceinline__ float warp_reduce_max(float x) {
+#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_AMPERE
+    // Ampere __reduce_max_sync works on int. Convert float to int-comparable
+    // form via IEEE 754 sign-bit manipulation, reduce, then convert back.
+    int i = __float_as_int(x);
+    i = (i >= 0) ? i : (i ^ 0x7FFFFFFF);
+    i = __reduce_max_sync(0xffffffff, i);
+    i = (i >= 0) ? i : (i ^ 0x7FFFFFFF);
+    return __int_as_float(i);
+#else
 #pragma unroll
     for (int mask = 16; mask > 0; mask >>= 1) {
         x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, mask, 32));
     }
     return x;
+#endif
 }
 
 static __device__ __forceinline__ half ggml_cuda_hmax(const half a, const half b) {
@@ -757,7 +767,7 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ5_K_R4> {
 // and a shift:
 //
 // n/d = (mulhi(n, mp) + n) >> L;
-static const uint3 init_fastdiv_values(uint64_t d_64) {
+static uint3 init_fastdiv_values(uint64_t d_64) {
     GGML_ASSERT(d_64 != 0);
     GGML_ASSERT(d_64 <= std::numeric_limits<uint32_t>::max());
 
@@ -794,6 +804,50 @@ static __device__ __forceinline__ uint2 fast_div_modulo(uint32_t n, const uint3 
     const uint32_t div_val = fastdiv(n, fastdiv_values);
     const uint32_t mod_val = n - div_val * fastdiv_values.z;
     return make_uint2(div_val, mod_val);
+}
+
+// ggml_cuda_mad: fused multiply-add for better performance
+// Uses the compiler's ability to optimize acc += v*u to FMA when appropriate
+static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const float v, const float u) {
+    acc += v*u;
+}
+
+static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const float2 v, const float2 u) {
+    acc += v.x*u.x;
+    acc += v.y*u.y;
+}
+
+#if defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
+#define V_DOT2_F32_F16_AVAILABLE
+#endif // defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
+
+static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const half2 v, const half2 u) {
+#ifdef V_DOT2_F32_F16_AVAILABLE
+    asm volatile("v_dot2_f32_f16 %0, %1, %2, %0" : "+v"(acc) : "v"(v), "v"(u));
+#else
+#ifdef FAST_FP16_AVAILABLE
+    const float2 tmp = __half22float2(v*u);
+    acc += tmp.x + tmp.y;
+#else
+    const float2 tmpv = __half22float2(v);
+    const float2 tmpu = __half22float2(u);
+    acc += tmpv.x * tmpu.x;
+    acc += tmpv.y * tmpu.y;
+#endif // FAST_FP16_AVAILABLE
+#endif // V_DOT2_F32_F16_AVAILABLE
+}
+
+static __device__ __forceinline__ void ggml_cuda_mad(half2 & acc, const half2 v, const half2 u) {
+#if defined(FAST_FP16_AVAILABLE) && !defined(GGML_USE_HIPBLAS)
+    acc = __hfma2(v, u, acc);
+#else
+    const float2 tmpv = __half22float2(v);
+    const float2 tmpu = __half22float2(u);
+    float2 tmpacc = __half22float2(acc);
+    tmpacc.x += tmpv.x * tmpu.x;
+    tmpacc.y += tmpv.y * tmpu.y;
+    acc = make_half2(tmpacc.x, tmpacc.y);
+#endif // FAST_FP16_AVAILABLE
 }
 
 
