@@ -1801,7 +1801,7 @@ static __global__ void flash_attn_mask_to_KV_max(
     }
 }
 
-template <int DV, int ncols1, int ncols2>
+template <int DV, int ncols1, int ncols2, bool is_mla = false>
 static void launch_fattn_new_mma(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_new_mma_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
     const int KQ_row_granularity, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const int warp_size = WARP_SIZE
@@ -1873,7 +1873,7 @@ static void launch_fattn_new_mma(
     }
 
     if (need_f16_V && V->type != GGML_TYPE_F16) {
-        if constexpr (DV == 512) {
+        if constexpr (is_mla) {
             // DeepSeek. In this case the V cache is the same as the K cache, except that
             //           it has 512 elements per row instead of 576.
             nb21 = nb11;
@@ -2064,7 +2064,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ct
     constexpr int nwarps_max_y  = c::nbatch_fa / tile_A::I;
     constexpr int nwarps        = nwarps_max_x*nwarps_max_y <= c::nwarps_max ? nwarps_max_x*nwarps_max_y : c::nwarps_max;
 
-    constexpr bool mla = DKQ == 576 || DKQ == 320;
+    constexpr bool is_mla = (DKQ == 576 && DV == 512) || (DKQ == 320 && DV == 256);
 
     const int nbatch_K2      = c::get_nbatch_K2_host     (cc, ncols);
     const int nbatch_V2      = c::get_nbatch_K2_host     (cc, ncols);
@@ -2092,7 +2092,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ct
     fattn_new_mma_kernel_t fattn_kernel;
     if (logit_softcap == 0.0f) {
         constexpr bool use_logit_softcap = false;
-        fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, mla>;
+        fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, is_mla>;
 
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA)
         static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
@@ -2103,7 +2103,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ct
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA)
     } else {
         constexpr bool use_logit_softcap = true;
-        fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, mla>;
+        fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, is_mla>;
 
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA)
         static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
@@ -2114,7 +2114,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ct
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA)
     }
 
-    launch_fattn_new_mma<DV, ncols1, ncols2>
+    launch_fattn_new_mma<DV, ncols1, ncols2, is_mla>
         (ctx, dst, fattn_kernel, nwarps, nbytes_shared_total, FATTN_KQ_STRIDE, true, true, true);
 }
 
