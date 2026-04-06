@@ -785,6 +785,50 @@ static __device__ __forceinline__ uint2 fast_div_modulo(uint32_t n, const uint3 
     return make_uint2(div_val, mod_val);
 }
 
+// ggml_cuda_mad: fused multiply-add for better performance
+// Uses the compiler's ability to optimize acc += v*u to FMA when appropriate
+static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const float v, const float u) {
+    acc += v*u;
+}
+
+static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const float2 v, const float2 u) {
+    acc += v.x*u.x;
+    acc += v.y*u.y;
+}
+
+#if defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
+#define V_DOT2_F32_F16_AVAILABLE
+#endif // defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
+
+static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const half2 v, const half2 u) {
+#ifdef V_DOT2_F32_F16_AVAILABLE
+    asm volatile("v_dot2_f32_f16 %0, %1, %2, %0" : "+v"(acc) : "v"(v), "v"(u));
+#else
+#ifdef FAST_FP16_AVAILABLE
+    const float2 tmp = __half22float2(v*u);
+    acc += tmp.x + tmp.y;
+#else
+    const float2 tmpv = __half22float2(v);
+    const float2 tmpu = __half22float2(u);
+    acc += tmpv.x * tmpu.x;
+    acc += tmpv.y * tmpu.y;
+#endif // FAST_FP16_AVAILABLE
+#endif // V_DOT2_F32_F16_AVAILABLE
+}
+
+static __device__ __forceinline__ void ggml_cuda_mad(half2 & acc, const half2 v, const half2 u) {
+#ifdef FAST_FP16_AVAILABLE
+    acc += v*u;
+#else
+    const float2 tmpv = __half22float2(v);
+    const float2 tmpu = __half22float2(u);
+    float2 tmpacc = __half22float2(acc);
+    tmpacc.x += tmpv.x * tmpu.x;
+    tmpacc.y += tmpv.y * tmpu.y;
+    acc = make_half2(tmpacc.x, tmpacc.y);
+#endif // FAST_FP16_AVAILABLE
+}
+
 
 //////////////////////
 
