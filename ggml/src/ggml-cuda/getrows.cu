@@ -12,15 +12,15 @@ template<int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static __global__ void k_get_rows(
             const void * src0, const int32_t * src1, dst_t * dst,
             int64_t ne00, int64_t ne01, /*int64_t ne02, int64_t ne03,*/
-            /*int64_t ne10, int64_t ne11,*/ int64_t ne12, /*int64_t ne13,*/
+            /*int64_t ne10, int64_t ne11,*/ const uint3 ne12_fd, int64_t ne12,
             /*size_t s0,*/ size_t s1, size_t s2, size_t s3,
             /*size_t nb00,*/ size_t nb01, size_t nb02, size_t nb03,
             size_t s10, size_t s11, size_t s12/*, size_t s13*/) {
 
     const int i00 = (blockIdx.x*blockDim.x + threadIdx.x)*2;
     const int i10 = blockDim.y*blockIdx.y + threadIdx.y;
-    const int i11 = (blockIdx.z*blockDim.z + threadIdx.z)/ne12;
-    const int i12 = (blockIdx.z*blockDim.z + threadIdx.z)%ne12;
+    const int i11 = fastdiv((blockIdx.z*blockDim.z + threadIdx.z), ne12_fd);
+    const int i12 = fastmodulo((blockIdx.z*blockDim.z + threadIdx.z), ne12_fd);
 
     if (i00 >= ne00) {
         return;
@@ -52,15 +52,15 @@ template<typename src0_t, typename dst_t>
 static __global__ void k_get_rows_float(
             const src0_t * src0, const int32_t * src1, dst_t * dst,
             int64_t ne00, int64_t ne01, /*int64_t ne02, int64_t ne03,*/
-            /*int64_t ne10, int64_t ne11,*/ int64_t ne12, /*int64_t ne13,*/
+            /*int64_t ne10, int64_t ne11,*/ const uint3 ne12_fd, int64_t ne12,
             /*size_t s0,*/ size_t s1, size_t s2, size_t s3,
             /*size_t nb00,*/ size_t nb01, size_t nb02, size_t nb03,
             size_t s10, size_t s11, size_t s12/*, size_t s13*/) {
 
     const int i00 = blockIdx.x*blockDim.x + threadIdx.x;
     const int i10 = blockDim.y*blockIdx.y + threadIdx.y;
-    const int i11 = (blockIdx.z*blockDim.z + threadIdx.z)/ne12;
-    const int i12 = (blockIdx.z*blockDim.z + threadIdx.z)%ne12;
+    const int i11 = fastdiv((blockIdx.z*blockDim.z + threadIdx.z), ne12_fd);
+    const int i12 = fastmodulo((blockIdx.z*blockDim.z + threadIdx.z), ne12_fd);
 
     if (i00 >= ne00) {
         return;
@@ -94,12 +94,14 @@ static void get_rows_cuda(const ggml_tensor * src0, const ggml_tensor * src1, gg
     const size_t s12 = nb12 / ggml_element_size(src1);
     //const size_t s13 = nb13 / ggml_element_size(src1);
 
+    const uint3 ne12_fd = init_fastdiv_values((uint32_t) ne12);
+
     GGML_ASSERT(ne00 % 2 == 0);
 
     k_get_rows<qk, qr, dq><<<block_nums, block_dims, 0, stream>>>(
             src0_dd, src1_dd, dst_dd,
             ne00, ne01, /*ne02, ne03,*/
-            /*ne10, ne11,*/ ne12, /*ne13,*/
+            /*ne10, ne11,*/ ne12_fd, ne12,
             /* s0,*/ s1, s2, s3,
             /* nb00,*/ nb01, nb02, nb03,
             s10, s11, s12/*, s13*/);
@@ -128,10 +130,12 @@ static void get_rows_cuda_float(const ggml_tensor * src0, const ggml_tensor * sr
     const size_t s12 = nb12 / ggml_element_size(src1);
     //const size_t s13 = nb13 / ggml_element_size(src1);
 
+    const uint3 ne12_fd = init_fastdiv_values((uint32_t) ne12);
+
     k_get_rows_float<<<block_nums, block_dims, 0, stream>>>(
             src0_dd, src1_dd, dst_dd,
             ne00, ne01, /*ne02, ne03,*/
-            /*ne10, ne11,*/ ne12, /*ne13,*/
+            /*ne10, ne11,*/ ne12_fd, ne12,
             /* s0,*/ s1, s2, s3,
             /* nb00,*/ nb01, nb02, nb03,
             s10, s11, s12/*, s13*/);

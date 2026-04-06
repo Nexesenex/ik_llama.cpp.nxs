@@ -96,7 +96,7 @@ static __global__ void conv2d_kernel(const float * __restrict__ input,
 
                 const float input_val = input[Layout::input_index(n, c_in, in_y, in_x, P)];
                 const T kernel_val = kernel[Layout::kernel_index(c_out, c_in, ky, kx, P)];
-                acc += (input_val * ggml_cuda_cast<float>(kernel_val));
+                ggml_cuda_mad(acc, input_val, ggml_cuda_cast<float>(kernel_val));
             }
         }
     }
