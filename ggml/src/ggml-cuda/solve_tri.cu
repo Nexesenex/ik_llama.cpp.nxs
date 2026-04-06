@@ -8,16 +8,6 @@
 #define MAX_N_FAST 64
 #define MAX_K_FAST 64
 
-// This branch does not carry the fast-div helpers from upstream CUDA common code.
-// Keep the PR kernel logic but back it with plain div/mod wrappers.
-static inline uint3 init_fastdiv_values(uint32_t d) {
-    return make_uint3(d, 0u, 0u);
-}
-
-static __device__ __forceinline__ uint2 fast_div_modulo(uint32_t n, const uint3 d) {
-    return make_uint2(n / d.x, n % d.x);
-}
-
 // Kernel to set up pointer arrays for batched cuBLAS TRSM
 // This avoids host-device copy during CUDA graph capture
 static __global__ void setup_trsm_batch_pointers(
