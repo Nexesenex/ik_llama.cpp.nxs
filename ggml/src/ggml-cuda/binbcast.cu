@@ -28,73 +28,112 @@ static __device__ __forceinline__ float op_sub(const float a, const float b) {
     return a - b;
 }
 
-template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
-static __global__ void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
-        int ne0, int ne1, int ne2, int ne3,
-        int ne10, int ne11, int ne12, int ne13,
-        /*int s0, */ int s1,  int s2,  int s3,
-        /*int s00,*/ int s01, int s02, int s03,
-        /*int s10,*/ int s11, int s12, int s13) {
-    const int i0s = blockDim.x*blockIdx.x + threadIdx.x;
-    const int i1 = (blockDim.y*blockIdx.y + threadIdx.y);
-    const int i2 = (blockDim.z*blockIdx.z + threadIdx.z) / ne3;
-    const int i3 = (blockDim.z*blockIdx.z + threadIdx.z) % ne3;
+template <float (*bin_op)(const float, const float),
+          typename src0_t,
+          typename src1_t,
+          typename dst_t>
+static __global__ void k_bin_bcast(const src0_t *         src0,
+                                   const src1_t *         src1,
+                                   dst_t *                dst,
+                                   const int              ne0,
+                                   const int              ne1,
+                                   const int              ne2,
+                                   const uint3            ne3_fd,
+                                   const uint3            ne10_fd,
+                                   const uint3            ne11_fd,
+                                   const uint3            ne12_fd,
+                                   const uint3            ne13_fd,
+                                   /*int s0, */ const int s1,
+                                   const int              s2,
+                                   const int              s3,
+                                   /*int s00,*/ const int s01,
+                                   const int              s02,
+                                   const int              s03,
+                                   /*int s10,*/ const int s11,
+                                   const int              s12,
+                                   const int              s13) {
+    const uint32_t i0s = blockDim.x * blockIdx.x + threadIdx.x;
+    const uint32_t i1  = (blockDim.y * blockIdx.y + threadIdx.y);
+    const uint32_t i2  = fastdiv((blockDim.z * blockIdx.z + threadIdx.z), ne3_fd);
+    const uint32_t i3  = (blockDim.z * blockIdx.z + threadIdx.z) - (i2 * ne3_fd.z);
 
-    if (i0s >= ne0 || i1 >= ne1 || i2 >= ne2 || i3 >= ne3) {
+    if (i0s >= ne0 || i1 >= ne1 || i2 >= ne2 || i3 >= ne3_fd.z) {
         return;
     }
 
-    const int i11 = i1 % ne11;
-    const int i12 = i2 % ne12;
-    const int i13 = i3 % ne13;
+    const uint32_t i11 = fastmodulo(i1, ne11_fd);
+    const uint32_t i12 = fastmodulo(i2, ne12_fd);
+    const uint32_t i13 = fastmodulo(i3, ne13_fd);
 
     const size_t i_src0 =  i3*s03 +  i2*s02 +  i1*s01;
     const size_t i_src1 = i13*s13 + i12*s12 + i11*s11;
     const size_t i_dst  =  i3*s3  +  i2*s2  +  i1*s1;
 
-    const src0_t * src0_row = src0 + i_src0;
+    const src0_t * src0_row = src0 ? (src0 + i_src0) : nullptr;
     const src1_t * src1_row = src1 + i_src1;
     dst_t * dst_row = dst + i_dst;
 
-    for (int i0 = i0s; i0 < ne0; i0 += blockDim.x*gridDim.x) {
-        const int i10 = i0 % ne10;
-        dst_row[i0] = (dst_t)bin_op(src0 ? (float)src0_row[i0] : 0.0f, (float)src1_row[i10]);
+    for (int i0 = i0s; i0 < ne0; i0 += blockDim.x * gridDim.x) {
+        const uint32_t i10 = fastmodulo(i0, ne10_fd);
+
+        float result = src0_row ? (float) src0_row[i0] : 0.0f;
+        dst_row[i0] = (dst_t) bin_op(result, (float) src1_row[i10]);
     }
 }
 
-template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
-static __global__ void k_bin_bcast_unravel(const src0_t * src0, const src1_t * src1, dst_t * dst,
-        int ne0, int ne1, int ne2, int ne3,
-        int ne10, int ne11, int ne12, int ne13,
-        /*int s0, */ int s1,  int s2,  int s3,
-        /*int s00,*/ int s01, int s02, int s03,
-        /*int s10,*/ int s11, int s12, int s13) {
-
+template <float (*bin_op)(const float, const float),
+          typename src0_t,
+          typename src1_t,
+          typename dst_t>
+static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
+                                           const src1_t *         src1,
+                                           dst_t *                dst,
+                                           const uint3            ne0_fd,
+                                           const uint3            ne1_fd,
+                                           const uint3            ne2_fd,
+                                           const uint32_t         ne3,
+                                           const uint3            prod_012_fd,
+                                           const uint3            prod_01_fd,
+                                           const uint3            ne10_fd,
+                                           const uint3            ne11_fd,
+                                           const uint3            ne12_fd,
+                                           const uint3            ne13_fd,
+                                           /*int s0, */ const int s1,
+                                           const int              s2,
+                                           const int              s3,
+                                           /*int s00,*/ const int s01,
+                                           const int              s02,
+                                           const int              s03,
+                                           /*int s10,*/ const int s11,
+                                           const int              s12,
+                                           const int              s13) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
-    const int i3 = i/(ne2*ne1*ne0);
-    const int i2 = (i/(ne1*ne0)) % ne2;
-    const int i1 = (i/ne0) % ne1;
-    const int i0 = i % ne0;
+    const uint32_t i3 = fastdiv(i, prod_012_fd);
+    const uint32_t i2 = fastdiv(i - i3 * prod_012_fd.z, prod_01_fd);
+    const uint32_t i1 = fastdiv(i - i3 * prod_012_fd.z - i2 * prod_01_fd.z, ne0_fd);
+    const uint32_t i0 = i - i3 * prod_012_fd.z - i2 * prod_01_fd.z - i1 * ne0_fd.z;
 
-    if (i0 >= ne0 || i1 >= ne1 || i2 >= ne2 || i3 >= ne3) {
+    if (i0 >= ne0_fd.z || i1 >= ne1_fd.z || i2 >= ne2_fd.z || i3 >= ne3) {
         return;
     }
 
-    const int i11 = i1 % ne11;
-    const int i12 = i2 % ne12;
-    const int i13 = i3 % ne13;
+    const int i11 = fastmodulo(i1, ne11_fd);
+    const int i12 = fastmodulo(i2, ne12_fd);
+    const int i13 = fastmodulo(i3, ne13_fd);
 
     const size_t i_src0 =  i3*s03 +  i2*s02 +  i1*s01;
     const size_t i_src1 = i13*s13 + i12*s12 + i11*s11;
     const size_t i_dst  =  i3*s3  +  i2*s2  +  i1*s1;
 
-    const src0_t * src0_row = src0 + i_src0;
+    const src0_t * src0_row = src0 ? (src0 + i_src0) : nullptr;
     const src1_t * src1_row = src1 + i_src1;
     dst_t * dst_row = dst + i_dst;
 
-    const int i10 = i0 % ne10;
-    dst_row[i0] = (dst_t)bin_op(src0 ? (float)src0_row[i0] : 0.0f, (float)src1_row[i10]);
+    const int i10 = fastmodulo(i0, ne10_fd);
+
+    float result = src0_row ? (float) src0_row[i0] : 0.0f;
+    dst_row[i0] = (dst_t) bin_op(result, (float) src1_row[i10]);
 }
 
 template<float (*bin_op)(const float, const float)>
@@ -233,22 +272,29 @@ struct bin_bcast_cuda {
 
             if (block_nums.z > 65535) {
                 // this is the maximum number of blocks in z dimension, fallback to 1D grid kernel
-                int block_num = (ne0*ne1*ne2*ne3 + block_size - 1) / block_size;
+                int         block_num  = (ne0 * ne1 * ne2 * ne3 + block_size - 1) / block_size;
+                const uint3 prod_012    = init_fastdiv_values((uint32_t) (ne0 * ne1 * ne2));
+                const uint3 prod_01     = init_fastdiv_values((uint32_t) (ne0 * ne1));
+                const uint3 ne0_fastdiv = init_fastdiv_values((uint32_t) ne0);
+                const uint3 ne1_fastdiv = init_fastdiv_values((uint32_t) ne1);
+                const uint3 ne2_fastdiv = init_fastdiv_values((uint32_t) ne2);
+
                 k_bin_bcast_unravel<bin_op><<<block_num, block_size, 0, stream>>>(
-                    src0_dd, src1_dd, dst_dd,
-                    ne0, ne1, ne2, ne3,
-                    ne10, ne11, ne12, ne13,
+                    src0_dd, src1_dd, dst_dd, ne0_fastdiv, ne1_fastdiv, ne2_fastdiv, ne3, prod_012, prod_01,
+                    init_fastdiv_values((uint32_t) ne10), init_fastdiv_values((uint32_t) ne11),
+                    init_fastdiv_values((uint32_t) ne12), init_fastdiv_values((uint32_t) ne13),
                     /* s0, */ s1, s2, s3,
-                    /* s00, */ s01, s02, s03,
-                    /* s10, */ s11, s12, s13);
+                    /* s00,*/ s01, s02, s03,
+                    /* s10,*/ s11, s12, s13);
             } else {
+                const uint3 ne3_fastdiv = init_fastdiv_values((uint32_t) ne3);
                 k_bin_bcast<bin_op><<<block_nums, block_dims, 0, stream>>>(
-                    src0_dd, src1_dd, dst_dd,
-                    ne0, ne1, ne2, ne3,
-                    ne10, ne11, ne12, ne13,
+                    src0_dd, src1_dd, dst_dd, ne0, ne1, ne2, ne3_fastdiv,
+                    init_fastdiv_values((uint32_t) ne10), init_fastdiv_values((uint32_t) ne11),
+                    init_fastdiv_values((uint32_t) ne12), init_fastdiv_values((uint32_t) ne13),
                     /* s0, */ s1, s2, s3,
-                    /* s00, */ s01, s02, s03,
-                    /* s10, */ s11, s12, s13);
+                    /* s00,*/ s01, s02, s03,
+                    /* s10,*/ s11, s12, s13);
             }
         }
     }
@@ -317,12 +363,12 @@ void ggml_cuda_op_repeat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_repeat>>(&aux_dst, &aux_src, &aux_dst, nullptr, dst->src[0]->data, dst->data, ctx.stream());
 }
 
-static __global__ void k_fast_add(int64_t ne0, int64_t nelem, const float * x, const float * y, float * z) {
+static __global__ void k_fast_add(int64_t ne0, int64_t nelem, const float * x, const float * y, float * z, const uint3 ne0_fd) {
     int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
     if (i >= nelem) {
         return;
     }
-    z[i] = x[i] + y[i % ne0];
+    z[i] = x[i] + y[fastmodulo((uint32_t)i, ne0_fd)];
 }
 
 template <typename src1_t, typename src2_t, typename dst_t>
@@ -1183,8 +1229,9 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         constexpr int kBlockSize = 256;
         auto nelem = ggml_nelements(dst);
         int nblocks = (nelem + kBlockSize - 1)/kBlockSize;
+        const uint3 ne0_fd = init_fastdiv_values((uint32_t)dst->ne[0]);
         k_fast_add<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
-                (const float *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data);
+                (const float *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data, ne0_fd);
         return;
     }
     if (ggml_is_contiguous(dst->src[0]) && ggml_is_contiguous(dst->src[1]) &&
@@ -1589,12 +1636,12 @@ static void ggml_cuda_op_scale_tensor(ggml_backend_cuda_context & ctx, ggml_tens
     scale_f32_cuda_l(src0_d, dst_d, dst->src[1]->data, ggml_nelements(src0), stream);
 }
 
-static __global__ void k_mul_fast(int ne0, int nelem, const float * x, const float * y, float * z) {
+static __global__ void k_mul_fast(int ne0, int nelem, const float * x, const float * y, float * z, const uint3 ne0_fd) {
     int i = blockDim.x*blockIdx.x + threadIdx.x;
     if (i >= nelem) {
         return;
     }
-    int i1 = i / ne0;
+    const int i1 = fastdiv((uint32_t)i, ne0_fd);
     z[i] = x[i] * y[i1];
 }
 
@@ -1615,7 +1662,8 @@ void ggml_cuda_op_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         constexpr int kBlockSize = 256;
         int nelem = ggml_nelements(src0);
         int nblock = (nelem + kBlockSize - 1)/kBlockSize;
-        k_mul_fast<<<nblock, kBlockSize, 0, ctx.stream()>>>(src0->ne[0], nelem, (const float *)src0->data, (const float *)src1->data, (float *)dst->data);
+        const uint3 ne0_fd = init_fastdiv_values((uint32_t)src0->ne[0]);
+        k_mul_fast<<<nblock, kBlockSize, 0, ctx.stream()>>>(src0->ne[0], nelem, (const float *)src0->data, (const float *)src1->data, (float *)dst->data, ne0_fd);
         return;
     }
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_mul>>(src0, src1, dst, src0->data, src1->data, dst->data, ctx.stream());

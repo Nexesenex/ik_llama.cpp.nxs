@@ -64,7 +64,7 @@ __global__ void __launch_bounds__(splitD, 2)
         for (int j = 0; j < N; j++) {
             float state = (smem_s0[tid * stride_ss0 + j] * expf(dt_soft_plus * smem_A[tid * stride_sA + j])) +
                           (B_block[i * stride_B + j] * x_dt);
-            sumf += state * C_block[i * stride_C + j];
+            ggml_cuda_mad(sumf, state, C_block[i * stride_C + j]);
             if (i == L - 1) {
                 s_block[tid * stride_s + j] = state;
             } else {
