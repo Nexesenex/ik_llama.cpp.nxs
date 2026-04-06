@@ -49,8 +49,7 @@ static __device__ __forceinline__ void dequantize_q4_1(const void * vx, const in
     v.y = vui >> 4;
 
 #ifdef GGML_CUDA_F16
-    v = __hmul2(v, {d, d});
-    v = __hadd2(v, {m, m});
+    v = __hfma2(v, {d, d}, {m, m});
 #else
     v.x = (v.x * d) + m;
     v.y = (v.y * d) + m;
@@ -96,8 +95,7 @@ static __device__ __forceinline__ void dequantize_q5_1(const void * vx, const in
     v.y = ((x[ib].qs[iqs] >>  4) | xh_1);
 
 #ifdef GGML_CUDA_F16
-    v = __hmul2(v, {d, d});
-    v = __hadd2(v, {m, m});
+    v = __hfma2(v, {d, d}, {m, m});
 #else
     v.x = (v.x * d) + m;
     v.y = (v.y * d) + m;
