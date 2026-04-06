@@ -20,14 +20,16 @@ static __global__ void setup_trsm_batch_pointers(
     const size_t nb02,  // stride for A dim 2 (in floats)
     const size_t nb03,  // stride for A dim 3 (in floats)
     const size_t nb2,   // stride for X dim 2 (in floats)
-    const size_t nb3    // stride for X dim 3 (in floats)
+    const size_t nb3,   // stride for X dim 3 (in floats)
+    const uint3 ne02_fd
 ) {
     const int64_t batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (batch_idx >= total_batches) return;
 
-    // Decompose batch_idx into i02, i03
-    const int64_t i02 = batch_idx % ne02;
-    const int64_t i03 = batch_idx / ne02;
+    // Decompose batch_idx into i02, i03 using fastdiv
+    const uint2   i02_i03 = fast_div_modulo((uint32_t)batch_idx, ne02_fd);
+    const int64_t i02     = i02_i03.y;
+    const int64_t i03     = i02_i03.x;
 
     A_ptrs[batch_idx] = A + i02 * nb02 + i03 * nb03;
     X_ptrs[batch_idx] = X + i02 * nb2  + i03 * nb3;
@@ -39,7 +41,7 @@ static __global__ void solve_tri_f32_64x64_latency(
     const float * __restrict__ A,
     const float * __restrict__ B,
     float * __restrict__ X,
-    const uint3  ne02,
+    const uint3  ne02_fd,
     const size_t nb02,
     const size_t nb03,
     const size_t nb12,
@@ -50,7 +52,7 @@ static __global__ void solve_tri_f32_64x64_latency(
     const int lane      = threadIdx.x;
     const int warp_id   = threadIdx.y;
 
-    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
+    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02_fd);
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
 
@@ -105,10 +107,10 @@ static __global__ void solve_tri_f32_64x64_latency(
         if (row > 0) {
             for (int j = lane; j < row; j += WARP_SIZE) {
                 const float a_val = sA[row * 64 + j];
-                sum0 += a_val * sX[j * 65 + col_base + 0];
-                sum1 += a_val * sX[j * 65 + col_base + 1];
-                sum2 += a_val * sX[j * 65 + col_base + 2];
-                sum3 += a_val * sX[j * 65 + col_base + 3];
+                ggml_cuda_mad(sum0, a_val, sX[j * 65 + col_base + 0]);
+                ggml_cuda_mad(sum1, a_val, sX[j * 65 + col_base + 1]);
+                ggml_cuda_mad(sum2, a_val, sX[j * 65 + col_base + 2]);
+                ggml_cuda_mad(sum3, a_val, sX[j * 65 + col_base + 3]);
             }
         }
 
@@ -141,7 +143,7 @@ static __global__ void solve_tri_f32_64x64_latency(
 static __global__ void solve_tri_f32_64x64_opt(const float * __restrict__ A,
                                                const float * __restrict__ B,
                                                float * __restrict__ X,
-                                               const uint3  ne02,
+                                               const uint3  ne02_fd,
                                                const size_t nb02,
                                                const size_t nb03,
                                                const size_t nb12,
@@ -152,7 +154,7 @@ static __global__ void solve_tri_f32_64x64_opt(const float * __restrict__ A,
     const int lane      = threadIdx.x;
     const int warp_id   = threadIdx.y;
 
-    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
+    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02_fd);
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
 
@@ -207,8 +209,8 @@ static __global__ void solve_tri_f32_64x64_opt(const float * __restrict__ A,
             const int j2 = lane + WARP_SIZE;
             if (j2 < row) {
                 const float a_val2 = sA[row * 64 + j2];
-                sum0 += a_val2 * sXt[col0 * 65 + j2];
-                sum1 += a_val2 * sXt[col1 * 65 + j2];
+                ggml_cuda_mad(sum0, a_val2, sXt[col0 * 65 + j2]);
+                ggml_cuda_mad(sum1, a_val2, sXt[col1 * 65 + j2]);
             }
         }
 
@@ -243,7 +245,7 @@ static __global__ void solve_tri_f32_64x64_opt(const float * __restrict__ A,
 static __global__ void solve_tri_f32_128x128_opt(const float * __restrict__ A,
                                                   const float * __restrict__ B,
                                                   float * __restrict__ X,
-                                                  const uint3  ne02,
+                                                  const uint3  ne02_fd,
                                                   const size_t nb02,
                                                   const size_t nb03,
                                                   const size_t nb12,
@@ -256,7 +258,7 @@ static __global__ void solve_tri_f32_128x128_opt(const float * __restrict__ A,
     const int lane      = threadIdx.x;
     const int warp_id   = threadIdx.y;
 
-    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
+    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02_fd);
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
 
@@ -311,10 +313,10 @@ static __global__ void solve_tri_f32_128x128_opt(const float * __restrict__ A,
         // Sum over j < row - each lane handles multiple elements
         for (int j = lane; j < row; j += WARP_SIZE) {
             const float a_val = sA[row * 128 + j];
-            if (col_base + 0 < k) sum0 += a_val * sXt[(col_base + 0) * 129 + j];
-            if (col_base + 1 < k) sum1 += a_val * sXt[(col_base + 1) * 129 + j];
-            if (col_base + 2 < k) sum2 += a_val * sXt[(col_base + 2) * 129 + j];
-            if (col_base + 3 < k) sum3 += a_val * sXt[(col_base + 3) * 129 + j];
+            if (col_base + 0 < k) ggml_cuda_mad(sum0, a_val, sXt[(col_base + 0) * 129 + j]);
+            if (col_base + 1 < k) ggml_cuda_mad(sum1, a_val, sXt[(col_base + 1) * 129 + j]);
+            if (col_base + 2 < k) ggml_cuda_mad(sum2, a_val, sXt[(col_base + 2) * 129 + j]);
+            if (col_base + 3 < k) ggml_cuda_mad(sum3, a_val, sXt[(col_base + 3) * 129 + j]);
         }
 
         // Warp-level reduction
@@ -357,7 +359,7 @@ static __global__ void solve_tri_f32_128x128_opt(const float * __restrict__ A,
 static __global__ void solve_tri_f32_256x256_tiled(const float * __restrict__ A,
                                                     const float * __restrict__ B,
                                                     float * __restrict__ X,
-                                                    const uint3  ne02,
+                                                    const uint3  ne02_fd,
                                                     const size_t nb02,
                                                     const size_t nb03,
                                                     const size_t nb12,
@@ -370,7 +372,7 @@ static __global__ void solve_tri_f32_256x256_tiled(const float * __restrict__ A,
     const int lane      = threadIdx.x;
     const int warp_id   = threadIdx.y;
 
-    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
+    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02_fd);
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
 
@@ -457,11 +459,11 @@ static __global__ void solve_tri_f32_256x256_tiled(const float * __restrict__ A,
                         float a_val = sA_off[row * TILE_SIZE + j];
                         if (col0 < tile_k) {
                             float x_prev0 = X_batch[(prev_tile + j) * k + tile_col + col0];
-                            sum0 += a_val * x_prev0;
+                            ggml_cuda_mad(sum0, a_val, x_prev0);
                         }
                         if (col1 < tile_k) {
                             float x_prev1 = X_batch[(prev_tile + j) * k + tile_col + col1];
-                            sum1 += a_val * x_prev1;
+                            ggml_cuda_mad(sum1, a_val, x_prev1);
                         }
                     }
 
@@ -497,8 +499,8 @@ static __global__ void solve_tri_f32_256x256_tiled(const float * __restrict__ A,
                     int j2 = lane + WARP_SIZE;
                     if (j2 < row) {
                         float a_val2 = sA_tile[row * TILE_SIZE + j2];
-                        if (col0 < tile_k) sum0 += a_val2 * sXt_tile[col0 * (TILE_SIZE+1) + j2];
-                        if (col1 < tile_k) sum1 += a_val2 * sXt_tile[col1 * (TILE_SIZE+1) + j2];
+                        if (col0 < tile_k) ggml_cuda_mad(sum0, a_val2, sXt_tile[col0 * (TILE_SIZE+1) + j2]);
+                        if (col1 < tile_k) ggml_cuda_mad(sum1, a_val2, sXt_tile[col1 * (TILE_SIZE+1) + j2]);
                     }
                 }
 
@@ -545,7 +547,7 @@ template <int n_template, int k_template, int threads_y_template>
 static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
                                           const float * __restrict__ B,
                                           float * __restrict__ X,
-                                          const uint3  ne02,
+                                          const uint3  ne02_fd,
                                           const size_t nb02,
                                           const size_t nb03,
                                           const size_t nb12,
@@ -561,7 +563,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
     const int batch_idx = blockIdx.x;
     const int lane      = threadIdx.x;
 
-    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
+    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02_fd);
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
 
@@ -618,13 +620,13 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
             {
                 int j = lane;
                 if (j < row) {
-                    sum += sA[row * n + j] * sXt[col_idx * n + j];
+                    ggml_cuda_mad(sum, sA[row * n + j], sXt[col_idx * n + j]);
                 }
             }
             if (row >= WARP_SIZE) {
                 int j = WARP_SIZE + lane;
                 if (j < row) {
-                    sum += sA[row * n + j] * sXt[col_idx * n + j];
+                    ggml_cuda_mad(sum, sA[row * n + j], sXt[col_idx * n + j]);
                 }
             }
 
@@ -692,11 +694,12 @@ static void solve_tri_f32_cublas(
     {
         const int block_size = 256;
         const int grid_size = (total_batches + block_size - 1) / block_size;
+        const uint3 ne02_fd = init_fastdiv_values((uint32_t)ne02);
         setup_trsm_batch_pointers<<<grid_size, block_size, 0, stream>>>(
             A, X,
             A_ptrs.get(), X_ptrs.get(),
             ne02, total_batches,
-            nb02, nb03, nb2, nb3
+            nb02, nb03, nb2, nb3, ne02_fd
         );
         CUDA_CHECK(cudaGetLastError());
     }
