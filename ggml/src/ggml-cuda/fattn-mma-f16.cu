@@ -1,13 +1,13 @@
 #include "fattn-mma-f16.cuh"
 #include "fattn-mma-f16-interface.cuh"
 
-static __global__ void k_repack_q(int nelements, int ne0, int ne0_1, const float * src, float * dst1, float * dst2) {
+static __global__ void k_repack_q(int nelements, int ne0, int ne0_1, const float * src, float * dst1, float * dst2, const uint3 ne0_fd) {
     int i = blockDim.x * blockIdx.x + threadIdx.x;
     if (i >= nelements) {
         return;
     }
-    int row = i / ne0;
-    int i0  = i % ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
+    const int i0  = fastmodulo((uint32_t)i, ne0_fd);
     if (i0 < ne0_1) {
         dst1[row*ne0_1 + i0] = src[i];
     } else {
@@ -15,14 +15,14 @@ static __global__ void k_repack_q(int nelements, int ne0, int ne0_1, const float
     }
 }
 
-static __global__ void k_pack_fa(const float * x, const float * y, float * dst, int ne0, int ne00, int nelem) {
+static __global__ void k_pack_fa(const float * x, const float * y, float * dst, int ne0, int ne00, int nelem, const uint3 ne0_fd) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     if (i >= nelem) {
         return;
     }
 
-    int row = i / ne0;
-    int i0  = i % ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
+    const int i0  = fastmodulo((uint32_t)i, ne0_fd);
 
     if (i0 < ne00) {
         dst[row*ne0 + i0] = x[row*ne00 + i0];
@@ -41,7 +41,8 @@ static void repack_q(const ggml_tensor * q, float * dst, int nhead1, int nhead2,
     int nblocks = (nelements + kBlockSize - 1)/kBlockSize;
     auto dst1 = dst;
     auto dst2 = dst + ne0_1 * q->ne[1] * q->ne[3] * nek2;
-    k_repack_q<<<nblocks, kBlockSize, 0, stream>>>(nelements, ne0, ne0_1, (const float *)q->data, dst1, dst2);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
+    k_repack_q<<<nblocks, kBlockSize, 0, stream>>>(nelements, ne0, ne0_1, (const float *)q->data, dst1, dst2, ne0_fd);
 }
 
 static void pack_glm45_result(const ggml_tensor * fa1, const ggml_tensor * fa2, ggml_tensor * dst, cudaStream_t stream) {
@@ -56,7 +57,8 @@ static void pack_glm45_result(const ggml_tensor * fa1, const ggml_tensor * fa2, 
     int ne00 = dst->ne[0] *  8;
     int nelem = ne0 * dst->ne[1]/12 * dst->ne[2] * dst->ne[3];
     int nblocks = (nelem + kBlockSize - 1)/kBlockSize;
-    k_pack_fa<<<nblocks, kBlockSize, 0, stream>>>((const float *)fa1->data, (const float *)fa2->data, (float *)dst->data, ne0, ne00, nelem);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
+    k_pack_fa<<<nblocks, kBlockSize, 0, stream>>>((const float *)fa1->data, (const float *)fa2->data, (float *)dst->data, ne0, ne00, nelem, ne0_fd);
 }
 
 static inline ggml_tensor get_float_tensor(int ne0, int ne1, int ne2, int ne3) {

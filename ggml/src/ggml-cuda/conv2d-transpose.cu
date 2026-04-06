@@ -42,7 +42,7 @@ __global__ void conv2d_transpose_kernel(const float * __restrict__ input, const 
                 float input_val = input[input_idx];
                 half  kern_val  = kernel[kernel_idx];
 
-                accumulator += input_val * (float) kern_val;
+                ggml_cuda_mad(accumulator, input_val, (float) kern_val);
             }
         }
     }
