@@ -41,7 +41,7 @@ static  __global__ void pool2d_nchw_kernel(
             Ti cur = i_ptr[i * iw + j];
 #endif
             switch (op) {
-                case GGML_OP_POOL_AVG: res += cur * scale; break;
+                case GGML_OP_POOL_AVG: ggml_cuda_mad(res, (float)cur, scale); break;
                 case GGML_OP_POOL_MAX: res = max(res, (To)cur); break;
                 default: assert(false);
             }

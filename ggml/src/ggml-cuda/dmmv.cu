@@ -359,7 +359,7 @@ static __global__ void dequantize_mul_mat_vec_q3_k(const void * __restrict__ vx,
                  + y[l+80] * (s[5] - 32) * (((q[l+16] >> 4) & 3) - (h[l+16] & (m << 2) ? 0 : 4))
                 + y[l+112] * (s[7] - 32) * (((q[l+16] >> 6) & 3) - (h[l+16] & (m << 3) ? 0 : 4));
         }
-        tmp += d * sum;
+        ggml_cuda_mad(tmp, d, sum);
 
     }
 
