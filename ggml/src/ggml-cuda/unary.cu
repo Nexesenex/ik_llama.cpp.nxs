@@ -72,59 +72,59 @@ static __global__ void fused_mul_silu_f32(const float * x, const float * y, floa
     dst[i] = g * max(-limit, min(limit, y[i]));
 }
 
-static __global__ void fused_mul_silu_f32(int ne0, const float * x, const float * y, float * dst, const int k) {
+static __global__ void fused_mul_silu_f32(int ne0, const float * x, const float * y, float * dst, const int k, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
     dst[i] = x[row] * y[i] / (1.0f + expf(-x[row]));
 }
 
-static __global__ void fused_mul_sigmoid_f32(int ne0, const float * x, const float * y, float * dst, const int k) {
+static __global__ void fused_mul_sigmoid_f32(int ne0, const float * x, const float * y, float * dst, const int k, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
     dst[i] = y[i] / (1.0f + expf(-x[row]));
 }
 
-static __global__ void fused_mul_silu_f32(int ne0, const float * x, const float * y, float * dst, const int k, float limit) {
+static __global__ void fused_mul_silu_f32(int ne0, const float * x, const float * y, float * dst, const int k, float limit, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
     float g = x[row] / (1.0f + expf(-x[row]));
     g = min(g, limit);
     dst[i] = g * max(-limit, min(limit, y[i]));
 }
 
-static __global__ void fused_mul_silu_f32(const float * x, float * dst, const int k, const int ne0) {
+static __global__ void fused_mul_silu_f32(const float * x, float * dst, const int k, const int ne0, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
-    int j   = i % ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
+    const int j   = fastmodulo((uint32_t)i, ne0_fd);
     auto x_row = x + 2*row*ne0;
     // Note: gate is at the beginning of each row, up is offset by ne0
     dst[i] = x_row[j] * x_row[j + ne0] / (1.0f + expf(-x_row[j]));
 }
 
-static __global__ void fused_mul_silu_f32(const float * x, float * dst, const int k, const int ne0, float limit) {
+static __global__ void fused_mul_silu_f32(const float * x, float * dst, const int k, const int ne0, float limit, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
-    int j   = i % ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
+    const int j   = fastmodulo((uint32_t)i, ne0_fd);
     auto x_row = x + 2*row*ne0;
     // Note: gate is at the beginning of each row, up is offset by ne0
     float g = x_row[j] / (1.0f + expf(-x_row[j]));
@@ -141,14 +141,14 @@ static __global__ void fused_mul_relu_f32(const float * x, const float * y, floa
     dst[i] = fmaxf(x[i], 0) * y[i];
 }
 
-static __global__ void fused_mul_relu_f32(const float * x, float * dst, const int k, const int ne0) {
+static __global__ void fused_mul_relu_f32(const float * x, float * dst, const int k, const int ne0, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
-    int j   = i % ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
+    const int j   = fastmodulo((uint32_t)i, ne0_fd);
     auto x_row = x + 2*row*ne0;
     dst[i] = fmaxf(x_row[j], 0) * x_row[j + ne0];
 }
@@ -165,7 +165,7 @@ static __global__ void fused_mul_gelu_f32(const float * x, const float * y, floa
     dst[i] = 0.5f*xi*y[i]*(1.0f + tanhf(SQRT_2_OVER_PI*xi*(1.0f + GELU_COEF_A*xi*xi)));
 }
 
-static __global__ void fused_mul_gelu_f32(const float * x, float * dst, const int k, const int ne0) {
+static __global__ void fused_mul_gelu_f32(const float * x, float * dst, const int k, const int ne0, const uint3 ne0_fd) {
     constexpr float GELU_COEF_A    = 0.044715f;
     constexpr float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
@@ -173,8 +173,8 @@ static __global__ void fused_mul_gelu_f32(const float * x, float * dst, const in
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
-    int j   = i % ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
+    const int j   = fastmodulo((uint32_t)i, ne0_fd);
     auto x_row = x + 2*row*ne0;
     float xi = x_row[j];
     dst[i] = 0.5f*xi*x_row[j+ne0]*(1.0f + tanhf(SQRT_2_OVER_PI*xi*(1.0f + GELU_COEF_A*xi*xi)));
@@ -293,16 +293,18 @@ static void fused_mul_silu_f32_cuda(const float * x, const float * y, float * ds
 
 static void fused_mul_silu_f32_cuda(int ne0, const float * x, const float * y, float * dst, const int k, float limit, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_SILU_BLOCK_SIZE - 1) / CUDA_SILU_BLOCK_SIZE;
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
     if (limit < 1e-6f) {
-        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k);
+        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k, ne0_fd);
     } else {
-        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k, limit);
+        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k, limit, ne0_fd);
     }
 }
 
 static void fused_mul_sigmoid_f32_cuda(int ne0, const float * x, const float * y, float * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_SILU_BLOCK_SIZE - 1) / CUDA_SILU_BLOCK_SIZE;
-    fused_mul_sigmoid_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
+    fused_mul_sigmoid_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k, ne0_fd);
 }
 
 static void fused_mul_relu_f32_cuda(const float * x, const float * y, float * dst, const int k, cudaStream_t stream) {
@@ -317,21 +319,24 @@ static void fused_mul_gelu_f32_cuda(const float * x, const float * y, float * ds
 
 static void fused_mul_silu_f32_cuda(const float * x, float * dst, const int k, const int ne0, float limit, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_SILU_BLOCK_SIZE - 1) / CUDA_SILU_BLOCK_SIZE;
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
     if (limit < 1e-6f) {
-        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0);
+        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0, ne0_fd);
     } else {
-        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0, limit);
+        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0, limit, ne0_fd);
     }
 }
 
 static void fused_mul_relu_f32_cuda(const float * x, float * dst, const int k, const int ne0, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_RELU_BLOCK_SIZE - 1) / CUDA_RELU_BLOCK_SIZE;
-    fused_mul_relu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
+    fused_mul_relu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0, ne0_fd);
 }
 
 static void fused_mul_gelu_f32_cuda(const float * x, float * dst, const int k, const int ne0, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_GELU_BLOCK_SIZE - 1) / CUDA_GELU_BLOCK_SIZE;
-    fused_mul_gelu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
+    fused_mul_gelu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0, ne0_fd);
 }
 
 static void tanh_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
@@ -961,12 +966,12 @@ void ggml_cuda_op_elu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_elu>(ctx, dst);
 }
 
-static __global__ void k_fused_softplus(int ne0, int nelem, const float * a, const float * b, const float * c, float * dst) {
+static __global__ void k_fused_softplus(int ne0, int nelem, const float * a, const float * b, const float * c, float * dst, const uint3 ne0_fd) {
     int i = blockIdx.x*blockDim.x + threadIdx.x;
     if (i >= nelem) {
         return;
     }
-    int i0 = i % ne0;
+    const int i0 = fastmodulo((uint32_t)i, ne0_fd);
     dst[i] = c[i0] * op_softplus(a[i] + b[i0]);
 }
 
@@ -986,16 +991,17 @@ void ggml_cuda_fused_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 
     int nelem = ggml_nelements(a->src[0]);
     int nblock = (nelem + kBlockSize - 1)/kBlockSize;
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)a->src[0]->ne[0]);
     k_fused_softplus<<<nblock, kBlockSize, 0, ctx.stream()>>>(a->src[0]->ne[0], nelem,
-            (const float *)a->src[0]->data, (const float *)a->src[1]->data, (const float *)m->src[1]->data, (float *)dst->data);
+            (const float *)a->src[0]->data, (const float *)a->src[1]->data, (const float *)m->src[1]->data, (float *)dst->data, ne0_fd);
 }
 
-static __global__ void k_fused_mul_exp_mul(int ne0, int nelem, const float * x, const float * y, float * dst) {
+static __global__ void k_fused_mul_exp_mul(int ne0, int nelem, const float * x, const float * y, float * dst, const uint3 ne0_fd) {
     int i = blockIdx.x*blockDim.x + threadIdx.x;
     if (i >= nelem) {
         return;
     }
-    int i0 = i % ne0;
+    const int i0 = fastmodulo((uint32_t)i, ne0_fd);
     dst[i] = y[i0] * expf(x[i] * y[i0]);
 }
 
@@ -1012,7 +1018,8 @@ void ggml_cuda_fused_mul_exp_mul(ggml_backend_cuda_context & ctx, ggml_tensor * 
     auto nelem = ggml_nelements(m1->src[0]);
     auto ne0   = ggml_nelements(m1->src[1]);
     int nblock = (nelem + kBlockSize - 1)/kBlockSize;
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
 
     k_fused_mul_exp_mul<<<nblock, kBlockSize, 0, ctx.stream()>>>(ne0, nelem,
-            (const float *)m1->src[0]->data, (const float *)m1->src[1]->data, (float *)dst->data);
+            (const float *)m1->src[0]->data, (const float *)m1->src[1]->data, (float *)dst->data, ne0_fd);
 }

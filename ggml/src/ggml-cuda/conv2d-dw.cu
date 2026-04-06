@@ -97,7 +97,7 @@ __global__ void conv2d_dw_kernel(const T * __restrict__ input, const T * __restr
     int batch_idx, channel_idx, out_y_idx, out_x_idx;
     Layout::unpack_indices(global_idx, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
 
-    T accumulator = 0;
+    float acc = 0.0f;
     kernel_bounds bounds = calculate_kernel_bounds(out_x_idx, out_y_idx, params);
 
     for (int kern_y = bounds.y_min; kern_y < bounds.y_max; ++kern_y) {
@@ -109,11 +109,11 @@ __global__ void conv2d_dw_kernel(const T * __restrict__ input, const T * __restr
             const T input_val  = input[Layout::input_index(batch_idx, channel_idx, in_y_idx, in_x_idx, params)];
             const T kernel_val = kernel[Layout::kernel_index(channel_idx, kern_y, kern_x, params)];
 
-            accumulator += input_val * kernel_val;
+            ggml_cuda_mad(acc, (float)input_val, (float)kernel_val);
         }
     }
 
-    output[Layout::output_index(batch_idx, channel_idx, out_y_idx, out_x_idx, params)] = accumulator;
+    output[Layout::output_index(batch_idx, channel_idx, out_y_idx, out_x_idx, params)] = (T)acc;
 }
 
 void ggml_cuda_op_conv2d_dw(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
