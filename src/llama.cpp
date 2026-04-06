@@ -2770,7 +2770,7 @@ static bool llm_load_tensors(
     if (fit && device_count > 1) {
         model.main_gpu = device_count - 1;
     }
-    model.default_layer_device = std::vector<int32_t>(hparams.n_layer+1, device_count-1);
+    model.default_layer_device = std::vector<int32_t>(hparams.n_layer+1, model.main_gpu);
     int act_gpu_layers = std::min(n_gpu_layers, (int)n_layer + 1);
     std::vector<llama_model_tensor_buft_override> overrides;
     bool has_tensor_split = tensor_split != nullptr && std::any_of(tensor_split, tensor_split + device_count, [](float x) { return x != 0.0f; });
