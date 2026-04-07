@@ -1757,11 +1757,16 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     }
                     // check if a weight is on a different backend
                     // by starting a new split, the memory of the previously offloaded weights can be reused
+                    // only force a new split if the current backend cannot support the weight buffer type
                     if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
                         int src_backend_id = tensor_backend_id(src);
                         if (src_backend_id != cur_backend_id) {
-                            need_new_split = true;
-                            break;
+                            // check if copy is supported, like in the "too many inputs" case below
+                            bool supported = ggml_backend_sched_buffer_supported(sched, src, cur_backend_id);
+                            if (!supported) {
+                                need_new_split = true;
+                                break;
+                            }
                         }
                     }
                     // check if the split has too many inputs
