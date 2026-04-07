@@ -1676,6 +1676,64 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.use_mmap = false;
         return true;
     }
+    if (arg == "-dio" || arg == "--direct-io") {
+        std::string dio_val = "";
+        
+        if (i + 1 < argc) {
+            std::string next_arg = argv[i + 1];
+            if (next_arg.find("--") == std::string::npos && next_arg[0] != '-') {
+                dio_val = next_arg;
+                i++;
+            }
+        }
+        
+        std::string dio_type = "auto";
+        
+        size_t comma_pos = dio_val.find(',');
+        if (comma_pos != std::string::npos) {
+            dio_type = dio_val.substr(0, comma_pos);
+            std::string modifiers = dio_val.substr(comma_pos + 1);
+            
+            std::stringstream ss(modifiers);
+            std::string mod;
+            while (std::getline(ss, mod, ',')) {
+                if (mod == "thread") {
+                    params.dio_thread = true;
+                } else if (mod == "async") {
+                    params.dio_async = true;
+                } else if (mod == "fallback") {
+                    params.dio_fallback = true;
+                } else if (mod == "directgpu" || mod == "gds") {
+                    params.dio_directgpu = true;
+                }
+            }
+        } else if (!dio_val.empty()) {
+            dio_type = dio_val;
+        }
+        
+        if (dio_type == "auto" || dio_type == "") {
+            params.use_direct_io = true;
+            params.dio_type = 0;
+        } else if (dio_type == "off" || dio_type == "none") {
+            params.use_direct_io = false;
+            params.dio_type = -1;
+        } else if (dio_type == "seq" || dio_type == "sequential") {
+            params.use_direct_io = true;
+            params.dio_type = 1;
+        } else if (dio_type == "direct" || dio_type == "nobuf") {
+            params.use_direct_io = true;
+            params.dio_type = 2;
+        } else {
+            fprintf(stderr, "warning: unknown --direct-io type '%s', using auto\n", dio_type.c_str());
+            params.use_direct_io = true;
+            params.dio_type = 0;
+        }
+        
+        if (params.use_direct_io) {
+            params.use_mmap = false;
+        }
+        return true;
+    }
     if (arg == "-rtr" || arg == "--run-time-repack") {
         params.repack_tensors = true;
         params.use_mmap = false;
@@ -2741,6 +2799,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     if (llama_supports_mmap()) {
         options.push_back({ "*",           "       --no-mmap",              "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
+    options.push_back({ "*",           "-dio,  --direct-io [type]",     "use DirectIO: auto|off|seq|direct,mods (disables mmap). Mods: thread,async,fallback (e.g. -dio seq,thread,fallback)"});
     options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
@@ -3684,6 +3743,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.split_mode      = params.split_mode;
     mparams.tensor_split    = params.tensor_split;
     mparams.use_mmap        = params.use_mmap;
+    mparams.use_direct_io   = params.use_direct_io;
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
     mparams.repack_tensors  = params.repack_tensors;
@@ -4769,6 +4829,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "n_predict: %d # default: -1 (unlimited)\n", params.n_predict);
     fprintf(stream, "n_probs: %d # only used by server binary, default: 0\n", sparams.n_probs);
     fprintf(stream, "no_mmap: %s # default: false\n", !params.use_mmap ? "true" : "false");
+    fprintf(stream, "direct-io: %s # default: false\n", params.use_direct_io ? "true" : "false");
     fprintf(stream, "repack: %s # default: false\n", params.repack_tensors ? "true" : "false");
     fprintf(stream, "use_thp: %s # default: false\n", params.use_thp ? "true" : "false");
     fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");

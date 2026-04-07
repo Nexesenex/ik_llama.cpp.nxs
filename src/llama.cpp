@@ -3159,7 +3159,6 @@ static bool llm_load_tensors(
         if (bufs.empty()) {
             LLAMA_LOG_WARN("No monolithic tensors in buffer type %s\n", ggml_backend_buft_name(buft));
             continue;
-            //throw std::runtime_error("failed to allocate buffer (1)");
         }
 
         for (auto & buf : bufs) {
@@ -3317,7 +3316,7 @@ static bool llm_load_tensors(
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
-        llama_model_loader ml(fname, params.ncmoe, params.use_mmap, params.check_tensors,
+        llama_model_loader ml(fname, params.ncmoe, params.use_mmap, params.use_direct_io, params.dio_type, params.dio_thread, params.dio_async, params.dio_fallback, params.dio_directgpu, params.check_tensors,
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
                 params.defer_experts,
                 params.kv_overrides, params.tensor_buft_overrides);
@@ -5469,6 +5468,7 @@ struct llama_model_params llama_model_default_params() {
         /*.tensor_buft_overrides       =*/ nullptr,
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
+        /*.use_direct_io               =*/ false,
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.repack_tensors              =*/ false,
@@ -5614,6 +5614,14 @@ bool llama_supports_mmap(void) {
     return llama_mmap::SUPPORTED;
 }
 
+bool llama_supports_direct_io(void) {
+#if defined(_WIN32) || defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+    return true;
+#else
+    return false;
+#endif
+}
+
 bool llama_supports_mlock(void) {
     return llama_mlock::SUPPORTED;
 }
@@ -5680,6 +5688,7 @@ struct llama_model * llama_model_load_from_file(
     llama_model * model = new llama_model;
 
     unsigned cur_percentage = 0;
+    int64_t dio_start_time = ggml_time_us();
     if (params.progress_callback == NULL) {
         params.progress_callback_user_data = &cur_percentage;
         params.progress_callback = [](float progress, void * ctx) {
@@ -5698,7 +5707,7 @@ struct llama_model * llama_model_load_from_file(
     model->set_tensor_overrides(params);
     // model->devices hold device indices that are used to offload
     // use model->devices to determine offload device
-    // if no device is specified, all device are included
+    // if no device is specified, all device are included in the model->devices
     // if device is specified, only those in the devices are included in the model->devices
 
     std::vector<std::string> params_devices;

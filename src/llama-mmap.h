@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include <cstdio>
 
 struct llama_file;
 struct llama_mmap;
@@ -13,7 +14,7 @@ using llama_mmaps  = std::vector<std::unique_ptr<llama_mmap>>;
 using llama_mlocks = std::vector<std::unique_ptr<llama_mlock>>;
 
 struct llama_file {
-    llama_file(const char * fname, const char * mode);
+    llama_file(const char * fname, const char * mode, bool use_direct_io = false, int dio_type = 0, bool dio_thread = false, bool dio_async = false, bool dio_fallback = false, bool dio_directgpu = false);
     ~llama_file();
 
     size_t tell() const;
@@ -23,11 +24,22 @@ struct llama_file {
 
     void seek(size_t offset, int whence) const;
 
-    void read_raw(void * ptr, size_t len) const;
-    uint32_t read_u32() const;
+    void read_raw(void * ptr, size_t len);
+    void read_raw_unsafe(void * ptr, size_t len);
+    void read_aligned_chunk(void * dest, size_t size);
+    size_t read_direct(void * ptr, size_t len, size_t offset) const;
+    uint32_t read_u32();
 
     void write_raw(const void * ptr, size_t len) const;
     void write_u32(uint32_t val) const;
+
+    size_t read_alignment() const;
+    bool has_direct_io() const;
+    size_t get_total_bytes_read() const;
+    double get_load_speed_mbps() const;
+    int64_t get_load_start_us() const;
+
+    static constexpr bool DIRECT_IO_SUPPORTED = true;
 
 private:
     struct impl;
@@ -45,6 +57,10 @@ struct llama_mmap {
     void dontneed_fragment(size_t first, size_t last);
 
     void unmap_fragment(size_t first, size_t last);
+
+    void populate(size_t first, size_t last) const;
+
+    bool prefetch;
 
     static const bool SUPPORTED;
 

@@ -417,6 +417,12 @@ extern "C" {
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;    // only load the vocabulary, no weights
         bool use_mmap;      // use mmap if possible
+        bool use_direct_io; // use direct io, takes precedence over use_mmap when supported
+        int  dio_type;      // DIO type: 0=auto, 1=seq, 2=direct (no buffering)
+        bool dio_thread;    // use thread buffering for DIO
+        bool dio_async;     // use async I/O for DIO
+        bool dio_fallback;  // fallback to buffered I/O on DIO failure
+        bool dio_directgpu; // use GPUDirect Storage (direct GPU read)
         bool use_mlock;     // force system to keep model in RAM
         bool check_tensors; // validate model tensor data
         bool repack_tensors;// repack if available
@@ -607,6 +613,7 @@ extern "C" {
     LLAMA_API size_t llama_max_devices(void);
 
     LLAMA_API bool llama_supports_mmap       (void);
+    LLAMA_API bool llama_supports_direct_io  (void);
     LLAMA_API bool llama_supports_mlock      (void);
     LLAMA_API bool llama_supports_gpu_offload(void);
 
