@@ -4315,11 +4315,15 @@ bool create_tensors_helper::create_tensors() {
 
             if (layer.ffn_norm) {
                 if (auto it = split_tensors.find(layer.ffn_norm); it != split_tensors.end()) {
+                    // auto split = create_split(ggml_nrows(layer.ffn_norm), -1, cur_splits, mem_used, vram_free,
+                        // model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_norm, layer.split_ffn_norm, mirror, mem_used);
                 }
             }
             if (layer.ffn_post_norm) {
                 if (auto it = split_tensors.find(layer.ffn_post_norm); it != split_tensors.end()) {
+                    // auto split = create_split(ggml_nrows(layer.ffn_post_norm), -1, cur_splits, mem_used, vram_free, vram_total,
+                        // model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_post_norm, layer.split_ffn_post_norm, mirror, mem_used);
                 }
             }
