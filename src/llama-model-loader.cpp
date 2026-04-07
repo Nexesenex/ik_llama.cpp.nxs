@@ -297,7 +297,7 @@ static void coalesce_ranges(std::vector<llama_file_range> & ranges) {
     ranges = std::move(merged);
 }
 
-llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors,
+llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool use_direct_io, int dio_type, bool dio_thread, bool dio_async, bool dio_fallback, bool dio_directgpu, bool check_tensors,
         bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
@@ -347,8 +347,33 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
     llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
-    files.emplace_back(new llama_file(fname.c_str(), "rb"));
+    files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io, dio_type, dio_thread, dio_async, dio_fallback, dio_directgpu));
     contexts.emplace_back(ctx);
+
+    LLAMA_LOG_INFO("%s: direct I/O is %s (requested: use_dio=%s, thread=%s, async=%s, fallback=%s)\n", __func__,
+                   files.back()->has_direct_io() ? "enabled" : "disabled",
+                   use_direct_io ? "true" : "false",
+                   dio_thread ? "true" : "false",
+                   dio_async ? "true" : "false",
+                   dio_fallback ? "true" : "false");
+
+    if (use_mmap && use_direct_io) {
+        if (files.back()->has_direct_io()) {
+            LLAMA_LOG_WARN("%s: direct I/O is enabled, disabling mmap\n", __func__);
+            use_mmap = false;
+        } else if (!dio_fallback) {
+            LLAMA_LOG_WARN("%s: direct I/O is not available, using mmap\n", __func__);
+            use_mmap = true;
+            use_direct_io = false;
+            files.pop_back();
+            files.emplace_back(new llama_file(fname.c_str(), "rb", false, false, false, false, false));
+        } else {
+            LLAMA_LOG_WARN("%s: direct I/O is not available, using fallback\n", __func__);
+            use_direct_io = false;
+            files.pop_back();
+            files.emplace_back(new llama_file(fname.c_str(), "rb", false, false, false, false));
+        }
+    }
 
     // Save tensors data offset of the main file.
     // For subsidiary files, `meta` tensor data offset must not be used,
@@ -389,7 +414,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
                 throw std::runtime_error(format("%s: failed to load GGUF split from %s\n", __func__, split_path));
             }
 
-            files.emplace_back(new llama_file(split_path, "rb"));
+            files.emplace_back(new llama_file(split_path, "rb", use_direct_io, dio_type, dio_thread, dio_async, dio_fallback));
             contexts.emplace_back(ctx);
 
             // Save tensors data offset info of the shard.
@@ -589,6 +614,8 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
 
     this->ncmoe = ncmoe;
     this->use_mmap = use_mmap;
+    this->use_direct_io = use_direct_io;
+    this->dio_type = dio_type;
     this->check_tensors = check_tensors;
     this->repack_tensors = repack_tensors;
     this->use_thp = use_thp;
@@ -1067,7 +1094,15 @@ bool llama_model_loader::load_all_data(
     // 4 staging buffers for async uploads, each sized 1MB seems to be a good default for single NVMe drives.
     // NVMe raid configurations might require more / larger buffers.
     constexpr size_t n_buffers = 4;
-    constexpr size_t buffer_size = 1 * 1024 * 1024; // 1MB
+
+    size_t alignment = 1;
+    for (const auto & file : files) {
+        alignment = std::max(file->read_alignment(), alignment);
+    }
+
+    // Buffer size: balance between memory usage and I/O efficiency
+    // 64MB works well for NVMe drives
+    const size_t buffer_size = alignment != 1 ? 64 * 1024 * 1024 + 2 * alignment : 1 * 1024 * 1024;
 
     std::vector<ggml_backend_buffer_t> host_buffers;
     std::vector<void*> host_ptrs;
@@ -1111,6 +1146,62 @@ bool llama_model_loader::load_all_data(
         if (progress_callback) {
             if (!progress_callback((float) size_done / size_data, progress_callback_user_data)) {
                 return false;
+            }
+
+            // DIO speed counter - track last printed percentage to synchronize with dots
+            static size_t last_bytes = 0;
+            static int64_t last_log_time = 0;
+            static int64_t load_start_time = 0;
+            static int layer_count = 0;
+            static unsigned last_percentage = 0;
+            static bool timing_started = false;
+            
+            unsigned current_percentage = (unsigned)(100 * size_done / size_data);
+            
+            size_t current_bytes = 0;
+            for (const auto & file : files) {
+                current_bytes += file->get_total_bytes_read();
+            }
+            
+            if (!timing_started) {
+                load_start_time = ggml_time_us();
+                timing_started = true;
+            }
+            
+            layer_count++;
+            // Only print DIO line when progress advances (dot event) and at least every 2 layers
+            if (current_percentage > last_percentage && layer_count % 2 == 0) {
+                last_percentage = current_percentage;
+                int64_t now = ggml_time_us();
+                int64_t elapsed = now - last_log_time;
+                
+                if (last_log_time == 0) {
+                    last_log_time = now;
+                    last_bytes = current_bytes;
+                } else if (elapsed > 0) {
+                    size_t bytes_delta = current_bytes > last_bytes ? current_bytes - last_bytes : 0;
+                    double mbps = (double)bytes_delta / (double)elapsed * 1000000.0 / (1024.0 * 1024.0);
+                    int64_t timestamp = (int64_t)time(NULL);
+                    double total_seconds = (double)(now - load_start_time) / 1000000.0;
+                    double total_mbps = total_seconds > 0 ? (double)current_bytes / total_seconds / (1024.0 * 1024.0) : 0.0;
+                    const char * dio_mode = "unknown";
+                    if (!use_direct_io) {
+                        dio_mode = "no";
+                    } else {
+                        switch (dio_type) {
+                            case -1: dio_mode = "off"; break;
+                            case 0:  dio_mode = "auto"; break;
+                            case 1:  dio_mode = "seq"; break;
+                            case 2:  dio_mode = "direct"; break;
+                            default: dio_mode = "custom"; break;
+                        }
+                    }
+                    const char * buf_name = cur && cur->buffer ? ggml_backend_buffer_name(cur->buffer) : "unknown";
+                    LLAMA_LOG_INFO("time=%lld, tensor %d/%d loaded via %s-DIO on %s at %d MiB/s, %zu MiB in %.2f sec, %d MiB/s\n", (long long)timestamp,
+                        layer_count, n_tensors, dio_mode, buf_name, (int)mbps, current_bytes / (1024*1024), total_seconds, (int)total_mbps);
+                    last_log_time = now;
+                    last_bytes = current_bytes;
+                }
             }
         }
 
@@ -1159,19 +1250,54 @@ bool llama_model_loader::load_all_data(
 #if defined(GGML_USE_CUDA)
                 // If cuda_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
                 if (cuda_backend) {
-                    file->seek(weight->offs, SEEK_SET);
+                    size_t offset = weight->offs;
+                    alignment = file->read_alignment();
+                    size_t aligned_offset = offset & ~(alignment - 1);
+                    size_t offset_from_alignment = offset - aligned_offset;
+                    file->seek(aligned_offset, SEEK_SET);
+
+                    // Calculate aligned read boundaries
+                    size_t read_start = aligned_offset;
+                    size_t read_end = (offset + n_size + alignment - 1) & ~(alignment - 1);
 
                     size_t bytes_read = 0;
+                    size_t data_read = 0;  // Actual tensor data copied (excluding padding)
 
-                    while (bytes_read < n_size) {
-                        size_t read_iteration = std::min<size_t>(buffer_size, n_size - bytes_read);
+                    while (bytes_read < read_end - read_start) {
+                        size_t read_size = std::min<size_t>(buffer_size, read_end - read_start - bytes_read);
 
+                        // Align the destination pointer within the pinned buffer
+                        uintptr_t ptr_dest_aligned = (reinterpret_cast<uintptr_t>(host_ptrs[buffer_idx]) + alignment - 1) & ~(alignment - 1);
+
+                        // Wait for previous upload to complete before reusing buffer
                         ggml_backend_event_synchronize(events[buffer_idx]);
-                        file->read_raw(host_ptrs[buffer_idx], read_iteration);
-                        ggml_backend_tensor_set_async(cuda_backend, cur, host_ptrs[buffer_idx], bytes_read, read_iteration);
+
+                        // Read aligned chunk from file
+                        file->read_raw_unsafe(reinterpret_cast<void *>(ptr_dest_aligned), read_size);
+
+                        // Calculate actual data portion (excluding alignment padding)
+                        uintptr_t ptr_data = ptr_dest_aligned;
+                        size_t data_to_copy = read_size;
+
+                        // Skip alignment padding at start of first chunk
+                        if (bytes_read == 0) {
+                            ptr_data += offset_from_alignment;
+                            data_to_copy -= offset_from_alignment;
+                        }
+
+                        // Trim alignment padding at end of last chunk
+                        if (aligned_offset + bytes_read + read_size > offset + n_size) {
+                            data_to_copy -= (read_end - (offset + n_size));
+                        }
+
+                        // Async upload actual data to GPU
+                        ggml_backend_tensor_set_async(cuda_backend, cur,
+                                                      reinterpret_cast<void *>(ptr_data), data_read, data_to_copy);
                         ggml_backend_event_record(events[buffer_idx]);
 
-                        bytes_read += read_iteration;
+                        data_read += data_to_copy;
+                        bytes_read += read_size;
+
                         ++buffer_idx;
                         buffer_idx %= n_buffers;
                     }
