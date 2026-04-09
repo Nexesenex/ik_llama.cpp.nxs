@@ -720,7 +720,15 @@ static bool llama_kv_cache_init(
                          ggml_type   type_k,
                          ggml_type   type_v,
                           uint32_t   kv_size,
-                              bool   offload) {
+                              bool   offload,
+                          ggml_type  type_k_first,
+                          ggml_type  type_k_last,
+                          ggml_type  type_v_first,
+                          ggml_type  type_v_last,
+                          int32_t    n_k_first,
+                          int32_t    n_k_last,
+                          int32_t    n_v_first,
+                          int32_t    n_v_last) {
     const llama_model & model = ctx->model;
     const llama_cparams & cparams = ctx->cparams;
 
@@ -926,10 +934,30 @@ static bool llama_kv_cache_init(
                 split_cache_i = false;
             }
             int n_embd_head_v = hparams.n_embd_head_v(i);
-            k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
+            auto this_type_k = type_k;
+            if (type_k_first != type_k && n_k_first > 0 && i < n_k_first) {
+                this_type_k = type_k_first;
+            }
+            if (type_k_last != type_k && n_k_last > 0 && i >= n_layer - n_k_last) {
+                this_type_k = type_k_last;
+            }
+            if (this_type_k != type_k) {
+                LLAMA_LOG_INFO("================= Setting K-cache type in layer %2d to %s\n", i, ggml_type_name(this_type_k));
+            }
+            k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
 
             int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
-            v = ggml_new_tensor_1d(ctx, type_v, v_ne);
+            auto this_type_v = type_v;
+            if (type_v_first != type_v && n_v_first > 0 && i < n_v_first) {
+                this_type_v = type_v_first;
+            }
+            if (type_v_last != type_v && n_v_last > 0 && i >= n_layer - n_v_last) {
+                this_type_v = type_v_last;
+            }
+            if (this_type_v != type_v) {
+                LLAMA_LOG_INFO("================= Setting V-cache type in layer %2d to %s\n", i, ggml_type_name(this_type_v));
+            }
+            v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
 
             auto k_name = std::string{"cache_k_l"} + std::to_string(i);
             auto v_name = std::string{"cache_v_l"} + std::to_string(i);
@@ -952,7 +980,7 @@ static bool llama_kv_cache_init(
                         LLAMA_LOG_DEBUG("K_cache(%d, %d): using %d instead of %ld heads\n",
                                 i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
                     }
-                    split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, nhead_kv * kv_size);
+                    split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, nhead_kv * kv_size);
                     auto split_name = k_name + '.' + std::to_string(is);
                     ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
                     mem_split[is] += ggml_nbytes(split_k_l.tensor_splits[is]);
@@ -963,7 +991,7 @@ static bool llama_kv_cache_init(
                 for (int is = 0; is < extra_V->n_device; ++is) {
                     auto split = extra_V->splits[is];
                     if (!split) continue;
-                    split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, type_v, split->ne[1] * kv_size);
+                    split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, this_type_v, split->ne[1] * kv_size);
                     auto split_name = v_name + '.' + std::to_string(is);
                     ggml_set_name(split_v_l.tensor_splits[is], split_name.c_str());
                     mem_split[is] += ggml_nbytes(split_v_l.tensor_splits[is]);
@@ -4907,6 +4935,14 @@ struct llama_model_params llama_model_default_params() {
         /*.fit_margin                  =*/ 0,
         /*.fit                         =*/ false,
         /*.worst_graph_tokens          =*/ 0,
+        /*.type_first_k                =*/ GGML_TYPE_F16,
+        /*.type_last_k                 =*/ GGML_TYPE_F16,
+        /*.type_first_v                =*/ GGML_TYPE_F16,
+        /*.type_last_v                 =*/ GGML_TYPE_F16,
+        /*.n_first_k                   =*/ -1,
+        /*.n_last_k                    =*/ -1,
+        /*.n_first_v                   =*/ -1,
+        /*.n_last_v                    =*/ -1,
         /*.tensor_split                =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
@@ -4962,6 +4998,14 @@ struct llama_context_params llama_context_default_params() {
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.type_reduce                 =*/ GGML_TYPE_F16,
+        /*.type_first_k                =*/ GGML_TYPE_F16,
+        /*.type_last_k                 =*/ GGML_TYPE_F16,
+        /*.type_first_v                =*/ GGML_TYPE_F16,
+        /*.type_last_v                 =*/ GGML_TYPE_F16,
+        /*.n_first_k                   =*/ -1,
+        /*.n_last_k                    =*/ -1,
+        /*.n_first_v                   =*/ -1,
+        /*.n_last_v                    =*/ -1,
         /*.logits_all                  =*/ false,
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
@@ -5670,7 +5714,9 @@ struct llama_context * llama_init_from_model(
         }
         ctx->backends.push_back(ctx->backend_cpu);
 
-        if (!llama_kv_cache_init(ctx->kv_self, ctx, type_k, type_v, kv_size, cparams.offload_kqv)) {
+        if (!llama_kv_cache_init(ctx->kv_self, ctx, type_k, type_v, kv_size, cparams.offload_kqv,
+                    params.type_k_first, params.type_k_last, params.type_v_first, params.type_v_first,
+                    params.n_k_first, params.n_k_last, params.n_v_first, params.n_v_last)) {
             LLAMA_LOG_ERROR("%s: llama_kv_cache_init() failed for self-attention cache\n", __func__);
             llama_free(ctx);
             return nullptr;
