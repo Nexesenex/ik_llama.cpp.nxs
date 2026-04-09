@@ -4536,7 +4536,8 @@ static int llama_decode_internal(
                 res = nullptr; // do not extract logits for embedding case
             } else {
                 if (!embd) { // do not extract embeddings when not needed
-                    GGML_ASSERT(strcmp(res->name, "result_output") == 0 && "missing result_output tensor");
+                    // also accept result_embd_pooled when pooling was added (for split_output_tensor or embeddings)
+                    GGML_ASSERT((strcmp(res->name, "result_output") == 0 || strcmp(res->name, "result_embd_pooled") == 0) && "missing result_output/result_embd_pooled tensor");
                 }
             }
         }
