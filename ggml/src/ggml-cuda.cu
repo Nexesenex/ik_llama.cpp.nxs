@@ -4305,9 +4305,14 @@ static bool is_cuda_graph_update_required(ggml_cuda_graph * graph, ggml_cgraph *
 
     // Loop over nodes in GGML graph to determine if CUDA graph update is required
     // and store properties to allow this comparison for the next token
+    // Optimized: when update is already required, skip per-node comparison
+    // since we know the graph must be rebuilt anyway
     for (int i = 0; i < cgraph->n_nodes; i++) {
         bool has_matching_properties = true;
-        if (!cuda_graph_update_required) {
+        if (cuda_graph_update_required) {
+            // Already know update is required - skip expensive comparison
+            has_matching_properties = false;
+        } else {
             has_matching_properties = ggml_graph_node_has_matching_properties(cgraph->nodes[i], &graph->ggml_graph_properties[i]);
         }
         if (!has_matching_properties) {
