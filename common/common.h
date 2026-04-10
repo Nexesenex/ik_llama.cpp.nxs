@@ -288,6 +288,16 @@ struct gpt_params {
     size_t n_buffer                  =  0; // number of token buffers for string ban
     bool can_ban_phrases             = true;  // whether to ban strings
 
+    std::vector<std::vector<std::tuple<
+        uint32_t        // lower codepoint
+        ,uint32_t       // upper codepoint
+        ,std::string    // unicode script name
+        ,float          // bias
+    >>> allow_ruless;
+    std::vector<std::string> allow_pieces;  // each token to allowlist
+    std::vector<std::string> allow_kws;     // keywords
+    size_t allow_kw_delay;  // minimum n_decoded before first keyword is active
+
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     std::vector<std::pair<int,int>> offload_policy;
@@ -735,3 +745,9 @@ void yaml_dump_non_result_info(
     const std::string & timestamp, const std::vector<int> & prompt_tokens, const char * model_desc);
 
 std::string string_format(const char* fmt, ...);
+
+//
+// Argparse utils
+//
+
+std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_rule(std::string argstr);
