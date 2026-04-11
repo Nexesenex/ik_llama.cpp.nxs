@@ -1934,6 +1934,56 @@ static void llm_prepare_mla(llama_model & model, int mla) {
     ggml_free(ctx);
 }
 
+static void llm_scale_gate_inp_s(llama_model & model, bool uses_mmap) {
+    auto & hparams = model.hparams;
+    printf("%s: n_embd = %d\n", __func__, hparams.n_embd);
+    std::vector<float> values(hparams.n_embd);
+    float scale = 1.0f/sqrtf((float)hparams.n_embd);
+    int n_host = 0;
+    for (auto & l : model.layers) {
+        auto gis = l.ffn_gate_inp_s;
+        if (!gis) continue;
+        bool is_host = ggml_backend_buffer_is_host(gis->buffer);
+        if (is_host) {
+            if (uses_mmap) {
+                ++n_host;
+            } else {
+                auto val = (float *)gis->data;
+                for (int j = 0; j < hparams.n_embd; ++j) val[j] *= scale;
+            }
+        } else {
+            auto extra = (ggml_split_tensor_t *)gis->extra;
+            if (extra) {
+                ggml_backend_tensor_get(extra->splits[0], values.data(), 0, values.size()*sizeof(float));
+            } else {
+                ggml_backend_tensor_get(gis, values.data(), 0, values.size()*sizeof(float));
+            }
+            for (int j = 0; j < hparams.n_embd; ++j) values[j] *= scale;
+            if (extra) {
+                for (int id = 0; id < extra->n_device; ++id) {
+                    ggml_backend_tensor_set(extra->splits[id], values.data(), 0, values.size()*sizeof(float));
+                }
+            } else {
+                ggml_backend_tensor_set(gis, values.data(), 0, values.size()*sizeof(float));
+            }
+        }
+    }
+    if (n_host > 0) {
+        model.aux_buffer.resize(n_host * hparams.n_embd * sizeof(float));
+        auto ptr = model.aux_buffer.data();
+        for (auto & l : model.layers) {
+            auto gis = l.ffn_gate_inp_s;
+            if (!gis) continue;
+            if (ggml_backend_buffer_is_host(gis->buffer)) {
+                auto val = (const float *)gis->data;
+                for (int j = 0; j < hparams.n_embd; ++j) ptr[j] = val[j] * scale;
+                gis->data = ptr;
+                ptr += hparams.n_embd;
+            }
+        }
+    }
+}
+
 // Backend (reg) enumeration
 static bool striequals(const char* a, const char* b) {
     for (; *a && *b; a++, b++) {
@@ -2758,6 +2808,9 @@ static bool llm_load_tensors(
 
     if (model.arch == LLM_ARCH_DEEPSEEK2 || model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_MISTRAL4) {
         llm_prepare_mla(model, mla_attn);
+    }
+    if (model.arch == LLM_ARCH_GEMMA4) {
+        llm_scale_gate_inp_s(model, use_mmap_buffer);
     }
 
     if (use_mmap_buffer) {

@@ -426,6 +426,7 @@ struct llama_model {
     std::vector<rpc_device> rpc_servers;
     std::vector<int32_t> devices;
     std::vector<int32_t> default_layer_device;
+    std::vector<float>   aux_buffer;
 
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
