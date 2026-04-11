@@ -449,6 +449,39 @@ void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth) {
     int ne01 = src0->ne[1];
     int ne00 = src0->ne[0];
 
+    auto src2 = dst->src[2];
+    auto src3 = dst->src[3];
+    if (src2 && src3) {
+        GGML_ASSERT(src2->type == GGML_TYPE_F32);
+        GGML_ASSERT(src3->type == GGML_TYPE_I32);
+        GGML_ASSERT(src3->ne[0] == src0->ne[1]);
+
+        auto cids = (const char *)src3->data;
+        auto scales = (const float *)src2->data;
+        for (int ir = first; ir < last; ++ir) {
+            auto c0 = (const char *)src0->data + ir*src0->nb[2];
+            auto c1 = (const char *)src1->data + ir*src1->nb[2];
+            auto cy = (      char *)dst->data + ir* dst->nb[1];
+            auto  y = (     float *)cy;
+            auto x0 = (const float *)c0;
+            auto x1 = (const float *)c1;
+            auto ids = (const int *)(cids + ir*src3->nb[1]);
+            float s = scales[ids[0]] * x1[0];
+            for (int k = 0; k < ne00; ++k) y[k] = x0[k] * s;
+            for (int j = 1; j < ne01; ++j) {
+                c0 += src0->nb[1];
+                c1 += src1->nb[1];
+                x0 = (const float *)c0;
+                x1 = (const float *)c1;
+                s  = x1[0] * scales[ids[j]];
+                for (int k = 0; k < ne00; ++k) y[k] += x0[k] * s;
+            }
+        }
+
+        return;
+
+    }
+
     for (int ir = first; ir < last; ++ir) {
         auto c0 = (const char *)src0->data + ir*src0->nb[2];
         auto c1 = (const char *)src1->data + ir*src1->nb[2];
