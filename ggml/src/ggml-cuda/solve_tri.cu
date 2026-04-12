@@ -20,14 +20,15 @@ static __global__ void setup_trsm_batch_pointers(
     const size_t nb02,  // stride for A dim 2 (in floats)
     const size_t nb03,  // stride for A dim 3 (in floats)
     const size_t nb2,   // stride for X dim 2 (in floats)
-    const size_t nb3    // stride for X dim 3 (in floats)
+    const size_t nb3,   // stride for X dim 3 (in floats)
+    const uint3 ne02_fd
 ) {
     const int64_t batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (batch_idx >= total_batches) return;
 
-    // Decompose batch_idx into i02, i03
-    const int64_t i02 = batch_idx % ne02;
-    const int64_t i03 = batch_idx / ne02;
+    // Decompose batch_idx into i02, i03 using fastdiv
+    const int64_t i02 = fastmodulo((uint32_t)batch_idx, ne02_fd);
+    const int64_t i03 = fastdiv((uint32_t)batch_idx, ne02_fd);
 
     A_ptrs[batch_idx] = A + i02 * nb02 + i03 * nb03;
     X_ptrs[batch_idx] = X + i02 * nb2  + i03 * nb3;
@@ -689,11 +690,12 @@ static void solve_tri_f32_cublas(
     {
         const int block_size = 256;
         const int grid_size = (total_batches + block_size - 1) / block_size;
+        const uint3 ne02_fd = init_fastdiv_values((uint32_t)ne02);
         setup_trsm_batch_pointers<<<grid_size, block_size, 0, stream>>>(
             A, X,
             A_ptrs.get(), X_ptrs.get(),
             ne02, total_batches,
-            nb02, nb03, nb2, nb3
+            nb02, nb03, nb2, nb3, ne02_fd
         );
         CUDA_CHECK(cudaGetLastError());
     }
