@@ -5828,6 +5828,8 @@ void llama_free_model(struct llama_model * model) {
 static void llama_concatenate_up_gate_exps(llama_context & lctx) {
     auto & model = lctx.model;
     bool needs_concatenate = false;
+    static int64_t func_start_time = 0;
+    static int processed_layers = 0;
     for (auto & l : model.layers) {
         if (l.ffn_up_gate_exps && l.ffn_up_exps && l.ffn_gate_exps &&
            !l.ffn_up_gate_exps->extra) {
@@ -5857,7 +5859,10 @@ static void llama_concatenate_up_gate_exps(llama_context & lctx) {
             if (nbytes > aux_buffer_gate.size()) {
                 aux_buffer_gate.resize(nbytes);
             }
-            LLAMA_LOG_INFO("%s: Concatenating up/gate experts weight in layer %d\n", __func__, il);
+            if (func_start_time == 0) {
+                func_start_time = ggml_time_us();
+            }
+            int64_t layer_start = ggml_time_us();
             ggml_backend_tensor_get(l.ffn_up_exps, aux_buffer_up.data(), 0, nbytes);
             ggml_backend_tensor_get(l.ffn_gate_exps, aux_buffer_gate.data(), 0, nbytes);
             if (aux_buffer_up_gate.size() < 2*nbytes) {
@@ -5874,6 +5879,17 @@ static void llama_concatenate_up_gate_exps(llama_context & lctx) {
                 offset_up      += expert_size;
             }
             ggml_backend_tensor_set(l.ffn_up_gate_exps, aux_buffer_up_gate.data(), 0, 2*expert_size*l.ffn_up_gate_exps->ne[2]);
+            processed_layers++;
+            int64_t layer_end = ggml_time_us();
+            double layer_sec = (layer_end - layer_start) / 1000000.0;
+            double total_sec = (layer_end - func_start_time) / 1000000.0;
+            double layers_per_sec = total_sec > 0 ? processed_layers / total_sec : 0.0;
+            LLAMA_LOG_INFO("time=%lld, %s: layer %d in %.2f sec. %d layers in %.2f sec, %.2f layer/s\n",
+                (long long)time(nullptr), __func__, il,
+                layer_sec,
+                processed_layers,
+                total_sec,
+                layers_per_sec);
             if (l.ffn_up_gate_exps_b && l.ffn_up_exps_b && l.ffn_gate_exps_b) {
                 nbytes = ggml_nbytes(l.ffn_up_exps_b);
                 GGML_ASSERT(nbytes == ggml_nbytes(l.ffn_gate_exps_b));
@@ -5883,7 +5899,7 @@ static void llama_concatenate_up_gate_exps(llama_context & lctx) {
                 if (nbytes > aux_buffer_gate.size()) {
                     aux_buffer_gate.resize(nbytes);
                 }
-                LLAMA_LOG_INFO("%s: Concatenating up/gate experts bias in layer %d\n", __func__, il);
+                LLAMA_LOG_INFO("%s: Cc up/gate experts bias in layer %d\n", __func__, il);
                 ggml_backend_tensor_get(l.ffn_up_exps_b, aux_buffer_up.data(), 0, nbytes);
                 ggml_backend_tensor_get(l.ffn_gate_exps_b, aux_buffer_gate.data(), 0, nbytes);
                 if (aux_buffer_up_gate.size() < 2*nbytes) {
