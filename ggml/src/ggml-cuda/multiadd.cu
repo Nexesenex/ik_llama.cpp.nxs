@@ -1,13 +1,13 @@
 #include "multiadd.cuh"
 
-static __global__ void multi_add_f32(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, const char * src0, char * dst) {
+static __global__ void multi_add_f32(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, const char * src0, char * dst, const uint3 ne0_fd) {
     const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
     int64_t k = ne0*ne1;
     if (i >= k) {
         return;
     }
-    int i1 = i / ne0;
-    int i0 = i % ne0;
+    const int i1 = fastdiv((uint32_t)i, ne0_fd);
+    const int i0 = fastmodulo((uint32_t)i, ne0_fd);
     float * result = (float *)(dst + i1*nb1);
     const float * s = (const float *)(src0 + i1*nb01) + i0;
     if (nused == 1) {
@@ -22,7 +22,8 @@ static __global__ void multi_add_f32(int nused, int64_t ne0, int64_t ne1, int64_
 static void multi_add_f32_cuda(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, const char * src0, char * dst, cudaStream_t stream) {
     int64_t k = ne0 * ne1;
     const int num_blocks = (k + CUDA_MULTI_ADD_BLOCK_SIZE - 1) / CUDA_MULTI_ADD_BLOCK_SIZE;
-    multi_add_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, stream>>>(nused, ne0, ne1, nb1, nb01, src0, dst);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
+    multi_add_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, stream>>>(nused, ne0, ne1, nb1, nb01, src0, dst, ne0_fd);
 }
 
 void ggml_cuda_op_multi_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -37,14 +38,14 @@ void ggml_cuda_op_multi_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
 }
 
 
-static __global__ void mul_multi_add_f32(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, int64_t nb02, int64_t nb11, int64_t nb12, const char * src0, const char * src1, char * dst) {
+static __global__ void mul_multi_add_f32(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, int64_t nb02, int64_t nb11, int64_t nb12, const char * src0, const char * src1, char * dst, const uint3 ne0_fd) {
     const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
     int64_t k = ne0*ne1;
     if (i >= k) {
         return;
     }
-    int i1 = i / ne0;
-    int i0 = i % ne0;
+    const int i1 = fastdiv((uint32_t)i, ne0_fd);
+    const int i0 = fastmodulo((uint32_t)i, ne0_fd);
     float * result = (float *)(dst + i1*nb1);
 
     auto c0 = src0 + i1*nb02;
@@ -65,18 +66,19 @@ static void mul_multi_add_f32_cuda(int nused, int64_t ne0, int64_t ne1, int64_t 
         const char * src0, const char * src1, char * dst, cudaStream_t stream) {
     int64_t k = ne0 * ne1;
     const int num_blocks = (k + CUDA_MULTI_ADD_BLOCK_SIZE - 1) / CUDA_MULTI_ADD_BLOCK_SIZE;
-    mul_multi_add_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, stream>>>(nused, ne0, ne1, nb1, nb01, nb02, nb11, nb12, src0, src1, dst);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
+    mul_multi_add_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, stream>>>(nused, ne0, ne1, nb1, nb01, nb02, nb11, nb12, src0, src1, dst, ne0_fd);
 }
 
 static __global__ void mul_multi_add_f32(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, int64_t nb02, int64_t nb11, int64_t nb12, int64_t nb31,
-        const char * src0, const char * src1, char * dst, const float * scales, const char * cids) {
+        const char * src0, const char * src1, char * dst, const float * scales, const char * cids, const uint3 ne0_fd) {
     const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
     int64_t k = ne0*ne1;
     if (i >= k) {
         return;
     }
-    int i1 = i / ne0;
-    int i0 = i % ne0;
+    const int i1 = fastdiv((uint32_t)i, ne0_fd);
+    const int i0 = fastmodulo((uint32_t)i, ne0_fd);
     float * result = (float *)(dst + i1*nb1);
 
     const int * ids = (const int *)(cids + i1 * nb31);
@@ -99,7 +101,8 @@ static void mul_multi_add_f32_cuda(int nused, int64_t ne0, int64_t ne1, int64_t 
         const char * src0, const char * src1, char * dst, const float * scales, const char * ids, cudaStream_t stream) {
     int64_t k = ne0 * ne1;
     const int num_blocks = (k + CUDA_MULTI_ADD_BLOCK_SIZE - 1) / CUDA_MULTI_ADD_BLOCK_SIZE;
-    mul_multi_add_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, stream>>>(nused, ne0, ne1, nb1, nb01, nb02, nb11, nb12, nb31, src0, src1, dst, scales, ids);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
+    mul_multi_add_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, stream>>>(nused, ne0, ne1, nb1, nb01, nb02, nb11, nb12, nb31, src0, src1, dst, scales, ids, ne0_fd);
 }
 
 void ggml_cuda_op_mul_multi_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
