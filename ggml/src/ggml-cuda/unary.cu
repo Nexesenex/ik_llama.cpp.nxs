@@ -164,7 +164,7 @@ static __global__ void fused_mul_gelu_f32(const float * x, const float * y, floa
     dst[i] = 0.5f*xi*y[i]*(1.0f + tanhf(SQRT_2_OVER_PI*xi*(1.0f + GELU_COEF_A*xi*xi)));
 }
 
-static __global__ void fused_mul_gelu_f32(const float * x, float * dst, const int k, const int ne0) {
+static __global__ void fused_mul_gelu_f32(const float * x, float * dst, const int k, const int ne0, const uint3 ne0_fd) {
     constexpr float GELU_COEF_A    = 0.044715f;
     constexpr float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
@@ -172,8 +172,8 @@ static __global__ void fused_mul_gelu_f32(const float * x, float * dst, const in
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
-    int j   = i % ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
+    const int j   = fastmodulo((uint32_t)i, ne0_fd);
     auto x_row = x + 2*row*ne0;
     float xi = x_row[j];
     dst[i] = 0.5f*xi*x_row[j+ne0]*(1.0f + tanhf(SQRT_2_OVER_PI*xi*(1.0f + GELU_COEF_A*xi*xi)));
@@ -330,7 +330,8 @@ static void fused_mul_relu_f32_cuda(const float * x, float * dst, const int k, c
 
 static void fused_mul_gelu_f32_cuda(const float * x, float * dst, const int k, const int ne0, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_GELU_BLOCK_SIZE - 1) / CUDA_GELU_BLOCK_SIZE;
-    fused_mul_gelu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
+    fused_mul_gelu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0, ne0_fd);
 }
 
 static void tanh_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
