@@ -41,7 +41,7 @@ template<bool forward, bool has_ff, typename T>
 static __global__ void rope_norm(
         const T * x, T * dst, const int ne0, const int ne1, const int s1, const int s2, const int n_dims,
         const int32_t * pos, const float freq_scale, const float ext_factor, const float attn_factor,
-        const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors) {
+        const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors, const uint3 ne1_fd) {
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne0) {
@@ -50,8 +50,8 @@ static __global__ void rope_norm(
 
     const int row_dst = blockDim.x*blockIdx.x + threadIdx.x;
 
-    const int row_x     = row_dst % ne1;
-    const int channel_x = row_dst / ne1;
+    const int row_x     = fastmodulo((uint32_t)row_dst, ne1_fd);
+    const int channel_x = fastdiv((uint32_t)row_dst, ne1_fd);
 
     const int idst = row_dst*ne0 + i0;
     const int ix   = channel_x*s2 + row_x*s1 + i0;
@@ -114,7 +114,7 @@ template<bool forward, bool has_ff, typename T>
 static __global__ void rope_neox(
         const T * x, T * dst, const int ne0, const int ne1, const int s1, const int s2, const int n_dims,
         const int32_t * pos, const float freq_scale, const float ext_factor, const float attn_factor,
-        const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors) {
+        const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors, const uint3 ne1_fd) {
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne0) {
@@ -123,8 +123,8 @@ static __global__ void rope_neox(
 
     const int row_dst = blockDim.x*blockIdx.x + threadIdx.x;
 
-    const int row_x     = row_dst % ne1;
-    const int channel_x = row_dst / ne1;
+    const int row_x     = fastmodulo((uint32_t)row_dst, ne1_fd);
+    const int channel_x = fastdiv((uint32_t)row_dst, ne1_fd);
 
     const int idst = row_dst*ne0 + i0/2;
     const int ix   = channel_x*s2 + row_x*s1 + i0/2;
@@ -467,15 +467,16 @@ static void rope_norm_cuda(
     const dim3 block_nums(nr, n_blocks_x, 1);
 
     const float theta_scale = powf(freq_base, -2.0f/n_dims);
+    const uint3 ne1_fd = init_fastdiv_values((uint32_t)ne1);
 
     if (freq_factors == nullptr) {
         rope_norm<forward, false><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne0, ne1, s1, s2, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors);
+            attn_factor, corr_dims, theta_scale, freq_factors, ne1_fd);
     } else {
         rope_norm<forward, true><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne0, ne1, s1, s2, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors);
+            attn_factor, corr_dims, theta_scale, freq_factors, ne1_fd);
     }
 }
 
@@ -490,15 +491,16 @@ static void rope_neox_cuda(
     const dim3 block_nums(nr, n_blocks_x, 1);
 
     const float theta_scale = powf(freq_base, -2.0f/n_dims);
+    const uint3 ne1_fd = init_fastdiv_values((uint32_t)ne1);
 
     if (freq_factors == nullptr) {
         rope_neox<forward, false, T><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne0, ne1, s1, s2, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors);
+            attn_factor, corr_dims, theta_scale, freq_factors, ne1_fd);
     } else {
         rope_neox<forward, true, T><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne0, ne1, s1, s2, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors);
+            attn_factor, corr_dims, theta_scale, freq_factors, ne1_fd);
     }
 }
 
