@@ -72,59 +72,59 @@ static __global__ void fused_mul_silu_f32(const float * x, const float * y, floa
     dst[i] = g * max(-limit, min(limit, y[i]));
 }
 
-static __global__ void fused_mul_silu_f32(int ne0, const float * x, const float * y, float * dst, const int k) {
+static __global__ void fused_mul_silu_f32(int ne0, const float * x, const float * y, float * dst, const int k, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
     dst[i] = x[row] * y[i] / (1.0f + expf(-x[row]));
 }
 
-static __global__ void fused_mul_sigmoid_f32(int ne0, const float * x, const float * y, float * dst, const int k) {
+static __global__ void fused_mul_sigmoid_f32(int ne0, const float * x, const float * y, float * dst, const int k, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
     dst[i] = y[i] / (1.0f + expf(-x[row]));
 }
 
-static __global__ void fused_mul_silu_f32(int ne0, const float * x, const float * y, float * dst, const int k, float limit) {
+static __global__ void fused_mul_silu_f32(int ne0, const float * x, const float * y, float * dst, const int k, float limit, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
     float g = x[row] / (1.0f + expf(-x[row]));
     g = min(g, limit);
     dst[i] = g * max(-limit, min(limit, y[i]));
 }
 
-static __global__ void fused_mul_silu_f32(const float * x, float * dst, const int k, const int ne0) {
+static __global__ void fused_mul_silu_f32(const float * x, float * dst, const int k, const int ne0, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
-    int j   = i % ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
+    const int j   = fastmodulo((uint32_t)i, ne0_fd);
     auto x_row = x + 2*row*ne0;
     //dst[i] = x_row[j] * x_row[j + ne0] / (1.0f + expf(-x_row[j + ne0]));
     dst[i] = x_row[j] * x_row[j + ne0] / (1.0f + expf(-x_row[j]));
 }
 
-static __global__ void fused_mul_silu_f32(const float * x, float * dst, const int k, const int ne0, float limit) {
+static __global__ void fused_mul_silu_f32(const float * x, float * dst, const int k, const int ne0, float limit, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
-    int j   = i % ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
+    const int j   = fastmodulo((uint32_t)i, ne0_fd);
     auto x_row = x + 2*row*ne0;
     float g = x_row[j + ne0] / (1.0f + expf(-x_row[j + ne0]));
     g = min(g, limit);
@@ -140,14 +140,14 @@ static __global__ void fused_mul_relu_f32(const float * x, const float * y, floa
     dst[i] = fmaxf(x[i], 0) * y[i];
 }
 
-static __global__ void fused_mul_relu_f32(const float * x, float * dst, const int k, const int ne0) {
+static __global__ void fused_mul_relu_f32(const float * x, float * dst, const int k, const int ne0, const uint3 ne0_fd) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    int row = i / ne0;
-    int j   = i % ne0;
+    const int row = fastdiv((uint32_t)i, ne0_fd);
+    const int j   = fastmodulo((uint32_t)i, ne0_fd);
     auto x_row = x + 2*row*ne0;
     dst[i] = fmaxf(x_row[j], 0) * x_row[j + ne0];
 }
@@ -292,16 +292,18 @@ static void fused_mul_silu_f32_cuda(const float * x, const float * y, float * ds
 
 static void fused_mul_silu_f32_cuda(int ne0, const float * x, const float * y, float * dst, const int k, float limit, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_SILU_BLOCK_SIZE - 1) / CUDA_SILU_BLOCK_SIZE;
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
     if (limit < 1e-6f) {
-        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k);
+        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k, ne0_fd);
     } else {
-        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k, limit);
+        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k, limit, ne0_fd);
     }
 }
 
 static void fused_mul_sigmoid_f32_cuda(int ne0, const float * x, const float * y, float * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_SILU_BLOCK_SIZE - 1) / CUDA_SILU_BLOCK_SIZE;
-    fused_mul_sigmoid_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
+    fused_mul_sigmoid_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k, ne0_fd);
 }
 
 static void fused_mul_relu_f32_cuda(const float * x, const float * y, float * dst, const int k, cudaStream_t stream) {
@@ -316,16 +318,18 @@ static void fused_mul_gelu_f32_cuda(const float * x, const float * y, float * ds
 
 static void fused_mul_silu_f32_cuda(const float * x, float * dst, const int k, const int ne0, float limit, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_SILU_BLOCK_SIZE - 1) / CUDA_SILU_BLOCK_SIZE;
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
     if (limit < 1e-6f) {
-        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0);
+        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0, ne0_fd);
     } else {
-        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0, limit);
+        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0, limit, ne0_fd);
     }
 }
 
 static void fused_mul_relu_f32_cuda(const float * x, float * dst, const int k, const int ne0, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_RELU_BLOCK_SIZE - 1) / CUDA_RELU_BLOCK_SIZE;
-    fused_mul_relu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
+    fused_mul_relu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, dst, k, ne0, ne0_fd);
 }
 
 static void fused_mul_gelu_f32_cuda(const float * x, float * dst, const int k, const int ne0, cudaStream_t stream) {
