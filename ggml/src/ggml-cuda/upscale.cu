@@ -3,16 +3,18 @@
 static __global__ void upscale_f32(const float * x, float * dst,
         const int nb00, const int nb01, const int nb02, const int nb03,
         const int ne10, const int ne11, const int ne12, const int ne13,
-        const float sf0, const float sf1, const float sf2, const float sf3) {
+        const float sf0, const float sf1, const float sf2, const float sf3,
+        const uint3 ne10_fd, const uint3 ne10_ne11_fd, const uint3 ne10_ne11_ne12_fd) {
     int index = threadIdx.x + blockIdx.x * blockDim.x;
     if (index >= ne10 * ne11 * ne12 * ne13) {
         return;
     }
 
-    int i10 = index % ne10;
-    int i11 = (index / ne10) % ne11;
-    int i12 = (index / (ne10 * ne11)) % ne12;
-    int i13 = (index / (ne10 * ne11 * ne12)) % ne13;
+    const int i10 = fastmodulo((uint32_t)index, ne10_fd);
+    const int i11 = fastmodulo((uint32_t)(index / ne10_fd.z), ne10_ne11_fd);
+    const uint32_t tmp12 = (uint32_t)(index / ne10_ne11_fd.z);
+    const int i12 = fastmodulo(tmp12, ne10_ne11_ne12_fd);
+    const int i13 = tmp12 / ne10_ne11_ne12_fd.z;
 
     int i00 = i10 / sf0;
     int i01 = i11 / sf1;
@@ -94,7 +96,11 @@ static void upscale_f32_cuda(const float * x, float * dst,
     int dst_size = ne10 * ne11 * ne12 * ne13;
     int num_blocks = (dst_size + CUDA_UPSCALE_BLOCK_SIZE - 1) / CUDA_UPSCALE_BLOCK_SIZE;
 
-    upscale_f32<<<num_blocks, CUDA_UPSCALE_BLOCK_SIZE,0,stream>>>(x, dst, nb00, nb01, nb02, nb03, ne10, ne11, ne12, ne13, sf0, sf1, sf2, sf3);
+    const uint3 ne10_fd = init_fastdiv_values((uint32_t)ne10);
+    const uint3 ne10_ne11_fd = init_fastdiv_values((uint32_t)(ne10 * ne11));
+    const uint3 ne10_ne11_ne12_fd = init_fastdiv_values((uint32_t)(ne10 * ne11 * ne12));
+
+    upscale_f32<<<num_blocks, CUDA_UPSCALE_BLOCK_SIZE,0,stream>>>(x, dst, nb00, nb01, nb02, nb03, ne10, ne11, ne12, ne13, sf0, sf1, sf2, sf3, ne10_fd, ne10_ne11_fd, ne10_ne11_ne12_fd);
 }
 
 static void upscale_f32_bicubic_cuda(const float * x, float * dst,
