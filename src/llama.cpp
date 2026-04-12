@@ -5727,7 +5727,7 @@ struct llama_context * llama_init_from_model(
         ctx->backends.push_back(ctx->backend_cpu);
 
         if (!llama_kv_cache_init(ctx->kv_self, ctx, type_k, type_v, kv_size, cparams.offload_kqv,
-                    params.type_k_first, params.type_k_last, params.type_v_first, params.type_v_first,
+                    params.type_k_first, params.type_k_last, params.type_v_first, params.type_v_last,
                     params.n_k_first, params.n_k_last, params.n_v_first, params.n_v_last)) {
             LLAMA_LOG_ERROR("%s: llama_kv_cache_init() failed for self-attention cache\n", __func__);
             llama_free(ctx);
