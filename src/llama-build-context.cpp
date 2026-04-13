@@ -10019,6 +10019,11 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask, 1.0f / sqrtf(float(n_embd_head)), hparams.f_max_alibi_bias, 0.0f);
                 cb(cur, "fa", il_id);
 
+                if (cparams.v_cache_hadamard) {
+                    cur = ggml_hadamard(ctx0, cur, n_embd_head_v);
+                    cb(cur, "fa_h", il_id);
+                }
+
                 cur = ggml_reshape_2d(ctx0, cur, wo->splits[id]->ne[0], n_tokens);
                 cb(cur, "fa_reshaped", il_id);
 
@@ -10113,7 +10118,7 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 n_expert, n_expert_used,
                 LLM_FFN_SILU, true, false, 0.0f,
                 (llm_expert_gating_func_type)hparams.expert_gating_func,
-                LLM_FFN_SILU, cb, il, gf, true, nullptr);
+                LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
