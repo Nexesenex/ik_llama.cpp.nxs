@@ -154,7 +154,9 @@ __global__ void delta_net_recurrent_f32(
 
         for (int i = 0; i < HEAD_DIM/num_warps; ++i) {
             int col = num_warps*i + col_idx_0;
-            float new_state_val = decay * state_local[i] + sv_new * sK[col];
+            float new_state_val = 0;
+            ggml_cuda_mad(new_state_val, decay, state_local[i]);
+            ggml_cuda_mad(new_state_val, sv_new, sK[col]);
             new_state_val = fminf(fmaxf(new_state_val, -1e6f), 1e6f);
             state_local[i] = new_state_val;
         }
