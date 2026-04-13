@@ -106,10 +106,10 @@ static __global__ void solve_tri_f32_64x64_latency(
         if (row > 0) {
             for (int j = lane; j < row; j += WARP_SIZE) {
                 const float a_val = sA[row * 64 + j];
-                sum0 += a_val * sX[j * 65 + col_base + 0];
-                sum1 += a_val * sX[j * 65 + col_base + 1];
-                sum2 += a_val * sX[j * 65 + col_base + 2];
-                sum3 += a_val * sX[j * 65 + col_base + 3];
+                ggml_cuda_mad(sum0, a_val, sX[j * 65 + col_base + 0]);
+                ggml_cuda_mad(sum1, a_val, sX[j * 65 + col_base + 1]);
+                ggml_cuda_mad(sum2, a_val, sX[j * 65 + col_base + 2]);
+                ggml_cuda_mad(sum3, a_val, sX[j * 65 + col_base + 3]);
             }
         }
 
@@ -207,8 +207,8 @@ static __global__ void solve_tri_f32_64x64_opt(const float * __restrict__ A,
             const int j2 = lane + WARP_SIZE;
             if (j2 < row) {
                 const float a_val2 = sA[row * 64 + j2];
-                sum0 += a_val2 * sXt[col0 * 65 + j2];
-                sum1 += a_val2 * sXt[col1 * 65 + j2];
+                ggml_cuda_mad(sum0, a_val2, sXt[col0 * 65 + j2]);
+                ggml_cuda_mad(sum1, a_val2, sXt[col1 * 65 + j2]);
             }
         }
 
@@ -310,10 +310,10 @@ static __global__ void solve_tri_f32_128x128_opt(const float * __restrict__ A,
         // Sum over j < row - each lane handles multiple elements
         for (int j = lane; j < row; j += WARP_SIZE) {
             const float a_val = sA[row * 128 + j];
-            if (col_base + 0 < k) sum0 += a_val * sXt[(col_base + 0) * 129 + j];
-            if (col_base + 1 < k) sum1 += a_val * sXt[(col_base + 1) * 129 + j];
-            if (col_base + 2 < k) sum2 += a_val * sXt[(col_base + 2) * 129 + j];
-            if (col_base + 3 < k) sum3 += a_val * sXt[(col_base + 3) * 129 + j];
+            if (col_base + 0 < k) ggml_cuda_mad(sum0, a_val, sXt[(col_base + 0) * 129 + j]);
+            if (col_base + 1 < k) ggml_cuda_mad(sum1, a_val, sXt[(col_base + 1) * 129 + j]);
+            if (col_base + 2 < k) ggml_cuda_mad(sum2, a_val, sXt[(col_base + 2) * 129 + j]);
+            if (col_base + 3 < k) ggml_cuda_mad(sum3, a_val, sXt[(col_base + 3) * 129 + j]);
         }
 
         // Warp-level reduction
@@ -455,11 +455,11 @@ static __global__ void solve_tri_f32_256x256_tiled(const float * __restrict__ A,
                         float a_val = sA_off[row * TILE_SIZE + j];
                         if (col0 < tile_k) {
                             float x_prev0 = X_batch[(prev_tile + j) * k + tile_col + col0];
-                            sum0 += a_val * x_prev0;
+                            ggml_cuda_mad(sum0, a_val, x_prev0);
                         }
                         if (col1 < tile_k) {
                             float x_prev1 = X_batch[(prev_tile + j) * k + tile_col + col1];
-                            sum1 += a_val * x_prev1;
+                            ggml_cuda_mad(sum1, a_val, x_prev1);
                         }
                     }
 
@@ -495,8 +495,8 @@ static __global__ void solve_tri_f32_256x256_tiled(const float * __restrict__ A,
                     int j2 = lane + WARP_SIZE;
                     if (j2 < row) {
                         float a_val2 = sA_tile[row * TILE_SIZE + j2];
-                        if (col0 < tile_k) sum0 += a_val2 * sXt_tile[col0 * (TILE_SIZE+1) + j2];
-                        if (col1 < tile_k) sum1 += a_val2 * sXt_tile[col1 * (TILE_SIZE+1) + j2];
+                        if (col0 < tile_k) ggml_cuda_mad(sum0, a_val2, sXt_tile[col0 * (TILE_SIZE+1) + j2]);
+                        if (col1 < tile_k) ggml_cuda_mad(sum1, a_val2, sXt_tile[col1 * (TILE_SIZE+1) + j2]);
                     }
                 }
 
@@ -616,13 +616,13 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
             {
                 int j = lane;
                 if (j < row) {
-                    sum += sA[row * n + j] * sXt[col_idx * n + j];
+                    ggml_cuda_mad(sum, sA[row * n + j], sXt[col_idx * n + j]);
                 }
             }
             if (row >= WARP_SIZE) {
                 int j = WARP_SIZE + lane;
                 if (j < row) {
-                    sum += sA[row * n + j] * sXt[col_idx * n + j];
+                    ggml_cuda_mad(sum, sA[row * n + j], sXt[col_idx * n + j]);
                 }
             }
 
