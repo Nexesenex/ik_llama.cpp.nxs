@@ -67,8 +67,7 @@ if(Git_FOUND)
         OUTPUT_VARIABLE RECENT_COMMITS
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
-    if(RECENT_COMMITS)
-        string(REGEX MATCHALL "#[0-9]+" PR_NUMS "${RECENT_COMMITS}")
+    if(PR_NUMS)
         list(GET PR_NUMS 0 BUILD_LAST_MERGED_PR)
     endif()
     execute_process(
