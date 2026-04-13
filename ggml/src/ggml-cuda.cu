@@ -3665,6 +3665,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_cuda_op_fused_rms_norm(ctx, dst);
             }
             break;
+        case GGML_OP_FUSED_RMS_RMS_ADD:
+            ggml_cuda_op_fused_rms_rms_add(ctx, dst);
+            break;
         case GGML_OP_FUSED_NORM:
             ggml_cuda_op_fused_rms_norm(ctx, dst, true);
             break;
@@ -4658,6 +4661,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_DIV:
         case GGML_OP_SUB:
         case GGML_OP_FUSED_RMS_NORM:
+        case GGML_OP_FUSED_RMS_RMS_ADD:
         case GGML_OP_SCALE:
         case GGML_OP_SOFTCAP:
         case GGML_OP_SQR:

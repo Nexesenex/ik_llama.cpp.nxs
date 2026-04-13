@@ -4319,9 +4319,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "REDUCE",
     "FAKE_CPY",
     "FUSED_NORM",
+    "FUSED_RMS_RMS_ADD",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4438,9 +4439,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "reduce(x1,x2,...)",
     "fake_cpy(x,y)",
     "norm(x,y)",
+    "rms(x1)+rms(x2)",
+
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -7473,6 +7476,36 @@ struct ggml_tensor * ggml_rms_norm_inplace(
         float eps) {
     return ggml_rms_norm_impl(ctx, a, eps, true);
 }
+
+struct ggml_tensor * ggml_fused_rms_rms_add(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x1,
+            struct ggml_tensor  * c1,
+            struct ggml_tensor  * x2,
+            struct ggml_tensor  * c2,
+            float                 eps) {
+
+    GGML_ASSERT(ggml_is_contiguous(x1) && ggml_is_contiguous(x2));
+    GGML_ASSERT(ggml_are_same_shape(x1, x2));
+    GGML_ASSERT(ggml_nrows(c1) == 1 && ggml_nrows(c2) == 1);
+    GGML_ASSERT(x1->ne[0] == c1->ne[0] && x2->ne[0] == c2->ne[0]);
+    GGML_ASSERT(x1->type == x2->type);
+    GGML_ASSERT(x1->type == GGML_TYPE_F16 || x1->type == GGML_TYPE_BF16 || x1->type == GGML_TYPE_F32);
+    GGML_ASSERT(c1->type == GGML_TYPE_F32 && c2->type == GGML_TYPE_F32);
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, x1->ne[0], x1->ne[1], x1->ne[2], x1->ne[3]);
+
+    memcpy(result->op_params, &eps, sizeof(eps));
+
+    result->op = GGML_OP_FUSED_RMS_RMS_ADD;
+    result->src[0] = x1;
+    result->src[1] = c1;
+    result->src[2] = x2;
+    result->src[3] = c2;
+
+    return result;
+}
+
 
 static struct ggml_tensor * ggml_fused_rms_norm_impl(
         struct ggml_context * ctx,
@@ -24203,6 +24236,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_fused_rms_norm(params, tensor);
             } break;
+        case GGML_OP_FUSED_RMS_RMS_ADD:
+            {
+                iqk_rms_rms_add(tensor, params->ith, params->nth);
+            } break;
         case GGML_OP_FUSED_NORM:
             {
                 ggml_compute_forward_fused_norm(params, tensor);
@@ -25040,6 +25077,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 }
             } break;
         case GGML_OP_FUSED_RMS_NORM:
+        case GGML_OP_FUSED_RMS_RMS_ADD:
         case GGML_OP_FUSED_NORM:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
@@ -26240,6 +26278,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_NORM:
         case GGML_OP_RMS_NORM:
         case GGML_OP_FUSED_RMS_NORM:
+        case GGML_OP_FUSED_RMS_RMS_ADD:
         case GGML_OP_FUSED_NORM:
         case GGML_OP_RMS_NORM_BACK:
         case GGML_OP_GROUP_NORM:

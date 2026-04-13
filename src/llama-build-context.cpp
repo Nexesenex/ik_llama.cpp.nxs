@@ -6100,18 +6100,15 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
 
             if (il == 0) {
                 sa_inp[id] = inpL;
-                //sa_inp[id] = do_split_norm(ctx0, inpL, l.attn_norm, hparams, cb, id, il_cb, false);
             } else {
                 GGML_ASSERT(inpL->op == GGML_OP_REDUCE);
                 auto cur = get_input_tensor_sm_graph(ctx0, inpL, id);
                 if (is_moe) {
                     GGML_ASSERT(inpL_moe && inpL_moe->op == GGML_OP_REDUCE);
-                    cur = do_split_norm(ctx0, cur, model.layers[il-1].ffn_post_norm_1, hparams, cb, id, il_cb, false);
-                    cb(cur, "ffn_post_norm", il_cb);
                     auto cur_moe = get_input_tensor_sm_graph(ctx0, inpL_moe, id);
-                    cur_moe = do_split_norm(ctx0, cur_moe, model.layers[il-1].ffn_post_norm_2, hparams, cb, id, il_cb, false);
-                    cb(cur, "ffn_moe_post_norm", il_cb);
-                    cur = ggml_add(ctx0, cur, cur_moe);
+                    auto post_norm_1 = (ggml_split_tensor_t *)model.layers[il-1].ffn_post_norm_1->extra;
+                    auto post_norm_2 = (ggml_split_tensor_t *)model.layers[il-1].ffn_post_norm_2->extra;
+                    cur = ggml_fused_rms_rms_add(ctx0, cur, post_norm_1->splits[id], cur_moe, post_norm_2->splits[id], hparams.f_norm_rms_eps);
                     cb(cur, "ffn_combined", il_cb);
                 }
                 cur = do_split_norm(ctx0, cur, model.layers[il-1].ffn_post_norm, hparams, cb, id, il_cb, false);
@@ -6361,13 +6358,9 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
         }
         auto post_norm_1 = (const ggml_split_tensor_t *)model.layers[hparams.n_layer-1].ffn_post_norm_1->extra;
         auto post_norm_2 = (const ggml_split_tensor_t *)model.layers[hparams.n_layer-1].ffn_post_norm_2->extra;
-        cur = llm.llm_build_norm(ctx0, cur, hparams, post_norm_1->splits[idx], NULL, LLM_NORM_RMS, cb, -1);
+        cur = ggml_fused_rms_rms_add(ctx0, cur, post_norm_1->splits[idx], cur_moe, post_norm_2->splits[idx], hparams.f_norm_rms_eps);
         cur->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
         ggml_build_forward_expand(gf, cur);
-        cur_moe = llm.llm_build_norm(ctx0, cur_moe, hparams, post_norm_2->splits[idx], NULL, LLM_NORM_RMS, cb, -1);
-        cb(cur, "ffn_post", hparams.n_layer-1);
-        cb(cur_moe, "ffn_post_moe", hparams.n_layer-1);
-        cur = ggml_add(ctx0, cur, cur_moe);
         cb(cur, "ffn_combined", hparams.n_layer-1);
     }
     cur = llm.llm_build_norm(ctx0, cur, hparams, post_norm->splits[idx], NULL, LLM_NORM_RMS, cb, -1);
@@ -6568,9 +6561,6 @@ ggml_cgraph * llm_build_context::build_gemma4() {
                     nullptr,
                     LLM_FFN_GELU, LLM_FFN_PAR, cb, il, gf);
 
-            cur_mlp = llm_build_norm(ctx0, cur_mlp, hparams, model.layers[il].ffn_post_norm_1, nullptr, LLM_NORM_RMS, cb, il);
-            cb(cur_mlp, "ffn_mlp", il);
-
             // Expert FFN
             auto cur_moe = llm_build_norm(ctx0, attn_out, hparams, model.layers[il].ffn_pre_norm_2, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur_moe, "ffn_norm_2", il);
@@ -6596,11 +6586,9 @@ ggml_cgraph * llm_build_context::build_gemma4() {
                     model.layers[il].ffn_up_gate_exps,
                     nullptr, logits, model.layers[il].ffn_down_exps_s);
 
-            cur_moe = llm_build_norm(ctx0, cur_moe, hparams, model.layers[il].ffn_post_norm_2, nullptr, LLM_NORM_RMS, cb, il);
-            cb(cur_moe, "ffn_moe", il);
-
-            cur = ggml_add(ctx0, cur_mlp, cur_moe);
+            cur = ggml_fused_rms_rms_add(ctx0, cur_mlp, model.layers[il].ffn_post_norm_1, cur_moe, model.layers[il].ffn_post_norm_2, hparams.f_norm_rms_eps);
             cb(cur, "ffn_moe_combined", il);
+            ggml_build_forward_expand(gf, cur);
 
             cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, cb, -1);
             cb(cur, "ffn_post_norm", -1);
