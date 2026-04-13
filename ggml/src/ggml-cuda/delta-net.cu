@@ -131,8 +131,8 @@ __global__ void delta_net_recurrent_f32(
 #pragma unroll
         for (int i = 0; i < HEAD_DIM/num_warps; ++i) {
             int col = num_warps*i + col_idx_0;
-            sum1 += state_local[i] * sK[col];
-            sum2 += state_local[i] * sQ[col];
+            ggml_cuda_mad(sum1, state_local[i], sK[col]);
+            ggml_cuda_mad(sum2, state_local[i], sQ[col]);
         }
         all_sum1[col_idx_0*WARP_SIZE_S + row] = sum1;
         all_sum2[col_idx_0*WARP_SIZE_S + row] = sum2;
