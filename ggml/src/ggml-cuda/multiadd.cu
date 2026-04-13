@@ -55,7 +55,7 @@ static __global__ void mul_multi_add_f32(int nused, int64_t ne0, int64_t ne1, in
     for (int j = 0; j < nused; ++j) {
         auto x0 = (const float *)c0;
         auto x1 = (const float *)c1;
-        sum += x0[i0] * x1[0];
+        ggml_cuda_mad(sum, x0[i0], x1[0]);
         c0 += nb01;
         c1 += nb11;
     }
@@ -90,7 +90,7 @@ static __global__ void mul_multi_add_f32(int nused, int64_t ne0, int64_t ne1, in
     for (int j = 0; j < nused; ++j) {
         auto x0 = (const float *)c0;
         auto x1 = (const float *)c1;
-        sum += x0[i0] * x1[0] * scales[ids[j]];
+        ggml_cuda_mad(sum, x0[i0] * scales[ids[j]], x1[0]);
         c0 += nb01;
         c1 += nb11;
     }
