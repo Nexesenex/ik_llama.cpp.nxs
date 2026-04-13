@@ -41,7 +41,7 @@ static __global__ void ssm_conv_single_seq_f32(
                 ? state_row[(size_t) idx * src0_s0]
                 : src1[row + (size_t) (idx - (nc - 1)) * src1_s1];
 
-            sumf += x * c_row[j];
+            ggml_cuda_mad(sumf, x, c_row[j]);
         }
 
         dst_x[row + (size_t) t * nr] = sumf;
@@ -232,12 +232,12 @@ static __global__ void ssm_conv_multi_seq_unique_f32_kernel(
     for (int i0 = 0; i0 < nc - 1; ++i0) {
         const float v = src_state_row[i0];
         state_row[i0] = v;
-        sumf += v * c_row[i0];
+        ggml_cuda_mad(sumf, v, c_row[i0]);
     }
 
     const float x = src1[row + (size_t) t * src1_nb1];
     state_row[nc - 1] = x;
-    sumf += x * c_row[nc - 1];
+    ggml_cuda_mad(sumf, x, c_row[nc - 1]);
     dst_x[row + (size_t) t * nr] = sumf;
 }
 
@@ -341,7 +341,7 @@ static __global__ void ssm_conv_f32_kernel(
 
         float sumf = 0.0f;
         for (int i0 = 0; i0 < nc; ++i0) {
-            sumf += state_row[i0] * c_row[i0];
+            ggml_cuda_mad(sumf, state_row[i0], c_row[i0]);
         }
         dst_x[row + (size_t) t * nr] = sumf;
     }
