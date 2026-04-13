@@ -957,12 +957,12 @@ void ggml_cuda_op_elu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_elu>(ctx, dst);
 }
 
-static __global__ void k_fused_softplus(int ne0, int nelem, const float * a, const float * b, const float * c, float * dst) {
+static __global__ void k_fused_softplus(int ne0, int nelem, const float * a, const float * b, const float * c, float * dst, const uint3 ne0_fd) {
     int i = blockIdx.x*blockDim.x + threadIdx.x;
     if (i >= nelem) {
         return;
     }
-    int i0 = i % ne0;
+    const int i0 = fastmodulo((uint32_t)i, ne0_fd);
     dst[i] = c[i0] * op_softplus(a[i] + b[i0]);
 }
 
@@ -982,16 +982,17 @@ void ggml_cuda_fused_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 
     int nelem = ggml_nelements(a->src[0]);
     int nblock = (nelem + kBlockSize - 1)/kBlockSize;
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)a->src[0]->ne[0]);
     k_fused_softplus<<<nblock, kBlockSize, 0, ctx.stream()>>>(a->src[0]->ne[0], nelem,
-            (const float *)a->src[0]->data, (const float *)a->src[1]->data, (const float *)m->src[1]->data, (float *)dst->data);
+            (const float *)a->src[0]->data, (const float *)a->src[1]->data, (const float *)m->src[1]->data, (float *)dst->data, ne0_fd);
 }
 
-static __global__ void k_fused_mul_exp_mul(int ne0, int nelem, const float * x, const float * y, float * dst) {
+static __global__ void k_fused_mul_exp_mul(int ne0, int nelem, const float * x, const float * y, float * dst, const uint3 ne0_fd) {
     int i = blockIdx.x*blockDim.x + threadIdx.x;
     if (i >= nelem) {
         return;
     }
-    int i0 = i % ne0;
+    const int i0 = fastmodulo((uint32_t)i, ne0_fd);
     dst[i] = y[i0] * expf(x[i] * y[i0]);
 }
 
@@ -1008,7 +1009,8 @@ void ggml_cuda_fused_mul_exp_mul(ggml_backend_cuda_context & ctx, ggml_tensor * 
     auto nelem = ggml_nelements(m1->src[0]);
     auto ne0   = ggml_nelements(m1->src[1]);
     int nblock = (nelem + kBlockSize - 1)/kBlockSize;
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t)ne0);
 
     k_fused_mul_exp_mul<<<nblock, kBlockSize, 0, ctx.stream()>>>(ne0, nelem,
-            (const float *)m1->src[0]->data, (const float *)m1->src[1]->data, (float *)dst->data);
+            (const float *)m1->src[0]->data, (const float *)m1->src[1]->data, (float *)dst->data, ne0_fd);
 }
