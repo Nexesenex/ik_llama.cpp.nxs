@@ -363,12 +363,12 @@ void ggml_cuda_op_repeat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_repeat>>(&aux_dst, &aux_src, &aux_dst, nullptr, dst->src[0]->data, dst->data, ctx.stream());
 }
 
-static __global__ void k_fast_add(int64_t ne0, int64_t nelem, const float * x, const float * y, float * z) {
+static __global__ void k_fast_add(int64_t ne0, int64_t nelem, const float * x, const float * y, float * z, const uint3 ne0_fd) {
     int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
     if (i >= nelem) {
         return;
     }
-    z[i] = x[i] + y[i % ne0];
+    z[i] = x[i] + y[fastmodulo((uint32_t)i, ne0_fd)];
 }
 
 template <typename src1_t, typename src2_t, typename dst_t>
@@ -466,8 +466,9 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         constexpr int kBlockSize = 256;
         auto nelem = ggml_nelements(dst);
         int nblocks = (nelem + kBlockSize - 1)/kBlockSize;
+        const uint3 ne0_fd = init_fastdiv_values((uint32_t)dst->ne[0]);
         k_fast_add<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
-                (const float *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data);
+                (const float *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data, ne0_fd);
         return;
     }
     if (ggml_is_contiguous(dst->src[0]) && ggml_are_same_shape(dst->src[0], dst->src[1]) && ggml_is_contiguous(dst)) {
@@ -562,12 +563,12 @@ static void ggml_cuda_op_scale_tensor(ggml_backend_cuda_context & ctx, ggml_tens
     scale_f32_cuda_l(src0_d, dst_d, dst->src[1]->data, ggml_nelements(src0), stream);
 }
 
-static __global__ void k_mul_fast(int ne0, int nelem, const float * x, const float * y, float * z) {
+static __global__ void k_mul_fast(int ne0, int nelem, const float * x, const float * y, float * z, const uint3 ne0_fd) {
     int i = blockDim.x*blockIdx.x + threadIdx.x;
     if (i >= nelem) {
         return;
     }
-    int i1 = i / ne0;
+    const int i1 = fastdiv((uint32_t)i, ne0_fd);
     z[i] = x[i] * y[i1];
 }
 
@@ -583,7 +584,8 @@ void ggml_cuda_op_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         constexpr int kBlockSize = 256;
         int nelem = ggml_nelements(src0);
         int nblock = (nelem + kBlockSize - 1)/kBlockSize;
-        k_mul_fast<<<nblock, kBlockSize, 0, ctx.stream()>>>(src0->ne[0], nelem, (const float *)src0->data, (const float *)src1->data, (float *)dst->data);
+        const uint3 ne0_fd = init_fastdiv_values((uint32_t)src0->ne[0]);
+        k_mul_fast<<<nblock, kBlockSize, 0, ctx.stream()>>>(src0->ne[0], nelem, (const float *)src0->data, (const float *)src1->data, (float *)dst->data, ne0_fd);
         return;
     }
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_mul>>(src0, src1, dst, src0->data, src1->data, dst->data, ctx.stream());
