@@ -38,6 +38,7 @@ struct llama_file {
     size_t get_total_bytes_read() const;
     double get_load_speed_mbps() const;
     int64_t get_load_start_us() const;
+    void release_file_handle();
 
     static constexpr bool DIRECT_IO_SUPPORTED = true;
 
