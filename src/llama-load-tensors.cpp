@@ -462,6 +462,14 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         }
     }
 
+    // Split MTP layer's to graph
+    if ((model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) &&
+            model.hparams.nextn_predict_layers > 0 && model.splits.size() > 1) {
+        int mtp_first = n_layer - model.hparams.nextn_predict_layers;
+        LLAMA_LOG_DEBUG("%s: MTP layer(s) %d-%d: split attention+FFN, nextn on per-device CUDA\n",
+                __func__, mtp_first, n_layer - 1);
+    }
+
     auto n_tensors = ml.n_tensors;
     if (ml.merge_qkv) n_tensors += n_layer;
     if (ml.merge_up_gate_exps) n_tensors += n_layer;
