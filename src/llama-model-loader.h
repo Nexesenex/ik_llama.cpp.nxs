@@ -197,6 +197,8 @@ struct llama_model_loader {
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
             void * progress_callback_user_data);
+
+    void release_mmap_file_handles();
 };
 
 void llm_load_arch(llama_model_loader & ml, llama_model & model);

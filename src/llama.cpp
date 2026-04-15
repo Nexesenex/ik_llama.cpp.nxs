@@ -3446,6 +3446,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         )) {
             return -2;
         }
+
+        ml.release_mmap_file_handles();
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
         return -1;

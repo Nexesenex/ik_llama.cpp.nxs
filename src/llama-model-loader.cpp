@@ -1387,6 +1387,14 @@ bool llama_model_loader::load_all_data(
     return true;
 }
 
+void llama_model_loader::release_mmap_file_handles() {
+    for (auto & file : files) {
+        if (file) {
+            file->release_file_handle();
+        }
+    }
+}
+
 template<>
 bool llama_model_loader::get_key(const enum llm_kv kid, enum llama_pooling_type & result, const bool required) {
     uint32_t tmp;

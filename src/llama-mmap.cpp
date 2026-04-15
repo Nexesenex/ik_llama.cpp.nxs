@@ -813,6 +813,26 @@ int64_t llama_file::get_load_start_us() const {
 #endif
 }
 
+void llama_file::release_file_handle() {
+#if defined(_WIN32)
+    if (pimpl->use_no_buffering && pimpl->fp_win32 != INVALID_HANDLE_VALUE) {
+        CloseHandle(pimpl->fp_win32);
+        pimpl->fp_win32 = INVALID_HANDLE_VALUE;
+    } else if (pimpl->fp) {
+        fclose(pimpl->fp);
+        pimpl->fp = nullptr;
+    }
+#else
+    if (pimpl->fd != -1) {
+        close(pimpl->fd);
+        pimpl->fd = -1;
+    } else if (pimpl->fp) {
+        std::fclose(pimpl->fp);
+        pimpl->fp = nullptr;
+    }
+#endif
+}
+
 // llama_mmap
 
 struct llama_mmap::impl {
