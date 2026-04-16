@@ -1,11 +1,12 @@
 name: Build and Push Docker Image
 
-on: workflow_dispatch
+on:
+  # Allows manual triggering of the workflow
+  workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
-  actions: read
 
 jobs:
   build-and-push:
@@ -28,7 +29,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 100 # Enough for rev-list, but saves GBs of history
+          fetch-depth: 0 # 0 indicates all history for all branches and tags
       
       - name: Free Disk Space (Ubuntu)
         run: |
@@ -57,7 +58,6 @@ jobs:
         id: prep
         run: |
           echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> $GITHUB_ENV
-          echo "LLAMA_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "REPO_LOWER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
       
       # 5.1 Restore the cache from GitHub's storage to a host folder
@@ -86,7 +86,6 @@ jobs:
           REPO_OWNER: ${{ env.REPO_LOWER }}
           VARIANT: ${{ matrix.variant }}
           BUILD_NUMBER: ${{ env.BUILD_NUMBER }}
-          LLAMA_COMMIT: ${{ env.LLAMA_COMMIT }}
           CUDA_VERSION: ${{ matrix.cuda_version }}
           GGML_NATIVE: "OFF" # Force OFF for CI portability
           USE_CCACHE: "true"
@@ -103,18 +102,17 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: success()
+    permissions:
+      packages: write
     steps:
       - name: Delete untagged images
-        uses: vlaurin/action-ghcr-prune@v0.6.0
+        uses: dataaxiom/ghcr-cleanup-action@v1
         with:
-          # Use a PAT if GITHUB_TOKEN continues to return "Not Found"
-          token: ${{ secrets.GITHUB_TOKEN }} 
-          # Ensure this matches the package owner (user or org)
-          organization: ${{ github.repository_owner }}
-          container: ik-llama-cpp
-          # Changed from untagged-only to the valid input
-          untagged: true
-          # Optional: Keep the most recent untagged if needed, 
-          # otherwise 0 deletes all untagged.
-          keep-last: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Use the lower-case owner env you created earlier if possible, 
+          # or just github.repository_owner
+          owner: ${{ github.repository_owner }}
+          package: ik-llama-cpp
+          delete-untagged: true
+          # This helps avoid the "Package not found" error during high-volume deletion
+          validate: false
