@@ -218,6 +218,12 @@ void llama_sampling_set_rng_seed(struct common_sampler * ctx, uint32_t seed) {
 }
 
 void common_sampler_clone(common_sampler * src, common_sampler * dst) {
+    dst->params = src->params;
+    dst->mirostat_mu = src->mirostat_mu;
+    dst->n_valid = src->n_valid;
+    dst->rng = src->rng;
+    dst->server_biases = src->server_biases;
+
     if (dst->grammar) {
         llama_grammar_free(dst->grammar);
         dst->grammar = nullptr;
@@ -230,7 +236,18 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
     }
 
     dst->prev = src->prev;
-    dst->smpl = llama_sampler_dry_clone(src->smpl);
+    if (dst->smpl) {
+        llama_sampler_dry_free(dst->smpl);
+        dst->smpl = nullptr;
+    }
+    if (src->smpl) {
+        dst->smpl = llama_sampler_dry_clone(src->smpl);
+    }
+
+    if (dst->rbudget) {
+        common_reasoning_budget_free(dst->rbudget);
+        dst->rbudget = nullptr;
+    }
     if (src->rbudget) {
         dst->rbudget = common_reasoning_budget_clone(src->rbudget);
     }
