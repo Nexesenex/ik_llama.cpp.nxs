@@ -3755,10 +3755,6 @@ void server_context::speculative_decoding_accept() {
             if (slot.n_buffer == 0 || !params_base.can_ban_phrases) {
                 if (!process_token(result, slot)) {
                     // release slot because of stop condition
-                    slot.i_batch_dft.push_back(batch.n_tokens);
-                    common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
-                    slot.cache_tokens.push_back(slot.sampled);
-                    slot.n_past++;
                     send_final_response(slot);
                     release_slot_after_final_response(slot);
                     break;
@@ -3816,10 +3812,6 @@ void server_context::send_token_results(completion_token_outputs& results, serve
             if (slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
                 continue;
             }
-            slot.i_batch = batch.n_tokens;
-            common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
-            slot.cache_tokens.push_back(slot.sampled);
-            slot.n_past++;
             send_final_response(slot);
             release_slot_after_final_response(slot);
             released = true;
@@ -3831,10 +3823,6 @@ void server_context::send_token_results(completion_token_outputs& results, serve
     }
 
     if (!released && slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
-        slot.i_batch = batch.n_tokens;
-        common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
-        slot.cache_tokens.push_back(slot.sampled);
-        slot.n_past++;
         send_final_response(slot);
         release_slot_after_final_response(slot);
     }
