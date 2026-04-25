@@ -4,7 +4,6 @@
 #include "mma_new.cuh"
 #include "vecdotq.cuh"
 #include "iqk_cuda_common.h"
-#include "fastdiv.cuh"
 
 #include <vector>
 #include <climits>
