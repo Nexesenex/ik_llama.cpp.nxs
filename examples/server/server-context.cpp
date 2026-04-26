@@ -4009,7 +4009,7 @@ void server_context::send_token_results(completion_token_outputs& results, serve
         }
     }
 
-    if (!slot.released && slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
+    if (!released && slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
         const int last_n_tokens = (slot.n_decoded % 100 == 0) ? 100 : (slot.n_decoded % 100);
         const double last_tok_per_sec = last_n_tokens * 1e6 / ((slot.t_start_generation + slot.t_token_generation * 1e3) - slot.t_start_batch_100);
         const double cur_tg_tok_per_sec = slot.n_decoded * 1e6 / (slot.t_token_generation * 1e3);
@@ -4213,7 +4213,7 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     else if (buffer_full || !next_token) {
         slot.rewind_status = false;
         slot.rewind_count = 0;
-        
+
         if (!next_token) {
             // send all remaining tokens
             send_token_results(slot.token_buffer, slot);
