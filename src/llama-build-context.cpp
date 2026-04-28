@@ -1558,6 +1558,9 @@ static ggml_tensor * llm_build_kqv(
     auto v_cache = lctx.model.hparams.has_kv(il) ? kv.v_l[il]
                  : lctx.model.hparams.swa_layers[il] ? kv.v_l[hparams.n_layer_kv_from_start-2] : kv.v_l[hparams.n_layer_kv_from_start-1];
 
+    GGML_ASSERT(k_cache != nullptr && "k_cache is null in llm_build_kqv");
+    GGML_ASSERT(v_cache != nullptr && "v_cache is null in llm_build_kqv");
+
     struct ggml_tensor * k =
         ggml_view_3d(ctx, k_cache,
                 n_embd_head_k, n_kv, n_head_kv,
@@ -2056,7 +2059,8 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
         int idx = lctx.model.default_layer_device[lctx.model.hparams.n_layer];
         int idx_out = ggml_backend_sched_get_backend_idx(lctx.sched, lctx.model.output->buffer);
         if (idx_out >= 0) idx = idx_out;
-        if (cur->op == GGML_OP_REDUCE && cur->src[idx]) {
+        const bool is_qwen_mtp = lctx.model.arch == LLM_ARCH_QWEN35 && lctx.cparams.mtp;
+        if (cur->op == GGML_OP_REDUCE && cur->src[idx] && !is_qwen_mtp) {
             // avoid copy to main GPU
             cur->view_src = cur->src[idx];
         }
