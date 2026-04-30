@@ -1874,7 +1874,7 @@ bool llama_model_has_recurrent(const llama_model * model) {
 }
 
 bool llama_model_is_split_mode_graph(const struct llama_model * model) {
-    return model && (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN);
+    return model && (model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model->split_mode == LLAMA_SPLIT_MODE_ATTN);
 }
 
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il) {
