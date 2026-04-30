@@ -546,8 +546,8 @@ void server_slot::release() {
     if (state == SLOT_STATE_PROCESSING) {
         if (t_start_process_prompt > 0 && t_prompt_processing == 0) {
             t_prompt_processing = (ggml_time_us() - t_start_process_prompt) / 1e3;
-            n_prompt_tokens_processed = n_past;
-            // n_prompt_tokens_processed_log = n_past;
+            // n_prompt_tokens_processed = n_past;
+            n_prompt_tokens_processed_log = n_past;
         }
         t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
         command = SLOT_COMMAND_RELEASE;
