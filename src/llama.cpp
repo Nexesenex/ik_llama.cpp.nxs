@@ -778,11 +778,8 @@ static bool llama_kv_cache_init(
     // count used buffer types
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
     if (offload) {
-        const bool qwen_mtp = model.arch == LLM_ARCH_QWEN35 && hparams.nextn_predict_layers > 0;
-        const int64_t n_mtp_first = n_layer - hparams.nextn_predict_layers;
         for (int64_t i = 0; i < n_layer; ++i) {
-            const bool is_mtp_tail = qwen_mtp && i >= n_mtp_first;
-            if (split_cache && !is_mtp_tail) {
+            if (split_cache) {
                 buft_layer_count[model.buft_layer[i].buft_matrix]++;
             } else {
                 buft_layer_count[model.buft_layer[i].buft]++;
@@ -868,10 +865,8 @@ static bool llama_kv_cache_init(
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k(i);
 
-        const bool is_mtp_tail_layer = model.arch == LLM_ARCH_QWEN35 &&
-                hparams.nextn_predict_layers > 0 && i >= (int)n_mtp_first_layer;
         //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
-        struct ggml_context * ctx = (split_cache && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        struct ggml_context * ctx = split_cache ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
@@ -898,9 +893,7 @@ static bool llama_kv_cache_init(
             n_mla++;
         }
         else {
-            // Qwen 3 MTP layer always need KV cache in the MTP context
-            const bool is_mtp_layer = (cparams.mtp_op_type != MTP_OP_NONE && i >= (int)n_mtp_first_layer);
-            if (!hparams.has_kv(i) && !is_mtp_layer) {
+            if (!hparams.has_kv(i)) {
                 cache.k_l.push_back(nullptr);
                 cache.v_l.push_back(nullptr);
                 continue;
@@ -3311,8 +3304,6 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         model.hparams.vocab_only = params.vocab_only;
 
-        model.mtp = params.mtp;
-
         try {
             llm_load_arch(ml, model);
         } catch(const std::exception & e) {
@@ -4140,15 +4131,7 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
     // set all ids as invalid (negative)
     std::fill(lctx.output_ids.begin(), lctx.output_ids.end(), -1);
 
-    if (has_mtp) {
-        // MTP uses a large output footprint, clear only the active region.
-        const size_t clear_size = (logits_size + embd_size) * sizeof(float);
-        if (clear_size > 0 && output_base) {
-            memset(output_base, 0, clear_size);
-        }
-    } else {
-        ggml_backend_buffer_clear(lctx.buf_output, 0);
-    }
+    ggml_backend_buffer_clear(lctx.buf_output, 0);
 
     lctx.n_outputs = 0;
 
@@ -4502,14 +4485,8 @@ static int llama_decode_internal(
         }
         else {
             const bool has_mtp = lctx.model.hparams.nextn_predict_layers > 0 && lctx.model.mtp;
-            const bool use_qwen_mtp_embd = has_mtp && lctx.model.arch == LLM_ARCH_QWEN35;
             if (cparams.embeddings || has_mtp) {
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
-                    if (use_qwen_mtp_embd && strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
-                        // Qwen 3.5 uses raw hidden state before the final shared-head normalization.
-                        embd = gf->nodes[i];
-                        break;
-                    }
                     if (strcmp(gf->nodes[i]->name, "result_embd_pooled") == 0) {
                         embd = gf->nodes[i];
                         break;
@@ -5986,7 +5963,7 @@ struct llama_context * llama_init_from_model(
         }
     }
 
-    if (model->arch != LLM_ARCH_GLM4_MOE && model->arch != LLM_ARCH_QWEN35 && cparams.mtp != 0) {
+    if (model->arch != LLM_ARCH_GLM4_MOE && cparams.mtp != 0) {
         cparams.mtp = 0;
     }
 
