@@ -547,6 +547,7 @@ void server_slot::release() {
         if (t_start_process_prompt > 0 && t_prompt_processing == 0) {
             t_prompt_processing = (ggml_time_us() - t_start_process_prompt) / 1e3;
             n_prompt_tokens_processed = n_past;
+            // n_prompt_tokens_processed_log = n_past;
         }
         t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
         command = SLOT_COMMAND_RELEASE;
@@ -3991,22 +3992,22 @@ void server_context::send_token_results(completion_token_outputs& results, serve
             released = true;
             break;
 
-            const int last_n_tokens = (slot.n_decoded % 100 == 0) ? 100 : (slot.n_decoded % 100);
-            const double last_tok_per_sec = last_n_tokens * 1e6 / ((slot.t_start_generation + slot.t_token_generation * 1e3) - slot.t_start_batch_100);
-            const double cur_tg_tok_per_sec = slot.n_decoded * 1e6 / (slot.t_token_generation * 1e3);
-            LOG_INFO("TG_OK", {
-                {"n_p",   slot.n_past},
-                {"n_ctx",    n_ctx},
-                {"Dec", slot.n_decoded},
-                {"L" + std::to_string(last_n_tokens) + " tok/s",    std::round(last_tok_per_sec * 100) / 100},
-                {"TotCurTG t/s",    std::round(cur_tg_tok_per_sec * 100) / 100},
-                });
-                send_final_response(slot);
-                slot.release();
-                slot.print_timings();
-                metrics.on_prediction(slot);
-                slot.released = true;
-                break;
+            // const int last_n_tokens = (slot.n_decoded % 100 == 0) ? 100 : (slot.n_decoded % 100);
+            // const double last_tok_per_sec = last_n_tokens * 1e6 / ((slot.t_start_generation + slot.t_token_generation * 1e3) - slot.t_start_batch_100);
+            // const double cur_tg_tok_per_sec = slot.n_decoded * 1e6 / (slot.t_token_generation * 1e3);
+            // LOG_INFO("TG_OK", {
+                // {"n_p",   slot.n_past},
+                // {"n_ctx",    n_ctx},
+                // {"Dec", slot.n_decoded},
+                // {"L" + std::to_string(last_n_tokens) + " tok/s",    std::round(last_tok_per_sec * 100) / 100},
+                // {"TotCurTG t/s",    std::round(cur_tg_tok_per_sec * 100) / 100},
+                // });
+                // send_final_response(slot);
+                // slot.release();
+                // slot.print_timings();
+                // metrics.on_prediction(slot);
+                // slot.released = true;
+                // break;
         }
         if (n > 0 && count >= n) {
             break;
