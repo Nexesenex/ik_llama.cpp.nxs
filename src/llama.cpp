@@ -6224,6 +6224,7 @@ static int llama_decode_internal(
         } else {
             //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);
             gf = prev->graph;
+            gf->reused = true;
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
