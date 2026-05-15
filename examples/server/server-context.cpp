@@ -1760,22 +1760,24 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     slot.allow_ruless_prev = slot.allow_ruless;
 
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
-        params_base.can_ban_phrases = false;
-        bool do_checkpoint = params_base.ctx_checkpoints_n > 0;
-        // make checkpoints only for completion tasks
-        do_checkpoint = do_checkpoint && task.type == SERVER_TASK_TYPE_COMPLETION;
-        // make a checkpoint of the parts of the memory that cannot be rolled back.
-        // checkpoints are created only if:
-        // - the model architecture is marked as recurrent or hybrid
-        //
-        // TODO: try to make this conditional on the context or the memory module, instead of the model type
-        params_base.do_checkpoint = do_checkpoint;
-        if (slot.n_buffer != 0) {
-            LLAMA_LOG_WARN("banned strings is not supported by recurrent model, it will be disabled.\n");
-        }
-        if (params_base.ctx_shift) {
-            params_base.ctx_shift = false;
-            LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
+        if (!params_base.ignore_recurrent_model) {
+            params_base.can_ban_phrases = false;
+            bool do_checkpoint = params_base.ctx_checkpoints_n > 0;
+            // make checkpoints only for completion tasks
+            do_checkpoint = do_checkpoint && task.type == SERVER_TASK_TYPE_COMPLETION;
+            // make a checkpoint of the parts of the memory that cannot be rolled back.
+            // checkpoints are created only if:
+            // - the model architecture is marked as recurrent or hybrid
+            //
+            // TODO: try to make this conditional on the context or the memory module, instead of the model type
+            params_base.do_checkpoint = do_checkpoint;
+            if (slot.n_buffer != 0) {
+                LLAMA_LOG_WARN("banned strings is not supported by recurrent model, it will be disabled.\n");
+            }
+            if (params_base.ctx_shift) {
+                params_base.ctx_shift = false;
+                LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
+            }
         }
     }
     if (llama_model_is_split_mode_tensor_parallel(llama_get_model(slot.ctx))) {
