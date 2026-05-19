@@ -4173,8 +4173,8 @@ static void distribute_mla_tensors_for_split_mode_tensor_parallel(
         const llama_hparams & hparams,
         const std::vector<float> & cur_splits,
         std::vector<size_t> & mem_used,
-        ggml_context * ctx_split,
-        int il) {
+        const std::vector<size_t> & vram_free, const std::vector<size_t> & vram_total, ggml_context * ctx_split, int il,
+        float split_tensor_split_factor, float split_vram_free_factor, float split_usage_penalty_factor) {
     const std::vector<int> mirror(cur_splits.size(), 1);
 
     const int n_head        = hparams.n_head(il);
@@ -4182,7 +4182,8 @@ static void distribute_mla_tensors_for_split_mode_tensor_parallel(
     const int n_embd_head_v = hparams.n_embd_head_v(il);
 
     // granularity=4: keeps wo row blocks K-quant-aligned (% 256) and gqa_ratio % 4 == 0 for FA-MMA.
-    auto split_heads = create_split(n_head, 4, cur_splits, mem_used);
+    auto split_heads = create_split(n_head, 4, cur_splits, mem_used, vram_free, vram_total,
+                split_tensor_split_factor, split_vram_free_factor, split_usage_penalty_factor);
 
     // Derive per-tensor column/row splits from head splits.
     auto split_wq_b_cols  = split_heads;
@@ -5077,7 +5078,8 @@ bool create_tensors_helper::create_tensors() {
                  model.arch == LLM_ARCH_GLM_DSA ||
                  model.arch == LLM_ARCH_MISTRAL4)) {
                 distribute_mla_tensors_for_split_mode_tensor_parallel(
-                    layer, hparams, cur_splits, mem_used, ctx_split, il);
+                    layer, hparams, cur_splits, mem_used, vram_free, vram_total, ctx_split, il,
+                    model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
             }
 
             if (layer.ffn_down && layer.ffn_up && layer.ffn_gate) {
