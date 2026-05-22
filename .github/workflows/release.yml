@@ -1,0 +1,2291 @@
+name: Release
+
+on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      create_release:
+        description: 'Create new release'
+        required: true
+        type: boolean
+  push:
+    branches:
+      - master
+    paths: ['.github/workflows/release.yml', '**/CMakeLists.txt', '**/.cmake', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=ON -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+
+jobs:
+  macOS-arm64:
+    #if: false
+    runs-on: macos-14
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: macOS-latest-cmake-arm64
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        continue-on-error: true
+        run: |
+          brew update
+          brew install curl libomp
+
+      - name: Build
+        id: cmake_build
+        run: |
+          sysctl -a
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DLLAMA_FATAL_WARNINGS=OFF \
+            -DGGML_OPENMP=ON \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_RPC=OFF \
+            -DGGML_MAX_CONTEXTS=2048 \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          find build -type f -name "*.dylib" -exec mv {} ./build/bin/ \;
+          zip -r llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip ./build/bin/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip
+
+  macOS-x64:
+    #if: false
+    runs-on: macos-15-intel
+
+    strategy:
+      matrix:
+        instr: ['avx2', 'avx512', 'avx512_vnni', 'avx512_vnni_bf16', 'avx512_vnni_vbmi', 'avx512_vnni_vbmi_bf16'] # 'avx', 'noavx' won't compile because missing declarations all over the place
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: macOS-latest-cmake-x64-${{ matrix.instr }}
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        continue-on-error: true
+        run: |
+          brew update
+          brew install curl libomp
+
+      - name: Build
+        id: cmake_build
+        run: |
+          sysctl -a
+          # Metal is disabled due to intermittent failures with Github runners not having a GPU:
+          # https://github.com/ggml-org/llama.cpp/actions/runs/8635935781/job/23674807267#step:5:2313
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DLLAMA_FATAL_WARNINGS=OFF \
+            -DGGML_OPENMP=ON \
+            -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} \
+            -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_RPC=OFF \
+            -DGGML_MAX_CONTEXTS=2048 \
+            -DGGML_METAL_NDEBUG=ON \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          find build -type f -name "*.dylib" -exec mv {} ./build/bin/ \;
+          zip -r llama-${{ steps.tag.outputs.name }}-bin-macos-x64-${{ matrix.instr }}.zip ./build/bin/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-macos-x64-${{ matrix.instr }}.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-macos-x64-${{ matrix.instr }}.zip
+
+  ubuntu-22-cpu:
+    #if: false
+    strategy:
+      matrix:
+        instr: ['avx2', 'avx512', 'avx512_vnni', 'avx512_vnni_bf16', 'avx512_vnni_vbmi', 'avx512_vnni_vbmi_bf16'] # 'avx', 'noavx' won't compile because missing declarations all over the place
+        include:
+          - build: 'x64'
+            os: ubuntu-22.04
+          #- build: 'arm64'
+          #  os: ubuntu-22.04-arm
+        
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-cpu-cmake
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_NATIVE=OFF \
+            -DLLAMA_FATAL_WARNINGS=OFF \
+            -DGGML_OPENMP=ON \
+            -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} \
+            -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" \
+            -DGGML_MAX_CONTEXTS=2048 \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+        
+      - name: Check workspace contents
+        run: |
+          echo "=== Working directory ==="
+          pwd
+      
+          echo
+          echo "=== Top-level files ==="
+          ls -la
+      
+          echo
+          echo "=== Recursive listing of entire repo ==="
+          ls -R .
+      
+          echo
+          echo "=== Locate LICENSE file(s) ==="
+          find . -type f -iname "LICENSE" -print || echo "No LICENSE file found"
+      
+          echo
+          echo "=== Contents of build/ ==="
+          if [[ -d build ]]; then
+            ls -R build
+          else
+            echo "No build/ directory exists"
+          fi
+      
+          echo
+          echo "=== Executable binaries under build/ ==="
+          if [[ -d build ]]; then
+            find build -type f -executable -print || echo "No executables found in build/"
+          else
+            echo "Skipping find (build/ not present)"
+          fi
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          find build -type f -name "*.so" -exec mv {} ./build/bin/ \;
+          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}-${{ matrix.instr }}.zip ./build/bin/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}-${{ matrix.instr }}.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}-${{ matrix.instr }}.zip
+
+  ubuntu-22-vulkan:
+    #if: false
+    strategy:
+      matrix:
+        instr: ['avx2', 'avx512', 'avx512_vnni', 'avx512_vnni_bf16', 'avx512_vnni_vbmi', 'avx512_vnni_vbmi_bf16'] # 'avx', 'noavx' won't compile because missing declarations all over the place
+        include:
+          - build: 'x64'
+            os: ubuntu-22.04
+          #- build: 'arm64'
+          #  os: ubuntu-22.04-arm
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-22-cmake-vulkan
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libcurl4-openssl-dev
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DLLAMA_FATAL_WARNINGS=OFF \
+            -DGGML_OPENMP=ON \
+            -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} \
+            -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" \
+            -DGGML_VULKAN=ON \
+            -DGGML_SCHED_MAX_COPIES=1 \
+            -DGGML_MAX_CONTEXTS=2048 \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+        
+      - name: Check workspace contents
+        run: |
+          echo "=== Working directory ==="
+          pwd
+      
+          echo
+          echo "=== Top-level files ==="
+          ls -la
+      
+          echo
+          echo "=== Recursive listing of entire repo ==="
+          ls -R .
+      
+          echo
+          echo "=== Locate LICENSE file(s) ==="
+          find . -type f -iname "LICENSE" -print || echo "No LICENSE file found"
+      
+          echo
+          echo "=== Contents of build/ ==="
+          if [[ -d build ]]; then
+            ls -R build
+          else
+            echo "No build/ directory exists"
+          fi
+      
+          echo
+          echo "=== Executable binaries under build/ ==="
+          if [[ -d build ]]; then
+            find build -type f -executable -print || echo "No executables found in build/"
+          else
+            echo "Skipping find (build/ not present)"
+          fi
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          find build -type f -name "*.so" -exec mv {} ./build/bin/ \;
+          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}-${{ matrix.instr }}.zip ./build/bin/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}-${{ matrix.instr }}.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}-${{ matrix.instr }}.zip
+
+  ubuntu-22-cuda:
+    #if: false
+    strategy:
+      matrix:
+        cuda: ['12.8', '13.1'] # '11.7',
+        instr: ['avx2', 'avx512', 'avx512_vnni', 'avx512_vnni_bf16', 'avx512_vnni_vbmi', 'avx512_vnni_vbmi_bf16'] # 'avx', 'noavx' won't compile because missing declarations all over the place
+        include:
+          - build: 'x64'
+            os: ubuntu-22.04
+          #- build: 'arm64'
+          #  os: ubuntu-22.04-arm
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-22-cmake-cuda-${{ matrix.cuda }}
+          evict-old-files: 1d
+      - name: Dependencies
+        id: depends
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
+          sudo dpkg -i cuda-keyring_1.0-1_all.deb
+          sudo apt-get update -y
+          sudo apt-get install -y cuda-toolkit-${{ matrix.cuda }} build-essential libcurl4-openssl-dev
+      - name: Build
+        id: cmake_build
+        run: |
+          export PATH=/usr/local/cuda-${{ matrix.cuda }}/bin:$PATH
+          export LD_LIBRARY_PATH=/usr/local/cuda-${{ matrix.cuda }}/lib64:$LD_LIBRARY_PATH
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_BACKEND_DL=ON \
+            -DLLAMA_FATAL_WARNINGS=OFF \
+            -DGGML_OPENMP=ON \
+            -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} \
+            -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} \
+            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" \
+            -DGGML_CUDA=ON \
+            -DGGML_SCHED_MAX_COPIES=1 \
+            -DGGML_CUDA_IQK_FORCE_BF16=1 \
+            -DGGML_MAX_CONTEXTS=2048 \
+            -DGGML_CUDA_USE_GRAPHS=ON \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Check workspace contents
+        run: |
+          echo "=== Working directory ==="
+          pwd
+      
+          echo
+          echo "=== Top-level files ==="
+          ls -la
+      
+          echo
+          echo "=== Recursive listing of entire repo ==="
+          ls -R .
+      
+          echo
+          echo "=== Locate LICENSE file(s) ==="
+          find . -type f -iname "LICENSE" -print || echo "No LICENSE file found"
+      
+          echo
+          echo "=== Contents of build/ ==="
+          if [[ -d build ]]; then
+            ls -R build
+          else
+            echo "No build/ directory exists"
+          fi
+      
+          echo
+          echo "=== Executable binaries under build/ ==="
+          if [[ -d build ]]; then
+            find build -type f -executable -print || echo "No executables found in build/"
+          else
+            echo "Skipping find (build/ not present)"
+          fi
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          find build -type f -name "*.so" -exec mv {} ./build/bin/ \;
+          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-${{ matrix.build }}-${{ matrix.instr }}.zip ./build/bin/*
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-${{ matrix.build }}-${{ matrix.instr }}.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-${{ matrix.build }}-${{ matrix.instr }}.zip
+      - name: Copy and pack Cuda runtime
+        run: |
+          echo "Cuda install location: ${{ env.CUDA_PATH }}"
+          cp /usr/local/cuda-${{ matrix.cuda }}/lib64/libcublas.so.[0-9][0-9] ./build/bin/
+          cp /usr/local/cuda-${{ matrix.cuda }}/lib64/libcublasLt.so.[0-9][0-9] ./build/bin/
+          cp /usr/local/cuda-${{ matrix.cuda }}/lib64/libcudart.so.[0-9][0-9] ./build/bin/
+          zip -r cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-${{ matrix.build }}-${{ matrix.instr }}.zip ./build/bin/*
+          rm ./build/bin/libcublas.so.*
+          rm ./build/bin/libcublasLt.so.*
+          rm ./build/bin/libcudart.so.*
+
+      - name: Upload Cuda runtime
+        uses: actions/upload-artifact@v6
+        with:
+          path: cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-${{ matrix.build }}-${{ matrix.instr }}.zip
+          name: cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-${{ matrix.build }}-${{ matrix.instr }}.zip
+
+  windows-cpu:
+    #if: false # Not ready yet
+    runs-on: windows-2022
+
+    strategy:
+      matrix:
+        arch: ['x64'] #, 'arm64'
+        instr: ['avx2', 'avx512', 'avx512_vnni', 'avx512_vnni_bf16', 'avx512_vnni_vbmi', 'avx512_vnni_vbmi_bf16'] # 'avx', 'noavx' won't compile because missing declarations all over the place
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: windows-latest-cmake-cpu-${{ matrix.arch }}-${{ matrix.instr }}
+          variant: ccache
+          evict-old-files: 1d
+
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
+      - name: Detect Visual Studio installation
+        shell: pwsh
+        run: |
+          # detect Enterprise, then BuildTools; set VS_DIR and LLVM_DIR (written to GITHUB_ENV)
+          if (Test-Path 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise') {
+            $vs = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
+            $llvm = Join-Path $vs 'VC\Tools\Llvm\x64'
+          }
+          elseif (Test-Path 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools') {
+            $vs = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools'
+            $llvm = Join-Path $vs 'VC\Tools\Llvm\x64'
+          }
+          else {
+            Write-Error "No supported Visual Studio installation found under expected paths. Please install Visual Studio Build Tools or the full IDE, or set VS_DIR manually."
+            exit 1
+          }
+
+          Write-Host "Detected VS root: $vs"
+          Write-Host "Assuming LLVM dir: $llvm"
+
+          Add-Content -Path $env:GITHUB_ENV -Value ("VS_DIR=" + $vs)
+          Add-Content -Path $env:GITHUB_ENV -Value ("LLVM_DIR=" + $llvm)
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DLLAMA_FATAL_WARNINGS=OFF ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
+            -DGGML_OPENMP=ON ^
+            -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} ^
+            -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DCURL_LIBRARY="%CURL_PATH%\lib\libcurl.dll.a" ^
+            -DCURL_INCLUDE_DIR="%CURL_PATH%\include" ^
+            -DGGML_MAX_CONTEXTS=2048 ^
+            -DLLAMA_CURL=OFF ^
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        shell: pwsh
+        run: |
+          # quick note: "VC143" is the Visual C++ toolset folder name (msvc v14.3x, VS 2022).
+          $redistRoot = Join-Path $env:VS_DIR "VC\Redist\MSVC"
+          if (-not (Test-Path $redistRoot)) {
+            Write-Error "MSVC redist root not found at $redistRoot (VS_DIR = $env:VS_DIR)"
+            exit 1
+          }
+          # Prefer newest redist version folder name (sort descending)
+          $msvcDirs = Get-ChildItem -Path $redistRoot -Directory -ErrorAction SilentlyContinue |
+                      Sort-Object Name -Descending
+          if (-not $msvcDirs) {
+            Write-Error "No versioned directories found under $redistRoot"
+            exit 1
+          }
+          $arch        = "${{ matrix.arch }}"                                   # e.g. x64 or arm64
+          $llvmArch    = "${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}"  # keep your existing mapping
+          $foundDll    = $null
+          $foundDir    = $null
+          foreach ($d in $msvcDirs) {
+            # common redist layout uses debug_nonredist\<arch>\... ; search recursively for libomp140.*dll
+            $searchRoot = Join-Path $d.FullName ("debug_nonredist\$arch")
+            if (-not (Test-Path $searchRoot)) { continue }
+            # look for libomp140.<arch>.dll (most robust) or any libomp140*.dll
+            $dll = Get-ChildItem -Path $searchRoot -Filter "libomp140.$llvmArch.dll" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $dll) {
+              # fallback: maybe filename differs slightly -> search libomp140*.dll
+              $dll = Get-ChildItem -Path $searchRoot -Filter "libomp140*.dll" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if ($dll) {
+              $foundDll = $dll.FullName
+              $foundDir = $d.FullName
+              break
+            }
+          }
+          if (-not $foundDll) {
+            Write-Error "Could not locate libomp DLL under $redistRoot for arch '$arch' (searched directories: $($msvcDirs | ForEach-Object { $_.Name } -join ', '))."
+            exit 1
+          }
+          Write-Host "Found libomp DLL: $foundDll (in $foundDir)"
+          Copy-Item -Path $foundDll -Destination ".\build\bin\Release\" -Force
+          7z a llama-${{ steps.tag.outputs.name }}-bin-win-cpu-${{ matrix.arch }}-${{ matrix.instr }}.zip .\build\bin\Release\*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-cpu-${{ matrix.arch }}-${{ matrix.instr }}.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-win-cpu-${{ matrix.arch }}-${{ matrix.instr }}.zip
+
+  windows-cpu-clang:
+    #if: false # Not ready yet
+    runs-on: windows-2022
+
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            march: x86-64-v3
+            mtune: ""
+            label: x86_64_v3
+            instr: avx2
+          - arch: x64
+            march: x86-64-v4
+            mtune: ""
+            label: x86_64_v4
+            instr: avx512
+          - arch: x64
+            march: znver1
+            mtune: znver1
+            label: znver1
+            instr: avx2
+          - arch: x64
+            march: znver2
+            mtune: znver2
+            label: znver2
+            instr: avx2
+          - arch: x64
+            march: znver3
+            mtune: znver3
+            label: znver3
+            instr: avx2
+          - arch: x64
+            march: znver4
+            mtune: znver4
+            label: znver4
+            instr: avx512_vnni_vbmi_bf16
+          - arch: x64
+            march: znver5
+            mtune: znver5
+            label: znver5
+            instr: avx512_vnni_vbmi_bf16
+          - arch: x64
+            march: haswell
+            mtune: haswell
+            label: haswell
+            instr: avx2
+          - arch: x64
+            march: core-avx2
+            mtune: core-avx2
+            label: core-avx2
+            instr: avx2
+          - arch: x64
+            march: broadwell
+            mtune: broadwell
+            label: broadwell
+            instr: avx2
+          - arch: x64
+            march: skylake
+            mtune: skylake
+            label: skylake
+            instr: avx2
+          - arch: x64
+            march: skylake-avx512
+            mtune: skylake-avx512
+            label: skylake-avx512
+            instr: avx512
+          - arch: x64
+            march: skx
+            mtune: skx
+            label: skx
+            instr: avx512
+          - arch: x64
+            march: cascadelake
+            mtune: cascadelake
+            label: cascadelake
+            instr: avx512_vnni
+          - arch: x64
+            march: cooperlake
+            mtune: cooperlake
+            label: cooperlake
+            instr: avx512_vnni_bf16
+          - arch: x64
+            march: cannonlake
+            mtune: cannonlake
+            label: cannonlake
+            instr: avx512
+          - arch: x64
+            march: icelake-client
+            mtune: icelake-client
+            label: icelake-client
+            instr: avx512_vnni_vbmi
+          - arch: x64
+            march: rocketlake
+            mtune: rocketlake
+            label: rocketlake
+            instr: avx512_vnni_vbmi
+          - arch: x64
+            march: icelake-server
+            mtune: icelake-server
+            label: icelake-server
+            instr: avx512_vnni_vbmi
+          - arch: x64
+            march: tigerlake
+            mtune: tigerlake
+            label: tigerlake
+            instr: avx512_vnni_vbmi
+          - arch: x64
+            march: sapphirerapids
+            mtune: sapphirerapids
+            label: sapphirerapids
+            instr: avx512_vnni_vbmi_bf16
+          - arch: x64
+            march: alderlake
+            mtune: alderlake
+            label: alderlake
+            instr: avx512_vnni_vbmi_bf16
+          - arch: x64
+            march: raptorlake
+            mtune: raptorlake
+            label: raptorlake
+            instr: avx512_vnni_vbmi
+          - arch: x64
+            march: meteorlake
+            mtune: meteorlake
+            label: meteorlake
+            instr: avx2
+          - arch: x64
+            march: sierraforest
+            mtune: sierraforest
+            label: sierraforest
+            instr: avx512_vnni_vbmi_bf16
+          - arch: x64
+            march: grandridge
+            mtune: grandridge
+            label: grandridge
+            instr: avx512_vnni_vbmi_bf16
+          - arch: x64
+            march: graniterapids
+            mtune: graniterapids
+            label: graniterapids
+            instr: avx512_vnni_vbmi_bf16
+          - arch: x64
+            march: emeraldrapids
+            mtune: emeraldrapids
+            label: emeraldrapids
+            instr: avx512_vnni_vbmi_bf16
+
+    env:
+      MARCH: ${{ matrix.march }}
+      MTUNE: ${{ matrix.mtune }}
+      BUILD_LABEL: ${{ matrix.label }}
+      INSTR: ${{ matrix.instr }}
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: windows-latest-cmake-cpu-${{ env.BUILD_LABEL }}-${{ env.INSTR }}
+          variant: ccache
+          evict-old-files: 1d
+
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
+      - name: Detect Visual Studio installation and available clang
+        shell: pwsh
+        run: |
+          # detect Enterprise, then BuildTools; set VS_DIR and LLVM_DIR (written to GITHUB_ENV)
+          if (Test-Path 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise') {
+            $vs = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
+            $llvm = Join-Path $vs 'VC\Tools\Llvm\x64'
+          }
+          elseif (Test-Path 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools') {
+            $vs = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools'
+            $llvm = Join-Path $vs 'VC\Tools\Llvm\x64'
+          }
+          else {
+            Write-Error "No supported Visual Studio installation found under expected paths. Please install Visual Studio Build Tools or the full IDE, or set VS_DIR manually."
+            exit 1
+          }
+
+          Write-Host "Detected VS root: $vs"
+          Write-Host "Assuming LLVM dir: $llvm"
+
+          Add-Content -Path $env:GITHUB_ENV -Value ("VS_DIR=" + $vs)
+          Add-Content -Path $env:GITHUB_ENV -Value ("LLVM_DIR=" + $llvm)
+
+          # detect which clang binary exists
+          $clangCl = Join-Path $llvm 'bin\clang-cl.exe'
+          $clang   = Join-Path $llvm 'bin\clang.exe'
+
+          if (Test-Path $clangCl) {
+            Write-Host "Found clang-cl at $clangCl"
+            Add-Content -Path $env:GITHUB_ENV -Value 'CMAKE_COMPILER_TYPE=clang-cl'
+          }
+          elseif (Test-Path $clang) {
+            Write-Host "Found clang at $clang"
+            Add-Content -Path $env:GITHUB_ENV -Value 'CMAKE_COMPILER_TYPE=clang'
+          }
+          else {
+            Write-Error "No clang binary found in $llvm. Please install the LLVM/clang components in Visual Studio (Individual components -> filter 'clang')."
+            exit 1
+          }
+
+      - name: Build
+        shell: cmd
+        env:
+          MARCH: ${{ env.MARCH }}
+          MTUNE: ${{ env.MTUNE }}
+          INSTR: ${{ env.INSTR }}
+        run: |
+          rem set up the MSVC environment
+          call "%VS_DIR%\VC\Auxiliary\Build\vcvarsall.bat" x64
+
+          rem prepare optional mtune flags (only set if MTUNE is non-empty)
+          set "MTUNE_FLAG="
+          if not "%MTUNE%"=="" set "MTUNE_FLAG=/clang:-mtune=%MTUNE%"
+
+          rem choose compiler binary and flags based on detection
+          if "%CMAKE_COMPILER_TYPE%"=="clang-cl" (
+            set "CC=%LLVM_DIR%\bin\clang-cl.exe"
+            set "CXX=%LLVM_DIR%\bin\clang-cl.exe"
+            set "CFLAGS=/clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
+            set "CXXFLAGS=/EHsc /clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
+          ) else (
+            rem fallback to clang/clang++
+            set "CC=%LLVM_DIR%\bin\clang.exe"
+            set "CXX=%LLVM_DIR%\bin\clang++.exe"
+            set "MTUNE_FLAG_UNIX="
+            if not "%MTUNE%"=="" set "MTUNE_FLAG_UNIX=-mtune=%MTUNE%"
+            set "CFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=fast -fno-finite-math-only -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
+            set "CXXFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=fast -fno-finite-math-only -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
+          )
+
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DCMAKE_SYSTEM_NAME=Windows ^
+            -DCMAKE_SYSTEM_PROCESSOR=x86_64 ^
+            -DCMAKE_C_COMPILER="%CC%" ^
+            -DCMAKE_CXX_COMPILER="%CXX%" ^
+            -DLLAMA_FATAL_WARNINGS=OFF ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
+            -DGGML_OPENMP=ON ^
+            -DGGML_AVX2=${{ matrix.instr == 'avx2' && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512=${{ matrix.instr == 'avx512' && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VNNI=${{ contains(matrix.instr, 'vnni') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VBMI=${{ contains(matrix.instr, 'vbmi') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_BF16=${{ contains(matrix.instr, 'bf16') && 'ON' || 'OFF' }} ^
+            -DCURL_LIBRARY="%CURL_PATH%\lib\libcurl.dll.a" ^
+            -DCURL_INCLUDE_DIR="%CURL_PATH%\include" ^
+            -DGGML_MAX_CONTEXTS=2048 ^
+            -DLLAMA_CURL=OFF ^
+            -DCMAKE_C_FLAGS="%CFLAGS%" ^
+            -DCMAKE_CXX_FLAGS="%CXXFLAGS%" ^
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        shell: pwsh
+        run: |
+          # quick note: "VC143" is the Visual C++ toolset folder name (msvc v14.3x, VS 2022).
+          $redistRoot = Join-Path $env:VS_DIR "VC\Redist\MSVC"
+          if (-not (Test-Path $redistRoot)) {
+            Write-Error "MSVC redist root not found at $redistRoot (VS_DIR = $env:VS_DIR)"
+            exit 1
+          }
+          # Prefer newest redist version folder name (sort descending)
+          $msvcDirs = Get-ChildItem -Path $redistRoot -Directory -ErrorAction SilentlyContinue |
+                      Sort-Object Name -Descending
+          if (-not $msvcDirs) {
+            Write-Error "No versioned directories found under $redistRoot"
+            exit 1
+          }
+          $arch        = "${{ matrix.arch }}"                                   # e.g. x64 or arm64
+          $llvmArch    = "${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}"  # keep your existing mapping
+          $foundDll    = $null
+          $foundDir    = $null
+          foreach ($d in $msvcDirs) {
+            # common redist layout uses debug_nonredist\<arch>\... ; search recursively for libomp140.*dll
+            $searchRoot = Join-Path $d.FullName ("debug_nonredist\$arch")
+            if (-not (Test-Path $searchRoot)) { continue }
+            # look for libomp140.<arch>.dll (most robust) or any libomp140*.dll
+            $dll = Get-ChildItem -Path $searchRoot -Filter "libomp140.$llvmArch.dll" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $dll) {
+              # fallback: maybe filename differs slightly -> search libomp140*.dll
+              $dll = Get-ChildItem -Path $searchRoot -Filter "libomp140*.dll" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if ($dll) {
+              $foundDll = $dll.FullName
+              $foundDir = $d.FullName
+              break
+            }
+          }
+          if (-not $foundDll) {
+            Write-Error "Could not locate libomp DLL under $redistRoot for arch '$arch' (searched directories: $($msvcDirs | ForEach-Object { $_.Name } -join ', '))."
+            exit 1
+          }
+          Write-Host "Found libomp DLL: $foundDll (in $foundDir)"
+          Copy-Item -Path $foundDll -Destination ".\build\bin\Release\" -Force
+          7z a "llama-${{ steps.tag.outputs.name }}-bin-win-cpu-${{ matrix.label }}-${{ matrix.instr }}.zip" .\build\bin\Release\*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-cpu-${{ matrix.label }}-${{ matrix.instr }}.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-win-cpu-${{ matrix.label }}-${{ matrix.instr }}.zip
+
+  windows:
+    if: false
+    runs-on: windows-2025
+
+    env:
+      OPENBLAS_VERSION: 0.3.23
+      VULKAN_VERSION: 1.4.313.2
+
+    strategy:
+      matrix:
+        include:
+          - backend: 'vulkan'
+            arch: 'x64'
+            defines: '-DGGML_VULKAN=ON'
+            target: 'ggml-vulkan'
+          - backend: 'opencl-adreno'
+            arch: 'arm64'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
+            target: 'ggml-opencl'
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: windows-latest-cmake-${{ matrix.backend }}-${{ matrix.arch }}
+          variant: ccache
+          evict-old-files: 1d
+
+      - name: Install Vulkan SDK
+        id: get_vulkan
+        if: ${{ matrix.backend == 'vulkan' }}
+        run: |
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+
+      - name: Install Ninja
+        id: install_ninja
+        run: |
+          choco install ninja
+
+      - name: Install OpenCL Headers and Libs
+        id: install_opencl
+        if: ${{ matrix.backend == 'opencl-adreno' && matrix.arch == 'arm64' }}
+        run: |
+          git clone https://github.com/KhronosGroup/OpenCL-Headers
+          cd OpenCL-Headers
+          cmake -B build `
+            -DBUILD_TESTING=OFF `
+            -DOPENCL_HEADERS_BUILD_TESTING=OFF `
+            -DOPENCL_HEADERS_BUILD_CXX_TESTS=OFF `
+            -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
+          cmake --build build --target install
+          git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader
+          cd OpenCL-ICD-Loader
+          cmake -B build-arm64-release `
+            -A arm64 `
+            -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" `
+            -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
+          cmake --build build-arm64-release --target install --config release
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF -DGGML_MAX_CONTEXTS=2048
+          cmake --build build --config Release --target ${{ matrix.target }}
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        shell: pwsh
+        run: |
+          # quick note: "VC143" is the Visual C++ toolset folder name (msvc v14.3x, VS 2022).
+          $redistRoot = Join-Path $env:VS_DIR "VC\Redist\MSVC"
+          if (-not (Test-Path $redistRoot)) {
+            Write-Error "MSVC redist root not found at $redistRoot (VS_DIR = $env:VS_DIR)"
+            exit 1
+          }
+          # Prefer newest redist version folder name (sort descending)
+          $msvcDirs = Get-ChildItem -Path $redistRoot -Directory -ErrorAction SilentlyContinue |
+                      Sort-Object Name -Descending
+          if (-not $msvcDirs) {
+            Write-Error "No versioned directories found under $redistRoot"
+            exit 1
+          }
+          $arch        = "${{ matrix.arch }}"                                   # e.g. x64 or arm64
+          $llvmArch    = "${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}"  # keep your existing mapping
+          $foundDll    = $null
+          $foundDir    = $null
+          foreach ($d in $msvcDirs) {
+            # common redist layout uses debug_nonredist\<arch>\... ; search recursively for libomp140.*dll
+            $searchRoot = Join-Path $d.FullName ("debug_nonredist\$arch")
+            if (-not (Test-Path $searchRoot)) { continue }
+            # look for libomp140.<arch>.dll (most robust) or any libomp140*.dll
+            $dll = Get-ChildItem -Path $searchRoot -Filter "libomp140.$llvmArch.dll" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $dll) {
+              # fallback: maybe filename differs slightly -> search libomp140*.dll
+              $dll = Get-ChildItem -Path $searchRoot -Filter "libomp140*.dll" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if ($dll) {
+              $foundDll = $dll.FullName
+              $foundDir = $d.FullName
+              break
+            }
+          }
+          if (-not $foundDll) {
+            Write-Error "Could not locate libomp DLL under $redistRoot for arch '$arch' (searched directories: $($msvcDirs | ForEach-Object { $_.Name } -join ', '))."
+            exit 1
+          }
+          Write-Host "Found libomp DLL: $foundDll (in $foundDir)"
+          Copy-Item -Path $foundDll -Destination ".\build\bin\Release\" -Force
+          7z a llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip .\build\bin\Release\*${{ matrix.target }}.dll
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
+
+  windows-cuda:
+    #if: false
+    runs-on: windows-2022
+
+    strategy:
+      matrix:
+        arch: ['x64'] #, 'arm64'
+        cuda: ['12.8', '13.1'] # , '11.7'
+        instr: ['avx2', 'avx512', 'avx512_vnni', 'avx512_vnni_bf16', 'avx512_vnni_vbmi', 'avx512_vnni_vbmi_bf16'] # 'avx', 'noavx' won't compile because missing declarations all over the place
+        
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Install ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: windows-cuda-${{ matrix.cuda }}-${{ matrix.instr }}
+          variant: ccache
+          evict-old-files: 1d
+
+      - name: Install CUDA Toolkit
+        uses: ./.github/actions/windows-setup-cuda
+        with:
+          cuda_version: ${{ matrix.cuda }}
+
+      - name: Install Ninja
+        id: install_ninja
+        run: |
+          choco install ninja
+
+      - name: Detect Visual Studio installation
+        shell: pwsh
+        run: |
+          # detect Enterprise, then BuildTools; set VS_DIR and LLVM_DIR (written to GITHUB_ENV)
+          if (Test-Path 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise') {
+            $vs = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
+            $llvm = Join-Path $vs 'VC\Tools\Llvm\x64'
+          }
+          elseif (Test-Path 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools') {
+            $vs = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools'
+            $llvm = Join-Path $vs 'VC\Tools\Llvm\x64'
+          }
+          else {
+            Write-Error "No supported Visual Studio installation found under expected paths. Please install Visual Studio Build Tools or the full IDE, or set VS_DIR manually."
+            exit 1
+          }
+
+          Write-Host "Detected VS root: $vs"
+          Write-Host "Assuming LLVM dir: $llvm"
+
+          Add-Content -Path $env:GITHUB_ENV -Value ("VS_DIR=" + $vs)
+          Add-Content -Path $env:GITHUB_ENV -Value ("LLVM_DIR=" + $llvm)
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_OPENMP=ON ^
+            -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} ^
+            -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DCURL_LIBRARY="%CURL_PATH%\lib\libcurl.dll.a" ^
+            -DCURL_INCLUDE_DIR="%CURL_PATH%\include" ^
+            -DGGML_CUDA=ON ^
+            -DGGML_SCHED_MAX_COPIES=1 ^
+            -DGGML_CUDA_IQK_FORCE_BF16=1 ^
+            -DGGML_MAX_CONTEXTS=2048 ^
+            -DGGML_CUDA_USE_GRAPHS=ON ^
+            ${{ env.CMAKE_ARGS }}
+
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS%
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        shell: pwsh
+        run: |
+          # quick note: "VC143" is the Visual C++ toolset folder name (msvc v14.3x, VS 2022).
+          $redistRoot = Join-Path $env:VS_DIR "VC\Redist\MSVC"
+          if (-not (Test-Path $redistRoot)) {
+            Write-Error "MSVC redist root not found at $redistRoot (VS_DIR = $env:VS_DIR)"
+            exit 1
+          }
+          # Prefer newest redist version folder name (sort descending)
+          $msvcDirs = Get-ChildItem -Path $redistRoot -Directory -ErrorAction SilentlyContinue |
+                      Sort-Object Name -Descending
+          if (-not $msvcDirs) {
+            Write-Error "No versioned directories found under $redistRoot"
+            exit 1
+          }
+          $arch        = "${{ matrix.arch }}"                                   # e.g. x64 or arm64
+          $llvmArch    = "${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}"  # keep your existing mapping
+          $foundDll    = $null
+          $foundDir    = $null
+          foreach ($d in $msvcDirs) {
+            # common redist layout uses debug_nonredist\<arch>\... ; search recursively for libomp140.*dll
+            $searchRoot = Join-Path $d.FullName ("debug_nonredist\$arch")
+            if (-not (Test-Path $searchRoot)) { continue }
+            # look for libomp140.<arch>.dll (most robust) or any libomp140*.dll
+            $dll = Get-ChildItem -Path $searchRoot -Filter "libomp140.$llvmArch.dll" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $dll) {
+              # fallback: maybe filename differs slightly -> search libomp140*.dll
+              $dll = Get-ChildItem -Path $searchRoot -Filter "libomp140*.dll" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if ($dll) {
+              $foundDll = $dll.FullName
+              $foundDir = $d.FullName
+              break
+            }
+          }
+          if (-not $foundDll) {
+            Write-Error "Could not locate libomp DLL under $redistRoot for arch '$arch' (searched directories: $($msvcDirs | ForEach-Object { $_.Name } -join ', '))."
+            exit 1
+          }
+          Write-Host "Found libomp DLL: $foundDll (in $foundDir)"
+          Copy-Item -Path $foundDll -Destination ".\build\bin\Release\" -Force
+          7z a llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip .\build\bin\Release\*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip
+
+      - name: Copy and pack Cuda runtime
+        run: |
+          echo "Cuda install location: ${{ env.CUDA_PATH }}"
+          $dst='.\build\bin\cudart\'
+          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\bin\x64" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a cudart-llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip $dst\*
+
+      - name: Upload Cuda runtime
+        uses: actions/upload-artifact@v6
+        with:
+          path: cudart-llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip
+          name: cudart-llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip
+
+  windows-cuda-clang:
+    #if: false
+    runs-on: windows-2022
+
+    strategy:
+      matrix:
+        include:
+          - cuda: '12.8'
+            arch: x64
+            march: x86-64-v3
+            mtune: ""
+            label: x86_64_v3
+            instr: avx2
+          - cuda: '12.8'
+            arch: x64
+            march: x86-64-v4
+            mtune: ""
+            label: x86_64_v4
+            instr: avx512
+          - cuda: '13.1'
+            arch: x64
+            march: x86-64-v3
+            mtune: ""
+            label: x86_64_v3
+            instr: avx2
+          - cuda: '13.1'
+            arch: x64
+            march: x86-64-v4
+            mtune: ""
+            label: x86_64_v4
+            instr: avx512
+          - cuda: '13.1'
+            arch: x64
+            march: znver1
+            mtune: znver1
+            label: znver1
+            instr: avx2
+          - cuda: '13.1'
+            arch: x64
+            march: znver2
+            mtune: znver2
+            label: znver2
+            instr: avx2
+          - cuda: '13.1'
+            arch: x64
+            march: znver3
+            mtune: znver3
+            label: znver3
+            instr: avx2
+          - cuda: '13.1'
+            arch: x64
+            march: znver4
+            mtune: znver4
+            label: znver4
+            instr: avx512_vnni_vbmi_bf16
+          - cuda: '13.1'
+            arch: x64
+            march: znver5
+            mtune: znver5
+            label: znver5
+            instr: avx512_vnni_vbmi_bf16
+          - cuda: '13.1'
+            arch: x64
+            march: haswell
+            mtune: haswell
+            label: haswell
+            instr: avx2
+          - cuda: '13.1'
+            arch: x64
+            march: core-avx2
+            mtune: core-avx2
+            label: core-avx2
+            instr: avx2
+          - cuda: '13.1'
+            arch: x64
+            march: broadwell
+            mtune: broadwell
+            label: broadwell
+            instr: avx2
+          - cuda: '13.1'
+            arch: x64
+            march: skylake
+            mtune: skylake
+            label: skylake
+            instr: avx2
+          - cuda: '13.1'
+            arch: x64
+            march: skylake-avx512
+            mtune: skylake-avx512
+            label: skylake-avx512
+            instr: avx512
+          - cuda: '13.1'
+            arch: x64
+            march: skx
+            mtune: skx
+            label: skx
+            instr: avx512
+          - cuda: '13.1'
+            arch: x64
+            march: cascadelake
+            mtune: cascadelake
+            label: cascadelake
+            instr: avx512_vnni
+          - cuda: '13.1'
+            arch: x64
+            march: cooperlake
+            mtune: cooperlake
+            label: cooperlake
+            instr: avx512_vnni_bf16
+          - cuda: '13.1'
+            arch: x64
+            march: cannonlake
+            mtune: cannonlake
+            label: cannonlake
+            instr: avx512
+          - cuda: '13.1'
+            arch: x64
+            march: icelake-client
+            mtune: icelake-client
+            label: icelake-client
+            instr: avx512_vnni_vbmi
+          - cuda: '13.1'
+            arch: x64
+            march: rocketlake
+            mtune: rocketlake
+            label: rocketlake
+            instr: avx512_vnni_vbmi
+          - cuda: '13.1'
+            arch: x64
+            march: icelake-server
+            mtune: icelake-server
+            label: icelake-server
+            instr: avx512_vnni_vbmi
+          - cuda: '13.1'
+            arch: x64
+            march: tigerlake
+            mtune: tigerlake
+            label: tigerlake
+            instr: avx512_vnni_vbmi
+          - cuda: '13.1'
+            arch: x64
+            march: sapphirerapids
+            mtune: sapphirerapids
+            label: sapphirerapids
+            instr: avx512_vnni_vbmi_bf16
+          - cuda: '13.1'
+            arch: x64
+            march: alderlake
+            mtune: alderlake
+            label: alderlake
+            instr: avx512_vnni_vbmi_bf16
+          - cuda: '13.1'
+            arch: x64
+            march: raptorlake
+            mtune: raptorlake
+            label: raptorlake
+            instr: avx512_vnni_vbmi
+          - cuda: '13.1'
+            arch: x64
+            march: meteorlake
+            mtune: meteorlake
+            label: meteorlake
+            instr: avx2
+          - cuda: '13.1'
+            arch: x64
+            march: sierraforest
+            mtune: sierraforest
+            label: sierraforest
+            instr: avx512_vnni_vbmi_bf16
+          - cuda: '13.1'
+            arch: x64
+            march: grandridge
+            mtune: grandridge
+            label: grandridge
+            instr: avx512_vnni_vbmi_bf16
+          - cuda: '13.1'
+            arch: x64
+            march: graniterapids
+            mtune: graniterapids
+            label: graniterapids
+            instr: avx512_vnni_vbmi_bf16
+          - cuda: '13.1'
+            arch: x64
+            march: emeraldrapids
+            mtune: emeraldrapids
+            label: emeraldrapids
+            instr: avx512_vnni_vbmi_bf16
+
+    env:
+      MARCH: ${{ matrix.march }}
+      MTUNE: ${{ matrix.mtune }}
+      BUILD_LABEL: ${{ matrix.label }}
+      INSTR: ${{ matrix.instr }}
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: windows-cuda-${{ matrix.cuda }}-${{ env.BUILD_LABEL }}-${{ env.INSTR }}
+          variant: ccache
+          evict-old-files: 1d
+
+      - name: Install CUDA Toolkit
+        uses: ./.github/actions/windows-setup-cuda
+        with:
+          cuda_version: ${{ matrix.cuda }}
+
+      - name: Install Ninja
+        id: install_ninja
+        run: |
+          choco install ninja
+
+      - name: Detect Visual Studio installation and available clang
+        shell: pwsh
+        run: |
+          # detect Enterprise, then BuildTools; set VS_DIR and LLVM_DIR (written to GITHUB_ENV)
+          if (Test-Path 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise') {
+            $vs = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
+            $llvm = Join-Path $vs 'VC\Tools\Llvm\x64'
+          }
+          elseif (Test-Path 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools') {
+            $vs = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools'
+            $llvm = Join-Path $vs 'VC\Tools\Llvm\x64'
+          }
+          else {
+            Write-Error "No supported Visual Studio installation found under expected paths. Please install Visual Studio Build Tools or the full IDE, or set VS_DIR manually."
+            exit 1
+          }
+
+          Write-Host "Detected VS root: $vs"
+          Write-Host "Assuming LLVM dir: $llvm"
+
+          Add-Content -Path $env:GITHUB_ENV -Value ("VS_DIR=" + $vs)
+          Add-Content -Path $env:GITHUB_ENV -Value ("LLVM_DIR=" + $llvm)
+
+          # detect which clang binary exists
+          $clangCl = Join-Path $llvm 'bin\clang-cl.exe'
+          $clang   = Join-Path $llvm 'bin\clang.exe'
+
+          if (Test-Path $clangCl) {
+            Write-Host "Found clang-cl at $clangCl"
+            Add-Content -Path $env:GITHUB_ENV -Value 'CMAKE_COMPILER_TYPE=clang-cl'
+          }
+          elseif (Test-Path $clang) {
+            Write-Host "Found clang at $clang"
+            Add-Content -Path $env:GITHUB_ENV -Value 'CMAKE_COMPILER_TYPE=clang'
+          }
+          else {
+            Write-Error "No clang binary found in $llvm. Please install the LLVM/clang components in Visual Studio (Individual components -> filter 'clang')."
+            exit 1
+          }
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        env:
+          MARCH: ${{ env.MARCH }}
+          MTUNE: ${{ env.MTUNE }}
+          INSTR: ${{ env.INSTR }}
+        run: |
+          rem set up the MSVC environment
+          call "%VS_DIR%\VC\Auxiliary\Build\vcvarsall.bat" x64
+
+          rem prepare optional mtune flags (only set if MTUNE is non-empty)
+          set "MTUNE_FLAG="
+          if not "%MTUNE%"=="" set "MTUNE_FLAG=/clang:-mtune=%MTUNE%"
+
+          rem choose compiler binary and flags based on detection
+          if "%CMAKE_COMPILER_TYPE%"=="clang-cl" (
+            set "CC=%LLVM_DIR%\bin\clang-cl.exe"
+            set "CXX=%LLVM_DIR%\bin\clang-cl.exe"
+            set "CFLAGS=/clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
+            set "CXXFLAGS=/EHsc /clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
+          ) else (
+            rem fallback to clang/clang++
+            set "CC=%LLVM_DIR%\bin\clang.exe"
+            set "CXX=%LLVM_DIR%\bin\clang++.exe"
+            set "MTUNE_FLAG_UNIX="
+            if not "%MTUNE%"=="" set "MTUNE_FLAG_UNIX=-mtune=%MTUNE%"
+            set "CFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=fast -fno-finite-math-only -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
+            set "CXXFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=fast -fno-finite-math-only -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
+          )
+
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DCMAKE_SYSTEM_NAME=Windows ^
+            -DCMAKE_SYSTEM_PROCESSOR=x86_64 ^
+            -DCMAKE_C_COMPILER="%CC%" ^
+            -DCMAKE_CXX_COMPILER="%CXX%" ^
+            -DLLAMA_FATAL_WARNINGS=OFF ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
+            -DGGML_OPENMP=ON ^
+            -DGGML_AVX2=${{ matrix.instr == 'avx2' && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512=${{ matrix.instr == 'avx512' && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VNNI=${{ contains(matrix.instr, 'vnni') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VBMI=${{ contains(matrix.instr, 'vbmi') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_BF16=${{ contains(matrix.instr, 'bf16') && 'ON' || 'OFF' }} ^
+            -DCURL_LIBRARY="%CURL_PATH%\lib\libcurl.dll.a" ^
+            -DCURL_INCLUDE_DIR="%CURL_PATH%\include" ^
+            -DGGML_CUDA=ON ^
+            -DGGML_SCHED_MAX_COPIES=1 ^
+            -DGGML_CUDA_IQK_FORCE_BF16=1 ^
+            -DGGML_MAX_CONTEXTS=2048 ^
+            -DGGML_CUDA_USE_GRAPHS=ON ^
+            -DCMAKE_C_FLAGS="%CFLAGS%" ^
+            -DCMAKE_CXX_FLAGS="%CXXFLAGS%" ^
+            -DCMAKE_CUDA_COMPILER="%CUDA_PATH%\bin\nvcc.exe" ^
+            -DCMAKE_CUDA_STANDARD=17 ^
+            ${{ env.CMAKE_ARGS }}
+
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS%
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        shell: pwsh
+        run: |
+          # quick note: "VC143" is the Visual C++ toolset folder name (msvc v14.3x, VS 2022).
+          $redistRoot = Join-Path $env:VS_DIR "VC\Redist\MSVC"
+          if (-not (Test-Path $redistRoot)) {
+            Write-Error "MSVC redist root not found at $redistRoot (VS_DIR = $env:VS_DIR)"
+            exit 1
+          }
+          # Prefer newest redist version folder name (sort descending)
+          $msvcDirs = Get-ChildItem -Path $redistRoot -Directory -ErrorAction SilentlyContinue |
+                      Sort-Object Name -Descending
+          if (-not $msvcDirs) {
+            Write-Error "No versioned directories found under $redistRoot"
+            exit 1
+          }
+          $arch        = "${{ matrix.arch }}"                                   # e.g. x64 or arm64
+          $llvmArch    = "${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}"  # keep your existing mapping
+          $foundDll    = $null
+          $foundDir    = $null
+          foreach ($d in $msvcDirs) {
+            # common redist layout uses debug_nonredist\<arch>\... ; search recursively for libomp140.*dll
+            $searchRoot = Join-Path $d.FullName ("debug_nonredist\$arch")
+            if (-not (Test-Path $searchRoot)) { continue }
+            # look for libomp140.<arch>.dll (most robust) or any libomp140*.dll
+            $dll = Get-ChildItem -Path $searchRoot -Filter "libomp140.$llvmArch.dll" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $dll) {
+              # fallback: maybe filename differs slightly -> search libomp140*.dll
+              $dll = Get-ChildItem -Path $searchRoot -Filter "libomp140*.dll" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if ($dll) {
+              $foundDll = $dll.FullName
+              $foundDir = $d.FullName
+              break
+            }
+          }
+          if (-not $foundDll) {
+            Write-Error "Could not locate libomp DLL under $redistRoot for arch '$arch' (searched directories: $($msvcDirs | ForEach-Object { $_.Name } -join ', '))."
+            exit 1
+          }
+          Write-Host "Found libomp DLL: $foundDll (in $foundDir)"
+          Copy-Item -Path $foundDll -Destination ".\build\bin\Release\" -Force
+          7z a "llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.label }}-${{ matrix.instr }}.zip" .\build\bin\Release\*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.label }}-${{ matrix.instr }}.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.label }}-${{ matrix.instr }}.zip
+
+      - name: Copy and pack Cuda runtime
+        run: |
+          echo "Cuda install location: ${{ env.CUDA_PATH }}"
+          $dst='.\build\bin\cudart\'
+          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\bin\x64" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a cudart-llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.label }}-${{ matrix.instr }}.zip $dst\*
+
+      - name: Upload Cuda runtime
+        uses: actions/upload-artifact@v6
+        with:
+          path: cudart-llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.label }}-${{ matrix.instr }}.zip
+          name: cudart-llama-${{ steps.tag.outputs.name }}-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.label }}-${{ matrix.instr }}.zip
+
+  windows-sycl:
+    if: false
+    runs-on: windows-2022
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/7cd9bba0-7aab-4e30-b3ae-2221006a4a05/intel-oneapi-base-toolkit-2025.1.1.34_offline.exe
+      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
+      ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: windows-latest-cmake-sycl
+          variant: ccache
+          evict-old-files: 1d
+
+      - name: Install
+        run:  |
+          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
+          cmake -G "Ninja" -B build ^
+            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=OFF ^
+            -DGGML_SYCL=ON ^
+            -DGGML_MAX_CONTEXTS=2048 ^
+            -DLLAMA_CURL=OFF
+          cmake --build build -j
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Build the release package
+        id: pack_artifacts
+        run: |
+          echo "cp oneAPI running time dll files in ${{ env.ONEAPI_ROOT }} to ./build/bin"
+
+          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_sycl_blas.5.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_core.2.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_tbb_thread.2.dll" ./build/bin
+
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_opencl.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_loader.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_win_proxy_loader.dll" ./build/bin
+
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl8.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/svml_dispmd.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libmmd.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libiomp5md.dll" ./build/bin
+
+          cp "${{ env.ONEAPI_ROOT }}/dnnl/latest/bin/dnnl.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/tbb/latest/bin/tbb12.dll" ./build/bin
+
+          echo "cp oneAPI running time dll files to ./build/bin done"
+          7z a llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip ./build/bin/*
+
+      - name: Upload the release package
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip
+
+  windows-hip:
+    if: false
+    runs-on: windows-2022
+
+    strategy:
+      matrix:
+        include:
+          - name: "radeon"
+            gpu_targets: "gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Clone rocWMMA repository
+        id: clone_rocwmma
+        run: |
+          git clone https://github.com/rocm/rocwmma --branch rocm-6.2.4 --depth 1
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: windows-latest-cmake-hip-${{ matrix.name }}-x64
+          evict-old-files: 1d
+
+      - name: Install
+        id: depends
+        run: |
+          $ErrorActionPreference = "Stop"
+          write-host "Downloading AMD HIP SDK Installer"
+          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
+          write-host "Installing AMD HIP SDK"
+          Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -Wait
+          write-host "Completed AMD HIP SDK installation"
+
+      - name: Verify ROCm
+        id: verify
+        run: |
+          & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
+
+      - name: Build
+        id: cmake_build
+        run: |
+          $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
+          $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
+          cmake -G "Unix Makefiles" -B build -S . `
+            -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
+            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/ -Wno-ignored-attributes -Wno-nested-anon-types" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_NATIVE=OFF `
+            -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}" `
+            -DGGML_HIP_ROCWMMA_FATTN=ON `
+            -DGGML_HIP=ON `
+            -DLLAMA_CURL=OFF `
+            -DGGML_MAX_CONTEXTS=2048
+          cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
+          md "build\bin\rocblas\library\"
+          cp "${env:HIP_PATH}\bin\hipblas.dll" "build\bin\"
+          cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
+          cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          7z a llama-${{ steps.tag.outputs.name }}-bin-win-hip-${{ matrix.name }}-x64.zip .\build\bin\*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-hip-${{ matrix.name }}-x64.zip
+          name: llama-${{ steps.tag.outputs.name }}-bin-win-hip-${{ matrix.name }}-x64.zip
+
+  ios-xcode-build:
+    if: false
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Build
+        id: cmake_build
+        run: |
+          sysctl -a
+          cmake -B build -G Xcode \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml \
+            -DGGML_MAX_CONTEXTS=2048
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+
+      - name: xcodebuild for swift package
+        id: xcodebuild
+        run: |
+          ./build-xcframework.sh
+
+      - name: Build Xcode project
+        run: xcodebuild -project examples/llama.swiftui/llama.swiftui.xcodeproj -scheme llama.swiftui -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' FRAMEWORK_FOLDER_PATH=./build-ios build
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          zip --symlinks -r llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-xcframework.zip
+          name: llama-${{ steps.tag.outputs.name }}-xcframework
+
+  release:
+    if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+
+    # Fine-grant permission
+    # https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
+    permissions:
+        contents: write # for creating release
+
+    runs-on: ubuntu-latest
+
+    needs:
+      #- windows
+      - windows-cpu
+      - windows-cpu-clang
+      - windows-cuda
+      - windows-cuda-clang
+      #- windows-sycl
+      #- windows-hip
+      - ubuntu-22-cpu
+      - ubuntu-22-vulkan
+      - ubuntu-22-cuda
+      - macOS-arm64
+      - macOS-x64
+      #- ios-xcode-build
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Download artifacts
+        id: download-artifact
+        uses: actions/download-artifact@v7
+        with:
+          path: ./artifact
+          merge-multiple: true
+
+      - name: Move artifacts
+        id: move_artifacts
+        run: |
+          mkdir -p release
+
+          echo "Renaming and moving zips to release..."
+          for zip_file in artifact/llama-*.zip artifact/cudart-llama-*.zip; do
+            base_name=$(basename "$zip_file" .zip)
+            zip_name="ik_llama-${base_name/llama-/}.zip"
+            zip_name=$(echo "$zip_name" | sed -E "s/-[^-]+-b[0-9]+-[a-f0-9]{7}-bin-/-${{ steps.tag.outputs.name }}-bin-/g")
+            echo "Moving $zip_file to release/$zip_name"
+            mv "$zip_file" "release/$zip_name"
+          done
+
+          #echo "Moving any remaining artifacts..."
+          #mv -v artifact/*.zip release/ || true
+
+      - name: Build static release body file
+        id: build_release_body
+        shell: pwsh
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+          REPO: ${{ github.repository }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          $tag = $env:TAG
+          $repo = $env:REPO
+          $commit = $env:COMMIT_MSG
+
+          # Build the body in one string (use here-string). Put your full static content here.
+          # Use $tag and $repo variables to interpolate the tag/repo instead of ${ { ... } } expressions.
+          $body = @"
+          <details open>
+
+          $commit
+
+          ⚠️ CUDA Build Notice
+
+          CUDA builds have been downgraded to CUDA 13.1 due to an NVIDIA bug that affects certain quantized models when binaries are compiled with CUDA 13.2.
+          - This issue only impacts ik_llama.cpp binaries built with CUDA 13.2 (e.g. previous releases).
+          - Your installed CUDA 13.2 drivers are not affected — no downgrade is needed.
+          - NVIDIA is currently working on a fix.
+
+          Recommended workaround: Use binaries compiled with CUDA 12.8 or CUDA 13.1 for now.
+
+          Note: [llama.cpp](https://github.com/Thireus/llama.cpp/releases) is also affected by this issue.
+          Read more about it here: https://github.com/Thireus/GGUF-Tool-Suite/issues/71
+
+          </details>
+
+          Feeling lost? Why not copy paste this list to your favourite LLM along with this prompt (tweak your system config as needed):
+          
+          ```
+          This is my CPU: i9-7980xe; this is my OS: Windows 11; I use CUDA 13.2; I have 2x Nvidia GPUs; I don't mind experimenting, as long as it provides the best performances for my system configuration. Which exact flavor entry from the list below best match my configuration for best performance (prioritize GPU over CPU if my hardware configuration matches)? Best match my architecture for combined GPU and CPU performance (always prioritize GPU over CPU where that makes sense). Suggest 1 best option and 2 to 4 secondary options. Always include at least one option from the list above the experimental section. Where you see a dash in the list it means there are two separate items, "item1 - item2", item2 is just a link to obtain the cudart DLLs/dynamic libs for item1, so you must ignore it. Output item1 naming only and as exactly seen in the list.
+          ```
+
+          For ref. about CPU capabilities (always choose AVX2 if your CPU isn't AVX512-capable): https://github.com/Thireus/GGUF-Tool-Suite/issues/47#issuecomment-3681021233
+
+          **macOS:**
+
+          Note: For macOS, you might want to try the cli parameters `-ngl 0` or maybe `-dev none` which disables Metal and could improve inference speed. Also, you will likely get a message stating `“llama-server” cannot be opened because the developer cannot be verified.`, run the following command to remove the binaries from macOS's quarantine:
+
+          ```
+          sudo xattr -r -d com.apple.quarantine ~/Downloads/build*
+          ```
+
+          - [macOS Apple Silicon (arm64)](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-macos-arm64.zip)
+          - [macOS Intel (x64) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-macos-x64-avx2.zip)
+          - [macOS Intel (x64) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-macos-x64-avx512.zip)
+          - [macOS Intel (x64) AVX512 VNNI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-macos-x64-avx512_vnni.zip)
+          - [macOS Intel (x64) AVX512 VNNI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-macos-x64-avx512_vnni_bf16.zip)
+          - [macOS Intel (x64) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-macos-x64-avx512_vnni_vbmi.zip)
+          - [macOS Intel (x64) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-macos-x64-avx512_vnni_vbmi_bf16.zip)
+
+          **Linux CPU-only:**
+          - [Ubuntu x64 (CPU) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-x64-avx2.zip)
+          - [Ubuntu x64 (CPU) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-x64-avx512.zip)
+          - [Ubuntu x64 (CPU) AVX512 VNNI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-x64-avx512_vnni.zip)
+          - [Ubuntu x64 (CPU) AVX512 VNNI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-x64-avx512_vnni_bf16.zip)
+          - [Ubuntu x64 (CPU) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-x64-avx512_vnni_vbmi.zip)
+          - [Ubuntu x64 (CPU) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-x64-avx512_vnni_vbmi_bf16.zip)
+
+          **Linux Vulkan:**
+          - [Ubuntu x64 (Vulkan) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-vulkan-x64-avx2.zip)
+          - [Ubuntu x64 (Vulkan) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-vulkan-x64-avx512.zip)
+          - [Ubuntu x64 (Vulkan) AVX512 VNNI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-vulkan-x64-avx512_vnni.zip)
+          - [Ubuntu x64 (Vulkan) AVX512 VNNI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-vulkan-x64-avx512_vnni_bf16.zip)
+          - [Ubuntu x64 (Vulkan) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-vulkan-x64-avx512_vnni_vbmi.zip)
+          - [Ubuntu x64 (Vulkan) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-vulkan-x64-avx512_vnni_vbmi_bf16.zip)
+
+          **Linux CUDA 12.8:**
+          - [Ubuntu x64 (CUDA 12.8) AVX2](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-12.8-x64-avx2.zip) - [With Libraries](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-12.8-x64-avx2.zip)
+          - [Ubuntu x64 (CUDA 12.8) AVX512](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-12.8-x64-avx512.zip) - [With Libraries](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-12.8-x64-avx512.zip)
+          - [Ubuntu x64 (CUDA 12.8) AVX512 VNNI](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-12.8-x64-avx512_vnni.zip) - [With Libraries](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-12.8-x64-avx512_vnni.zip)
+          - [Ubuntu x64 (CUDA 12.8) AVX512 VNNI BF16](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-12.8-x64-avx512_vnni_bf16.zip) - [With Libraries](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-12.8-x64-avx512_vnni_bf16.zip)
+          - [Ubuntu x64 (CUDA 12.8) AVX512 VNNI VBMI](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-12.8-x64-x64-avx512_vnni_vbmi.zip) - [With Libraries](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-12.8-x64-avx512_vnni_vbmi.zip)
+          - [Ubuntu x64 (CUDA 12.8) AVX512 VNNI VBMI BF16](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-12.8-x64-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/Thireus/ik_llama.cpp/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-12.8-x64-avx512_vnni_vbmi_bf16.zip)
+
+          **Linux CUDA 13.1:**
+          - [Ubuntu x64 (CUDA 13.1) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-13.1-x64-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-13.1-x64-avx2.zip)
+          - [Ubuntu x64 (CUDA 13.1) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-13.1-x64-avx512.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-13.1-x64-avx512.zip)
+          - [Ubuntu x64 (CUDA 13.1) AVX512 VNNI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-13.1-x64-avx512_vnni.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-13.1-x64-avx512_vnni.zip)
+          - [Ubuntu x64 (CUDA 13.1) AVX512 VNNI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-13.1-x64-avx512_vnni_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-13.1-x64-avx512_vnni_bf16.zip)
+          - [Ubuntu x64 (CUDA 13.1) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-13.1-x64-avx512_vnni_vbmi.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-13.1-x64-avx512_vnni_vbmi.zip)
+          - [Ubuntu x64 (CUDA 13.1) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-ubuntu-cuda-13.1-x64-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-ubuntu-cuda-13.1-x64-avx512_vnni_vbmi_bf16.zip)
+
+          **Windows MSVC CPU-only:**
+          - [Windows x64 (CPU) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-x64-avx2.zip)
+          - [Windows x64 (CPU) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-x64-avx512.zip)
+          - [Windows x64 (CPU) AVX512 VNNI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-x64-avx512_vnni.zip)
+          - [Windows x64 (CPU) AVX512 VNNI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-x64-avx512_vnni_bf16.zip)
+          - [Windows x64 (CPU) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-x64-avx512_vnni_vbmi.zip)
+          - [Windows x64 (CPU) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-x64-avx512_vnni_vbmi_bf16.zip)
+
+          **Windows MSVC CUDA 12.8:**
+          - [Windows x64 (CUDA 12.8) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-12.8-x64-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-12.8-x64-avx2.zip)
+          - [Windows x64 (CUDA 12.8) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-12.8-x64-avx512.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-12.8-x64-avx512.zip)
+          - [Windows x64 (CUDA 12.8) AVX512 VNNI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-12.8-x64-avx512_vnni.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-12.8-x64-avx512_vnni.zip)
+          - [Windows x64 (CUDA 12.8) AVX512 VNNI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-12.8-x64-avx512_vnni_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-12.8-x64-avx512_vnni_bf16.zip)
+          - [Windows x64 (CUDA 12.8) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-12.8-x64-x64-avx512_vnni_vbmi.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-12.8-x64-avx512_vnni_vbmi.zip)
+          - [Windows x64 (CUDA 12.8) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-12.8-x64-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-12.8-x64-avx512_vnni_vbmi_bf16.zip)
+
+          **Windows MSVC CUDA 13.1:**
+          - [Windows x64 (CUDA 13.1) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-avx2.zip)
+          - [Windows x64 (CUDA 13.1) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-avx512.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-avx512.zip)
+          - [Windows x64 (CUDA 13.1) AVX512 VNNI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-avx512_vnni.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-avx512_vnni.zip)
+          - [Windows x64 (CUDA 13.1) AVX512 VNNI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-avx512_vnni_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-avx512_vnni_bf16.zip)
+          - [Windows x64 (CUDA 13.1) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-x64-avx512_vnni_vbmi.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-avx512_vnni_vbmi.zip)
+          - [Windows x64 (CUDA 13.1) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-avx512_vnni_vbmi_bf16.zip)
+
+          ---
+          ### Experimental Windows Clang builds can be found below
+
+          *These special builds are supposed to run faster when tailored to your specific CPU architecture.*
+
+          **Windows Clang CPU-only (try x86_64_v3 if you're unsure of your processor architecture, but don't expect better performances than MSVC builds):**
+          - [Windows x86_64_v3 (CPU) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-x86_64_v3-avx2.zip)
+          - [Windows x86_64_v4 (CPU) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-x86_64_v4-avx512.zip)
+          - [Windows znver1 (CPU) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-znver1-avx2.zip)
+          - [Windows znver2 (CPU) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-znver2-avx2.zip)
+          - [Windows znver3 (CPU) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-znver3-avx2.zip)
+          - [Windows znver4 (CPU) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-znver4-avx512_vnni_vbmi_bf16.zip)
+          - [Windows znver5 (CPU) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-znver5-avx512_vnni_vbmi_bf16.zip)
+          - [Windows znver6 (CPU) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-znver6-avx512_vnni_vbmi_bf16.zip)
+          - [Windows haswell (CPU) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-haswell-avx2.zip)
+          - [Windows core-avx2 (CPU) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-core-avx2-avx2.zip)
+          - [Windows broadwell (CPU) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-broadwell-avx2.zip)
+          - [Windows skylake (CPU) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-skylake-avx2.zip)
+          - [Windows skylake-avx512 (CPU) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-skylake-avx512-avx512.zip)
+          - [Windows skx (CPU) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-skx-avx512.zip)
+          - [Windows cascadelake (CPU) AVX512 VNNI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-cascadelake-avx512_vnni.zip)
+          - [Windows cooperlake (CPU) AVX512 VNNI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-cooperlake-avx512_vnni_bf16.zip)
+          - [Windows cannonlake (CPU) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-cannonlake-avx512.zip)
+          - [Windows icelake-client (CPU) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-icelake-client-avx512_vnni_vbmi.zip)
+          - [Windows rocketlake (CPU) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-rocketlake-avx512_vnni_vbmi.zip)
+          - [Windows icelake-server (CPU) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-icelake-server-avx512_vnni_vbmi.zip)
+          - [Windows tigerlake (CPU) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-tigerlake-avx512_vnni_vbmi.zip)
+          - [Windows sapphirerapids (CPU) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-sapphirerapids-avx512_vnni_vbmi_bf16.zip)
+          - [Windows alderlake (CPU) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-alderlake-avx512_vnni_vbmi_bf16.zip)
+          - [Windows raptorlake (CPU) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-raptorlake-avx512_vnni_vbmi.zip)
+          - [Windows meteorlake (CPU) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-meteorlake-avx2.zip)
+          - [Windows sierraforest (CPU) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-sierraforest-avx512_vnni_vbmi_bf16.zip)
+          - [Windows grandridge (CPU) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-grandridge-avx512_vnni_vbmi_bf16.zip)
+          - [Windows graniterapids (CPU) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-graniterapids-avx512_vnni_vbmi_bf16.zip)
+          - [Windows emeraldrapids (CPU) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cpu-emeraldrapids-avx512_vnni_vbmi_bf16.zip)
+
+          **Windows Clang CUDA 12.8 (try x86_64_v3 if you're unsure of your processor architecture, but don't expect better performances than MSVC builds):**
+          - [Windows x86_64_v3 (CUDA 12.8) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-12.8-x64-x86_64_v3-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-12.8-x64-x86_64_v3-avx2.zip)
+          - [Windows x86_64_v4 (CUDA 12.8) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-12.8-x64-x86_64_v4-avx512.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-12.8-x64-x86_64_v4-avx512.zip)
+
+          **Windows Clang CUDA 13.1 (try x86_64_v3 if you're unsure of your processor architecture, but don't expect better performances than MSVC builds):**
+          - [Windows x86_64_v3 (CUDA 13.1) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-x86_64_v3-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-x86_64_v3-avx2.zip)
+          - [Windows x86_64_v4 (CUDA 13.1) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-x86_64_v4-avx512.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-x86_64_v4-avx512.zip)
+          - [Windows znver1 (CUDA 13.1) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-znver1-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-znver1-avx2.zip)
+          - [Windows znver2 (CUDA 13.1) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-znver2-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-znver2-avx2.zip)
+          - [Windows znver3 (CUDA 13.1) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-znver3-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-znver3-avx2.zip)
+          - [Windows znver4 (CUDA 13.1) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-znver4-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-znver4-avx512_vnni_vbmi_bf16.zip)
+          - [Windows znver5 (CUDA 13.1) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-znver5-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-znver5-avx512_vnni_vbmi_bf16.zip)
+          - [Windows znver6 (CUDA 13.1) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-znver6-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-znver6-avx512_vnni_vbmi_bf16.zip)
+          - [Windows haswell (CUDA 13.1) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-haswell-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-haswell-avx2.zip)
+          - [Windows core-avx2 (CUDA 13.1) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-core-avx2-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-core-avx2-avx2.zip)
+          - [Windows broadwell (CUDA 13.1) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-broadwell-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-broadwell-avx2.zip)
+          - [Windows skylake (CUDA 13.1) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-skylake-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-skylake-avx2.zip)
+          - [Windows skylake-avx512 (CUDA 13.1) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-skylake-avx512-avx512.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-skylake-avx512-avx512.zip)
+          - [Windows skx (CUDA 13.1) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-skx-avx512.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-skx-avx512.zip)
+          - [Windows cascadelake (CUDA 13.1) AVX512 VNNI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-cascadelake-avx512_vnni.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-cascadelake-avx512_vnni.zip)
+          - [Windows cooperlake (CUDA 13.1) AVX512 VNNI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-cooperlake-avx512_vnni_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-cooperlake-avx512_vnni_bf16.zip)
+          - [Windows cannonlake (CUDA 13.1) AVX512](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-cannonlake-avx512.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-cannonlake-avx512.zip)
+          - [Windows icelake-client (CUDA 13.1) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-icelake-client-avx512_vnni_vbmi.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-icelake-client-avx512_vnni_vbmi.zip)
+          - [Windows rocketlake (CUDA 13.1) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-rocketlake-avx512_vnni_vbmi.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-rocketlake-avx512_vnni_vbmi.zip)
+          - [Windows icelake-server (CUDA 13.1) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-icelake-server-avx512_vnni_vbmi.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-icelake-server-avx512_vnni_vbmi.zip)
+          - [Windows tigerlake (CUDA 13.1) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-tigerlake-avx512_vnni_vbmi.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-tigerlake-avx512_vnni_vbmi.zip)
+          - [Windows sapphirerapids (CUDA 13.1) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-sapphirerapids-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-sapphirerapids-avx512_vnni_vbmi_bf16.zip)
+          - [Windows alderlake (CUDA 13.1) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-alderlake-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-alderlake-avx512_vnni_vbmi_bf16.zip)
+          - [Windows raptorlake (CUDA 13.1) AVX512 VNNI VBMI](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-raptorlake-avx512_vnni_vbmi.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-raptorlake-avx512_vnni_vbmi.zip)
+          - [Windows meteorlake (CUDA 13.1) AVX2](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-meteorlake-avx2.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-meteorlake-avx2.zip)
+          - [Windows sierraforest (CUDA 13.1) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-sierraforest-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-sierraforest-avx512_vnni_vbmi_bf16.zip)
+          - [Windows grandridge (CUDA 13.1) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-grandridge-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-grandridge-avx512_vnni_vbmi_bf16.zip)
+          - [Windows graniterapids (CUDA 13.1) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-graniterapids-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-graniterapids-avx512_vnni_vbmi_bf16.zip)
+          - [Windows emeraldrapids (CUDA 13.1) AVX512 VNNI VBMI BF16](https://github.com/$repo/releases/download/$tag/ik_llama-$tag-bin-win-cuda-13.1-x64-emeraldrapids-avx512_vnni_vbmi_bf16.zip) - [With Libraries](https://github.com/$repo/releases/download/$tag/ik_llama-cudart-$tag-bin-win-cuda-13.1-x64-emeraldrapids-avx512_vnni_vbmi_bf16.zip)
+
+          For any issues please open a ticket on https://github.com/Thireus/GGUF-Tool-Suite/issues
+          "@
+
+          # Write to file
+          $outFile = "release_body.md"
+          $body | Out-File -FilePath $outFile -Encoding UTF8
+          Write-Host "Wrote release body to $outFile (length: $((Get-Content $outFile -Raw).Length) chars)"
+
+      - name: Create release using GitHub API (avoids expression length limits)
+        id: create_release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.name }}
+          REPO: ${{ github.repository }}
+        run: |
+          $tag = $env:TAG
+          $repo = $env:REPO
+          $token = $env:GITHUB_TOKEN
+
+          $body = Get-Content -Raw -Path release_body.md
+
+          # Build payload. You can set "name" separately if you'd like.
+          $payload = @{
+            tag_name   = $tag
+            name       = $tag
+            body       = $body
+            draft      = $false
+            prerelease = $false
+          } | ConvertTo-Json -Depth 10
+
+          $url = "https://api.github.com/repos/$repo/releases"
+          $headers = @{
+            Authorization = "token $token"
+            "User-Agent"  = "github-actions"
+            Accept        = "application/vnd.github+json"
+          }
+
+          Write-Host "Creating release $tag for $repo..."
+          $resp = Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $payload -ContentType "application/json"
+          Write-Host "Release created: $($resp.html_url)"
+          # set the output so subsequent steps can use it
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "id=$($resp.id)"
+
+      - name: Upload release
+        id: upload_release
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const crypto = require('crypto');
+
+            const release_id = '${{ steps.create_release.outputs.id }}';
+            const dir = './release';
+            const maxAttempts = 4;
+            const backoffBaseMs = 500;
+
+            if (!fs.existsSync(dir)) {
+              console.log(`Directory ${dir} does not exist - nothing to upload.`);
+              return;
+            }
+
+            const files = fs.readdirSync(dir).filter(f => path.extname(f).toLowerCase() === '.zip');
+            if (files.length === 0) {
+              console.log('No .zip files found to upload.');
+              return;
+            }
+
+            function normalizeRemoteDigest(raw) {
+              if (!raw) return null;
+              return raw.replace(/^sha256:/i, '').toLowerCase();
+            }
+
+            function computeLocalSha256(filePath) {
+              return new Promise((resolve, reject) => {
+                const h = crypto.createHash('sha256');
+                const s = fs.createReadStream(filePath);
+                s.on('error', reject);
+                s.on('data', chunk => h.update(chunk));
+                s.on('end', () => resolve(h.digest('hex')));
+              });
+            }
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // helper: find existing asset by name (returns null if not found)
+            async function findExistingAssetByName(name) {
+              const resp = await github.rest.repos.listReleaseAssets({
+                owner,
+                repo,
+                release_id,
+                per_page: 100
+              });
+              const assets = resp.data || [];
+              return assets.find(a => a.name === name) || null;
+            }
+
+            for (const file of files) {
+              const filePath = path.join(dir, file);
+              const stat = fs.statSync(filePath);
+              const expectedSize = stat.size;
+
+              console.log(`\n=== Processing ${file} (${expectedSize} bytes) ===`);
+
+              // compute local sha (needed to validate remote digest if present)
+              const localSha = await computeLocalSha256(filePath);
+              console.log(`Local SHA256: ${localSha}`);
+
+              // check if asset already exists on the release
+              const existing = await findExistingAssetByName(file);
+              if (existing) {
+                const existingId = existing.id;
+                const remoteDigestRaw = existing.digest ?? null;
+                const remoteDigest = normalizeRemoteDigest(remoteDigestRaw);
+                const remoteSize = Number(existing.size);
+
+                console.log(`Found existing asset id=${existingId} size=${remoteSize} digest=${remoteDigestRaw ?? '<none>'}`);
+
+                if (remoteDigest) {
+                  if (remoteDigest === localSha.toLowerCase()) {
+                    console.log(`✅ Remote digest matches local for ${file} — skipping upload.`);
+                    continue; // already correct, skip to next file
+                  } else {
+                    console.warn(`❌ Remote digest present but does not match local (will delete and re-upload).`);
+                    // delete the bad asset so we can upload fresh below
+                    try {
+                      await github.rest.repos.deleteReleaseAsset({
+                        owner,
+                        repo,
+                        asset_id: existingId
+                      });
+                      console.log(`Deleted existing asset id=${existingId}`);
+                    } catch (delErr) {
+                      console.warn(`Failed to delete existing asset id=${existingId}: ${delErr && delErr.message ? delErr.message : delErr}`);
+                      // fall through to attempt upload anyway; if delete failed, upload may conflict
+                    }
+                  }
+                } else {
+                  // no digest present on remote — fall back to size check
+                  if (remoteSize === expectedSize) {
+                    console.log(`⚠️ Remote has no digest but sizes match for ${file} — skipping upload (fallback).`);
+                    continue;
+                  } else {
+                    console.warn(`❌ Remote has no digest and size mismatch (will delete and re-upload).`);
+                    try {
+                      await github.rest.repos.deleteReleaseAsset({
+                        owner,
+                        repo,
+                        asset_id: existingId
+                      });
+                      console.log(`Deleted existing asset id=${existingId}`);
+                    } catch (delErr) {
+                      console.warn(`Failed to delete existing asset id=${existingId}: ${delErr && delErr.message ? delErr.message : delErr}`);
+                    }
+                  }
+                }
+              } // end existing asset handling
+
+              // Upload loop (with retries) — only executed if we need to upload
+              let attempt = 0;
+              let success = false;
+              while (attempt < maxAttempts && !success) {
+                attempt++;
+                console.log(`Upload attempt ${attempt} for ${file}...`);
+                const stream = fs.createReadStream(filePath);
+                try {
+                  const resp = await github.rest.repos.uploadReleaseAsset({
+                    owner,
+                    repo,
+                    release_id,
+                    name: file,
+                    data: stream,
+                    headers: {
+                      'content-type': 'application/zip',
+                      'content-length': expectedSize
+                    }
+                  });
+
+                  const uploadedSize = Number(resp.data.size);
+                  const assetId = resp.data.id;
+                  const remoteDigestRaw = resp.data.digest ?? null;
+                  const remoteDigest = normalizeRemoteDigest(remoteDigestRaw);
+
+                  console.log(`Uploaded asset id=${assetId} size=${uploadedSize} digest=${remoteDigestRaw ?? '<none>'}`);
+
+                  // validate
+                  if (remoteDigest) {
+                    if (remoteDigest === localSha.toLowerCase()) {
+                      console.log(`✅ Digest match after upload for ${file}`);
+                      success = true;
+                    } else {
+                      console.warn(`❌ Digest mismatch after upload for ${file}: local=${localSha} remote=${remoteDigestRaw}`);
+                    }
+                  } else {
+                    if (uploadedSize === expectedSize) {
+                      console.log(`⚠️ Digest unavailable, but size matches after upload for ${file} — accepting (fallback).`);
+                      success = true;
+                    } else {
+                      console.warn(`❌ Size mismatch after upload for ${file}: expected=${expectedSize} uploaded=${uploadedSize}`);
+                    }
+                  }
+
+                  // if verification failed, delete the uploaded asset so retries don't accumulate bad assets
+                  if (!success) {
+                    try {
+                      console.log(`Deleting asset id=${assetId} (verification failed) ...`);
+                      await github.rest.repos.deleteReleaseAsset({
+                        owner,
+                        repo,
+                        asset_id: assetId
+                      });
+                      console.log(`Deleted asset id=${assetId}`);
+                    } catch (delErr) {
+                      console.warn(`Failed deleting bad uploaded asset id=${assetId}: ${delErr && delErr.message ? delErr.message : delErr}`);
+                    }
+
+                    if (attempt < maxAttempts) {
+                      const wait = Math.pow(2, attempt) * backoffBaseMs;
+                      console.log(`Will retry in ${wait}ms...`);
+                      await new Promise(r => setTimeout(r, wait));
+                    } else {
+                      throw new Error(`Failed verification after ${maxAttempts} attempts for ${file}`);
+                    }
+                  }
+
+                } catch (err) {
+                  console.warn(`Attempt ${attempt} error for ${file}: ${err && err.message ? err.message : String(err)}`);
+                  if (attempt < maxAttempts) {
+                    const wait = Math.pow(2, attempt) * backoffBaseMs;
+                    console.log(`Retrying in ${wait}ms...`);
+                    await new Promise(r => setTimeout(r, wait));
+                  } else {
+                    throw new Error(`Upload failed after ${maxAttempts} attempts for ${file}: ${err && err.message ? err.message : String(err)}`);
+                  }
+                } finally {
+                  try { stream.destroy(); } catch (e) { /* ignore */ }
+                }
+              } // end upload attempts
+
+              if (!success) {
+                throw new Error(`Giving up on ${file} after ${maxAttempts} attempts.`);
+              }
+            } // end files loop
+
+            console.log('All uploads processed.');
