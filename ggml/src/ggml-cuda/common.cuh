@@ -775,6 +775,8 @@ struct ggml_backend_cuda_context;
 
 struct ggml_cuda_device_info {
     int device_count;
+    int cuda_device_id[GGML_CUDA_MAX_DEVICES]; // maps logical index (0..device_count-1) → CUDA device index (matches nvidia-smi order)
+    int device_id[GGML_CUDA_MAX_DEVICES];       // reverse: CUDA device index → logical index, -1 if unused
 
     struct cuda_device_info {
         int     cc;                 // compute capability
