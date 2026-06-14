@@ -140,20 +140,27 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
 // this is faster on Windows
 // probably because the Windows CUDA libraries forget to make this check before invoking the drivers
 void ggml_cuda_set_device(int device) {
+    const auto & info = ggml_cuda_info();
+    int cuda_device = (device >= 0 && device < info.device_count) ? info.cuda_device_id[device] : device;
+
     int current_device;
     CUDA_CHECK(cudaGetDevice(&current_device));
 
-    if (device == current_device) {
+    if (cuda_device == current_device) {
         return;
     }
 
-    CUDA_CHECK(cudaSetDevice(device));
+    CUDA_CHECK(cudaSetDevice(cuda_device));
 }
 
 int ggml_cuda_get_device() {
-    int id;
-    CUDA_CHECK(cudaGetDevice(&id));
-    return id;
+    int raw_id;
+    CUDA_CHECK(cudaGetDevice(&raw_id));
+    const auto & info = ggml_cuda_info();
+    if (raw_id >= 0 && raw_id < GGML_CUDA_MAX_DEVICES && info.device_id[raw_id] >= 0) {
+        return info.device_id[raw_id];
+    }
+    return raw_id;
 }
 
 cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
@@ -203,6 +210,32 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
     GGML_ASSERT(info.device_count <= GGML_CUDA_MAX_DEVICES);
 
+    // Sort devices by PCI bus ID to match nvidia-smi ordering
+    {
+        char pci_bus_ids[GGML_CUDA_MAX_DEVICES][16];
+        int  sorted[GGML_CUDA_MAX_DEVICES];
+        for (int id = 0; id < info.device_count; ++id) {
+            sorted[id] = id;
+            CUDA_CHECK(cudaDeviceGetPCIBusId(pci_bus_ids[id], 16, id));
+        }
+        // Mark all reverse slots as unused
+        for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+            info.device_id[i] = -1;
+        }
+        // Simple sort by PCI bus ID (lexicographic)
+        for (int i = 0; i < info.device_count; ++i) {
+            for (int j = i + 1; j < info.device_count; ++j) {
+                if (strcmp(pci_bus_ids[sorted[i]], pci_bus_ids[sorted[j]]) > 0) {
+                    std::swap(sorted[i], sorted[j]);
+                }
+            }
+        }
+        for (int id = 0; id < info.device_count; ++id) {
+            info.cuda_device_id[id] = sorted[id];
+            info.device_id[sorted[id]] = id;
+        }
+    }
+
     int64_t total_vram = 0;
 #ifdef GGML_CUDA_FORCE_MMQ
     GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_MMQ (instead of CUBLAS):    yes\n", __func__);
@@ -212,25 +245,26 @@ static ggml_cuda_device_info ggml_cuda_init() {
 #endif // GGML_CUDA_FORCE_CUBLAS
     GGML_CUDA_LOG_INFO("%s: found %d " GGML_CUDA_NAME " devices:\n", __func__, info.device_count);
     for (int id = 0; id < info.device_count; ++id) {
+        int cuda_id = info.cuda_device_id[id];
         int device_vmm = 0;
 
 #if !defined(GGML_USE_HIPBLAS) && !defined(GGML_CUDA_NO_VMM) && !defined(GGML_USE_MUSA)
         CUdevice device;
-        CU_CHECK(cuDeviceGet(&device, id));
+        CU_CHECK(cuDeviceGet(&device, cuda_id));
         CU_CHECK(cuDeviceGetAttribute(&device_vmm, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, device));
 
         if (device_vmm) {
             CUmemAllocationProp alloc_prop = {};
             alloc_prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
             alloc_prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-            alloc_prop.location.id = id;
+            alloc_prop.location.id = cuda_id;
             CU_CHECK(cuMemGetAllocationGranularity(&info.devices[id].vmm_granularity, &alloc_prop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED));
         }
 #endif // !defined(GGML_USE_HIPBLAS) && !defined(GGML_CUDA_NO_VMM) && !defined(GGML_USE_MUSA)
         info.devices[id].vmm = !!device_vmm;
 
         cudaDeviceProp prop;
-        CUDA_CHECK(cudaGetDeviceProperties(&prop, id));
+        CUDA_CHECK(cudaGetDeviceProperties(&prop, cuda_id));
         GGML_CUDA_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n", id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
                 prop.totalGlobalMem/(1024*1024));
 
@@ -259,7 +293,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
     info.have_nccl = false;
     if (info.device_count > 1) {
         int gpu_list[GGML_CUDA_MAX_DEVICES];
-        for(int i = 0; i < info.device_count; ++i) gpu_list[i] = i;
+        for(int i = 0; i < info.device_count; ++i) gpu_list[i] = info.cuda_device_id[i];
         auto status = ncclCommInitAll(info.nccl_coms, info.device_count, gpu_list);
         if (status != ncclSuccess) {
             printf("=============================== NCCL initialization failed with status %d\n", int(status));
@@ -268,7 +302,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
             info.have_nccl = true;
             auto com = info.nccl_coms + info.device_count;
             if (info.device_count == 4) {
-                int devs[8] = {0,1, 2,3, 0,2, 1,3};
+                int devs[8] = {info.cuda_device_id[0],info.cuda_device_id[1], info.cuda_device_id[2],info.cuda_device_id[3], info.cuda_device_id[0],info.cuda_device_id[2], info.cuda_device_id[1],info.cuda_device_id[3]};
                 auto com = info.nccl_coms + info.device_count;
                 for (int ip = 0; ip < 4; ++ip) {
                     if (auto status = ncclCommInitAll(com+2*ip, 2, devs+2*ip); status != ncclSuccess) {
@@ -278,7 +312,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
                 }
                 printf("=============================== NCCL pair communicators for %d GPUs initialized\n", info.device_count);
             } else if (info.device_count == 3) {
-                int devs[4] = {0,1, 0,2};
+                int devs[4] = {info.cuda_device_id[0],info.cuda_device_id[1], info.cuda_device_id[0],info.cuda_device_id[2]};
                 for (int ip = 0; ip < 2; ++ip) {
                     if (auto status = ncclCommInitAll(com+2*ip, 2, devs+2*ip); status != ncclSuccess) {
                         printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
@@ -5362,8 +5396,10 @@ GGML_CALL int ggml_backend_cuda_get_device_count() {
 }
 
 GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size) {
+    const auto & info = ggml_cuda_info();
+    int cuda_device = (device >= 0 && device < info.device_count) ? info.cuda_device_id[device] : device;
     cudaDeviceProp prop;
-    CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, cuda_device));
     snprintf(description, description_size, "%s", prop.name);
 }
 
