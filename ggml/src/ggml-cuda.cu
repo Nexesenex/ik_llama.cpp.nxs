@@ -499,10 +499,12 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             GGML_ASSERT(pool_size + reserve_size <= CUDA_POOL_VMM_MAX_SIZE);
 
             // allocate more physical memory
+            const auto & info = ggml_cuda_info();
+            int cuda_device = info.cuda_device_id[device];
             CUmemAllocationProp prop = {};
             prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
             prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-            prop.location.id = device;
+            prop.location.id = cuda_device;
             CUmemGenericAllocationHandle handle;
             CU_CHECK(cuMemCreate(&handle, reserve_size, &prop, 0));
 
@@ -520,7 +522,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             // set access
             CUmemAccessDesc access = {};
             access.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-            access.location.id = device;
+            access.location.id = cuda_device;
             access.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
             CU_CHECK(cuMemSetAccess(pool_addr + pool_size, reserve_size, &access, 1));
 
