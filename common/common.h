@@ -334,6 +334,7 @@ struct gpt_params {
     float   split_tensor_split_factor   = 1.0f; // factor for proportional split (neutral: 1.0, you can test: 0.75)
     float   split_vram_free_factor      = 0.0f; // factor for VRAM availability (neutral: 0.0, you can test: 0.75)
     float   split_usage_penalty_factor  = 0.0f; // factor for memory usage penalty (neutral: 0.0, you can test: 0.25)
+    float   split_vram_reserve_factor[128] = {0}; // per-GPU VRAM reserve factor (<1: fraction reserved, >1: direct limit %)
     int32_t ncmoe                 =       0; // number of layers in which MoE tensors are left in VRAM
     int32_t fit_margin            =       0; // safety margin for auto-fit in MiB
     bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)
