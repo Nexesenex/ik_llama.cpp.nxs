@@ -501,8 +501,7 @@ struct llama_model {
     int main_gpu;
     int max_gpu = 0; // max. number of GPUs to use per layer for aplit mode "graph"
     int n_gpu_layers;
-
-    bool split_output_tensor = false; // force split output tensor in split mode graph
+    int split_output_tensor = 0;  // 0=off, 1=split on all GPUs, N>1=split on top N GPUs by VRAM
     bool mtp; // use mtp if is supported by the Model
 
     std::vector<rpc_device> rpc_servers;
