@@ -440,6 +440,30 @@ static inline void multiply_add_unsigned(const Bits& bits, const __m256i * scale
 // bits.values[k] are signed int8 dequantized values (post-iq4k_values lookup)
 template <typename Q8, typename Bits>
 static inline void multiply_add_signed(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
+#ifdef HAVE_VNNIINT8
+    auto s0 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[0]));
+    auto s1 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[1]));
+    auto s2 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[2]));
+    auto s3 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[3]));
+    auto zero = _mm256_setzero_si256();
+    const int k_off = j * 4;
+    for (int iy = 0; iy < Q8::nrc_y; ++iy) {
+        auto t0 = ggml_mm256_dpbssd_epi32(zero, bits.values[0], q8.load_quants(iy, i, k_off+0));
+        auto t1 = ggml_mm256_dpbssd_epi32(zero, bits.values[1], q8.load_quants(iy, i, k_off+1));
+        auto t2 = ggml_mm256_dpbssd_epi32(zero, bits.values[2], q8.load_quants(iy, i, k_off+2));
+        auto t3 = ggml_mm256_dpbssd_epi32(zero, bits.values[3], q8.load_quants(iy, i, k_off+3));
+        t0 = _mm256_mullo_epi32(t0, s0);
+        t1 = _mm256_mullo_epi32(t1, s1);
+        t2 = _mm256_mullo_epi32(t2, s2);
+        t3 = _mm256_mullo_epi32(t3, s3);
+        if (j) {
+            sumi[iy] = _mm256_add_epi32(sumi[iy], _mm256_add_epi32(t0, t2));
+            sumi[iy] = _mm256_add_epi32(sumi[iy], _mm256_add_epi32(t1, t3));
+        } else {
+            sumi[iy] = _mm256_add_epi32(_mm256_add_epi32(t0, t1), _mm256_add_epi32(t2, t3));
+        }
+    }
+#else
     // sign-abs of dequantized values (shared across branches, CSE elides the redundant sign_epi8 in non-VNNI path)
     auto s0 = _mm256_sign_epi8(bits.values[0], bits.values[0]);
     auto s1 = _mm256_sign_epi8(bits.values[1], bits.values[1]);
@@ -470,6 +494,7 @@ static inline void multiply_add_signed(const Bits& bits, const __m256i * scales,
         }
 #endif
     }
+#endif
 }
 
 #ifdef HAVE_FANCY_SIMD
