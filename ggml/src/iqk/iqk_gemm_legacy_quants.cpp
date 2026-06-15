@@ -1681,7 +1681,14 @@ static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
     auto dot = [&qx, &sx, &m1] (const int8_t * qy) {
         auto y128 = _mm_loadu_si128((const __m128i*)qy);
         auto y = _mm256_broadcastsi128_si256(y128);
-#ifdef HAVE_VNNI256
+#ifdef HAVE_VNNIINT8
+        auto sumi = _mm256_setzero_si256();
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[0], _mm256_shuffle_epi32(y, 0x00));
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[2], _mm256_shuffle_epi32(y, 0xaa));
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[3], _mm256_shuffle_epi32(y, 0xff));
+        return sumi;
+#elif defined(HAVE_VNNI256)
         auto sumi = _mm256_setzero_si256();
         sumi = ggml_mm256_dpbusd_epi32(sumi, sx[0], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x00), qx[0]));
         sumi = ggml_mm256_dpbusd_epi32(sumi, sx[1], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x55), qx[1]));
