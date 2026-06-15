@@ -5989,7 +5989,7 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * restrict s, size_t bs, const void * r
         const __m256i all_scales = _mm256_cvtepi8_epi16(scales8);
         const __m128i l_scales = _mm256_extracti128_si256(all_scales, 0);
         const __m128i h_scales = _mm256_extracti128_si256(all_scales, 1);
-        const __m256i scales[2] = {MM256_SET_M128I(l_scales, l_scales), MM256_SET_M128I(h_scales, h_scales)};
+        const __m256i scales[2] = {_mm256_broadcastsi128_si256(l_scales), _mm256_broadcastsi128_si256(h_scales)};
 
         __m256i sumi = _mm256_setzero_si256();
 
@@ -6599,7 +6599,7 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * restrict s, size_t bs, const void * r
         const __m256i all_scales = _mm256_cvtepi8_epi16(scales128);
         const __m128i l_scales = _mm256_extracti128_si256(all_scales, 0);
         const __m128i h_scales = _mm256_extracti128_si256(all_scales, 1);
-        const __m256i scales[2] = {MM256_SET_M128I(l_scales, l_scales), MM256_SET_M128I(h_scales, h_scales)};
+        const __m256i scales[2] = {_mm256_broadcastsi128_si256(l_scales), _mm256_broadcastsi128_si256(h_scales)};
 
         // high bit
         const __m256i hbits = _mm256_loadu_si256((const __m256i*)x[i].hmask);
@@ -7354,7 +7354,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * restrict s, size_t bs, const void * r
         acc_m = _mm_fmadd_ps(_mm_set1_ps(dmin), _mm_cvtepi32_ps(prod), acc_m);
 
         const __m128i sc128  = _mm256_extracti128_si256(mins_and_scales, 0);
-        const __m256i scales = MM256_SET_M128I(sc128, sc128);
+        const __m256i scales = _mm256_broadcastsi128_si256(sc128);
 
         __m256i sumi = _mm256_setzero_si256();
 
@@ -7930,7 +7930,7 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * restrict s, size_t bs, const void * r
         summs += dmin * _mm_extract_epi32(hsum, 0);
 
         const __m128i sc128  = _mm256_extracti128_si256(mins_and_scales, 0);
-        const __m256i scales = MM256_SET_M128I(sc128, sc128);
+        const __m256i scales = _mm256_broadcastsi128_si256(sc128);
 
         const __m256i hbits = _mm256_loadu_si256((const __m256i*)x[i].qh);
         __m256i hmask = mone;
@@ -9587,8 +9587,8 @@ void ggml_vec_dot_iq2_xs_q8_K(int n, float * restrict s, size_t bs, const void *
 
             const __m128i full_signs_l = _mm256_castsi256_si128(full_sign_bits);
             const __m128i full_signs_h = _mm256_extractf128_si256(full_sign_bits, 1);
-            const __m256i full_signs_1 = MM256_SET_M128I(full_signs_l, full_signs_l);
-            const __m256i full_signs_2 = MM256_SET_M128I(full_signs_h, full_signs_h);
+            const __m256i full_signs_1 = _mm256_broadcastsi128_si256(full_signs_l);
+            const __m256i full_signs_2 = _mm256_broadcastsi128_si256(full_signs_h);
 
             __m256i signs;
             signs = _mm256_shuffle_epi8(full_signs_1, block_sign_shuffle_1);
