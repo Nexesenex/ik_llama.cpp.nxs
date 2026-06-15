@@ -4421,6 +4421,7 @@ static bool llm_load_tensors(
         float split_tensor_split_factor,
         float split_vram_free_factor,
         float split_usage_penalty_factor,
+        const float * split_vram_reserve_factor,
         const float * tensor_split,
         ggml_type cache_type_k,
         ggml_type cache_type_v,
@@ -4541,6 +4542,9 @@ static bool llm_load_tensors(
     model.split_tensor_split_factor = split_tensor_split_factor;
     model.split_vram_free_factor = split_vram_free_factor;
     model.split_usage_penalty_factor = split_usage_penalty_factor;
+    if (split_vram_reserve_factor) {
+        model.split_vram_reserve_factor.assign(split_vram_reserve_factor, split_vram_reserve_factor + model.devices.size());
+    }
     model.n_gpu_layers = n_gpu_layers;
     model.mtp          = mtp;
     model.swa_compress = swa_compress;
@@ -5344,6 +5348,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             params.split_tensor_split_factor,
             params.split_vram_free_factor,
             params.split_usage_penalty_factor,
+            params.split_vram_reserve_factor,
             params.tensor_split,
             params.type_k,
             params.type_v,
@@ -8361,6 +8366,7 @@ struct llama_model_params llama_model_default_params() {
         /*.split_tensor_split_factor   =*/ 1.0f,
         /*.split_vram_free_factor      =*/ 0.0f,
         /*.split_usage_penalty_factor  =*/ 0.0f,
+        /*.split_vram_reserve_factor   =*/ nullptr,
         /*.ncmoe                       =*/ 0,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
