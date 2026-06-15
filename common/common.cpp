@@ -2283,7 +2283,17 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-sot" || arg == "--split-output-tensor") {
-        params.split_output_tensor = true;
+        if (i + 1 < argc && argv[i + 1][0] != '-') {
+            ++i;
+            try {
+                params.split_output_tensor = std::max(1, std::stoi(argv[i]));
+            } catch (...) {
+                invalid_param = true;
+                return true;
+            }
+        } else {
+            params.split_output_tensor = 1;
+        }
         return true;
     }
     if (arg == "-sas" || arg == "--scheduler-async") {
@@ -3158,7 +3168,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f32"});
     options.push_back({ "*",         "-gap, --graph-attn-precision",    "Flash-attn precision under -sm graph (default: %s)", "f16"});
     options.push_back({ "*",         "-smtps, -smgs, --split-mode-tensor-parallel-scheduling, --split-mode-graph-scheduling,", "Force Split Mode Tensor Parallel (Graph) Scheduling (default: %d)", params.split_mode_tensor_parallel_scheduling});
-    options.push_back({ "*",         "-sot, --split-output-tensor,",    "Force split of the Output Tensor in Split Mode Graph (default: %d)", params.split_output_tensor});
+    options.push_back({ "*",         "-sot, --split-output-tensor [N]", "Split output tensor (no arg=all GPUs, N=top N GPUs by VRAM) (default: %d)", params.split_output_tensor});
     options.push_back({ "*",         "-sas,  --scheduler_async,",       "Async evaluation of compute graphs: %d)", params.scheduler_async});
     options.push_back({ "*",         "-smc,  --sched-max-copies,",     "Max graph parallel copies (default: %d)", params.sched_max_copies});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
@@ -5578,7 +5588,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "k_cache_hadamard: %s # default: false\n", params.k_cache_hadamard ? "true" : "false");
     fprintf(stream, "v_cache_hadamard: %s # default: false\n", params.v_cache_hadamard ? "true" : "false");
     fprintf(stream, "split_mode_tensor_parallel_scheduling: %s # default: false\n", params.split_mode_tensor_parallel_scheduling ? "true" : "false");
-    fprintf(stream, "split_output_tensor: %s # default: false\n", params.split_output_tensor ? "true" : "false");
+    fprintf(stream, "split_output_tensor: %d # default: 0 (0=off, 1=all GPUs, N>1=top N GPUs)\n", params.split_output_tensor);
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");

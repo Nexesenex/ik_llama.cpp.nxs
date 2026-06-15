@@ -5386,8 +5386,32 @@ bool create_tensors_helper::create_tensors() {
                     LLAMA_LOG_INFO("%s: not splitting output tensor becausee buffer is host\n", __func__);
                 } else {
                     auto ctx_split = ctx_map[model.buft_output.buft_matrix];
-                    auto split = create_split(model.output->ne[1], 16, model.splits, mem_used, vram_free, vram_total, ggml_nbytes(model.output), model.split_vram_reserve_factor,
-                        model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
+                    std::vector<int> split;
+                    int nr = model.output->ne[1];
+                    int granularity = 16;
+                    if (model.split_output_tensor > 1 && model.split_output_tensor < (int)model.splits.size()) {
+                        int n_devices = (int)mem_used.size();
+                        std::vector<std::pair<size_t, int>> remaining;
+                        for (int i = 0; i < n_devices; ++i) {
+                            remaining.push_back({vram_total[i] - mem_used[i], i});
+                        }
+                        int n_gpus = std::min(model.split_output_tensor, n_devices);
+                        std::partial_sort(remaining.begin(), remaining.begin() + n_gpus, remaining.end(),
+                            std::greater<std::pair<size_t, int>>{});
+                        GGML_ASSERT(nr % granularity == 0);
+                        int nchunk = nr / granularity;
+                        int per_gpu = nchunk / n_gpus;
+                        int extra = nchunk % n_gpus;
+                        split.resize(n_devices, 0);
+                        for (int j = 0; j < n_gpus; ++j) {
+                            int gpu_idx = remaining[j].second;
+                            split[gpu_idx] = (per_gpu + (j < extra ? 1 : 0)) * granularity;
+                        }
+                        LLAMA_LOG_INFO("%s: splitting output tensor on top %d GPUs by remaining VRAM\n", __func__, n_gpus);
+                    } else {
+                        split = create_split(nr, granularity, model.splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                            model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
+                    }
                     prepare_split_tensors(1, ctx_split, model.output, model.split_output, split, mem_used);
                     if (auto it = split_tensors.find(model.output_norm); it != split_tensors.end() && !ggml_backend_buft_is_host(model.buft_output.buft_matrix)) {
                         auto ctx_split = ctx_map[model.buft_output.buft_matrix];
