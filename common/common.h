@@ -486,7 +486,7 @@ struct gpt_params {
     bool dsv4_lid_cache_cpu= false; // if true, also keep the DeepSeek-V4 indexer (LID) K cache in host memory
     bool split_mode_graph_scheduling = false; // if true, force split mode graph scheduling
     //bool split_mode_f16    = true;  // if true, intermediate results will be cast to f16 before copying to other GPUs to perform reduce ops
-    bool split_output_tensor = false; // if true, force split the output tensor in split mode graph
+    int  split_output_tensor = 0; // 0=off, 1=split on all GPUs, N>1=split on top N GPUs by VRAM
     bool scheduler_async   = false; // if true, in split mode graph the scheduler will use multiple threads to evaluate the graph
     int  fused_delta_net   = 0;     // use fused delta-net if number of tokens in the batch is less than this value
     bool has_mtp           = false; // enable MTP if supported by the model
