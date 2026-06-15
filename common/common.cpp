@@ -2088,6 +2088,25 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.split_usage_penalty_factor = std::stof(argv[i]);
         return true;
     }
+    else if (arg == "--split-vram-reserve-factor" || arg == "-svrf") {
+        CHECK_ARG
+        std::string arg_next = argv[i];
+        const std::regex regex{ R"([,/]+)" };
+        std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
+        std::vector<std::string> split_arg{ it, {} };
+        if (split_arg.size() >= llama_max_devices()) {
+            invalid_param = true;
+            return true;
+        }
+        for (size_t i = 0; i < llama_max_devices(); ++i) {
+            if (i < split_arg.size()) {
+                params.split_vram_reserve_factor[i] = std::stof(split_arg[i]);
+            } else {
+                params.split_vram_reserve_factor[i] = 0.0f;
+            }
+        }
+        return true;
+    }
     else if (arg == "--split-adjust-vram-aware" || arg == "-sava") {
         params.split_adjust_vram_aware = true;
         return true;
@@ -3436,6 +3455,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "-stpf, --split-tensor-split-factor f", "factor for proportional split (neutral: 1.0, you can test: 0.75)", params.split_tensor_split_factor });
         options.push_back({ "*",           "-svff, --split-vram-free-factor f", "factor for VRAM availability (neutral: 0.0, you can test: 0.75)", params.split_vram_free_factor });
         options.push_back({ "*",           "-supf, --split-usage-penalty-factor f", "factor for memory usage penalty (neutral: 0.0, you can test: 0.25)", params.split_usage_penalty_factor });
+        options.push_back({ "*",           "-svrf, --split-vram-reserve-factor LIST", "per-GPU VRAM reserve factors, comma-separated (<1: fraction reserved, >1: direct limit %%%, default: 0 = 12.5%%/6.25%% auto)" });
     }
 
     options.push_back({ "model" });
@@ -4398,6 +4418,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.split_tensor_split_factor = params.split_tensor_split_factor;
     mparams.split_vram_free_factor = params.split_vram_free_factor;
     mparams.split_usage_penalty_factor = params.split_usage_penalty_factor;
+    mparams.split_vram_reserve_factor = params.split_vram_reserve_factor;
     mparams.ncmoe           = params.ncmoe;
     mparams.fit             = params.fit;
     mparams.fit_margin      = params.fit_margin;
@@ -5503,6 +5524,10 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "split_tensor_split_factor: %.1f # default: 1.0 (neutral), ventilation: 2.0\n", params.split_tensor_split_factor);
     fprintf(stream, "split_vram_free_factor: %.1f # default: 0.0 (neutral), ventilation: 0.6\n", params.split_vram_free_factor);
     fprintf(stream, "split_usage_penalty_factor: %.1f # default: 0.0 (neutral), ventilation: 1.0\n", params.split_usage_penalty_factor);
+    {
+        const std::vector<float> svrf_vector(params.split_vram_reserve_factor, params.split_vram_reserve_factor + llama_max_devices());
+        yaml_dump_vector_float(stream, "split_vram_reserve_factor", svrf_vector);
+    }
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
     fprintf(stream, "fit: %d # default: false\n", params.fit);
     fprintf(stream, "fit_margin: %d # default: 0\n", params.fit_margin);
