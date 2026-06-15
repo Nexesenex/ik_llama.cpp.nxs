@@ -382,6 +382,7 @@ extern "C" {
         float split_tensor_split_factor;
         float split_vram_free_factor;
         float split_usage_penalty_factor;
+        const float * split_vram_reserve_factor;
         int32_t ncmoe;
 
         enum ggml_type type_k;
