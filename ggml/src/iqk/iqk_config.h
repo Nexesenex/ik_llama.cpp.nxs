@@ -40,6 +40,7 @@
 #endif
 
 #if defined __x86_64__
+#include <immintrin.h>
 #if defined HAVE_FANCY_SIMD
     #undef HAVE_FANCY_SIMD
 #endif
@@ -57,9 +58,25 @@
     #define ggml_mm256_dpwssd_epi32 _mm256_dpwssd_epi32
     #define ggml_mm_dpbusd_epi32    _mm_dpbusd_epi32
 #elif defined(__AVXVNNI__)
-    #define ggml_mm256_dpbusd_epi32 _mm256_dpbusd_avx_epi32
-    #define ggml_mm256_dpwssd_epi32 _mm256_dpwssd_avx_epi32
-    #define ggml_mm_dpbusd_epi32    _mm_dpbusd_avx_epi32
+    #ifdef _MSC_VER
+        #define ggml_mm256_dpbusd_epi32 _mm256_dpbusd_avx_epi32
+        #define ggml_mm256_dpwssd_epi32 _mm256_dpwssd_avx_epi32
+        #define ggml_mm_dpbusd_epi32    _mm_dpbusd_avx_epi32
+    #else
+        #define ggml_mm256_dpbusd_epi32 _mm256_dpbusd_epi32
+        #define ggml_mm256_dpwssd_epi32 _mm256_dpwssd_epi32
+        #define ggml_mm_dpbusd_epi32    _mm_dpbusd_epi32
+    #endif
+#elif defined(__VNNI256__)
+    static inline __m256i ggml_mm256_dpbusd_epi32(__m256i acc, __m256i a, __m256i b) {
+        return _mm256_add_epi32(acc, _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_maddubs_epi16(a, b)));
+    }
+    static inline __m256i ggml_mm256_dpwssd_epi32(__m256i acc, __m256i a, __m256i b) {
+        return _mm256_add_epi32(acc, _mm256_madd_epi16(a, b));
+    }
+    static inline __m128i ggml_mm_dpbusd_epi32(__m128i acc, __m128i a, __m128i b) {
+        return _mm_add_epi32(acc, _mm_madd_epi16(_mm_set1_epi16(1), _mm_maddubs_epi16(a, b)));
+    }
 #endif
 #endif
 
