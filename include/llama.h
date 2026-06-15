@@ -440,7 +440,7 @@ extern "C" {
         bool merge_up_gate_shexp; // if true, merge ffn_up_shexp and ffn_gate_shexp tensors into a single, contiguous tensor
         bool mtp;           // if true, load MTP layers if present
         bool dry_run;       // skip loading tensors
-        bool split_output_tensor; // if true, force split the output tensor in split mode graph
+        int split_output_tensor;  // 0=off, 1=split on all GPUs, N>1=split on top N GPUs by VRAM
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
     };
