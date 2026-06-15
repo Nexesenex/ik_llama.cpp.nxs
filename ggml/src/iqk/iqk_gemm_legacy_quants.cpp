@@ -3483,7 +3483,7 @@ inline std::pair<mul_mat_t, int> mul_mat_kernel(int int_typeA, int nq) {
 #ifdef __aarch64__
        MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerIQ4NL, nq);
 #else
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
        MAKE_FUNCS(mul_mat_qX_1_q8_2_T<IQ4_NL_UnpackerU, nq);
 #else
        MAKE_FUNCS2(mul_mat_qX_0_q8_0_T<IQ4_NL_UnpackerS, block_q8_2, nq);
