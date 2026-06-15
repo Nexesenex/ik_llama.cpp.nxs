@@ -3393,7 +3393,7 @@ static bool llm_load_tensors(
         bool mtp,
         bool fit,
         bool dry_run,
-        bool split_output_tensor,
+        int split_output_tensor,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
     model.t_start_us = ggml_time_us();
@@ -6527,7 +6527,7 @@ struct llama_model_params llama_model_default_params() {
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.repack_tensors              =*/ false,
-        /*.split_output_tensor         =*/ false,
+        /*.split_output_tensor         =*/ 0,
         /*.use_thp                     =*/ false,
         /*.validate_quants             =*/ false,
         /*.merge_qkv                   =*/ false,

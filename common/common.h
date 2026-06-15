@@ -473,7 +473,7 @@ struct gpt_params {
     bool k_cache_hadamard  = false; // if true, use Hadamard transform for the K-cache (only makes sense with quantized cache)
     bool v_cache_hadamard  = false; // if true, use Hadamard transform for the V-cache (only makes sense with quantized cache, which requires FA)
     bool split_mode_tensor_parallel_scheduling = false; // if true, force split mode graph scheduling
-    bool split_output_tensor = false; // if true, force split the output tensor in split mode graph
+    int  split_output_tensor = 0; // 0=off, 1=split on all GPUs, N>1=split on top N GPUs by VRAM
     //bool split_mode_f16    = true;  // if true, intermediate results will be cast to f16 before copying to other GPUs to perform reduce ops
     bool scheduler_async   = false; // if true, in split mode graph the scheduler will use multiple threads to evaluate the graph
     int  sched_max_copies  = -1;    // GGML_SCHED_MAX_COPIES override (-1 = default from cmake)
