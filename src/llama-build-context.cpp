@@ -1428,7 +1428,8 @@ llm_expert_gating_func_type   gating_op,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input,
          ggml_tensor * up_gate_exps, ggml_tensor * up_gate_exps_b,
          ggml_tensor * shexp_gate,
-         ggml_tensor * add_extra) {
+         ggml_tensor * add_extra,
+         ggml_tensor * up_gate_shexp, ggml_tensor * up_gate_shexp_b) {
 
     auto split_up_exps    = up_exps ? (ggml_split_tensor_t *)up_exps->extra : nullptr;
     auto split_gate_exps  = gate_exps ? (ggml_split_tensor_t *)gate_exps->extra : nullptr;
