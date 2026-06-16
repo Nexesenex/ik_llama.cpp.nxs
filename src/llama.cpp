@@ -7012,6 +7012,9 @@ static void llama_concatenate_up_gate_exps(llama_context & lctx) {
 }
 
 static void llama_concatenate_up_gate_shexp(llama_context & lctx) {
+    if (lctx.cparams.mtp_op_type != MTP_OP_NONE) {
+        return;
+    }
     auto & model = lctx.model;
     bool needs_concatenate = false;
     for (auto & l : model.layers) {
@@ -7027,9 +7030,6 @@ static void llama_concatenate_up_gate_shexp(llama_context & lctx) {
         auto & l = model.layers[il];
         if (l.ffn_up_gate_shexp && l.ffn_up_shexp && l.ffn_gate_shexp &&
            !l.ffn_up_gate_shexp->extra) {
-            if (!ggml_backend_buffer_is_host(l.ffn_up_shexp->buffer)) {
-                continue;
-            }
             GGML_ASSERT(l.ffn_up_gate_shexp->type  == l.ffn_up_shexp->type  && l.ffn_up_gate_shexp->type  == l.ffn_gate_shexp->type);
             GGML_ASSERT(l.ffn_up_gate_shexp->ne[0] == l.ffn_up_shexp->ne[0] && l.ffn_up_gate_shexp->ne[0] == l.ffn_gate_shexp->ne[0]);
             GGML_ASSERT(l.ffn_up_gate_shexp->ne[1] == l.ffn_up_shexp->ne[1] + l.ffn_gate_shexp->ne[1]);
@@ -7041,20 +7041,15 @@ static void llama_concatenate_up_gate_shexp(llama_context & lctx) {
             if (nbytes > aux_buffer_gate.size()) {
                 aux_buffer_gate.resize(nbytes);
             }
-            printf("%s: Concatenating up/gate shared experts weight in layer %d\n", __func__, il);
+            LLAMA_LOG_INFO("%s: Concatenating up/gate shared experts weight in layer %d\n", __func__, il);
             ggml_backend_tensor_get(l.ffn_up_shexp, aux_buffer_up.data(), 0, nbytes);
             ggml_backend_tensor_get(l.ffn_gate_shexp, aux_buffer_gate.data(), 0, nbytes);
             if (aux_buffer_up_gate.size() < 2*nbytes) {
                 aux_buffer_up_gate.resize(2*nbytes);
             }
-            size_t offset_up_gate = 0;
-            size_t offset_up = 0;
-            auto shexp_size = l.ffn_up_shexp->ne[1]*l.ffn_up_shexp->nb[1];
-            std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_gate.data() + offset_up, shexp_size);
-            offset_up_gate += shexp_size;
-            std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_up.data() + offset_up, shexp_size);
-            offset_up_gate += shexp_size;
-            ggml_backend_tensor_set(l.ffn_up_gate_shexp, aux_buffer_up_gate.data(), 0, 2*shexp_size);
+            std::memcpy(aux_buffer_up_gate.data(), aux_buffer_gate.data(), nbytes);
+            std::memcpy(aux_buffer_up_gate.data() + nbytes, aux_buffer_up.data(), nbytes);
+            ggml_backend_tensor_set(l.ffn_up_gate_shexp, aux_buffer_up_gate.data(), 0, 2*nbytes);
         }
     }
 }

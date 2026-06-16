@@ -1004,11 +1004,9 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
                             GGML_ASSERT(p.first >= 0);
                             offset = split->ne[0]/2 * split->nb[0];
                         }
-                        for (int i01 = 0; i01 < split->ne[1]; ++i01) {
-                            auto dst = (char *)split->data + i01*split->nb[1] + offset;
-                            auto src = (const char *)data + i01*tensor->nb[1] + ne*tensor->nb[0];
-                            CUDA_CHECK(cudaMemcpyAsync(dst, src, p.second*tensor->nb[0], cudaMemcpyHostToDevice, cudaStreamPerThread));
-                        }
+                        auto dst = (char *)split->data + offset;
+                        auto src = (const char *)data + ne*tensor->nb[1];
+                        CUDA_CHECK(cudaMemcpyAsync(dst, src, p.second*tensor->nb[1], cudaMemcpyHostToDevice, cudaStreamPerThread));
                         ne += p.second;
                         CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
                     }
@@ -1038,11 +1036,9 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
                             GGML_ASSERT(p.first >= 0);
                             offset = split->ne[1]/2 * split->nb[1];
                         }
-                        for (int i01 = 0; i01 < split->ne[1]; ++i01) {
-                            auto dst = (char *)split->data + i01*split->nb[1] + offset;
-                            auto src = (const char *)data + i01*tensor->nb[1] + ne*tensor->nb[0];
-                            CUDA_CHECK(cudaMemcpyAsync(dst, src, p.second*tensor->nb[0], cudaMemcpyHostToDevice, cudaStreamPerThread));
-                        }
+                        auto dst = (char *)split->data + offset;
+                        auto src = (const char *)data + ne*tensor->nb[1];
+                        CUDA_CHECK(cudaMemcpyAsync(dst, src, p.second*tensor->nb[1], cudaMemcpyHostToDevice, cudaStreamPerThread));
                         ne += p.second;
                         CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
                     }
