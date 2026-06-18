@@ -90,8 +90,7 @@ struct Trellis2 {
     const __m256i mask2 = _mm256_set1_epi32(km32);
 
     inline __m256i next8(uint32_t val1, uint32_t val2) {
-        __m256i mval = MM256_SET_M128I(_mm_set1_epi32(val2), _mm_set1_epi32(val1));
-        //__m256i mval = _mm256_setr_epi32(val1, val1, val1, val1, val2, val2, val2, val2);
+        __m256i mval = _mm256_setr_epi32(val1, val1, val1, val1, val2, val2, val2, val2);
         __m256i mres = _mm256_add_epi32(_mm256_mullo_epi32(mval, mka), mkb);
         return _mm256_xor_si256(_mm256_and_si256(mres, _mm256_set1_epi32(kmask)), _mm256_set1_epi32(km32));
     }
@@ -112,7 +111,7 @@ struct Trellis3 {
     const __m256i shuffle = _mm256_set_epi32(7, 3, 6, 2, 5, 1, 4, 0);
 
     inline __m256i next8(uint32_t val1, uint32_t val2) const {
-        __m256i mval = MM256_SET_M128I(_mm_set1_epi32(val2), _mm_set1_epi32(val1));
+        __m256i mval = _mm256_setr_epi32(val1, val1, val1, val1, val2, val2, val2, val2);
         return _mm256_mullo_epi32(mval, mka);
     }
     inline __m256i next8(uint32_t val) const {
