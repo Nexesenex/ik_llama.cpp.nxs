@@ -169,10 +169,8 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
     inline void new_block_f(int i, __m256 * scales) {
         auto sc16 = load_scales(i);
         auto scf  = _mm256_mul_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sc16)));
-        auto scf_l = _mm256_castps256_ps128(scf);
-        auto scf_h = _mm256_extractf128_ps(scf, 1);
-        scales[0] = _mm256_set_m128(scf_l, scf_l);
-        scales[1] = _mm256_set_m128(scf_h, scf_h);
+        scales[0] = _mm256_permute2f128_ps(scf, scf, 0x00);
+        scales[1] = _mm256_permute2f128_ps(scf, scf, 0x11);
         scales[2] = _mm256_mul_ps(scf, _mm256_set1_ps(-minv));
     }
 
@@ -193,8 +191,8 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
 
     IQK_ALWAYS_INLINE void sign_values(const uint32_t * aux32, __m256i * values) const {
 #if defined z_HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__
-        esh.sign_2_values(MM256_SET_M128I(_mm_set1_epi32(aux32[3]), _mm_set1_epi32(aux32[1])), values+0);
-        esh.sign_2_values(MM256_SET_M128I(_mm_set1_epi32(aux32[7]), _mm_set1_epi32(aux32[5])), values+2);
+        esh.sign_2_values(_mm256_setr_epi32(aux32[1],aux32[1],aux32[1],aux32[1],aux32[3],aux32[3],aux32[3],aux32[3]), values+0);
+        esh.sign_2_values(_mm256_setr_epi32(aux32[5],aux32[5],aux32[5],aux32[5],aux32[7],aux32[7],aux32[7],aux32[7]), values+2);
 #else
         esh.sign_value(aux32[1], values[0]);
         esh.sign_value(aux32[3], values[1]);
@@ -417,7 +415,7 @@ struct DequantizerIQ2S final : public BaseDequantizer<block_iq2_s> {
 
     inline static void make2(const uint8_t * qs, const uint8_t * qh, const __m256i& idx_shift, const __m256i& idx_mask, __m256i * values) {
         auto idx_l = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)qs));
-        auto idx_h = MM256_SET_M128I(_mm_set1_epi32(qh[1]), _mm_set1_epi32(qh[0]));
+        auto idx_h = _mm256_setr_epi32(qh[0], qh[0], qh[0], qh[0], qh[1], qh[1], qh[1], qh[1]);
         index_t idx;
         idx.vec = _mm256_or_si256(idx_l, _mm256_and_si256(_mm256_sllv_epi32(idx_h, idx_shift), idx_mask));
         values[0] = _mm256_set_epi64x(iq2s_grid[idx.val[3]], iq2s_grid[idx.val[2]], iq2s_grid[idx.val[1]], iq2s_grid[idx.val[0]]);
@@ -511,10 +509,8 @@ struct DequantizerIQ3XXS final : public BaseDequantizer<block_iq3_xxs> {
     inline void new_block_f(int i, __m256 * scales) {
         auto sc16 = prepare_scales(i);
         auto scf  = _mm256_mul_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sc16)));
-        auto scf_l = _mm256_castps256_ps128(scf);
-        auto scf_h = _mm256_extractf128_ps(scf, 1);
-        scales[0] = _mm256_set_m128(scf_l, scf_l);
-        scales[1] = _mm256_set_m128(scf_h, scf_h);
+        scales[0] = _mm256_permute2f128_ps(scf, scf, 0x00);
+        scales[1] = _mm256_permute2f128_ps(scf, scf, 0x11);
         scales[2] = _mm256_mul_ps(scf, _mm256_set1_ps(-minv));
     }
     inline float new_block(int i, __m256i * scales, __m256i& mins) {
@@ -537,7 +533,7 @@ struct DequantizerIQ3XXS final : public BaseDequantizer<block_iq3_xxs> {
 
     IQK_ALWAYS_INLINE void sign_2_values(const uint16_t * signs, __m256i * values) const {
 #if defined HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__
-        esh.sign_2_values(MM256_SET_M128I(_mm_set1_epi32(signs[2] | (signs[3] << 16)), _mm_set1_epi32(signs[0] | (signs[1] << 16))), values);
+        esh.sign_2_values(_mm256_setr_epi32(signs[0] | (signs[1] << 16), signs[0] | (signs[1] << 16), signs[0] | (signs[1] << 16), signs[0] | (signs[1] << 16), signs[2] | (signs[3] << 16), signs[2] | (signs[3] << 16), signs[2] | (signs[3] << 16), signs[2] | (signs[3] << 16)), values);
 #else
         esh.sign_value(signs[0] | (signs[1] << 16), values[0]);
         esh.sign_value(signs[2] | (signs[3] << 16), values[1]);
@@ -643,10 +639,8 @@ struct DequantizerIQ3S final : public BaseDequantizer<block_iq3_s> {
     inline void new_block_f(int i, __m256 * scales) {
         auto sc16 = make_scales(i, d);
         auto scf  = _mm256_mul_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sc16)));
-        auto scf_l = _mm256_castps256_ps128(scf);
-        auto scf_h = _mm256_extractf128_ps(scf, 1);
-        scales[0] = _mm256_set_m128(scf_l, scf_l);
-        scales[1] = _mm256_set_m128(scf_h, scf_h);
+        scales[0] = _mm256_permute2f128_ps(scf, scf, 0x00);
+        scales[1] = _mm256_permute2f128_ps(scf, scf, 0x11);
         scales[2] = _mm256_mul_ps(scf, _mm256_set1_ps(-minv));
     }
     inline float new_block(int i, __m256i * scales, __m256i& mins) {
@@ -972,10 +966,8 @@ static void mul_mat_iq2_xxs_q8_2_IQ_N(int n, const void * vx, size_t bx, const D
                 auto my  = _mm256_castsi256_ps(_mm256_slli_epi32(MM256_SET_M128I(my2, my1), 16));
                 accd[iy] = _mm256_fmadd_ps(all_mins, my, accd[iy]);
             }
-            auto scales_l = _mm256_castps256_ps128(all_scales);
-            auto scales_h = _mm256_extractf128_ps(all_scales, 1);
-            scales[0] = _mm256_set_m128(scales_l, scales_l);
-            scales[1] = _mm256_set_m128(scales_h, scales_h);
+            scales[0] = _mm256_permute2f128_ps(all_scales, all_scales, 0x00);
+            scales[1] = _mm256_permute2f128_ps(all_scales, all_scales, 0x11);
 
             for (int j = 0; j < QK_K/128; ++j) {
                 const uint8_t * a8 = (const uint8_t *)(a16 + 16*j);
@@ -1127,10 +1119,10 @@ static void mul_mat_iq2_xs_r4_q8_k(int n, const void * vx, size_t bx, const Data
     __m256i isum[2*nrc_y] = {};
 #else
     __m256i shuffles[4] = {
-        MM256_SET_M128I(_mm_set1_epi16(0x0302), _mm_set1_epi16(0x0100)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0706), _mm_set1_epi16(0x0504)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0b0a), _mm_set1_epi16(0x0908)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0f0e), _mm_set1_epi16(0x0d0c)),
+        _mm256_set_epi16(0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100),
+        _mm256_set_epi16(0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504),
+        _mm256_set_epi16(0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908),
+        _mm256_set_epi16(0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c),
     };
     __m256i isum[nrc_y == 1 ? 4 : nrc_y] = {};
 #endif
@@ -1252,10 +1244,10 @@ static void mul_mat_iq2_xs_r4_q8_k_16(int n, const void * vx, size_t bx, const D
     __m256i isum[2*nrc_y] = {};
 #else
     __m256i shuffles[4] = {
-        MM256_SET_M128I(_mm_set1_epi16(0x0302), _mm_set1_epi16(0x0100)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0706), _mm_set1_epi16(0x0504)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0b0a), _mm_set1_epi16(0x0908)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0f0e), _mm_set1_epi16(0x0d0c)),
+        _mm256_set_epi16(0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100),
+        _mm256_set_epi16(0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504),
+        _mm256_set_epi16(0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908),
+        _mm256_set_epi16(0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c),
     };
     __m256i isum[nrc_y == 1 ? 4 : nrc_y] = {};
 #endif
@@ -1411,10 +1403,10 @@ static void mul_mat_iq2_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
     __m256i isum[2*nrc_y] = {};
 #else
     __m256i shuffles[4] = {
-        MM256_SET_M128I(_mm_set1_epi16(0x0302), _mm_set1_epi16(0x0100)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0706), _mm_set1_epi16(0x0504)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0b0a), _mm_set1_epi16(0x0908)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0f0e), _mm_set1_epi16(0x0d0c)),
+        _mm256_set_epi16(0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100),
+        _mm256_set_epi16(0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504),
+        _mm256_set_epi16(0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908),
+        _mm256_set_epi16(0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c),
     };
     __m256i isum[nrc_y == 1 ? 4 : nrc_y] = {};
 #endif
@@ -1533,10 +1525,10 @@ static void mul_mat_iq2_s_r4_q8_k_16(int n, const void * vx, size_t bx, const Da
     __m256i isum[2*nrc_y] = {};
 #else
     __m256i shuffles[4] = {
-        MM256_SET_M128I(_mm_set1_epi16(0x0302), _mm_set1_epi16(0x0100)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0706), _mm_set1_epi16(0x0504)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0b0a), _mm_set1_epi16(0x0908)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0f0e), _mm_set1_epi16(0x0d0c)),
+        _mm256_set_epi16(0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100),
+        _mm256_set_epi16(0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504),
+        _mm256_set_epi16(0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908),
+        _mm256_set_epi16(0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c),
     };
     __m256i isum[nrc_y == 1 ? 4 : nrc_y] = {};
 #endif
@@ -1784,7 +1776,7 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
             auto qs = iq3[ibl].qs;
             auto qh = iq3[ibl].qh;
             auto scale_bits = _mm_loadu_si128((const __m128i *)iq3[ibl].scales);
-            auto scales8 = MM256_SET_M128I(_mm_srli_epi16(scale_bits, 4), scale_bits);
+            auto scales8 = _mm256_blend_epi32(_mm256_broadcastsi128_si256(scale_bits), _mm256_srli_epi16(_mm256_broadcastsi128_si256(scale_bits), 4), 0xF0);
             helper.vec = _mm256_or_si256(_mm256_slli_epi16(_mm256_and_si256(scales8, _mm256_set1_epi8(0xf)), 1), _mm256_set1_epi8(1));
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto qh32 = (const uint32_t *)qh;
@@ -1797,7 +1789,7 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
                 }
                 qs += 32; qh += 4;
                 auto signs128 = _mm_loadu_si128((const __m128i*)iq3[ibl].signs + ib);
-                auto signs = MM256_SET_M128I(_mm_srli_epi16(signs128, 4), signs128);
+                auto signs = _mm256_blend_epi32(_mm256_broadcastsi128_si256(signs128), _mm256_srli_epi16(_mm256_broadcastsi128_si256(signs128), 4), 0xF0);
 #ifdef HAVE_FANCY_SIMD
                 auto scales = _mm256_cvtepi8_epi32(_mm_set1_epi32(helper.val[ib]));
                 mask[0] = _mm256_cmpeq_epi8_mask(_mm256_and_si256(signs, smask), smask); signs = _mm256_srli_epi16(signs, 1);
@@ -2140,9 +2132,8 @@ static void mul_mat_iq2_xs_q8_2_X4(int n, const void * vx, size_t bx, const Data
                 auto d4_2 = _mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)(q8.y[iy][2*i+1].d)));
                 auto dy = _mm256_castsi256_ps(_mm256_slli_epi32(MM256_SET_M128I(d4_2, d4_1), 16));
                 if constexpr (nrc_y == 1) {
-                    auto dyh = _mm256_extractf128_ps(dy, 1);
-                    scales[0] = _mm256_mul_ps(scales[0], _mm256_set_m128(_mm256_castps256_ps128(dy), _mm256_castps256_ps128(dy)));
-                    scales[1] = _mm256_mul_ps(scales[1], _mm256_set_m128(dyh, dyh));
+                    scales[0] = _mm256_mul_ps(scales[0], _mm256_permute2f128_ps(dy, dy, 0x00));
+                    scales[1] = _mm256_mul_ps(scales[1], _mm256_permute2f128_ps(dy, dy, 0x11));
                 } else {
                     _mm256_storeu_ps(d8 + 8*iy, dy);
                 }
@@ -2380,9 +2371,8 @@ static void mul_mat_iq2_s_q8_2_X4(int n, const void * vx, size_t bx, const DataI
                 auto d4_2 = _mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)(q8.y[iy][2*i+1].d)));
                 auto dy = _mm256_castsi256_ps(_mm256_slli_epi32(MM256_SET_M128I(d4_2, d4_1), 16));
                 if constexpr (nrc_y == 1) {
-                    auto dyh = _mm256_extractf128_ps(dy, 1);
-                    scales[0] = _mm256_mul_ps(scales[0], _mm256_set_m128(_mm256_castps256_ps128(dy), _mm256_castps256_ps128(dy)));
-                    scales[1] = _mm256_mul_ps(scales[1], _mm256_set_m128(dyh, dyh));
+                    scales[0] = _mm256_mul_ps(scales[0], _mm256_permute2f128_ps(dy, dy, 0x00));
+                    scales[1] = _mm256_mul_ps(scales[1], _mm256_permute2f128_ps(dy, dy, 0x11));
                 } else {
                     _mm256_storeu_ps(d8 + 8*iy, dy);
                 }

@@ -914,7 +914,7 @@ void mul_mat_iq1_m_q8_K(int n, const void * vx, size_t bx, const DataInfo& info,
                 auto sumi = _mm256_setzero_si256();
                 for (int j = 0; j < 8; ++j) {
                     auto p = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[j], qx[j]), _mm256_sign_epi8(q8.load_quants(iy, ibl, j), qx[j]));
-                    sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(p, MM256_SET_M128I(_mm_set1_epi16(helper.val[2*j+1]), _mm_set1_epi16(helper.val[2*j+0]))));
+                    sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(p, _mm256_setr_epi16(helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1])));
                 }
                 acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d*q8.scale(iy, ibl)), _mm256_cvtepi32_ps(sumi), acc[iy]);
             }
@@ -957,10 +957,8 @@ void mul_mat_iq1_s_q8_2_x4(int n, const void * vx, size_t bx, const DataInfo& in
                 acc[iy]  = _mm256_fmadd_ps(deltas, my, acc[iy]);
             }
             all_scales = _mm256_mul_ps(_mm256_set1_ps(8.f), all_scales);
-            auto scales_l = _mm256_castps256_ps128(all_scales);
-            auto scales_h = _mm256_extractf128_ps(all_scales, 1);
-            scales[0] = _mm256_set_m128(scales_l, scales_l);
-            scales[1] = _mm256_set_m128(scales_h, scales_h);
+            scales[0] = _mm256_permute2f128_ps(all_scales, all_scales, 0x00);
+            scales[1] = _mm256_permute2f128_ps(all_scales, all_scales, 0x11);
             const uint8_t  * qs = iq1s[ibl].qs;
             const uint16_t * qh = iq1s[ibl].qh;
             for (int i128 = 0; i128 < QK_K/128; ++i128) {
@@ -1355,7 +1353,7 @@ struct DequantizeIQ2BN final : public BaseDequantizer<block_iq2_bn, true> {
     }
     IQK_ALWAYS_INLINE void prepare2(int i, __m256i * val) const {
         auto q2bits_1 = _mm_loadu_si128((const __m128i *)x[i].qs);
-        make2(MM256_SET_M128I(_mm_srli_epi16(q2bits_1, 2), q2bits_1), val);
+        make2(_mm256_blend_epi32(_mm256_broadcastsi128_si256(q2bits_1), _mm256_srli_epi16(_mm256_broadcastsi128_si256(q2bits_1), 2), 0xF0), val);
     }
     const __m256i m1_8   = _mm256_set1_epi8(1);
     const __m256i mf_8   = _mm256_set1_epi8(16);
