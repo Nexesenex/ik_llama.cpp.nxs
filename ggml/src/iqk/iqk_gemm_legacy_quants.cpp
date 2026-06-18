@@ -2109,14 +2109,14 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             set_functions<Q6_0_1_Unpacker>(kernels);
             break;
         case GGML_TYPE_Q8_0:
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             set_functions<Q8_0_1_Unpacker>(kernels);
 #else
             set_functions<Q8_0_Unpacker>(kernels);
 #endif
             break;
         case GGML_TYPE_IQ4_NL:
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             set_functions<IQ4_NL_UnpackerU>(kernels);
 #else
             set_functions<IQ4_NL_UnpackerS>(kernels);
