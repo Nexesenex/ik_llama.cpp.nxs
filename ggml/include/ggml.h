@@ -3125,6 +3125,10 @@ extern "C" {
 
     GGML_API int ggml_cpu_has_avx        (void);
     GGML_API int ggml_cpu_has_avx_vnni   (void);
+    GGML_API int ggml_cpu_has_avx_vnni_int8(void);
+    GGML_API int ggml_cpu_has_avx_ifma   (void);
+    GGML_API int ggml_cpu_has_avx_ne_convert(void);
+    GGML_API int ggml_cpu_has_cmpccxadd (void);
     GGML_API int ggml_cpu_has_avx2       (void);
     GGML_API int ggml_cpu_has_avx512     (void);
     GGML_API int ggml_cpu_has_avx512_vbmi(void);

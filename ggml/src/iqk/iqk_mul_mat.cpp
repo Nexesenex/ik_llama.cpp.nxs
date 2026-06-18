@@ -35,6 +35,12 @@
 
 // clang-format off
 
+// Arrow Lake (Core Ultra 265K) tuning: 3MB L2 per P-core vs 1MB on Zen 4
+// Detection: AVX-VNNI-INT8 + AVX-VNNI, no AVX-512
+#if defined(HAVE_VNNIINT8) && defined(HAVE_VNNI256) && !defined(HAVE_FANCY_SIMD)
+    #define GGML_ARROWLAKE
+#endif
+
 // This matrix - vector and matrix - matrix multiplication implementation
 // for k-quants, i-quants, and legacy quants, makes prompt processing
 // 150-350% faster (depending on quantization type) compared to mainline llama.cpp.
@@ -60,6 +66,8 @@ struct MulMat {
     inline void mul_mat_NxM(int n, const void * vx, size_t bx, DataInfo& info, int nrc_x, int nrc_y) {
 #ifdef __aarch64__
         constexpr int k_x_step = 64; //8192; // Tiling does not seem to help on my M2 Max (but difference to tiling is small)
+#elif defined(GGML_ARROWLAKE)
+        constexpr int k_x_step = 96; // Larger L2 (3MB vs 1MB) supports wider tiles for Arrow Lake
 #else
         constexpr int k_x_step = 64; // This works best on my Ryzen-7950X (but differences to other tile size are small)
 #endif
@@ -138,6 +146,8 @@ struct MulMat {
             DataInfo& info, int nrc_x, int nrc_y, int unary_op, float limit) {
 #ifdef __aarch64__
         constexpr int k_x_step = 64; //8192; // Tiling does not seem to help on my M2 Max (but difference to tiling is small)
+#elif defined(GGML_ARROWLAKE)
+        constexpr int k_x_step = 96; // Wider tiles for larger L2 on Arrow Lake
 #else
         constexpr int k_x_step = 64; // This works best on my Ryzen-7950X (but differences to other tile size are small)
 #endif
@@ -255,7 +265,11 @@ struct MulMat {
             case GGML_TYPE_Q3_K   : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_Q4_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
             case GGML_TYPE_Q5_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
+#ifdef GGML_ARROWLAKE
+            case GGML_TYPE_Q6_K   : return nrc_y >= 48 ? GGML_TYPE_Q8_0_R8 : type;
+#else
             case GGML_TYPE_Q6_K   : return nrc_y >= 64 ? GGML_TYPE_Q8_0_R8 : type;
+#endif
             case GGML_TYPE_IQ2_KS : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ2_K  : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ2_KL : return nrc_y >= 32 ? q8_k_type : type;
@@ -287,7 +301,11 @@ struct MulMat {
             case GGML_TYPE_Q3_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_Q4_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
             case GGML_TYPE_Q5_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
+#ifdef GGML_ARROWLAKE
+            case GGML_TYPE_Q6_K   : return nrc_y >= 48 ? GGML_TYPE_Q8_0_R8 : type;
+#else
             case GGML_TYPE_Q6_K   : return nrc_y >= 64 ? GGML_TYPE_Q8_0_R8 : type;
+#endif
             case GGML_TYPE_IQ1_S  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_IQ1_M  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_IQ2_XXS: return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
@@ -536,7 +554,11 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
              dequant_type != etypeA && MulMat::prepare(dequant_type, typeB, ne00, mm, Ny) &&
              Nx%MulMat::num_rows(ggml_type(dequant_type)) == 0) {
 
+#if defined(GGML_ARROWLAKE)
+        constexpr int k_x_step = 64; // Fewer repack iterations on Arrow Lake's larger L2
+#else
         constexpr int k_x_step = 32;
+#endif
 
         auto num_rows = MulMat::num_rows(ggml_type(dequant_type));
         GGML_ASSERT(Nx%num_rows == 0);
@@ -728,7 +750,11 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
             return false;
         }
 
+#if defined(GGML_ARROWLAKE)
+        constexpr int k_x_step = 64;
+#else
         constexpr int k_x_step = 32;
+#endif
 
         auto num_rows = MulMat::num_rows(ggml_type(dequant_type));
         GGML_ASSERT(Nx%num_rows == 0);
@@ -795,7 +821,11 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
     if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); dequant_type != etypeA) {
         if (MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
 
+#if defined(GGML_ARROWLAKE)
+            constexpr int k_x_step = 96;
+#else
             constexpr int k_x_step = 64;
+#endif
 
             auto num_rows = MulMat::num_rows(ggml_type(dequant_type));
             GGML_ASSERT(Nx%num_rows == 0);
@@ -1057,39 +1087,38 @@ constexpr float k_swiglu_oai_alpha = 1.702f;
 constexpr float k_swiglu_oai_limit = 7.f;
 
 void MulMat::swiglu_oai(int n, const float * x, float * y) {
-//    int i = 0;
-//#if defined __AVX512F__ && defined __AVX512DQ__
-//    {
-//        auto max = _mm512_set1_ps(k_swiglu_oai_limit);
-//        auto alpha = _mm512_set1_ps(-k_swiglu_oai_alpha);
-//        for (; i + 15 < n; i += 16) {
-//            auto xc = v_clamp_max(_mm512_loadu_ps(x + i), max);
-//            _mm512_storeu_ps(y + i, v_silu_oai(xc, alpha));
-//        }
-//    }
-//#endif
-//#if defined __AVX2__ && defined __FMA__
-//    if (i + 7 < n) {
-//        auto max = _mm256_set1_ps(k_swiglu_oai_limit);
-//        auto alpha = _mm256_set1_ps(-k_swiglu_oai_alpha);
-//        for (; i + 7 < n; i += 8) {
-//            auto xc = v_clamp_max(_mm256_loadu_ps(x + i), max);
-//            _mm256_storeu_ps(y + i, v_silu_oai(xc, alpha));
-//        }
-//    }
-//#endif
-//    for (; i < n; ++i) {
-//        auto xi = std::min(x[i], k_swiglu_oai_limit);
-//        y[i] = xi / (1.0f + expf(-xi * k_swiglu_oai_alpha));
-//    }
-    for (int i = 0; i < n; ++i) {
+    int i = 0;
+#if defined __AVX2__ && defined __FMA__
+    if (i + 7 < n) {
+        auto max = _mm256_set1_ps(k_swiglu_oai_limit);
+        auto alpha = _mm256_set1_ps(-k_swiglu_oai_alpha);
+        for (; i + 7 < n; i += 8) {
+            auto xc = v_clamp_max(_mm256_loadu_ps(x + i), max);
+            _mm256_storeu_ps(y + i, v_silu_oai(xc, alpha));
+        }
+    }
+#endif
+    for (; i < n; ++i) {
         auto xi = std::min(x[i], k_swiglu_oai_limit);
         y[i] = xi / (1.0f + expf(-xi * k_swiglu_oai_alpha));
     }
 }
 
 void MulMat::clamp_oai(int n, float * x) {
-    for (int i = 0; i < n; ++i) x[i] = 1.f + std::max(std::min(x[i], k_swiglu_oai_limit), -k_swiglu_oai_limit);
+    int i = 0;
+#if defined __AVX2__ && defined __FMA__
+    if (i + 7 < n) {
+        auto limit = _mm256_set1_ps(k_swiglu_oai_limit);
+        auto neg_limit = _mm256_set1_ps(-k_swiglu_oai_limit);
+        auto one = _mm256_set1_ps(1.f);
+        for (; i + 7 < n; i += 8) {
+            auto xi = _mm256_loadu_ps(x + i);
+            auto clamped = _mm256_min_ps(_mm256_max_ps(xi, neg_limit), limit);
+            _mm256_storeu_ps(x + i, _mm256_add_ps(one, clamped));
+        }
+    }
+#endif
+    for (; i < n; ++i) x[i] = 1.f + std::max(std::min(x[i], k_swiglu_oai_limit), -k_swiglu_oai_limit);
 }
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
@@ -1139,37 +1168,6 @@ void MulMat::gelu(int n, const float * x, float * y) {
     for (; i < n; ++i) y[i] = 0.5f*x[i]*(1.0f + tanhf(SQRT_2_OVER_PI*x[i]*(1.0f + GELU_COEF_A*x[i]*x[i])));
 }
 
-//void MulMat::swiglu_oai(int n, const float * x, float * y) {
-//    int i = 0;
-//#if defined __AVX512F__ && defined __AVX512DQ__
-//    {
-//        auto limit = _mm512_set1_ps(k_swiglu_oai_limit);
-//        auto alpha = _mm512_set1_ps(k_swiglu_oai_alpha);
-//        for (; i + 15 < n; i += 16) {
-//            auto xi = _mm512_loadu_ps(x + i);
-//            auto mask = _mm512_cmp
-//
-//        }
-//        __m512 c1 = _mm512_set1_ps(GELU_COEF_A);
-//        __m512 c2 = _mm512_set1_ps(2.f*SQRT_2_OVER_PI);
-//        for (; i + 15 < n; i += 16) _mm512_storeu_ps(y + i, v_gelu(_mm512_loadu_ps(x + i), c1, c2));
-//    }
-//#endif
-//#if defined __AVX2__ && defined __FMA__
-//    if (i + 7 < n) {
-//        __m256 c1 = _mm256_set1_ps(GELU_COEF_A);
-//        __m256 c2 = _mm256_set1_ps(2.f*SQRT_2_OVER_PI);
-//        for (; i + 7 < n; i += 8) _mm256_storeu_ps(y + i, v_gelu(_mm256_loadu_ps(x + i), c1, c2));
-//
-//    }
-//#endif
-//    for (; i < n; ++i) {
-//        auto xi = std::min(x[i], k_swiglu_oai_limit);
-//        y[i] = xi / (1.0f + expf(-xi * k_swiglu_oai_alpha));
-//    }
-//}
-
-
 void MulMat::silu(int n, const float * x, float * y) {
     int i = 0;
 #if defined __AVX512F__ && defined __AVX512DQ__
@@ -1182,7 +1180,16 @@ void MulMat::silu(int n, const float * x, float * y) {
 }
 
 void MulMat::relu(int n, const float * x, float * y) {
-    for (int j = 0; j < n; ++j) y[j] = x[j] > 0 ? x[j] : 0;
+    int i = 0;
+#if defined __AVX2__ && defined __FMA__
+    if (i + 7 < n) {
+        for (; i + 7 < n; i += 8) {
+            auto xm = _mm256_loadu_ps(x + i);
+            _mm256_storeu_ps(y + i, _mm256_max_ps(xm, _mm256_setzero_ps()));
+        }
+    }
+#endif
+    for (; i < n; ++i) y[i] = x[i] > 0 ? x[i] : 0;
 }
 
 #endif
