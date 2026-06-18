@@ -819,9 +819,8 @@ static void mul_mat_qX_K_q8_2_X4_T(int n, const void * vx, size_t bx, const Data
             }
 
             auto all_scales = _mm256_mul_ps(_mm256_set1_ps(deq.d), _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)utmp))));
-            scales[0] = _mm256_set_m128(_mm256_castps256_ps128(all_scales), _mm256_castps256_ps128(all_scales));
-            auto scales_h = _mm256_extractf128_ps(all_scales, 1);
-            scales[1] = _mm256_set_m128(scales_h, scales_h);
+            scales[0] = _mm256_permute2f128_ps(all_scales, all_scales, 0x00);
+            scales[1] = _mm256_permute2f128_ps(all_scales, all_scales, 0x11);
 
             for (int j = 0; j < QK_K/128; ++j) {
 
@@ -969,9 +968,8 @@ static void mul_mat_qY_K_q8_2_X4_T(int n, const void * vx, size_t bx, const Data
                 auto d4_2 = _mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)(q8.y[iy][2*i+1].d)));
                 auto dy = _mm256_castsi256_ps(_mm256_slli_epi32(MM256_SET_M128I(d4_2, d4_1), 16));
                 if constexpr (nrc_y == 1) {
-                    auto dyh = _mm256_extractf128_ps(dy, 1);
-                    scales[0] = _mm256_mul_ps(scales[0], _mm256_set_m128(_mm256_castps256_ps128(dy), _mm256_castps256_ps128(dy)));
-                    scales[1] = _mm256_mul_ps(scales[1], _mm256_set_m128(dyh, dyh));
+                    scales[0] = _mm256_mul_ps(scales[0], _mm256_permute2f128_ps(dy, dy, 0x00));
+                    scales[1] = _mm256_mul_ps(scales[1], _mm256_permute2f128_ps(dy, dy, 0x11));
                 } else {
                     _mm256_storeu_ps(d8 + 8*iy, dy);
                 }
@@ -1258,8 +1256,8 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
         const block_q2_k_r4 * iq2 = (const block_q2_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dm = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq2[ibl].d));
-            auto d4 = _mm256_set_m128(_mm256_castps256_ps128(dm), _mm256_castps256_ps128(dm));
-            auto m4 = _mm256_set_m128(_mm256_extractf128_ps(dm, 1), _mm256_extractf128_ps(dm, 1));
+            auto d4 = _mm256_permute2f128_ps(dm, dm, 0x00);
+            auto m4 = _mm256_permute2f128_ps(dm, dm, 0x11);
             m4 = _mm256_mul_ps(m4, _mm256_set1_ps(-1.f));
             auto all_scales1 = _mm256_loadu_si256((const __m256i *)iq2[ibl].scales+0);
             auto all_scales2 = _mm256_loadu_si256((const __m256i *)iq2[ibl].scales+1);
@@ -1548,8 +1546,8 @@ static void mul_mat_q4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
         const block_q4_k_r4 * iq4 = (const block_q4_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[ibl].d));
-            auto d4 = _mm256_set_m128(_mm256_castps256_ps128(dl), _mm256_castps256_ps128(dl));
-            auto m4 = _mm256_mul_ps(_mm256_set1_ps(-1.0f), _mm256_set_m128(_mm256_extractf128_ps(dl, 1), _mm256_extractf128_ps(dl, 1)));
+            auto d4 = _mm256_permute2f128_ps(dl, dl, 0x00);
+            auto m4 = _mm256_mul_ps(_mm256_set1_ps(-1.0f), _mm256_permute2f128_ps(dl, dl, 0x11));
             auto lbits = _mm256_loadu_si256((const __m256i *)iq4[ibl].scales_l);
             auto hbits128 = _mm_loadu_si128((const __m128i *)iq4[ibl].scales_h);
             auto hbits = MM256_SET_M128I(hbits128, _mm_slli_epi16(hbits128, 4));
@@ -1617,8 +1615,8 @@ static void mul_mat_q5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
         const block_q5_k_r4 * iq5 = (const block_q5_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq5[ibl].d));
-            auto d4 = _mm256_set_m128(_mm256_castps256_ps128(dl), _mm256_castps256_ps128(dl));
-            auto m4 = _mm256_mul_ps(_mm256_set1_ps(-1.0f), _mm256_set_m128(_mm256_extractf128_ps(dl, 1), _mm256_extractf128_ps(dl, 1)));
+            auto d4 = _mm256_permute2f128_ps(dl, dl, 0x00);
+            auto m4 = _mm256_mul_ps(_mm256_set1_ps(-1.0f), _mm256_permute2f128_ps(dl, dl, 0x11));
             auto lbits = _mm256_loadu_si256((const __m256i *)iq5[ibl].scales_l);
             auto hbits128 = _mm_loadu_si128((const __m128i *)iq5[ibl].scales_h);
             auto hbits = MM256_SET_M128I(hbits128, _mm_slli_epi16(hbits128, 4));
