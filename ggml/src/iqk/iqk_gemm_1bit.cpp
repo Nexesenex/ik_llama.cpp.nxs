@@ -957,10 +957,8 @@ void mul_mat_iq1_s_q8_2_x4(int n, const void * vx, size_t bx, const DataInfo& in
                 acc[iy]  = _mm256_fmadd_ps(deltas, my, acc[iy]);
             }
             all_scales = _mm256_mul_ps(_mm256_set1_ps(8.f), all_scales);
-            auto scales_l = _mm256_castps256_ps128(all_scales);
-            auto scales_h = _mm256_extractf128_ps(all_scales, 1);
-            scales[0] = _mm256_set_m128(scales_l, scales_l);
-            scales[1] = _mm256_set_m128(scales_h, scales_h);
+            scales[0] = _mm256_permute2f128_ps(all_scales, all_scales, 0x00);
+            scales[1] = _mm256_permute2f128_ps(all_scales, all_scales, 0x11);
             const uint8_t  * qs = iq1s[ibl].qs;
             const uint16_t * qh = iq1s[ibl].qh;
             for (int i128 = 0; i128 < QK_K/128; ++i128) {

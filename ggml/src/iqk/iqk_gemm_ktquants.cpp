@@ -622,10 +622,8 @@ void mul_mat_iq1_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
             auto sh = _mm_loadl_epi64((const __m128i *)x[i].sh);
             auto s32 = _mm256_cvtepi8_epi32(_mm_shuffle_epi8(values, _mm_and_si128(sh, _mm_set1_epi8(0xf))));
             auto all_scales = _mm256_mul_ps(d, _mm256_cvtepi32_ps(s32));
-            auto scales_l = _mm256_castps256_ps128(all_scales);
-            auto scales_h = _mm256_extractf128_ps(all_scales, 1);
-            scales[0] = _mm256_set_m128(scales_l, scales_l);
-            scales[1] = _mm256_set_m128(scales_h, scales_h);
+            scales[0] = _mm256_permute2f128_ps(all_scales, all_scales, 0x00);
+            scales[1] = _mm256_permute2f128_ps(all_scales, all_scales, 0x11);
             auto qs8l = _mm_loadu_si128((const __m128i *)x[i].ql+0);
             auto qs8h = _mm_loadu_si128((const __m128i *)x[i].ql+1);
             auto qh16 = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)x[i].qh));
@@ -714,10 +712,8 @@ void mul_mat_iq2_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
             s8 = _mm_shuffle_epi8(values, s8);
             auto s32 = _mm256_cvtepi8_epi32(s8);
             auto all_scales = _mm256_mul_ps(d, _mm256_cvtepi32_ps(s32));
-            auto scales_l = _mm256_castps256_ps128(all_scales);
-            auto scales_h = _mm256_extractf128_ps(all_scales, 1);
-            scales[0] = _mm256_set_m128(scales_l, scales_l);
-            scales[1] = _mm256_set_m128(scales_h, scales_h);
+            scales[0] = _mm256_permute2f128_ps(all_scales, all_scales, 0x00);
+            scales[1] = _mm256_permute2f128_ps(all_scales, all_scales, 0x11);
             for (int i128 = 0; i128 < 2; ++i128) {
                 trellis.next_128(ql + 16*i128, 4096, xv);
                 for (int iy = 0; iy < nrc_y; ++iy) {
@@ -858,10 +854,8 @@ void mul_mat_iq3_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
             s8 = _mm_and_si128(_mm_srlv_epi32(s8, shifts), _mm_set1_epi8(0xf));
             auto s32 = _mm256_cvtepi8_epi32(s8);
             auto all_scales = _mm256_mul_ps(d, _mm256_cvtepi32_ps(s32));
-            auto scales_l = _mm256_castps256_ps128(all_scales);
-            auto scales_h = _mm256_extractf128_ps(all_scales, 1);
-            scales[0] = _mm256_set_m128(scales_l, scales_l);
-            scales[1] = _mm256_set_m128(scales_h, scales_h);
+            scales[0] = _mm256_permute2f128_ps(all_scales, all_scales, 0x00);
+            scales[1] = _mm256_permute2f128_ps(all_scales, all_scales, 0x11);
             auto mask = _mm256_set1_epi8(1);
             for (int i128 = 0; i128 < 2; ++i128) {
                 trellis.next_128(ql + 16*i128, 4096, xv);
@@ -1160,10 +1154,8 @@ void mul_mat_iq4_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
             auto iscales = _mm256_srli_epi32(_mm256_and_si256(vshb, _mm256_set1_epi32(0xff)), 1);
             iscales = _mm256_sub_epi32(iscales, _mm256_set1_epi32(64));
             auto all_scales = _mm256_mul_ps(d, _mm256_cvtepi32_ps(iscales));
-            auto scales_l = _mm256_castps256_ps128(all_scales);
-            auto scales_h = _mm256_extractf128_ps(all_scales, 1);
-            scales[0] = _mm256_set_m128(scales_l, scales_l);
-            scales[1] = _mm256_set_m128(scales_h, scales_h);
+            scales[0] = _mm256_permute2f128_ps(all_scales, all_scales, 0x00);
+            scales[1] = _mm256_permute2f128_ps(all_scales, all_scales, 0x11);
             o_helper.vec = _mm256_add_epi32(_mm256_slli_epi32(_mm256_and_si256(vshb, _mm256_set1_epi32(1)), 15), _mm256_set1_epi32(4096));
             for (int ib = 0; ib < 4; ++ib) {
                 for (int j = 0; j < 2; ++j) {
