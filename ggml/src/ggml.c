@@ -2899,7 +2899,17 @@ inline static void ggml_vec_sub_f32(const int n, float * z, const float * x, con
 }
 inline static void ggml_vec_set_f32 (const int n, float * x, const float   v)                  { for (int i = 0; i < n; ++i) x[i]  = v;           }
 inline static void ggml_vec_cpy_f32 (const int n, float * y, const float * x)                  { for (int i = 0; i < n; ++i) y[i]  = x[i];        }
-inline static void ggml_vec_neg_f32 (const int n, float * y, const float * x)                  { for (int i = 0; i < n; ++i) y[i]  = -x[i];       }
+inline static void ggml_vec_neg_f32(const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(__AVX2__)
+    __m256 sign_mask = _mm256_set1_ps(-0.0f);
+    for (; i + 7 < n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        _mm256_storeu_ps(y + i, _mm256_xor_ps(vx, sign_mask));
+    }
+#endif
+    for (; i < n; ++i) y[i] = -x[i];
+}
 inline static void ggml_vec_mul_f32(const int n, float * z, const float * x, const float * y) {
     int i = 0;
 #if defined(__AVX2__)
@@ -2912,7 +2922,17 @@ inline static void ggml_vec_mul_f32(const int n, float * z, const float * x, con
 #endif
     for (; i < n; ++i) z[i] = x[i] * y[i];
 }
-inline static void ggml_vec_div_f32 (const int n, float * z, const float * x, const float * y) { for (int i = 0; i < n; ++i) z[i]  = x[i]/y[i];   }
+inline static void ggml_vec_div_f32(const int n, float * z, const float * x, const float * y) {
+    int i = 0;
+#if defined(__AVX2__)
+    for (; i + 7 < n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        __m256 vy = _mm256_loadu_ps(y + i);
+        _mm256_storeu_ps(z + i, _mm256_div_ps(vx, vy));
+    }
+#endif
+    for (; i < n; ++i) z[i] = x[i] / y[i];
+}
 
 inline static void ggml_vec_add_f32 (const int n, float * z, const float * x, const float * y) {
     int i = 0;
@@ -3402,7 +3422,17 @@ inline static void ggml_vec_sgn_f32  (const int n, float * y, const float * x) {
 inline static void ggml_vec_step_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = (x[i] > 0.f) ? 1.f : 0.f; }
 //inline static void ggml_vec_tanh_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = tanhf(x[i]);  }
 inline static void ggml_vec_elu_f32  (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = (x[i] > 0.f) ? x[i] : expm1f(x[i]); }
-inline static void ggml_vec_relu_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = (x[i] > 0.f) ? x[i] : 0.f; }
+inline static void ggml_vec_relu_f32(const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(__AVX2__)
+    __m256 zero = _mm256_setzero_ps();
+    for (; i + 7 < n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        _mm256_storeu_ps(y + i, _mm256_max_ps(vx, zero));
+    }
+#endif
+    for (; i < n; ++i) y[i] = (x[i] > 0.f) ? x[i] : 0.f;
+}
 inline static void ggml_vec_leaky_relu_f32 (const int n, float * y, const float * x, const float ns) { for (int i = 0; i < n; ++i) y[i] = ((x[i] > 0.f) ? x[i] : 0.f) + ns * ((x[i] < 0.0f) ? x[i] : 0.f); }
 inline static void ggml_vec_sigmoid_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = 1.f / (1.f + expf(-x[i])); }
 inline static float ggml_compute_softplus_f32(const float x) { return x > 20.0f ? x : logf(1.0f + expf(x)); }
