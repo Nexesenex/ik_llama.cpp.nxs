@@ -3374,7 +3374,7 @@ inline static void ggml_vec_sqrt_f32(const int n, float * y, const float * x) {
 }
 inline static void ggml_vec_log_f32(const int n, float * y, const float * x) {
     int i = 0;
-#if defined(__AVX2__)
+#if defined(__AVX2__) && defined(_MSC_VER)
     for (; i + 7 < n; i += 8) {
         __m256 vx = _mm256_loadu_ps(x + i);
         __m256 vy = _mm256_log_ps(vx);
@@ -3404,7 +3404,7 @@ inline static void ggml_vec_sigmoid_f32 (const int n, float * y, const float * x
 inline static float ggml_compute_softplus_f32(const float x) { return x > 20.0f ? x : logf(1.0f + expf(x)); }
 inline static void ggml_vec_exp_f32(const int n, float * y, const float * x) {
     int i = 0;
-#if defined(__AVX2__)
+#if defined(__AVX2__) && defined(_MSC_VER)
     for (; i + 7 < n; i += 8) {
         __m256 vx = _mm256_loadu_ps(x + i);
         __m256 vy = _mm256_exp_ps(vx);
@@ -3428,7 +3428,7 @@ inline static void ggml_vec_hardswish_f32 (const int n, float * y, const float *
         _mm512_storeu_ps(y + i, _mm512_mul_ps(xi, clamped));
     }
 #endif
-#if defined(__AVX2__) && defined(__FMA__)
+#if defined(__AVX2__)
     const __m256 inv_six = _mm256_set1_ps(1.0f/6.0f);
     const __m256 three = _mm256_set1_ps(3.0f);
     const __m256 one = _mm256_set1_ps(1.0f);
@@ -3456,7 +3456,7 @@ inline static void ggml_vec_hardsigmoid_f32 (const int n, float * y, const float
         _mm512_storeu_ps(y + i, clamped);
     }
 #endif
-#if defined(__AVX2__) && defined(__FMA__)
+#if defined(__AVX2__)
     const __m256 inv_six = _mm256_set1_ps(1.0f/6.0f);
     const __m256 three = _mm256_set1_ps(3.0f);
     const __m256 one = _mm256_set1_ps(1.0f);
