@@ -142,6 +142,137 @@ template <typename Float, int nrc_in> struct QFT final : public QFBase {
     const Float * y[nrc];
 };
 
+#if defined(HAVE_NECONVERT) && !defined(HAVE_FANCY_SIMD)
+// Specialized BF16 matmul using AVX-NE-CONVERT (Arrow Lake / Granite Rapids).
+// vcvtneebf162ps/vcvtneobf162ps convert 16 BF16 values to 16 FP32 values in one go.
+// k_step=16 avoids 50% waste from the interleave overhead that k_step=8 would incur.
+
+struct QFBaseNEC {
+    constexpr static int k_step = 16;
+    using Data = __m256;
+    using Acc  = __m256;
+    static inline void load_pair(const ggml_bf16_t * x, Data& even, Data& odd) {
+        __m256i bf16 = _mm256_loadu_si256((const __m256i*)x);
+        even = ggml_cvtneebf16_ps(bf16);
+        odd  = ggml_cvtneobf16_ps(bf16);
+    }
+    static inline Acc acc(Acc prev, const Data& y, const Data& x) {
+        return _mm256_fmadd_ps(y, x, prev);
+    }
+    static inline Acc acc_first(const Data& y, const Data& x) {
+        return _mm256_mul_ps(y, x);
+    }
+    static inline Acc add(Acc x, Acc y) { return _mm256_add_ps(x, y); }
+    static inline float hsum(Acc acc) {
+        return hsum_float_8(acc);
+    }
+    static inline Data load4Floats(const ggml_bf16_t * x) {
+        return _mm256_insertf128_ps(_mm256_setzero_ps(),
+            _mm_castsi128_ps(_mm_slli_epi32(_mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i*)x)), 16)), 0);
+    }
+};
+
+template <int nrc_in> struct QFTNEC final : public QFBaseNEC {
+    constexpr static int nrc = nrc_in;
+    QFTNEC(const DataInfo& info) {
+        for (int iy = 0; iy < nrc; ++iy) y[iy] = (const ggml_bf16_t *)info.src1_row(iy);
+    }
+    QFTNEC(const char * cx, size_t bx) {
+        for (int iy = 0; iy < nrc; ++iy) y[iy] = (const ggml_bf16_t *)(cx + iy*bx);
+    }
+    IQK_ALWAYS_INLINE void load_pair(int iy, int i, Data& even, Data& odd) const {
+        QFBaseNEC::load_pair(y[iy] + k_step*i, even, odd);
+    }
+    IQK_ALWAYS_INLINE Data load_tail(int iy, int i) const {
+        return load4Floats(y[iy] + 4*i);
+    }
+    const ggml_bf16_t * y[nrc];
+};
+
+template <typename Qy, typename Qx>
+IQK_NOINLINE void mul_mat_Qx_Qy_MxN_NEC(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
+    int nb = n/QFBaseNEC::k_step;
+    int nb4 = n/4;
+    Qy y(info);
+    Qx x(cx + ix0*bx, bx);
+    QFBaseNEC::Data xv_even[Qx::nrc], xv_odd[Qx::nrc];
+    QFBaseNEC::Acc  acc_even[Qx::nrc*Qy::nrc], acc_odd[Qx::nrc*Qy::nrc];
+    QFBaseNEC::Data yv_even, yv_odd;
+    y.load_pair(0, 0, yv_even, yv_odd);
+    for (int ix = 0; ix < Qx::nrc; ++ix) {
+        x.load_pair(ix, 0, xv_even[ix], xv_odd[ix]);
+        acc_even[ix] = QFBaseNEC::acc_first(yv_even, xv_even[ix]);
+        acc_odd[ix]  = QFBaseNEC::acc_first(yv_odd,  xv_odd[ix]);
+    }
+    for (int iy = 1; iy < Qy::nrc; ++iy) {
+        y.load_pair(iy, 0, yv_even, yv_odd);
+        for (int ix = 0; ix < Qx::nrc; ++ix) {
+            acc_even[Qx::nrc*iy + ix] = QFBaseNEC::acc_first(yv_even, xv_even[ix]);
+            acc_odd[Qx::nrc*iy + ix]  = QFBaseNEC::acc_first(yv_odd,  xv_odd[ix]);
+        }
+    }
+    for (int i = 1; i < nb; ++i) {
+        y.load_pair(0, i, yv_even, yv_odd);
+        for (int ix = 0; ix < Qx::nrc; ++ix) {
+            x.load_pair(ix, i, xv_even[ix], xv_odd[ix]);
+            acc_even[ix] = QFBaseNEC::acc(acc_even[ix], yv_even, xv_even[ix]);
+            acc_odd[ix]  = QFBaseNEC::acc(acc_odd[ix],  yv_odd,  xv_odd[ix]);
+        }
+        for (int iy = 1; iy < Qy::nrc; ++iy) {
+            y.load_pair(iy, i, yv_even, yv_odd);
+            for (int ix = 0; ix < Qx::nrc; ++ix) {
+                acc_even[Qx::nrc*iy + ix] = QFBaseNEC::acc(acc_even[Qx::nrc*iy + ix], yv_even, xv_even[ix]);
+                acc_odd[Qx::nrc*iy + ix]  = QFBaseNEC::acc(acc_odd[Qx::nrc*iy + ix],  yv_odd,  xv_odd[ix]);
+            }
+        }
+    }
+    for (int i = (QFBaseNEC::k_step/4)*nb; i < nb4; ++i) {
+        yv_even = y.load_tail(0, i);
+        for (int ix = 0; ix < Qx::nrc; ++ix) {
+            xv_even[ix] = x.load_tail(ix, i);
+            acc_even[ix] = QFBaseNEC::acc(acc_even[ix], yv_even, xv_even[ix]);
+        }
+        for (int iy = 1; iy < Qy::nrc; ++iy) {
+            yv_even = y.load_tail(iy, i);
+            for (int ix = 0; ix < Qx::nrc; ++ix) {
+                acc_even[Qx::nrc*iy + ix] = QFBaseNEC::acc(acc_even[Qx::nrc*iy + ix], yv_even, xv_even[ix]);
+            }
+        }
+    }
+    for (int iy = 0; iy < Qy::nrc; ++iy) {
+        for (int ix = 0; ix < Qx::nrc; ++ix) {
+            info.store(ix0+ix, iy, QFBaseNEC::hsum(QFBaseNEC::add(acc_even[Qx::nrc*iy+ix], acc_odd[Qx::nrc*iy+ix])));
+        }
+    }
+}
+
+template <int nrc_y>
+void mul_mat_fX_fY_T_NEC(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    constexpr int k_nx = nrc_y == 1 ? 4 : 2;
+    const char * cx = (const char *)vx;
+    for (int ix = 0; ix < nrc_x/k_nx; ++ix) {
+        mul_mat_Qx_Qy_MxN_NEC<QFTNEC<nrc_y>, QFTNEC<k_nx>>(n, cx, bx, ix*k_nx, info);
+    }
+    int last_x = k_nx*(nrc_x/k_nx);
+    if (last_x == nrc_x) return;
+    int nx = nrc_x - last_x;
+    switch (nx) {
+        case 1: mul_mat_Qx_Qy_MxN_NEC<QFTNEC<nrc_y>, QFTNEC<1>>(n, cx, bx, last_x, info); break;
+        case 2: mul_mat_Qx_Qy_MxN_NEC<QFTNEC<nrc_y>, QFTNEC<2>>(n, cx, bx, last_x, info); break;
+        case 3: mul_mat_Qx_Qy_MxN_NEC<QFTNEC<nrc_y>, QFTNEC<3>>(n, cx, bx, last_x, info); break;
+    }
+}
+
+void set_mul_mat_f_nec(std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
+    for (auto& f : funcs) f = nullptr;
+    funcs[0] = mul_mat_fX_fY_T_NEC<1>;
+    funcs[1] = mul_mat_fX_fY_T_NEC<2>;
+    funcs[2] = mul_mat_fX_fY_T_NEC<3>;
+    funcs[3] = mul_mat_fX_fY_T_NEC<4>;
+    funcs[4] = mul_mat_fX_fY_T_NEC<5>;
+}
+#endif
+
 // TBD if we want this
 //template <typename Qy, typename Qx>
 //IQK_NOINLINE void mul_mat_Qx_Qy_Mx1(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
@@ -618,10 +749,12 @@ bool iqk_set_kernels_float(int ne00, int typeA, int typeB, std::array<mul_mat_t,
                     set_mul_mat_bf16x8(kernels);
                 }
             } break;
+#elif defined(HAVE_NECONVERT) && !defined(HAVE_FANCY_SIMD)
+            case GGML_TYPE_BF16: set_mul_mat_f_nec(kernels); break;
 #else
             case GGML_TYPE_BF16: set_mul_mat_f<ggml_bf16_t, ggml_bf16_t>(kernels); break;
-            case GGML_TYPE_F32:  set_mul_mat_f<ggml_bf16_t, float>(kernels);       break;
 #endif
+            case GGML_TYPE_F32:  set_mul_mat_f<ggml_bf16_t, float>(kernels);       break;
             default: return false;
         }
         return true;
