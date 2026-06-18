@@ -236,11 +236,14 @@ static inline __m256 v_silu_oai(__m256 x, __m256 alpha) {
     const __m256 one_plus_exp_neg_x = _mm256_add_ps(one, exp_neg_x);
     return _mm256_div_ps(x, one_plus_exp_neg_x);
 }
+
+#endif // __AVX2__ && __FMA__
+
+#if defined(__AVX2__)
 static inline __m256 v_clamp_max(__m256 x, __m256 max) {
     auto mask = _mm256_cmp_ps(x, max, _CMP_GT_OQ);
     return _mm256_or_ps(_mm256_and_ps(mask, max), _mm256_andnot_ps(mask, x));
 }
-
 #endif // __AVX2__
 
 #endif // IQK_IMPLEMENT
