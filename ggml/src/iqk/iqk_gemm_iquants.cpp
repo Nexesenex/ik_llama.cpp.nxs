@@ -191,8 +191,8 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
 
     IQK_ALWAYS_INLINE void sign_values(const uint32_t * aux32, __m256i * values) const {
 #if defined z_HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__
-        esh.sign_2_values(MM256_SET_M128I(_mm_set1_epi32(aux32[3]), _mm_set1_epi32(aux32[1])), values+0);
-        esh.sign_2_values(MM256_SET_M128I(_mm_set1_epi32(aux32[7]), _mm_set1_epi32(aux32[5])), values+2);
+        esh.sign_2_values(_mm256_setr_epi32(aux32[1],aux32[1],aux32[1],aux32[1],aux32[3],aux32[3],aux32[3],aux32[3]), values+0);
+        esh.sign_2_values(_mm256_setr_epi32(aux32[5],aux32[5],aux32[5],aux32[5],aux32[7],aux32[7],aux32[7],aux32[7]), values+2);
 #else
         esh.sign_value(aux32[1], values[0]);
         esh.sign_value(aux32[3], values[1]);
@@ -415,7 +415,7 @@ struct DequantizerIQ2S final : public BaseDequantizer<block_iq2_s> {
 
     inline static void make2(const uint8_t * qs, const uint8_t * qh, const __m256i& idx_shift, const __m256i& idx_mask, __m256i * values) {
         auto idx_l = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)qs));
-        auto idx_h = MM256_SET_M128I(_mm_set1_epi32(qh[1]), _mm_set1_epi32(qh[0]));
+        auto idx_h = _mm256_setr_epi32(qh[0], qh[0], qh[0], qh[0], qh[1], qh[1], qh[1], qh[1]);
         index_t idx;
         idx.vec = _mm256_or_si256(idx_l, _mm256_and_si256(_mm256_sllv_epi32(idx_h, idx_shift), idx_mask));
         values[0] = _mm256_set_epi64x(iq2s_grid[idx.val[3]], iq2s_grid[idx.val[2]], iq2s_grid[idx.val[1]], iq2s_grid[idx.val[0]]);
@@ -533,7 +533,7 @@ struct DequantizerIQ3XXS final : public BaseDequantizer<block_iq3_xxs> {
 
     IQK_ALWAYS_INLINE void sign_2_values(const uint16_t * signs, __m256i * values) const {
 #if defined HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__
-        esh.sign_2_values(MM256_SET_M128I(_mm_set1_epi32(signs[2] | (signs[3] << 16)), _mm_set1_epi32(signs[0] | (signs[1] << 16))), values);
+        esh.sign_2_values(_mm256_setr_epi32(signs[0] | (signs[1] << 16), signs[0] | (signs[1] << 16), signs[0] | (signs[1] << 16), signs[0] | (signs[1] << 16), signs[2] | (signs[3] << 16), signs[2] | (signs[3] << 16), signs[2] | (signs[3] << 16), signs[2] | (signs[3] << 16)), values);
 #else
         esh.sign_value(signs[0] | (signs[1] << 16), values[0]);
         esh.sign_value(signs[2] | (signs[3] << 16), values[1]);
@@ -1119,10 +1119,10 @@ static void mul_mat_iq2_xs_r4_q8_k(int n, const void * vx, size_t bx, const Data
     __m256i isum[2*nrc_y] = {};
 #else
     __m256i shuffles[4] = {
-        MM256_SET_M128I(_mm_set1_epi16(0x0302), _mm_set1_epi16(0x0100)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0706), _mm_set1_epi16(0x0504)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0b0a), _mm_set1_epi16(0x0908)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0f0e), _mm_set1_epi16(0x0d0c)),
+        _mm256_set_epi16(0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100),
+        _mm256_set_epi16(0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504),
+        _mm256_set_epi16(0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908),
+        _mm256_set_epi16(0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c),
     };
     __m256i isum[nrc_y == 1 ? 4 : nrc_y] = {};
 #endif
@@ -1244,10 +1244,10 @@ static void mul_mat_iq2_xs_r4_q8_k_16(int n, const void * vx, size_t bx, const D
     __m256i isum[2*nrc_y] = {};
 #else
     __m256i shuffles[4] = {
-        MM256_SET_M128I(_mm_set1_epi16(0x0302), _mm_set1_epi16(0x0100)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0706), _mm_set1_epi16(0x0504)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0b0a), _mm_set1_epi16(0x0908)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0f0e), _mm_set1_epi16(0x0d0c)),
+        _mm256_set_epi16(0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100),
+        _mm256_set_epi16(0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504),
+        _mm256_set_epi16(0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908),
+        _mm256_set_epi16(0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c),
     };
     __m256i isum[nrc_y == 1 ? 4 : nrc_y] = {};
 #endif
@@ -1403,10 +1403,10 @@ static void mul_mat_iq2_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
     __m256i isum[2*nrc_y] = {};
 #else
     __m256i shuffles[4] = {
-        MM256_SET_M128I(_mm_set1_epi16(0x0302), _mm_set1_epi16(0x0100)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0706), _mm_set1_epi16(0x0504)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0b0a), _mm_set1_epi16(0x0908)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0f0e), _mm_set1_epi16(0x0d0c)),
+        _mm256_set_epi16(0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100),
+        _mm256_set_epi16(0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504),
+        _mm256_set_epi16(0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908),
+        _mm256_set_epi16(0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c),
     };
     __m256i isum[nrc_y == 1 ? 4 : nrc_y] = {};
 #endif
@@ -1525,10 +1525,10 @@ static void mul_mat_iq2_s_r4_q8_k_16(int n, const void * vx, size_t bx, const Da
     __m256i isum[2*nrc_y] = {};
 #else
     __m256i shuffles[4] = {
-        MM256_SET_M128I(_mm_set1_epi16(0x0302), _mm_set1_epi16(0x0100)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0706), _mm_set1_epi16(0x0504)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0b0a), _mm_set1_epi16(0x0908)),
-        MM256_SET_M128I(_mm_set1_epi16(0x0f0e), _mm_set1_epi16(0x0d0c)),
+        _mm256_set_epi16(0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0302,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100,0x0100),
+        _mm256_set_epi16(0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0706,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504,0x0504),
+        _mm256_set_epi16(0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0b0a,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908,0x0908),
+        _mm256_set_epi16(0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0f0e,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c,0x0d0c),
     };
     __m256i isum[nrc_y == 1 ? 4 : nrc_y] = {};
 #endif
