@@ -914,7 +914,7 @@ void mul_mat_iq1_m_q8_K(int n, const void * vx, size_t bx, const DataInfo& info,
                 auto sumi = _mm256_setzero_si256();
                 for (int j = 0; j < 8; ++j) {
                     auto p = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[j], qx[j]), _mm256_sign_epi8(q8.load_quants(iy, ibl, j), qx[j]));
-                    sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(p, MM256_SET_M128I(_mm_set1_epi16(helper.val[2*j+1]), _mm_set1_epi16(helper.val[2*j+0]))));
+                    sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(p, _mm256_setr_epi16(helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+0],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1],helper.val[2*j+1])));
                 }
                 acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d*q8.scale(iy, ibl)), _mm256_cvtepi32_ps(sumi), acc[iy]);
             }
