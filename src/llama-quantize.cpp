@@ -13,6 +13,7 @@
 #include <mutex>
 #include <fstream>
 #include <filesystem>
+#include <unordered_set>
 
 //
 // quantization
@@ -1101,14 +1102,22 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     constexpr bool use_mmap = false;
 #endif
 
+    // virtual-map: track which tensor names have been patched with BF16 data from the source
+    std::unordered_set<std::string> virtual_map_targets;
+    std::vector<no_init<uint8_t>> vmap_data;
+
     llama_model_kv_override * kv_overrides = nullptr;
     if (params->kv_overrides) {
         auto v = (std::vector<llama_model_kv_override>*)params->kv_overrides;
         kv_overrides = v->data();
     }
-    llama_model_loader ml(fname_inp, 0, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
+    // When --virtual-map is used, load the reference model (which has ALL tensors) instead of the source
+    llama_model_loader ml(
+            params->virtual_map ? std::string(params->virtual_map) : fname_inp,
+            0, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
             /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false,
-            /* defer_experts */ false, kv_overrides, nullptr, tensor_ids);
+            /* defer_experts */ false, kv_overrides, nullptr,
+            params->virtual_map ? nullptr : tensor_ids);
     ml.init_mappings(false); // no prefetching
 
     llama_model model;
@@ -1124,6 +1133,61 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     }
 
     struct quantize_state_internal qs(model, params);
+
+    // --virtual-map: patch BF16 data from source model into reference model tensors
+    if (params->virtual_map && tensor_ids) {
+        const int64_t t_start_us = llama_time_us();
+        LLAMA_LOG_INFO("%s: virtual-map: loading source BF16 tensors from '%s'\n", __func__, fname_inp.c_str());
+
+        llama_model_loader src_ml(fname_inp, 0, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
+                /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false,
+                /* defer_experts */ false, /* kv_overrides */ nullptr, /* tensor_buft_overrides */ nullptr, tensor_ids);
+        src_ml.init_mappings(false);
+
+        // read_buf for non-mmap source reading
+        std::vector<no_init<uint8_t>> src_read_buf;
+
+        vmap_data.reserve(src_ml.n_tensors);
+
+        for (int i = 0; i < src_ml.n_tensors; ++i) {
+            const auto * src_weight = src_ml.get_weight(i);
+            auto * src_tensor = src_weight->tensor;
+            const std::string name = ggml_get_name(src_tensor);
+
+            size_t nbytes = ggml_nbytes(src_tensor);
+
+            if (!src_ml.use_mmap) {
+                if (src_read_buf.size() < nbytes) {
+                    src_read_buf.resize(nbytes);
+                }
+                src_tensor->data = src_read_buf.data();
+            }
+            src_ml.load_data_for(src_tensor);
+
+            // Find matching tensor in reference model by name
+            const auto * ref_weight = ml.get_weight(name.c_str());
+            if (!ref_weight) {
+                throw std::runtime_error(format("virtual_map: tensor '%s' not found in reference model", name.c_str()));
+            }
+            auto * ref_tensor = ref_weight->tensor;
+
+            // Allocate a persistent buffer for the BF16 data and copy
+            vmap_data.emplace_back(nbytes);
+            std::memcpy(vmap_data.back().data(), src_tensor->data, nbytes);
+
+            // Replace the reference tensor's type and data with the source BF16 data
+            LLAMA_LOG_INFO("%s: virtual-map: patching '%s' (%s -> %s)\n",
+                    __func__, name.c_str(), ggml_type_name(ref_tensor->type), ggml_type_name(src_tensor->type));
+            ref_tensor->type = src_tensor->type;
+            ref_tensor->data = vmap_data.back().data();
+
+            virtual_map_targets.insert(name);
+        }
+
+        const int64_t t_end_us = llama_time_us();
+        LLAMA_LOG_INFO("%s: virtual-map: patched %d tensors in %8.2f ms\n",
+                __func__, (int)virtual_map_targets.size(), (t_end_us - t_start_us) / 1000.0);
+    }
 
     if (params->only_copy) {
         ftype = model.ftype;
@@ -1334,18 +1398,20 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     }
 
     // Set split info if needed
-    if (n_split > 1) {
+    // Use the actual output split count (from reference model when virtual-map is active)
+    const uint16_t out_split_count = (uint16_t)ctx_outs.size();
+    if (out_split_count > 1) {
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
             if (ctx_outs[i] == NULL) continue;
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_NO).c_str(), i);
-            gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), n_split);
-            gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), n_split - 1);
+            gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), out_split_count);
+            gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), out_split_count - 1);
         }
     }
 
     int cur_split = -1;
     std::ofstream fout;
-    std::vector<bool> split_skipped(n_split, false);
+    std::vector<bool> split_skipped(out_split_count, false);
     auto close_ofstream = [&]() {
         // Write metadata and close file handler
         if (fout.is_open()) {
@@ -1365,7 +1431,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         std::string fname = fname_out;
         if (params->keep_split) {
             char split_path[PATH_MAX] = {0};
-            llama_split_path(split_path, sizeof(split_path), fname_out.c_str(), cur_split, n_split);
+            llama_split_path(split_path, sizeof(split_path), fname_out.c_str(), cur_split, out_split_count);
             fname = std::string(split_path);
         }
 
@@ -1413,13 +1479,15 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
         std::string name = ggml_get_name(tensor);
 
-        if (!ml.use_mmap) {
-            if (read_data.size() < ggml_nbytes(tensor)) {
-                read_data.resize(ggml_nbytes(tensor));
+        if (virtual_map_targets.find(name) == virtual_map_targets.end()) {
+            if (!ml.use_mmap) {
+                if (read_data.size() < ggml_nbytes(tensor)) {
+                    read_data.resize(ggml_nbytes(tensor));
+                }
+                tensor->data = read_data.data();
             }
-            tensor->data = read_data.data();
+            ml.load_data_for(tensor);
         }
-        ml.load_data_for(tensor);
 
         LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
                ++idx, ml.n_tensors,

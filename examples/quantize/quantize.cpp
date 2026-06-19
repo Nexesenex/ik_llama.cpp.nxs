@@ -155,7 +155,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--extra-output-tensor] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] [--individual-tensors LIST] [--skip-first-shard] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--extra-output-tensor] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] [--individual-tensors LIST] [--skip-first-shard] [--virtual-map PATH] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -173,7 +173,8 @@ static void usage(const char * executable) {
     printf("  --repack Repack all tensors to the corresponding _r4/8 variant if available.\n\n");
     printf("  --repack-pattern Comma separated list of regexs to use for matching tensor names to be repacked.\n\n");
     printf("  --individual-tensors LIST: Comma-separated list of split IDs (integers >= 2). Requires --keep-split to be set. Example: --individual-tensors 2,5,1094 will produce tensor_ids = {1,4,1093}.\n\n");
-    printf("  --skip-first-shard: Do not output the first shard (assumed to be metadata only and not containing tensors). Must be used in combination with --individual-tensors and --keep-split.\n\n");
+    printf("  --skip-first-shard: Do not output the first shard (assumed to be metadata only and not containing tensors). Must be used in combination with --individual-tensors and --keep-split.\n");
+    printf("  --virtual-map PATH: Path to an existing fully quantized model used as the base tensor source. Tensors from --individual-tensors replace corresponding tensors in this reference model, then are requantized. Non-target tensors pass through from the reference model unchanged.\n\n");
     printf("  --symmetric-q40  Use [-7:7] range for Q4_0 quantization (turns off imatrix)\n\n");
     printf("  --slow-iq2ks Use the original very slow IQ2_KS quantization method.\n\n");
     printf("Additional specific tensor quantization types used in the custom quant scheme 'CQS (default is Q2_K):\n");
@@ -529,6 +530,12 @@ int main(int argc, char ** argv) {
             params.skip_first_shard = true;
         } else if (strcmp(argv[arg_idx], "--partial-requant") == 0) {
             params.partial_requant = true;
+        } else if (strcmp(argv[arg_idx], "--virtual-map") == 0) {
+            if (arg_idx < argc-1) {
+                params.virtual_map = argv[++arg_idx];
+            } else {
+                usage(argv[0]);
+            }
         } else {
             usage(argv[0]);
         }
@@ -539,13 +546,14 @@ int main(int argc, char ** argv) {
     }
 
     // enforce requirement: if --individual-tensors specified, require --keep-split
-    if (individual_tensors_specified && !params.keep_split) {
+    // unless --virtual-map is set (which provides the tensor structure from the reference model)
+    if (individual_tensors_specified && !params.keep_split && !params.virtual_map) {
         fprintf(stderr, "%s: --individual-tensors requires --keep-split to be set\n", argv[0]);
         usage(argv[0]);
     }
 
-    // --individual-tensors is mandatory
-    if (!individual_tensors_specified) {
+    // --individual-tensors is mandatory, unless --virtual-map is set
+    if (!individual_tensors_specified && !params.virtual_map) {
         fprintf(stderr, "%s: missing required option --individual-tensors\n", argv[0]);
         usage(argv[0]);
     }
@@ -707,24 +715,26 @@ int main(int argc, char ** argv) {
     // prepare tensor_ids vector
     std::vector<size_t> tensor_ids_vec;
     {
-        // Since --individual-tensors is mandatory (enforced above), build tensor_ids_vec from individual_tensors_list
-        // dedupe and sort original 1-based ids
-        std::sort(individual_tensors_list.begin(), individual_tensors_list.end());
-        individual_tensors_list.erase(std::unique(individual_tensors_list.begin(), individual_tensors_list.end()), individual_tensors_list.end());
+        if (individual_tensors_specified) {
+            // build tensor_ids_vec from individual_tensors_list
+            // dedupe and sort original 1-based ids
+            std::sort(individual_tensors_list.begin(), individual_tensors_list.end());
+            individual_tensors_list.erase(std::unique(individual_tensors_list.begin(), individual_tensors_list.end()), individual_tensors_list.end());
 
-        for (int v : individual_tensors_list) {
-            // subtract 1 (convert to zero-based)
-            int zero_based = v - 1;
-            if (zero_based <= 0) continue; // should not happen because v >= 2 was enforced
-            tensor_ids_vec.push_back(static_cast<size_t>(zero_based));
+            for (int v : individual_tensors_list) {
+                // subtract 1 (convert to zero-based)
+                int zero_based = v - 1;
+                if (zero_based <= 0) continue; // should not happen because v >= 2 was enforced
+                tensor_ids_vec.push_back(static_cast<size_t>(zero_based));
+            }
+
+            if (tensor_ids_vec.empty()) {
+                fprintf(stderr, "%s: --individual-tensors resulted in an empty list\n", argv[0]);
+                usage(argv[0]);
+            }
+
+            tensor_ids_vec.push_back(static_cast<size_t>(0)); // Add 0 at the end, which is used for llama_model_loader to know when to end processing
         }
-
-        if (tensor_ids_vec.empty()) {
-            fprintf(stderr, "%s: --individual-tensors resulted in an empty list\n", argv[0]);
-            usage(argv[0]);
-        }
-
-        tensor_ids_vec.push_back(static_cast<size_t>(0)); // Add 0 at the end, which is used for llama_model_loader to know when to end processing
     }
 
     // obtain the chunks count (previously hardcoded 1097) from the input filename.
@@ -756,8 +766,8 @@ int main(int argc, char ** argv) {
     {
         const int64_t t_start_us = llama_time_us();
 
-        // Pass the parsed n_chunks and the tensor ids buffer
-        if (llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), &params, n_chunks, tensor_ids_vec.data())) {
+        // Pass the parsed n_chunks and the tensor ids buffer (may be nullptr when --virtual-map is used without --individual-tensors)
+        if (llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), &params, n_chunks, tensor_ids_vec.empty() ? nullptr : tensor_ids_vec.data())) {
             fprintf(stderr, "%s: failed to quantize model from '%s'\n", __func__, fname_inp.c_str());
             return 1;
         }
