@@ -1335,8 +1335,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     // Set split info if needed
     if (n_split > 1) {
-        for (int k = 0; k < ml.n_tensors + 1; ++k) {
-            size_t i = (k == 0) ? 0 : tensor_ids[k - 1];
+        for (size_t i = 0; i < ctx_outs.size(); ++i) {
+            if (ctx_outs[i] == NULL) continue;
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_NO).c_str(), i);
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), n_split);
             gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), n_split - 1);
@@ -1419,7 +1419,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
             tensor->data = read_data.data();
         }
-        ml.load_data_for(tensor, k+1);
+        ml.load_data_for(tensor);
 
         LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
                ++idx, ml.n_tensors,
