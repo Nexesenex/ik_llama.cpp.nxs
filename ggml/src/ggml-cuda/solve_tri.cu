@@ -40,7 +40,7 @@ static __global__ void solve_tri_f32_64x64_latency(
     const float * __restrict__ A,
     const float * __restrict__ B,
     float * __restrict__ X,
-    const uint3  ne02,
+    const uint3  ne02_fd,
     const size_t nb02,
     const size_t nb03,
     const size_t nb12,
@@ -52,7 +52,7 @@ static __global__ void solve_tri_f32_64x64_latency(
     const int lane      = threadIdx.x;
     const int warp_id   = threadIdx.y;
 
-    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
+    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02_fd);
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
 
@@ -142,7 +142,7 @@ static __global__ void solve_tri_f32_64x64_latency(
 static __global__ void solve_tri_f32_64x64_opt(const float * __restrict__ A,
                                                const float * __restrict__ B,
                                                float * __restrict__ X,
-                                               const uint3  ne02,
+                                               const uint3  ne02_fd,
                                                const size_t nb02,
                                                const size_t nb03,
                                                const size_t nb12,
@@ -153,7 +153,7 @@ static __global__ void solve_tri_f32_64x64_opt(const float * __restrict__ A,
     const int lane      = threadIdx.x;
     const int warp_id   = threadIdx.y;
 
-    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
+    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02_fd);
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
 
@@ -243,7 +243,7 @@ static __global__ void solve_tri_f32_64x64_opt(const float * __restrict__ A,
 static __global__ void solve_tri_f32_128x128_opt(const float * __restrict__ A,
                                                   const float * __restrict__ B,
                                                   float * __restrict__ X,
-                                                  const uint3  ne02,
+                                                  const uint3  ne02_fd,
                                                   const size_t nb02,
                                                   const size_t nb03,
                                                   const size_t nb12,
@@ -256,7 +256,7 @@ static __global__ void solve_tri_f32_128x128_opt(const float * __restrict__ A,
     const int lane      = threadIdx.x;
     const int warp_id   = threadIdx.y;
 
-    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
+    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02_fd);
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
 
@@ -356,7 +356,7 @@ static __global__ void solve_tri_f32_128x128_opt(const float * __restrict__ A,
 static __global__ void solve_tri_f32_256x256_tiled(const float * __restrict__ A,
                                                     const float * __restrict__ B,
                                                     float * __restrict__ X,
-                                                    const uint3  ne02,
+                                                    const uint3  ne02_fd,
                                                     const size_t nb02,
                                                     const size_t nb03,
                                                     const size_t nb12,
@@ -369,7 +369,7 @@ static __global__ void solve_tri_f32_256x256_tiled(const float * __restrict__ A,
     const int lane      = threadIdx.x;
     const int warp_id   = threadIdx.y;
 
-    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
+    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02_fd);
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
 
@@ -544,7 +544,7 @@ template <int n_template, int k_template, int threads_y_template>
 static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
                                           const float * __restrict__ B,
                                           float * __restrict__ X,
-                                          const uint3  ne02,
+                                          const uint3  ne02_fd,
                                           const size_t nb02,
                                           const size_t nb03,
                                           const size_t nb12,
@@ -560,7 +560,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
     const int batch_idx = blockIdx.x;
     const int lane      = threadIdx.x;
 
-    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
+    const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02_fd);
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
 

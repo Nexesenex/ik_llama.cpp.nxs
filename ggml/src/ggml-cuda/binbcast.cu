@@ -38,11 +38,11 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
                                    const int              ne0,
                                    const int              ne1,
                                    const int              ne2,
-                                   const uint3            ne3,
-                                   const uint3            ne10,
-                                   const uint3            ne11,
-                                   const uint3            ne12,
-                                   const uint3            ne13,
+                                   const uint3            ne3_fd,
+                                   const uint3            ne10_fd,
+                                   const uint3            ne11_fd,
+                                   const uint3            ne12_fd,
+                                   const uint3            ne13_fd,
                                    /*int s0, */ const int s1,
                                    const int              s2,
                                    const int              s3,
@@ -54,16 +54,16 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
                                    const int              s13) {
     const uint32_t i0s = blockDim.x * blockIdx.x + threadIdx.x;
     const uint32_t i1  = (blockDim.y * blockIdx.y + threadIdx.y);
-    const uint32_t i2  = fastdiv((blockDim.z * blockIdx.z + threadIdx.z), ne3);
-    const uint32_t i3  = (blockDim.z * blockIdx.z + threadIdx.z) - (i2 * ne3.z);
+    const uint32_t i2  = fastdiv((blockDim.z * blockIdx.z + threadIdx.z), ne3_fd);
+    const uint32_t i3  = (blockDim.z * blockIdx.z + threadIdx.z) - (i2 * ne3_fd.z);
 
-    if (i0s >= ne0 || i1 >= ne1 || i2 >= ne2 || i3 >= ne3.z) {
+    if (i0s >= ne0 || i1 >= ne1 || i2 >= ne2 || i3 >= ne3_fd.z) {
         return;
     }
 
-    const uint32_t i11 = fastmodulo(i1, ne11);
-    const uint32_t i12 = fastmodulo(i2, ne12);
-    const uint32_t i13 = fastmodulo(i3, ne13);
+    const uint32_t i11 = fastmodulo(i1, ne11_fd);
+    const uint32_t i12 = fastmodulo(i2, ne12_fd);
+    const uint32_t i13 = fastmodulo(i3, ne13_fd);
 
     const size_t i_src0 =  i3*s03 +  i2*s02 +  i1*s01;
     const size_t i_src1 = i13*s13 + i12*s12 + i11*s11;
@@ -74,7 +74,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     dst_t * dst_row = dst + i_dst;
 
     for (int i0 = i0s; i0 < ne0; i0 += blockDim.x * gridDim.x) {
-        const uint32_t i10 = fastmodulo(i0, ne10);
+        const uint32_t i10 = fastmodulo(i0, ne10_fd);
 
         float result = src0_row ? (float) src0_row[i0] : 0.0f;
         dst_row[i0] = (dst_t) bin_op(result, (float) src1_row[i10]);
@@ -88,16 +88,16 @@ template <float (*bin_op)(const float, const float),
 static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
                                            const src1_t *         src1,
                                            dst_t *                dst,
-                                           const uint3            ne0,
-                                           const uint3            ne1,
-                                           const uint3            ne2,
+                                           const uint3            ne0_fd,
+                                           const uint3            ne1_fd,
+                                           const uint3            ne2_fd,
                                            const uint32_t         ne3,
-                                           const uint3            prod_012,
-                                           const uint3            prod_01,
-                                           const uint3            ne10,
-                                           const uint3            ne11,
-                                           const uint3            ne12,
-                                           const uint3            ne13,
+                                           const uint3            prod_012_fd,
+                                           const uint3            prod_01_fd,
+                                           const uint3            ne10_fd,
+                                           const uint3            ne11_fd,
+                                           const uint3            ne12_fd,
+                                           const uint3            ne13_fd,
                                            /*int s0, */ const int s1,
                                            const int              s2,
                                            const int              s3,
@@ -109,18 +109,18 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
                                            const int              s13) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
-    const uint32_t i3 = fastdiv(i, prod_012);
-    const uint32_t i2 = fastdiv(i - i3 * prod_012.z, prod_01);
-    const uint32_t i1 = fastdiv(i - i3 * prod_012.z - i2 * prod_01.z, ne0);
-    const uint32_t i0 = i - i3 * prod_012.z - i2 * prod_01.z - i1 * ne0.z;
+    const uint32_t i3 = fastdiv(i, prod_012_fd);
+    const uint32_t i2 = fastdiv(i - i3 * prod_012_fd.z, prod_01_fd);
+    const uint32_t i1 = fastdiv(i - i3 * prod_012_fd.z - i2 * prod_01_fd.z, ne0_fd);
+    const uint32_t i0 = i - i3 * prod_012_fd.z - i2 * prod_01_fd.z - i1 * ne0_fd.z;
 
-    if (i0 >= ne0.z || i1 >= ne1.z || i2 >= ne2.z || i3 >= ne3) {
+    if (i0 >= ne0_fd.z || i1 >= ne1_fd.z || i2 >= ne2_fd.z || i3 >= ne3) {
         return;
     }
 
-    const int i11 = fastmodulo(i1, ne11);
-    const int i12 = fastmodulo(i2, ne12);
-    const int i13 = fastmodulo(i3, ne13);
+    const int i11 = fastmodulo(i1, ne11_fd);
+    const int i12 = fastmodulo(i2, ne12_fd);
+    const int i13 = fastmodulo(i3, ne13_fd);
 
     const size_t i_src0 =  i3*s03 +  i2*s02 +  i1*s01;
     const size_t i_src1 = i13*s13 + i12*s12 + i11*s11;
@@ -130,7 +130,7 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
     const src1_t * src1_row = src1 + i_src1;
     dst_t * dst_row = dst + i_dst;
 
-    const int i10 = fastmodulo(i0, ne10);
+    const int i10 = fastmodulo(i0, ne10_fd);
 
     float result = src0_row ? (float) src0_row[i0] : 0.0f;
     dst_row[i0] = (dst_t) bin_op(result, (float) src1_row[i10]);
