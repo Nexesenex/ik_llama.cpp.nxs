@@ -18213,10 +18213,14 @@ static void ggml_compute_forward_fused_moe_silu(
     char (*atomic_current_chunk)[CACHE_LINE_SIZE] = (char (*)[CACHE_LINE_SIZE])((char *)wdata_cur + CACHE_LINE_SIZE * n_as);
 
     if (ith == 0) {
-        for (int id = 0; id < n_ids; ++id) {
-            const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + id*ids->nb[0]);
-            atomic_int * ctr = (atomic_int *)(atomic_current_chunk + expert_idx);
-            atomic_store(ctr, (int)nchunk0);
+        for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+            for (int id = 0; id < n_ids; ++id) {
+                const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+                if (expert_idx >= 0 && expert_idx < n_as) {
+                    atomic_int * ctr = (atomic_int *)(atomic_current_chunk + expert_idx);
+                    atomic_store(ctr, (int)nchunk0);
+                }
+            }
         }
     }
 
@@ -27270,6 +27274,21 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * src1->ne[2] * sizeof(int64_t); // matrix_rows
+                    // Fused MoE silu path (ggml_compute_forward_fused_moe_silu) uses a
+                    // larger scratch layout. Ensure buffer is big enough when fusion
+                    // might trigger (n_tokens <= 4, matching the fusion gate).
+                    if (src1 && ggml_nrows(src1) <= 4 && src1->type != vec_dot_type) {
+                        const size_t row_size  = ggml_row_size(vec_dot_type, src1->ne[0]);
+                        const int64_t n_tokens = ggml_nrows(src1);
+                        const int64_t nr0      = src0->ne[1];
+                        const int64_t nchunk0  = MIN((nr0 + 64 - 1) / 64, n_tasks);
+                        const size_t full_quant = row_size * n_tokens;
+                        // offset space + per-thread quant buffers + per-(expert,token) atomic counters
+                        const size_t fused_cur =
+                            2 * nchunk0 * (full_quant + CACHE_LINE_SIZE) +
+                            n_as * n_tokens * CACHE_LINE_SIZE;
+                        cur = MAX((size_t)cur, fused_cur);
+                    }
                 } break;
             case GGML_OP_MOE_FUSED_UP_GATE:
                 {
