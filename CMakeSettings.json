@@ -4,9 +4,7 @@
       "name": "x64_Debug",
       "generator": "Ninja",
       "configurationType": "Debug",
-      "inheritEnvironments": [
-        "msvc_x64_x64"
-      ],
+      "inheritEnvironments": [ "msvc_x64_x64" ],
       "buildRoot": "${projectDir}\\out\\build\\${name}",
       "installRoot": "${projectDir}\\out\\install\\${name}",
       "cmakeCommandArgs": "",
@@ -17,9 +15,7 @@
       "name": "x64_Release",
       "generator": "Ninja",
       "configurationType": "Release",
-      "inheritEnvironments": [
-        "msvc_x64_x64"
-      ],
+      "inheritEnvironments": [ "msvc_x64_x64" ],
       "buildRoot": "${projectDir}\\out\\build\\${name}",
       "installRoot": "${projectDir}\\out\\install\\${name}",
       "cmakeCommandArgs": "",
@@ -35,9 +31,7 @@
       "cmakeCommandArgs": "",
       "buildCommandArgs": "",
       "ctestCommandArgs": "",
-      "inheritEnvironments": [
-        "msvc_x64_x64"
-      ],
+      "inheritEnvironments": [ "msvc_x64_x64" ],
       "variables": [
         {
           "name": "GGML_IQK_FA_ALL_QUANTS",
@@ -121,7 +115,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -145,9 +139,260 @@
           "type": "BOOL"
         },
         {
-          "type": "BOOL",
-          "name": "GGML_AVX_VNNI_INT8",
-          "value": "True"
+          "name": "GGML_CCACHE",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CCACHE_FOUND",
+          "value": "C:/ProgramData/chocolatey/bin/ccache.exe",
+          "type": "FILEPATH"
+        }
+      ]
+    },
+    {
+      "name": "x64_Rel_MSVC_CPU_DEV",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_CUBLAS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVXVNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_NE_CONVERT",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_VNNI256",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CCACHE",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CCACHE_FOUND",
+          "value": "C:/ProgramData/chocolatey/bin/ccache.exe",
+          "type": "FILEPATH"
+        }
+      ]
+    },
+    {
+      "name": "x64_Rel_MSVC_CPU_TEST",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_CUBLAS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVXVNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_NE_CONVERT",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_VNNI256",
+          "value": "True",
+          "type": "BOOL"
         },
         {
           "name": "GGML_CCACHE",
@@ -170,9 +415,7 @@
       "cmakeCommandArgs": "",
       "buildCommandArgs": "",
       "ctestCommandArgs": "",
-      "inheritEnvironments": [
-        "msvc_x64_x64"
-      ],
+      "inheritEnvironments": [ "msvc_x64_x64" ],
       "variables": [
         {
           "name": "GGML_IQK_FA_ALL_QUANTS",
@@ -280,9 +523,132 @@
           "type": "BOOL"
         },
         {
-          "type": "BOOL",
-          "name": "GGML_AVX_VNNI_INT8",
-          "value": "True"
+          "name": "GGML_CCACHE",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CCACHE_FOUND",
+          "value": "C:/ProgramData/chocolatey/bin/ccache.exe",
+          "type": "FILEPATH"
+        }
+      ]
+    },
+    {
+      "name": "x64_Rel_MSVC_CPU_IT",
+      "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x64_x64" ],
+      "variables": [
+        {
+          "name": "GGML_IQK_FA_ALL_QUANTS",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX2",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "CUDAToolkit_BIN_DIR",
+          "value": "P:\\NVIDIAGPUCT\\CUDA\\v12.9\\bin",
+          "type": "PATH"
+        },
+        {
+          "name": "CMAKE_CUDA_COMPILER",
+          "value": "P:/NVIDIAGPUCT/CUDA/v12.9/bin/nvcc.exe",
+          "type": "FILEPATH"
+        },
+        {
+          "name": "CMAKE_CUDA_ARCHITECTURES",
+          "value": "86",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_FA_ALL_QUANTS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_FORCE_MMQ",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA_CUBLAS",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_FMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CUDA",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_OPENMP",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_SCHED_MAX_COPIES",
+          "value": "1",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_CUDA_COMPRESSION_MODE",
+          "value": "speed",
+          "type": "STRING"
+        },
+        {
+          "name": "GGML_MAX_CONTEXTS",
+          "value": "2048",
+          "type": "STRING"
+        },
+        {
+          "name": "LLAMA_CUDA_ENABLE_UNIFIED_MEMORY",
+          "value": "False",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVXVNNI",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_IFMA",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_CMPCCXADD",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_AVX_NE_CONVERT",
+          "value": "True",
+          "type": "BOOL"
+        },
+        {
+          "name": "GGML_VNNI256",
+          "value": "True",
+          "type": "BOOL"
         },
         {
           "name": "GGML_CCACHE",
@@ -305,9 +671,7 @@
       "cmakeCommandArgs": "",
       "buildCommandArgs": "",
       "ctestCommandArgs": "",
-      "inheritEnvironments": [
-        "msvc_x64_x64"
-      ],
+      "inheritEnvironments": [ "msvc_x64_x64" ],
       "variables": [
         {
           "name": "GGML_IQK_FA_ALL_QUANTS",
@@ -401,7 +765,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -445,9 +809,7 @@
       "cmakeCommandArgs": "",
       "buildCommandArgs": "",
       "ctestCommandArgs": "",
-      "inheritEnvironments": [
-        "msvc_x64_x64"
-      ],
+      "inheritEnvironments": [ "msvc_x64_x64" ],
       "variables": [
         {
           "name": "GGML_IQK_FA_ALL_QUANTS",
@@ -546,7 +908,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -590,9 +952,7 @@
       "cmakeCommandArgs": "",
       "buildCommandArgs": "",
       "ctestCommandArgs": "",
-      "inheritEnvironments": [
-        "msvc_x64_x64"
-      ],
+      "inheritEnvironments": [ "msvc_x64_x64" ],
       "variables": [
         {
           "name": "GGML_IQK_FA_ALL_QUANTS",
@@ -681,7 +1041,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -730,9 +1090,7 @@
       "cmakeCommandArgs": "",
       "buildCommandArgs": "",
       "ctestCommandArgs": "",
-      "inheritEnvironments": [
-        "msvc_x64_x64"
-      ],
+      "inheritEnvironments": [ "msvc_x64_x64" ],
       "variables": [
         {
           "name": "GGML_IQK_FA_ALL_QUANTS",
@@ -816,7 +1174,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -860,9 +1218,7 @@
       "cmakeCommandArgs": "",
       "buildCommandArgs": "",
       "ctestCommandArgs": "",
-      "inheritEnvironments": [
-        "msvc_x64_x64"
-      ],
+      "inheritEnvironments": [ "msvc_x64_x64" ],
       "variables": [
         {
           "name": "GGML_IQK_FA_ALL_QUANTS",
@@ -946,7 +1302,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -990,9 +1346,7 @@
       "cmakeCommandArgs": "",
       "buildCommandArgs": "",
       "ctestCommandArgs": "",
-      "inheritEnvironments": [
-        "msvc_x64_x64"
-      ],
+      "inheritEnvironments": [ "msvc_x64_x64" ],
       "variables": [
         {
           "name": "GGML_IQK_FA_ALL_QUANTS",
@@ -1096,7 +1450,7 @@
         },
         {
           "name": "GGML_VNNI256",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -1110,14 +1464,9 @@
           "type": "FILEPATH"
         },
         {
-          "name": "CMAKE_C_COMPILER",
-          "value": "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Tools\\MSVC\\14.51.36231\\bin\\Hostx64\\x64\\cl.exe",
-          "type": "STRING"
-        },
-        {
-          "name": "CMAKE_AR",
-          "value": "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Tools\\MSVC\\14.51.36231\\bin\\Hostx64\\x64\\lib.exe",
-          "type": "FILEPATH"
+          "name": "GGML_AVX_VNNI",
+          "value": "False",
+          "type": "BOOL"
         }
       ]
     },
@@ -1130,9 +1479,7 @@
       "cmakeCommandArgs": "",
       "buildCommandArgs": "",
       "ctestCommandArgs": "",
-      "inheritEnvironments": [
-        "clang_cl_x64_x64"
-      ],
+      "inheritEnvironments": [ "clang_cl_x64_x64" ],
       "variables": [
         {
           "name": "GGML_IQK_FA_ALL_QUANTS",
@@ -1206,7 +1553,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -1228,11 +1575,6 @@
           "name": "GGML_VNNI256",
           "value": "True",
           "type": "BOOL"
-        },
-        {
-          "type": "BOOL",
-          "name": "GGML_AVX_VNNI_INT8",
-          "value": "True"
         },
         {
           "name": "GGML_CCACHE",
@@ -1353,7 +1695,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -1387,9 +1729,7 @@
           "type": "FILEPATH"
         }
       ],
-      "inheritEnvironments": [
-        "clang_cl_x64_x64"
-      ]
+      "inheritEnvironments": [ "clang_cl_x64_x64" ]
     },
     {
       "name": "x64_Rel_Clang_Cuda_Main",
@@ -1498,7 +1838,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -1532,9 +1872,7 @@
           "type": "FILEPATH"
         }
       ],
-      "inheritEnvironments": [
-        "clang_cl_x64_x64"
-      ]
+      "inheritEnvironments": [ "clang_cl_x64_x64" ]
     },
     {
       "name": "x64_Rel_Clang_Cuda_Test",
@@ -1643,7 +1981,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -1677,9 +2015,7 @@
           "type": "FILEPATH"
         }
       ],
-      "inheritEnvironments": [
-        "clang_cl_x64_x64"
-      ]
+      "inheritEnvironments": [ "clang_cl_x64_x64" ]
     },
     {
       "name": "x64_Rel_Clang_Cuda_Legacy",
@@ -1788,7 +2124,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -1822,9 +2158,7 @@
           "type": "FILEPATH"
         }
       ],
-      "inheritEnvironments": [
-        "clang_cl_x64_x64"
-      ]
+      "inheritEnvironments": [ "clang_cl_x64_x64" ]
     },
     {
       "name": "x64_Rel_Clang_Cuda_Dev",
@@ -1933,7 +2267,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -1962,9 +2296,7 @@
           "type": "FILEPATH"
         }
       ],
-      "inheritEnvironments": [
-        "clang_cl_x64_x64"
-      ]
+      "inheritEnvironments": [ "clang_cl_x64_x64" ]
     },
     {
       "name": "x64_Rel_Clang_LLVM_CPU",
@@ -1994,7 +2326,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
@@ -2053,11 +2385,6 @@
           "type": "BOOL"
         },
         {
-          "type": "BOOL",
-          "name": "GGML_AVX_VNNI_INT8",
-          "value": "True"
-        },
-        {
           "name": "GGML_CCACHE",
           "value": "True",
           "type": "BOOL"
@@ -2102,7 +2429,7 @@
         },
         {
           "name": "GGML_AVXVNNI",
-          "value": "False",
+          "value": "True",
           "type": "BOOL"
         },
         {
