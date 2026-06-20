@@ -18173,6 +18173,7 @@ static void ggml_compute_forward_fused_moe_silu(
     const size_t nb11 = src1->nb[1];
 
     const size_t glu_nb1 = glu_node->nb[1];
+    const size_t glu_nb2 = glu_node->nb[2];
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -18185,6 +18186,7 @@ static void ggml_compute_forward_fused_moe_silu(
 
     const int n_ids = ids->ne[0];
     const int n_as = weights_gate->ne[2];
+    const int64_t n_tokens = ids->ne[1];
 
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
@@ -18194,12 +18196,18 @@ static void ggml_compute_forward_fused_moe_silu(
 
     void * wdata_cur = params->wdata;
 
+    // Per-(expert, token) atomic counters at the start of scratch space.
+    // Must come before quantization buffers to avoid write-after-init overwrite
+    // (thread 0 initialises counters then all threads write quant data).
+    char (*atomic_current_chunk)[CACHE_LINE_SIZE] = (char (*)[CACHE_LINE_SIZE])wdata_cur;
+    const size_t counter_bytes = n_as * n_tokens * CACHE_LINE_SIZE;
+
     const char * src1_q = (const char *) src1->data;
     if (src1->type != vec_dot_type) {
-        char * quant_base = (char *) ((int64_t)wdata_cur + GGML_PAD(ggml_row_size(vec_dot_type, ggml_nelements(src1)) + CACHE_LINE_SIZE, sizeof(int64_t))*nchunk0);
+        const size_t stride = ne11 * row_size + CACHE_LINE_SIZE;
 
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
-        char * wdata = quant_base + ith * (ne11 * row_size + CACHE_LINE_SIZE);
+        char * wdata = (char *)wdata_cur + counter_bytes + ith * stride;
         for (int64_t i11 = 0; i11 < ne11; ++i11) {
             from_float((float *)((char *) src1->data + i11*nb11),
                        (void *)(wdata + i11*row_size),
@@ -18208,16 +18216,12 @@ static void ggml_compute_forward_fused_moe_silu(
         src1_q = wdata;
     }
 
-    wdata_cur = (char *)wdata_cur + GGML_PAD(n_as * sizeof(int64_t), sizeof(int64_t));
-
-    char (*atomic_current_chunk)[CACHE_LINE_SIZE] = (char (*)[CACHE_LINE_SIZE])((char *)wdata_cur + CACHE_LINE_SIZE * n_as);
-
     if (ith == 0) {
-        for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+        for (int64_t iid1 = 0; iid1 < n_tokens; ++iid1) {
             for (int id = 0; id < n_ids; ++id) {
                 const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
                 if (expert_idx >= 0 && expert_idx < n_as) {
-                    atomic_int * ctr = (atomic_int *)(atomic_current_chunk + expert_idx);
+                    atomic_int * ctr = (atomic_int *)(atomic_current_chunk + expert_idx * n_tokens + iid1);
                     atomic_store(ctr, 0);
                 }
             }
@@ -18228,34 +18232,38 @@ static void ggml_compute_forward_fused_moe_silu(
 
     const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
 
-    for (int id = 0; id < n_ids; ++id) {
-        const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + id*ids->nb[0]);
+    for (int64_t iid1 = 0; iid1 < n_tokens; ++iid1) {
+        const char * token_activations = src1_q + iid1 * row_size;
 
-        const char * gate_cur = (const char *) weights_gate->data + expert_idx * gate_nb02;
-        const char * up_cur = (const char *) weights_up->data + expert_idx * up_nb02;
-        const char * src1_col = src1_q;
+        for (int id = 0; id < n_ids; ++id) {
+            const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+            if (expert_idx < 0 || expert_idx >= n_as) continue;
 
-        float * glu_col = (float *) ((char *) glu_node->data + id*glu_nb1);
+            const char * gate_cur = (const char *) weights_gate->data + expert_idx * gate_nb02;
+            const char * up_cur = (const char *) weights_up->data + expert_idx * up_nb02;
 
-        atomic_int * current_chunk_ctr = (atomic_int *)(atomic_current_chunk + expert_idx);
+            float * glu_col = (float *) ((char *) glu_node->data + id*glu_nb1 + iid1*glu_nb2);
 
-        int current_chunk = ith;
-        while (current_chunk < nchunk0) {
-            const int64_t ir0_start = dr0 * current_chunk;
-            const int64_t ir0_end = MIN(ir0_start + dr0, nr0);
+            atomic_int * current_chunk_ctr = (atomic_int *)(atomic_current_chunk + expert_idx * n_tokens + iid1);
 
-            for (int64_t ir0 = ir0_start; ir0 < ir0_end; ++ir0) {
-                float gate_val, up_val;
-                vec_dot(ne00, &gate_val, 0, gate_cur + ir0*gate_nb01, 0, src1_col, 0, 1);
-                vec_dot(ne00, &up_val, 0, up_cur + ir0*up_nb01, 0, src1_col, 0, 1);
-                glu_col[ir0] = ggml_silu_f32(gate_val) * up_val;
+            int current_chunk = ith;
+            while (current_chunk < nchunk0) {
+                const int64_t ir0_start = dr0 * current_chunk;
+                const int64_t ir0_end = MIN(ir0_start + dr0, nr0);
+
+                for (int64_t ir0 = ir0_start; ir0 < ir0_end; ++ir0) {
+                    float gate_val, up_val;
+                    vec_dot(ne00, &gate_val, 0, gate_cur + ir0*gate_nb01, 0, token_activations, 0, 1);
+                    vec_dot(ne00, &up_val, 0, up_cur + ir0*up_nb01, 0, token_activations, 0, 1);
+                    glu_col[ir0] = ggml_silu_f32(gate_val) * up_val;
+                }
+
+                if (nth >= nchunk0) {
+                    break;
+                }
+
+                current_chunk = atomic_fetch_add(current_chunk_ctr, 1);
             }
-
-            if (nth >= nchunk0) {
-                break;
-            }
-
-            current_chunk = atomic_fetch_add(current_chunk_ctr, 1);
         }
     }
 }
@@ -27283,10 +27291,10 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                         const int64_t nr0      = src0->ne[1];
                         const int64_t nchunk0  = MIN((nr0 + 64 - 1) / 64, n_tasks);
                         const size_t full_quant = row_size * n_tokens;
-                        // offset space + per-thread quant buffers + per-(expert,token) atomic counters
+                        // per-(expert,token) atomic counters + per-thread quant buffers
                         const size_t fused_cur =
-                            2 * nchunk0 * (full_quant + CACHE_LINE_SIZE) +
-                            n_as * n_tokens * CACHE_LINE_SIZE;
+                            n_as * n_tokens * CACHE_LINE_SIZE +
+                            nchunk0 * (full_quant + CACHE_LINE_SIZE);
                         cur = MAX((size_t)cur, fused_cur);
                     }
                 } break;
@@ -27470,7 +27478,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
                 struct ggml_tensor * glu = cgraph->nodes[node_n + 2];
                 if (node1->op == GGML_OP_MUL_MAT_ID && glu->op == GGML_OP_GLU &&
                     node->src[1] == node1->src[1] && node->src[2] == node1->src[2] &&
-                    ggml_nrows(node->src[1]) == 1 &&
+                    ggml_nrows(node->src[1]) <= 4 &&
                     ggml_get_glu_op(glu) == GGML_GLU_OP_SWIGLU) {
                     ggml_compute_forward_fused_moe_silu(&params, node, node1, glu);
                     fused_nodes = 2;
