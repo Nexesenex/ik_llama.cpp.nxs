@@ -19292,6 +19292,18 @@ static void ggml_compute_forward_fused_moe_silu(
 
         for (int id = 0; id < n_ids; ++id) {
             const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+
+            // Prefetch next expert's gate/up weights while computing current expert
+            if (id + 1 < n_ids) {
+                const int32_t next_expert = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + (id+1)*ids->nb[0]);
+                if (next_expert >= 0 && next_expert < n_as) {
+#if defined(_MSC_VER) || defined(__SSE__)
+                    _mm_prefetch((const char *) weights_gate->data + next_expert * gate_nb02, _MM_HINT_T0);
+                    _mm_prefetch((const char *) weights_up->data + next_expert * up_nb02, _MM_HINT_T0);
+#endif
+                }
+            }
+
             if (expert_idx < 0 || expert_idx >= n_as) continue;
 
             const char * gate_cur = (const char *) weights_gate->data + expert_idx * gate_nb02;
