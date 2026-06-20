@@ -523,6 +523,9 @@ void server_slot::reset() {
     oai_resp_message_id.clear();
     oai_resp_fc_id.clear();
 
+    n_decoded = 0;
+    t_prompt_processing = 0.0;
+    t_token_generation = 0.0;
     t_start_batch_100 = 0;
     n_decoded_at_batch_100 = 0;
     n_prompt_tokens_processed_log = 0;
@@ -608,7 +611,9 @@ void server_slot::release() {
             // n_prompt_tokens_processed = n_past;
             n_prompt_tokens_processed_log = n_past;
         }
-        t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
+        if (t_start_generation > 0) {
+            t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
+        }
         command = SLOT_COMMAND_RELEASE;
         state = SLOT_STATE_IDLE;
         task.reset();
@@ -764,11 +769,19 @@ size_t server_slot::find_stopping_strings(const std::string& text, const size_t 
 
 void server_slot::print_timings() const {
     char buffer[512];
-    double t_prompt = t_prompt_processing / n_prompt_tokens_processed;
-    double n_prompt_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+    double t_prompt = 0.0;
+    double n_prompt_second = 0.0;
+    if (n_prompt_tokens_processed > 0) {
+        t_prompt = t_prompt_processing / n_prompt_tokens_processed;
+        n_prompt_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+    }
 
-    double t_gen = t_token_generation / n_decoded;
-    double n_gen_second = 1e3 / t_token_generation * n_decoded;
+    double t_gen = 0.0;
+    double n_gen_second = 0.0;
+    if (n_decoded > 0) {
+        t_gen = t_token_generation / n_decoded;
+        n_gen_second = 1e3 / t_token_generation * n_decoded;
+    }
 
     SLT_INF(*this,
         "\n"
