@@ -18760,17 +18760,33 @@ static void ggml_compute_forward_mul_mat_id(
                 matrix_row_counts[i02] += 1;
             }
         }
-        // Build compact active-expert array for O(1) chunk→expert lookup.
-        // (Replaces the per-chunk O(n_as) linear scan.)
-        int32_t * active_start   = (int32_t *)(matrix_rows + n_as * mmid_stride);
-        int32_t * active_count_p = active_start;
-        int32_t * active_list    = active_start + 1;
+        // Build active-expert list and weighted chunk-start prefix sum.
+        // Experts with more assigned tokens get proportionally more chunks
+        // (adaptive chunk sizing) for better load balancing.
+        int32_t * pool_start    = (int32_t *)(matrix_rows + n_as * mmid_stride);
+        int32_t * count_p       = pool_start;          // [0] = active_count
+        int32_t * active_list   = pool_start + 1;       // [1..n_active-1] = expert indices
+        int32_t * chunk_start   = active_list + n_as;   // [n_active+1] prefix-sum of chunks
+        int64_t total_rows = 0;
         int n_active = 0;
         for (int a = 0; a < n_as; a++) {
             if (matrix_row_counts[a] <= 0) continue;
-            active_list[n_active++] = a;
+            active_list[n_active] = a;
+            total_rows += matrix_row_counts[a];
+            n_active++;
         }
-        *active_count_p = n_active;
+        const int base_chunks = MAX(1, MIN(nth, (int)(ne01 / 16)));
+        int sum_chunks = 0;
+        chunk_start[0] = 0;
+        for (int i = 0; i < n_active; i++) {
+            const int a = active_list[i];
+            int c = (int)((int64_t)base_chunks * n_active * matrix_row_counts[a] / total_rows);
+            c = MAX(1, MIN(nth, c));
+            sum_chunks += c;
+            chunk_start[i + 1] = sum_chunks;
+        }
+        count_p[0] = n_active;
+        // total_chunks = sum_chunks (stored as chunk_start[n_active])
     }
 
     // Use dynamic expert scheduling: threads claim experts via atomic counter.
@@ -18785,27 +18801,36 @@ static void ggml_compute_forward_mul_mat_id(
     const void * wdata_mm    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
     const size_t row_size_mm = ggml_row_size(vec_dot_type, ne10);
     const int32_t * active_list = NULL;
+    const int32_t * chunk_start = NULL;
     int             active_count = 0;
 #if GGML_USE_IQK_MULMAT
     {
-        const int32_t * active_start = (const int32_t *)(matrix_rows + n_as * mmid_stride);
-        active_count = *active_start;
-        active_list  = active_start + 1;
+        const int32_t * pool_start = (const int32_t *)(matrix_rows + n_as * mmid_stride);
+        active_count = pool_start[0];
+        active_list  = pool_start + 1;
+        chunk_start  = active_list + n_as;
     }
 #endif
 
 #if GGML_USE_IQK_MULMAT
     if (ne13 == 1 && dst->type == GGML_TYPE_F32) {
-        // Cross-expert chunk pooling: divide each active expert into chunks,
-        // then use atomic work-stealing across the unified chunk pool.
-        const int chunks_per_expert = MAX(1, MIN(nth, (int)(ne01 / 16)));
-
-        const int total_chunks = active_count * chunks_per_expert;
+        // Cross-expert chunk pooling with adaptive chunk sizing.
+        // Each expert receives chunks proportional to its token count.
+        const int total_chunks = chunk_start[active_count];
 
         int chunk_id;
         while ((chunk_id = atomic_fetch_add(&params->shared->current_chunk, 1)) < total_chunks) {
-            const int cur_a = active_list[chunk_id / chunks_per_expert];
-            const int local_chunk = chunk_id % chunks_per_expert;
+            // Binary search on chunk_start prefix-sum (O(log active_count))
+            int lo = 0, hi = active_count;
+            while (lo < hi) {
+                const int mid = (lo + hi) / 2;
+                if (chunk_start[mid] <= chunk_id) { lo = mid + 1; }
+                else                               { hi = mid;     }
+            }
+            const int idx   = lo - 1;
+            const int cur_a = active_list[idx];
+            const int local_chunk = chunk_id - chunk_start[idx];
+            const int chunks_for_expert = chunk_start[idx + 1] - chunk_start[idx];
 
             const char * src0_cur = (const char *) src0->data + cur_a*nb02;
 
@@ -18813,7 +18838,7 @@ static void ggml_compute_forward_mul_mat_id(
                         src0->type, src0_cur, nb01,
                         vec_dot_type, (const char *)wdata_mm, row_size_mm,
                         (float *)dst->data, nb1, nb2,
-                        matrix_rows + cur_a*mmid_stride, local_chunk, chunks_per_expert)) goto IQK_MulMat_Not_Available;
+                        matrix_rows + cur_a*mmid_stride, local_chunk, chunks_for_expert)) goto IQK_MulMat_Not_Available;
         }
         goto IQK_MulMat_Done;
     }
@@ -18990,6 +19015,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     const struct ggml_tensor * src0 = src0_1; // so GGML_TENSOR_BINARY_OP_LOCALS works
 
     GGML_TENSOR_BINARY_OP_LOCALS
+    const int64_t nr0_base = src0_2 ? ne01 : ne01/2;
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -19083,16 +19109,30 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                 matrix_row_counts[i02] += 1;
             }
         }
-        // Build compact active-expert array.
-        int32_t * active_start   = (int32_t *)(matrix_rows + n_as * mmid_stride);
-        int32_t * active_count_p = active_start;
-        int32_t * active_list    = active_start + 1;
+        // Build active-expert list and weighted chunk-start prefix sum.
+        int32_t * pool_start    = (int32_t *)(matrix_rows + n_as * mmid_stride);
+        int32_t * count_p       = pool_start;
+        int32_t * active_list   = pool_start + 1;
+        int32_t * chunk_start   = active_list + n_as;
+        int64_t total_rows = 0;
         int n_active = 0;
         for (int a = 0; a < n_as; a++) {
             if (matrix_row_counts[a] <= 0) continue;
-            active_list[n_active++] = a;
+            active_list[n_active] = a;
+            total_rows += matrix_row_counts[a];
+            n_active++;
         }
-        *active_count_p = n_active;
+        const int base_chunks = MAX(1, MIN(nth, (int)(nr0_base / 16)));
+        int sum_chunks = 0;
+        chunk_start[0] = 0;
+        for (int i = 0; i < n_active; i++) {
+            const int a = active_list[i];
+            int c = (int)((int64_t)base_chunks * n_active * matrix_row_counts[a] / total_rows);
+            c = MAX(1, MIN(nth, c));
+            sum_chunks += c;
+            chunk_start[i + 1] = sum_chunks;
+        }
+        count_p[0] = n_active;
     }
 
     // Use dynamic expert scheduling: threads claim experts via atomic counter.
@@ -19106,21 +19146,27 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
     const void * wdata_ug    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
     const size_t row_size_ug = ggml_row_size(vec_dot_type, ne10);
-    const int64_t nr0_base = src0_2 ? ne01 : ne01/2;
+    const int32_t * pool_start   = (const int32_t *)(matrix_rows + n_as * mmid_stride);
+    const int      active_count  = pool_start[0];
+    const int32_t * active_list  = pool_start + 1;
+    const int32_t * chunk_start  = active_list + n_as;
 
-    const int32_t * active_start  = (int32_t *)(matrix_rows + n_as * mmid_stride);
-    const int      active_count   = *active_start;
-    const int32_t * active_list   = active_start + 1;
-
-    // Cross-expert chunk pooling for fused up/gate
-    const int chunks_per_expert_ug = MAX(1, MIN(nth, (int)(nr0_base / 16)));
-
-    const int total_chunks_ug = active_count * chunks_per_expert_ug;
+    // Cross-expert chunk pooling with adaptive chunk sizing.
+    const int total_chunks_ug = chunk_start[active_count];
 
     int chunk_id_ug;
     while ((chunk_id_ug = atomic_fetch_add(&params->shared->current_chunk, 1)) < total_chunks_ug) {
-        const int cur_a = active_list[chunk_id_ug / chunks_per_expert_ug];
-        const int local_chunk = chunk_id_ug % chunks_per_expert_ug;
+        // Binary search on chunk_start prefix-sum
+        int lo = 0, hi = active_count;
+        while (lo < hi) {
+            const int mid = (lo + hi) / 2;
+            if (chunk_start[mid] <= chunk_id_ug) { lo = mid + 1; }
+            else                                  { hi = mid;     }
+        }
+        const int idx   = lo - 1;
+        const int cur_a = active_list[idx];
+        const int local_chunk = chunk_id_ug - chunk_start[idx];
+        const int chunks_for_expert = chunk_start[idx + 1] - chunk_start[idx];
 
         const char *src0_1_cur, *src0_2_cur, *up_b_cur = NULL, *gate_b_cur = NULL;
         if (src0_2) {
@@ -19143,7 +19189,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             vec_dot_type, (const char *)wdata_ug, row_size_ug,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*mmid_stride, limit, local_chunk, chunks_per_expert_ug)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*mmid_stride, limit, local_chunk, chunks_for_expert)) GGML_ABORT("fatal error");
     }
 
 #undef MMID_MATRIX_ROW
@@ -29400,7 +29446,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * ggml_nrows(src1) * sizeof(int64_t); // matrix_rows [n_as][n_tokens]
-                    cur += sizeof(int32_t) + n_as * sizeof(int32_t);  // active_count + active_experts []
+                    cur += (2 * n_as + 2) * sizeof(int32_t);  // active_count + active_experts[] + chunk_start[] (prefix-sum)
                     // Fused MoE silu path (ggml_compute_forward_fused_moe_silu) uses a
                     // larger scratch layout. Ensure buffer is big enough when fusion
                     // might trigger (n_tokens <= 4, matching the fusion gate).
@@ -29434,7 +29480,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * ggml_nrows(src2) * sizeof(int64_t); // matrix_rows [n_as][n_tokens]
-                    cur += sizeof(int32_t) + n_as * sizeof(int32_t);  // active_count + active_experts []
+                    cur += (2 * n_as + 2) * sizeof(int32_t);  // active_count + active_experts[] + chunk_start[] (prefix-sum)
                     if (src2 && ggml_nrows(src2) == 1) {
                         const int64_t nr0 = src0->ne[1];
                         const int64_t nchunk0 = (nr0 + 64 - 1) / 64;
