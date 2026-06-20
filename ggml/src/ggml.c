@@ -17672,6 +17672,17 @@ static void ggml_compute_forward_mul_mat_id(
                 matrix_row_counts[i02] += 1;
             }
         }
+        // Build compact active-expert array for O(1) chunk→expert lookup.
+        // (Replaces the per-chunk O(n_as) linear scan.)
+        int32_t * active_start   = (int32_t *)(matrix_rows + n_as * mmid_stride);
+        int32_t * active_count_p = active_start;
+        int32_t * active_list    = active_start + 1;
+        int n_active = 0;
+        for (int a = 0; a < n_as; a++) {
+            if (matrix_row_counts[a] <= 0) continue;
+            active_list[n_active++] = a;
+        }
+        *active_count_p = n_active;
     }
 
     // Use dynamic expert scheduling: threads claim experts via atomic counter.
@@ -17685,6 +17696,15 @@ static void ggml_compute_forward_mul_mat_id(
 
     const void * wdata_mm    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
     const size_t row_size_mm = ggml_row_size(vec_dot_type, ne10);
+    const int32_t * active_list = NULL;
+    int             active_count = 0;
+#if GGML_USE_IQK_MULMAT
+    {
+        const int32_t * active_start = (const int32_t *)(matrix_rows + n_as * mmid_stride);
+        active_count = *active_start;
+        active_list  = active_start + 1;
+    }
+#endif
 
 #if GGML_USE_IQK_MULMAT
     if (ne13 == 1 && dst->type == GGML_TYPE_F32) {
@@ -17692,24 +17712,12 @@ static void ggml_compute_forward_mul_mat_id(
         // then use atomic work-stealing across the unified chunk pool.
         const int chunks_per_expert = MAX(1, MIN(nth, (int)(ne01 / 16)));
 
-        int total_chunks = 0;
-        for (int a = 0; a < n_as; a++) {
-            if (matrix_row_counts[a] > 0) total_chunks += chunks_per_expert;
-        }
+        const int total_chunks = active_count * chunks_per_expert;
 
         int chunk_id;
         while ((chunk_id = atomic_fetch_add(&params->shared->current_chunk, 1)) < total_chunks) {
-            // Map global chunk_id to (expert_index, local_chunk_index)
-            int acc = 0, cur_a = -1, local_chunk = 0;
-            for (int a = 0; a < n_as; a++) {
-                if (matrix_row_counts[a] == 0) continue;
-                if (chunk_id < acc + chunks_per_expert) {
-                    cur_a = a;
-                    local_chunk = chunk_id - acc;
-                    break;
-                }
-                acc += chunks_per_expert;
-            }
+            const int cur_a = active_list[chunk_id / chunks_per_expert];
+            const int local_chunk = chunk_id % chunks_per_expert;
 
             const char * src0_cur = (const char *) src0->data + cur_a*nb02;
 
@@ -17987,6 +17995,16 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                 matrix_row_counts[i02] += 1;
             }
         }
+        // Build compact active-expert array.
+        int32_t * active_start   = (int32_t *)(matrix_rows + n_as * mmid_stride);
+        int32_t * active_count_p = active_start;
+        int32_t * active_list    = active_start + 1;
+        int n_active = 0;
+        for (int a = 0; a < n_as; a++) {
+            if (matrix_row_counts[a] <= 0) continue;
+            active_list[n_active++] = a;
+        }
+        *active_count_p = n_active;
     }
 
     // Use dynamic expert scheduling: threads claim experts via atomic counter.
@@ -18002,26 +18020,19 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     const size_t row_size_ug = ggml_row_size(vec_dot_type, ne10);
     const int64_t nr0_base = src0_2 ? ne01 : ne01/2;
 
+    const int32_t * active_start  = (int32_t *)(matrix_rows + n_as * mmid_stride);
+    const int      active_count   = *active_start;
+    const int32_t * active_list   = active_start + 1;
+
     // Cross-expert chunk pooling for fused up/gate
     const int chunks_per_expert_ug = MAX(1, MIN(nth, (int)(nr0_base / 16)));
 
-    int total_chunks_ug = 0;
-    for (int a = 0; a < n_as; a++) {
-        if (matrix_row_counts[a] > 0) total_chunks_ug += chunks_per_expert_ug;
-    }
+    const int total_chunks_ug = active_count * chunks_per_expert_ug;
 
     int chunk_id_ug;
     while ((chunk_id_ug = atomic_fetch_add(&params->shared->current_chunk, 1)) < total_chunks_ug) {
-        int acc = 0, cur_a = -1, local_chunk = 0;
-        for (int a = 0; a < n_as; a++) {
-            if (matrix_row_counts[a] == 0) continue;
-            if (chunk_id_ug < acc + chunks_per_expert_ug) {
-                cur_a = a;
-                local_chunk = chunk_id_ug - acc;
-                break;
-            }
-            acc += chunks_per_expert_ug;
-        }
+        const int cur_a = active_list[chunk_id_ug / chunks_per_expert_ug];
+        const int local_chunk = chunk_id_ug % chunks_per_expert_ug;
 
         const char *src0_1_cur, *src0_2_cur, *up_b_cur = NULL, *gate_b_cur = NULL;
         if (src0_2) {
@@ -27179,6 +27190,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * ggml_nrows(src1) * sizeof(int64_t); // matrix_rows [n_as][n_tokens]
+                    cur += sizeof(int32_t) + n_as * sizeof(int32_t);  // active_count + active_experts []
                     // Fused MoE silu path (ggml_compute_forward_fused_moe_silu) uses a
                     // larger scratch layout. Ensure buffer is big enough when fusion
                     // might trigger (n_tokens <= 4, matching the fusion gate).
@@ -27211,6 +27223,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * ggml_nrows(src2) * sizeof(int64_t); // matrix_rows [n_as][n_tokens]
+                    cur += sizeof(int32_t) + n_as * sizeof(int32_t);  // active_count + active_experts []
                     if (src2 && ggml_nrows(src2) == 1) {
                         const int64_t nr0 = src0->ne[1];
                         const int64_t nchunk0 = (nr0 + 64 - 1) / 64;
