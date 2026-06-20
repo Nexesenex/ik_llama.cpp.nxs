@@ -11,10 +11,11 @@ static __global__ void upscale_f32(const float * x, float * dst,
     }
 
     const int i10 = fastmodulo((uint32_t)index, ne10_fd);
-    const int i11 = fastmodulo((uint32_t)(index / ne10_fd.z), ne10_ne11_fd);
-    const uint32_t tmp12 = (uint32_t)(index / ne10_ne11_fd.z);
+    const uint32_t tmp10 = fastdiv((uint32_t)index, ne10_fd);
+    const int i11 = fastmodulo(tmp10, ne10_ne11_fd);
+    const uint32_t tmp12 = fastdiv((uint32_t)index, ne10_ne11_fd);
     const int i12 = fastmodulo(tmp12, ne10_ne11_ne12_fd);
-    const int i13 = tmp12 / ne10_ne11_ne12_fd.z;
+    const int i13 = fastdiv(tmp12, ne10_ne11_ne12_fd);
 
     int i00 = i10 / sf0;
     int i01 = i11 / sf1;
