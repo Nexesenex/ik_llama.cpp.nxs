@@ -18126,7 +18126,7 @@ static void ggml_compute_forward_fused_moe_silu(
                 const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
                 if (expert_idx >= 0 && expert_idx < n_as) {
                     atomic_int * ctr = (atomic_int *)(atomic_current_chunk + expert_idx);
-                    atomic_store(ctr, (int)nchunk0);
+                    atomic_store(ctr, 0);
                 }
             }
         }
