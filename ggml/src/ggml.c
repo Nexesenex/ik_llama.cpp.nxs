@@ -18665,7 +18665,6 @@ static int ggml_compute_forward_mul_mat(
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
-
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
     const struct ggml_tensor * ids = dst->src[2];
@@ -18696,8 +18695,9 @@ static void ggml_compute_forward_mul_mat_id(
     GGML_ASSERT(nb2 <= nb3);
 
     // row groups
-    const int n_ids = ids->ne[0]; // n_expert_used
-    const int n_as  = ne02;       // n_expert
+    const int n_ids    = ids->ne[0]; // n_expert_used
+    const int n_as     = ne02;       // n_expert
+    const int64_t mmid_stride = ids->ne[1]; // n_tokens (stride between expert row entries)
 
     char * wdata_src1_end = (src1->type == vec_dot_type) ?
             (char *) params->wdata :
@@ -18709,9 +18709,10 @@ static void ggml_compute_forward_mul_mat_id(
     };
 
     int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end); // [n_as]
-    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne12]
+    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][n_tokens]
 
     if (src1->type != vec_dot_type) {
+
         char * wdata = params->wdata;
 
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
@@ -18732,7 +18733,7 @@ static void ggml_compute_forward_mul_mat_id(
         }
     }
 
-#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
+#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*mmid_stride + (i1)]
 
     GGML_ASSERT(ids->ne[1] == dst->ne[2]);
     for (int64_t iid1 = ith; iid1 < ids->ne[1]; iid1 += nth) {
@@ -18807,7 +18808,7 @@ static void ggml_compute_forward_mul_mat_id(
                         src0->type, src0_cur, nb01,
                         vec_dot_type, (const char *)wdata_mm, row_size_mm,
                         (float *)dst->data, nb1, nb2,
-                        matrix_rows + cur_a*ne12, local_chunk, chunks_per_expert)) goto IQK_MulMat_Not_Available;
+                        matrix_rows + cur_a*mmid_stride, local_chunk, chunks_per_expert)) goto IQK_MulMat_Not_Available;
         }
         goto IQK_MulMat_Done;
     }
@@ -19009,6 +19010,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     // row groups
     const int n_ids = ids->ne[0]; // n_expert_used
     const int n_as  = ne02;       // n_expert
+    const int64_t mmid_stride = ids->ne[1]; // n_tokens (stride between expert row entries)
 
     char * wdata_src1_end = (src1->type == vec_dot_type) ?
             (char *) params->wdata :
@@ -19020,7 +19022,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     };
 
     int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end); // [n_as]
-    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne12]
+    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][n_tokens]
 
     if (src1->type != vec_dot_type) {
 
@@ -19046,7 +19048,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         }
     }
 
-#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
+#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*mmid_stride + (i1)]
 
     GGML_ASSERT(ids->ne[1] == dst->ne[2]);
     for (int64_t iid1 = ith; iid1 < ids->ne[1]; iid1 += nth) {
@@ -19133,7 +19135,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             vec_dot_type, (const char *)wdata_ug, row_size_ug,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, limit, local_chunk, chunks_per_expert_ug)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*mmid_stride, limit, local_chunk, chunks_per_expert_ug)) GGML_ABORT("fatal error");
     }
 
 #undef MMID_MATRIX_ROW
@@ -29390,7 +29392,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const int n_as = src0->ne[2];
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
-                    cur += n_as * src1->ne[2] * sizeof(int64_t); // matrix_rows
+                    cur += n_as * ggml_nrows(src1) * sizeof(int64_t); // matrix_rows [n_as][n_tokens]
                     // Fused MoE silu path (ggml_compute_forward_fused_moe_silu) uses a
                     // larger scratch layout. Ensure buffer is big enough when fusion
                     // might trigger (n_tokens <= 4, matching the fusion gate).
@@ -29423,7 +29425,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const int n_as = src0->ne[2];
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
-                    cur += n_as * src2->ne[2] * sizeof(int64_t); // matrix_rows
+                    cur += n_as * ggml_nrows(src2) * sizeof(int64_t); // matrix_rows [n_as][n_tokens]
                     if (src2 && ggml_nrows(src2) == 1) {
                         const int64_t nr0 = src0->ne[1];
                         const int64_t nchunk0 = (nr0 + 64 - 1) / 64;
