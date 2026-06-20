@@ -464,7 +464,7 @@ static inline void multiply_add(const Bits& bits, const __m256i * scales, int j,
 
 template <typename Q8, typename Bits>
 static inline void multiply_add_avx2(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
-#ifdef HAVE_VNNIINT8
+#if defined(HAVE_VNNIINT8)
     auto s0 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[0]));
     auto s1 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[1]));
     auto s2 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[2]));
