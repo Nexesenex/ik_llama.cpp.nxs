@@ -491,14 +491,34 @@ void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth) {
             auto x1 = (const float *)c1;
             auto ids = (const int *)(cids + ir*src3->nb[1]);
             float s = scales[ids[0]] * x1[0];
-            for (int k = 0; k < ne00; ++k) y[k] = x0[k] * s;
+            int k = 0;
+#ifdef __AVX2__
+            auto vs = _mm256_set1_ps(s);
+            for (; k + 7 < ne00; k += 8) {
+                _mm256_storeu_ps(y + k, _mm256_mul_ps(_mm256_loadu_ps(x0 + k), vs));
+            }
+#endif
+            for (; k < ne00; ++k) y[k] = x0[k] * s;
             for (int j = 1; j < ne01; ++j) {
                 c0 += src0->nb[1];
                 c1 += src1->nb[1];
                 x0 = (const float *)c0;
                 x1 = (const float *)c1;
                 s  = x1[0] * scales[ids[j]];
-                for (int k = 0; k < ne00; ++k) y[k] += x0[k] * s;
+                k = 0;
+#ifdef __AVX2__
+                vs = _mm256_set1_ps(s);
+                for (; k + 7 < ne00; k += 8) {
+                    auto vx = _mm256_loadu_ps(x0 + k);
+                    auto vy = _mm256_loadu_ps(y + k);
+#ifdef __FMA__
+                    _mm256_storeu_ps(y + k, _mm256_fmadd_ps(vx, vs, vy));
+#else
+                    _mm256_storeu_ps(y + k, _mm256_add_ps(_mm256_mul_ps(vx, vs), vy));
+#endif
+                }
+#endif
+                for (; k < ne00; ++k) y[k] += x0[k] * s;
             }
         }
 
@@ -513,13 +533,33 @@ void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth) {
         auto  y = (     float *)cy;
         auto x0 = (const float *)c0;
         auto x1 = (const float *)c1;
-        for (int k = 0; k < ne00; ++k) y[k] = x0[k] * x1[0];
+        int k = 0;
+#ifdef __AVX2__
+        auto vs = _mm256_set1_ps(x1[0]);
+        for (; k + 7 < ne00; k += 8) {
+            _mm256_storeu_ps(y + k, _mm256_mul_ps(_mm256_loadu_ps(x0 + k), vs));
+        }
+#endif
+        for (; k < ne00; ++k) y[k] = x0[k] * x1[0];
         for (int j = 1; j < ne01; ++j) {
             c0 += src0->nb[1];
             c1 += src1->nb[1];
             x0 = (const float *)c0;
             x1 = (const float *)c1;
-            for (int k = 0; k < ne00; ++k) y[k] += x0[k] * x1[0];
+            k = 0;
+#ifdef __AVX2__
+            vs = _mm256_set1_ps(x1[0]);
+            for (; k + 7 < ne00; k += 8) {
+                auto vx = _mm256_loadu_ps(x0 + k);
+                auto vy = _mm256_loadu_ps(y + k);
+#ifdef __FMA__
+                _mm256_storeu_ps(y + k, _mm256_fmadd_ps(vx, vs, vy));
+#else
+                _mm256_storeu_ps(y + k, _mm256_add_ps(_mm256_mul_ps(vx, vs), vy));
+#endif
+            }
+#endif
+            for (; k < ne00; ++k) y[k] += x0[k] * x1[0];
         }
     }
 }
