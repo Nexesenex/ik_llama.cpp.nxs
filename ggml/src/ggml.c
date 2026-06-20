@@ -30130,6 +30130,14 @@ int ggml_cpu_has_avx_vnni_int8(void) {
 #endif
 }
 
+int ggml_cpu_has_avx_ifma(void) {
+#if defined(__AVX_IFMA__)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 int ggml_cpu_has_avx2(void) {
 #if defined(__AVX2__)
     return 1;
