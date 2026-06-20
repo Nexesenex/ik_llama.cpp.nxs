@@ -64,6 +64,9 @@
 #if defined(__AVX_NE_CONVERT__)
     #define HAVE_NECONVERT
 #endif
+#if defined(__AVXIFMA__)
+    #define HAVE_IFMA256
+#endif
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__)
     #define ggml_mm256_dpbusd_epi32 _mm256_dpbusd_epi32
     #define ggml_mm256_dpwssd_epi32 _mm256_dpwssd_epi32
