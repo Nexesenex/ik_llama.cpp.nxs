@@ -746,7 +746,7 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ5_K_R4> {
 // and a shift:
 //
 // n/d = (mulhi(n, mp) + n) >> L;
-static const uint3 init_fastdiv_values(uint64_t d_64) {
+static uint3 init_fastdiv_values(uint64_t d_64) {
     GGML_ASSERT(d_64 != 0);
     GGML_ASSERT(d_64 <= std::numeric_limits<uint32_t>::max());
 
