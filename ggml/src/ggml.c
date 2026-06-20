@@ -30146,6 +30146,14 @@ int ggml_cpu_has_avx_ne_convert(void) {
 #endif
 }
 
+int ggml_cpu_has_cmpccxadd(void) {
+#if defined(__CMPCCXADD__)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 int ggml_cpu_has_avx2(void) {
 #if defined(__AVX2__)
     return 1;
