@@ -23,9 +23,9 @@ static __global__ void k_set_rows_quant(const float * __restrict__ src0,
                                         const int64_t s1,
                                         const int64_t s2,
                                         const int64_t s3,
-                                        const uint3   ne00,
-                                        const uint3   ne01,
-                                        const uint3   ne02,
+                                        const uint3   ne00_fd,
+                                        const uint3   ne01_fd,
+                                        const uint3   ne02_fd,
                                         const uint3   ne11_fd,
                                         const uint3   ne12_fd) {
 
@@ -39,15 +39,15 @@ static __global__ void k_set_rows_quant(const float * __restrict__ src0,
     uint32_t      tmp    = (uint32_t) i_base;
     uint2         div_mod;
 
-    div_mod           = fast_div_modulo(tmp, ne00);
+    div_mod           = fast_div_modulo(tmp, ne00_fd);
     const int64_t i00 = div_mod.y;
     tmp               = div_mod.x;
 
-    div_mod           = fast_div_modulo(tmp, ne01);
+    div_mod           = fast_div_modulo(tmp, ne01_fd);
     const int64_t i01 = div_mod.y;
     tmp               = div_mod.x;
 
-    div_mod           = fast_div_modulo(tmp, ne02);
+    div_mod           = fast_div_modulo(tmp, ne02_fd);
     const int64_t i02 = div_mod.y;
     const int64_t i03 = div_mod.x;
 
@@ -129,9 +129,9 @@ static __global__ void k_set_rows(const src_t * __restrict__ src0,
                                   const int64_t s1,
                                   const int64_t s2,
                                   const int64_t s3,
-                                  const uint3   ne00,
-                                  const uint3   ne01,
-                                  const uint3   ne02,
+                                  const uint3   ne00_fd,
+                                  const uint3   ne01_fd,
+                                  const uint3   ne02_fd,
                                   const uint3   ne11_fd,
                                   const uint3   ne12_fd) {
 
@@ -144,15 +144,15 @@ static __global__ void k_set_rows(const src_t * __restrict__ src0,
     uint32_t tmp = (uint32_t) i;
     uint2    div_mod;
 
-    div_mod           = fast_div_modulo(tmp, ne00);
+    div_mod           = fast_div_modulo(tmp, ne00_fd);
     const int64_t i00 = div_mod.y;
     tmp               = div_mod.x;
 
-    div_mod           = fast_div_modulo(tmp, ne01);
+    div_mod           = fast_div_modulo(tmp, ne01_fd);
     const int64_t i01 = div_mod.y;
     tmp               = div_mod.x;
 
-    div_mod           = fast_div_modulo(tmp, ne02);
+    div_mod           = fast_div_modulo(tmp, ne02_fd);
     const int64_t i02 = div_mod.y;
     const int64_t i03 = div_mod.x;
 
