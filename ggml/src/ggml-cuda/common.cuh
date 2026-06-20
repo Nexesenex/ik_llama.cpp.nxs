@@ -290,11 +290,21 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 }
 
 static __device__ __forceinline__ float warp_reduce_max(float x) {
+#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_AMPERE
+    // Ampere __reduce_max_sync works on int. Convert float to int-comparable
+    // form via IEEE 754 sign-bit manipulation, reduce, then convert back.
+    int i = __float_as_int(x);
+    i = (i >= 0) ? i : (i ^ 0x7FFFFFFF);
+    i = __reduce_max_sync(0xffffffff, i);
+    i = (i >= 0) ? i : (i ^ 0x7FFFFFFF);
+    return __int_as_float(i);
+#else
 #pragma unroll
     for (int mask = 16; mask > 0; mask >>= 1) {
         x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, mask, 32));
     }
     return x;
+#endif
 }
 
 static __device__ __forceinline__ half ggml_cuda_hmax(const half a, const half b) {
