@@ -5610,11 +5610,18 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         ggml_backend_cuda_set_pinmem(params.pinmem);
         // Store user-provided stream_k_thresh for use in FA kernel
         if (params.stream_k_thresh != 75) {
-            ggml_cuda_user_stream_k_thresh_global = params.stream_k_thresh;
-            for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-                ggml_cuda_user_stream_k_thresh[i] = params.stream_k_thresh;
+            if (params.stream_k_thresh == -1) {
+                size_t total_vram = 0;
+                ggml_backend_cuda_get_device_memory(device, nullptr, &total_vram);
+                int vram_gib = (int)(total_vram / (1024 * 1024 * 1024));
+                int recommended = ggml_backend_cuda_get_default_stream_k_thresh(vram_gib);
+                ggml_cuda_user_stream_k_thresh[device] = recommended;
+                GGML_CUDA_LOG_INFO("=========================== %s: auto-detected stream_k_thresh for device %d (%d GiB VRAM) -> %d\n", __func__, device, vram_gib, recommended);
+            } else {
+                ggml_cuda_user_stream_k_thresh_global = params.stream_k_thresh;
+                ggml_cuda_user_stream_k_thresh[device] = params.stream_k_thresh;
+                GGML_CUDA_LOG_INFO("=========================== %s: setting stream_k_thresh to %d\n", __func__, params.stream_k_thresh);
             }
-            GGML_CUDA_LOG_INFO("=========================== %s: setting stream_k_thresh to %d\n", __func__, params.stream_k_thresh);
         }
         if (params.fusion != ctx->fusion) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting fusion to %d\n", __func__, params.fusion);
