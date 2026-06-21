@@ -159,3 +159,4 @@ flake.lock
 a.out.*
 .dev
 .github
+.opencode/opencode.json
