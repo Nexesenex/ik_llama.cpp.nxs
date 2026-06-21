@@ -5634,7 +5634,9 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         // Apply user-provided cslq (normalizes value and sets env var immediately)
         if (!params.cslq.empty()) {
             ggml_backend_cuda_set_cslq(params.cslq.c_str());
-            GGML_CUDA_LOG_INFO(" =========================== %s: setting CUDA_SCALE_LAUNCH_QUEUES to %s\n", __func__, params.cslq.c_str());
+            if (device == 0) {
+                GGML_CUDA_LOG_INFO(" =========================== %s: setting CUDA_SCALE_LAUNCH_QUEUES to %s\n", __func__, params.cslq.c_str());
+            }
         }
         // Store user-provided pinmem for use in buffer type allocation
         ggml_backend_cuda_set_pinmem(params.pinmem);
@@ -5646,16 +5648,20 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
                 int vram_gib = (int)(total_vram / (1024 * 1024 * 1024));
                 int recommended = ggml_backend_cuda_get_default_stream_k_thresh(vram_gib);
                 ggml_cuda_user_stream_k_thresh[device] = recommended;
-                GGML_CUDA_LOG_INFO("=========================== %s: auto-detected stream_k_thresh for device %d (%d GiB VRAM) -> %d\n", __func__, device, vram_gib, recommended);
+                GGML_CUDA_LOG_INFO(" =========================== %s: auto-detected stream_k_thresh for device %d (%d GiB VRAM) -> %d\n", __func__, device, vram_gib, recommended);
             } else {
                 ggml_cuda_user_stream_k_thresh_global = params.stream_k_thresh;
                 ggml_cuda_user_stream_k_thresh[device] = params.stream_k_thresh;
-                GGML_CUDA_LOG_INFO("=========================== %s: setting stream_k_thresh to %d\n", __func__, params.stream_k_thresh);
+                if (device == 0) {
+                    GGML_CUDA_LOG_INFO(" =========================== %s: setting stream_k_thresh to %d\n", __func__, params.stream_k_thresh);
+                }
             }
         // Store user-provided nblocks_stream_k_raw_thresh for use in FA kernel
         if (params.nblocks_stream_k_raw_thresh != 4) {
             ggml_cuda_user_nblocks_stream_k_raw_thresh = params.nblocks_stream_k_raw_thresh;
-            GGML_CUDA_LOG_INFO("=========================== %s: setting nblocks_stream_k_raw_thresh to %d\n", __func__, params.nblocks_stream_k_raw_thresh);
+            if (device == 0) {
+                GGML_CUDA_LOG_INFO(" =========================== %s: setting nblocks_stream_k_raw_thresh to %d\n", __func__, params.nblocks_stream_k_raw_thresh);
+            }
         }
         }
         if (params.fusion != ctx->fusion) {
@@ -5689,7 +5695,7 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
 
 #ifdef GGML_USE_NCCL
     if (!enable_p2p) {
-        printf("================== P2P disabled, but needed for NCCL\n");
+        printf(" ================== P2P disabled, but needed for NCCL\n");
         enable_p2p = true;
     }
 #endif
@@ -5889,7 +5895,7 @@ GGML_CALL int ggml_backend_cuda_get_nblocks_stream_k_raw_thresh(void) {
 }
 
 GGML_CALL void ggml_backend_cuda_set_nblocks_stream_k_raw_thresh(int thresh) {
-    if (thresh >= 1 && thresh <= 10) {
+    if (thresh >= 1 && thresh <= 64) {
         ggml_cuda_user_nblocks_stream_k_raw_thresh = thresh;
         GGML_CUDA_LOG_INFO("=========================== ggml_backend_cuda_set_nblocks_stream_k_raw_thresh: setting to %d\n", thresh);
     } else {
