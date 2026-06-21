@@ -4999,6 +4999,18 @@ static void update_cuda_graph_executable(ggml_cuda_graph * graph) {
         GGML_ASSERT(stat == cudaSuccess);
     }
 }
+
+static void maintain_cuda_graph(ggml_backend_cuda_context * cuda_ctx, bool cuda_graph_update_required) {
+    auto graph = cuda_ctx->cur_graph;
+    if (graph->instance == nullptr) { // Create executable graph from captured graph.
+        CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
+    }
+    if (cuda_graph_update_required) { // Update graph executable
+        update_cuda_graph_executable(graph);
+    }
+    // Launch graph
+    CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
+}
 #endif
 
 static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
@@ -5043,24 +5055,18 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
             if (--ggml_cuda_lock_counter == 0) {
                 ggml_cuda_lock_cv.notify_all();
             }
-        } else {
+        }
+#endif
+        if (!graph_evaluated_or_captured) {
             graph_evaluated_or_captured = true; // ggml graph has been directly evaluated
         }
     }
 
+#ifdef USE_CUDA_GRAPH
     if (use_cuda_graph) {
-        if (graph->instance == nullptr) { // Create executable graph from captured graph.
-            CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
-        }
-        if (cuda_graph_update_required) { // Update graph executable
-            update_cuda_graph_executable(graph);
-        }
-        // Launch graph
-        CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
-#else
-        graph_evaluated_or_captured = true;
-#endif  // USE_CUDA_GRAPH
+        maintain_cuda_graph(cuda_ctx, cuda_graph_update_required);
     }
+#endif
 }
 
 GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
