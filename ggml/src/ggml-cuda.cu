@@ -5123,6 +5123,10 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
 
         use_cuda_graph = check_node_graph_compatibility_and_refresh_copy_ops(graph, cgraph, use_cuda_graph, cuda_ctx->stream());
 
+        if (!use_cuda_graph) {
+            graph->disable_due_to_failed_graph_capture = true;
+        }
+
         // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
         if (use_cuda_graph) {
             if (cuda_graph_update_required) {
