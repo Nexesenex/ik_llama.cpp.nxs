@@ -197,7 +197,10 @@ server_task_result server_response::recv(int id_task) {
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_results);
         condition_results.wait(lock, [&] {
-            return !queue_results_legacy.empty();
+            for (const auto & r : queue_results_legacy) {
+                if (r.id == id_task) return true;
+            }
+            return false;
             });
 
         for (int i = 0; i < (int)queue_results_legacy.size(); i++) {
