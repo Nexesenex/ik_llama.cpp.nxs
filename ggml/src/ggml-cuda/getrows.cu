@@ -260,6 +260,9 @@ void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_Q6_0:
             get_rows_cuda<QK6_0, QR6_0, dequantize_q6_0>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
             break;
+        case GGML_TYPE_IQ4_NL:
+            get_rows_cuda<QK4_NL, QR4_NL, dequantize_iq4_nl>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
+            break;
         case GGML_TYPE_Q8_0:
             get_rows_cuda<QK8_0, QR8_0, dequantize_q8_0>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
             break;
