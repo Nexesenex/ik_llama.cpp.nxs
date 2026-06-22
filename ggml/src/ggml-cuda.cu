@@ -3787,6 +3787,27 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 dst == cgraph->nodes[i+1]->src[0] && ops_are_same_device(cgraph, i, i+1)) {
                 ggml_cuda_op_fused_add_rms_norm(ctx, dst, cgraph->nodes[i+1]);
                 ++i;
+            }
+            else if (fusion) {
+                // Fuse chain of consecutive ADD nodes
+                int n_fuse = 1;
+                for (; n_fuse <= 7; ++n_fuse) {
+                    if (i + n_fuse >= cgraph->n_nodes) break;
+                    if (cgraph->nodes[i + n_fuse]->op != GGML_OP_ADD) break;
+                    if (cgraph->nodes[i + n_fuse - 1] != cgraph->nodes[i + n_fuse]->src[0]) break;
+                    if (cgraph->nodes[i + n_fuse]->src[1]->type != dst->src[1]->type) break;
+                    if (!ggml_are_same_shape(cgraph->nodes[i + n_fuse]->src[1], dst->src[1])) break;
+                    if (!ops_are_same_device(cgraph, i, i + n_fuse)) break;
+                }
+                if (n_fuse > 1) {
+                    for (int j = 0; j < n_fuse - 1; ++j) {
+                        dst->src[j + 2] = cgraph->nodes[i + j + 1]->src[1];
+                    }
+                    ggml_cuda_op_fused_add(ctx, dst, n_fuse);
+                    i += n_fuse - 1;
+                } else {
+                    ggml_cuda_op_add(ctx, dst);
+                }
             } else {
                 ggml_cuda_op_add(ctx, dst);
             }
