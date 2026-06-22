@@ -143,6 +143,9 @@ typedef sycl::half2 ggml_half2;
 #define QI4_NL (QK4_NL / (4*QR4_NL))
 #define QR4_NL 2
 
+#define QI5_NL (QK5_NL / (4*QR5_NL))
+#define QR5_NL 2
+
 #define QI4_XS (QK_K / (4*QR4_XS))
 #define QR4_XS 2
 
@@ -594,6 +597,14 @@ typedef struct {
     uint8_t qs[4*QK4_NL];
 } block_iq4_nl_r8;
 static_assert(sizeof(block_iq4_nl_r8) == 8*sizeof(ggml_half) + 4*QK4_NL, "wrong iq4_nl_r8 block size/padding");
+
+#define QK5_NL 32
+typedef struct {
+    ggml_half d;
+    uint8_t qh[4];
+    uint8_t qs[QK5_NL/2];
+} block_iq5_nl;
+static_assert(sizeof(block_iq5_nl) == sizeof(ggml_half) + sizeof(uint32_t) + QK5_NL/2, "wrong iq5_nl block size/padding");
 
 typedef struct {
     ggml_half d;
@@ -2223,6 +2234,13 @@ GGML_TABLE_END()
 GGML_TABLE_BEGIN(int8_t, iq4k_values, 32)
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
     -123, -100, -79, -61, -45, -31, -18,  -6, 5, 17, 29, 42, 57, 73, 93, 117
+GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(int8_t, kvalues_iq5nl, 32)
+    -127, -115, -103,  -92,  -81,  -71,  -61,  -52,
+     -43,  -34,  -27,  -20,  -14,   -8,   -4,   -1,
+       1,    4,    8,   14,   20,   27,   34,   43,
+      52,   61,   71,   81,   92,  103,  115,  127,
 GGML_TABLE_END()
 
 GGML_TABLE_BEGIN(int8_t, iq5nl_values, 64)
