@@ -19,6 +19,28 @@ static __device__ __forceinline__ void dequantize_q4_0(const void * vx, const in
 #endif // GGML_CUDA_F16
 }
 
+static __device__ __forceinline__ void dequantize_iq5_nl(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
+    const block_iq5_nl * x = (const block_iq5_nl *) vx;
+
+    const dfloat d = x[ib].d;
+
+    uint32_t qh;
+    memcpy(&qh, x[ib].qh, sizeof(qh));
+
+    const int xh_0 = ((qh >> (iqs +  0)) << 4) & 0x10;
+    const int xh_1 = ((qh >> (iqs + 12))     ) & 0x10;
+
+    v.x = kvalues_iq5nl[((x[ib].qs[iqs] & 0xF) | xh_0)];
+    v.y = kvalues_iq5nl[((x[ib].qs[iqs] >> 4) | xh_1)];
+
+#ifdef GGML_CUDA_F16
+    v = __hmul2(v, {d, d});
+#else
+    v.x = v.x * d;
+    v.y = v.y * d;
+#endif // GGML_CUDA_F16
+}
+
 static __device__ __forceinline__ void dequantize_iq4_nl(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
     const block_q4_0 * x = (const block_q4_0 *) vx;
 

@@ -165,7 +165,7 @@ static void ggml_cpy_flt_contiguous_cuda(
         (cx, cdst, ne, cdst_indirect, graph_cpynode_index++);
 }
 
-// F32 -> quantized copy template (for Q4_0, Q4_1, Q5_0, Q5_1, Q6_0, Q8_0, IQ4_NL)
+// F32 -> quantized copy template (for Q4_0, Q4_1, Q5_0, Q5_1, Q6_0, Q8_0, IQ4_NL, IQ5_NL)
 template <cpy_kernel_t cpy_blck, int qk>
 static void ggml_cpy_f32_q_cuda(
     const char * cx, char * cdst, const int64_t ne,
