@@ -62,6 +62,10 @@
 #define GGML_CUDA_CC_IS_NVIDIA(cc)   (cc < CC_OFFSET_AMD)
 #define GGML_CUDA_CC_IS_AMD(cc)   (cc >= CC_OFFSET_AMD)
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
+#define GGML_CUDA_USE_CUB
+#endif
+
 #define MATRIX_ROW_PADDING 512 // last row of quant. matrices is a multiple of this to avoid out-of-bounds memory accesses
 
 #if defined(_MSC_VER)
@@ -332,25 +336,6 @@ static __device__ __forceinline__ half2 ggml_cuda_hmax2(const half2 a, const hal
     GGML_UNUSED(b);
     NO_DEVICE_CODE;
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
-}
-
-template<bool norm>
-static __global__ void reduce_rows_f32(const float * x, float * dst, const int ncols) {
-    const int row = blockIdx.x;
-    const int col = threadIdx.x;
-
-    float sum = 0.0f;
-    for (int i = col; i < ncols; i += blockDim.x) {
-        sum += x[row * ncols + i];
-    }
-
-    sum = warp_reduce_sum(sum);
-
-    if (col != 0) {
-        return;
-    }
-
-    dst[row] = norm ? sum / ncols : sum;
 }
 
 static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
