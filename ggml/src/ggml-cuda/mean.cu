@@ -1,4 +1,15 @@
 #include "mean.cuh"
+#include "reduce_rows.cuh"
+
+#ifdef GGML_CUDA_USE_CUB
+#include <cub/cub.cuh>
+using namespace cub;
+#endif
+
+template <typename T>
+static __global__ void divide_by_count(T * result, size_t count) {
+    *result /= static_cast<T>(count);
+}
 
 void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0   = dst->src[0];
@@ -13,7 +24,32 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t ncols = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    const dim3 block_dims(WARP_SIZE, 1, 1);
+#ifdef GGML_CUDA_USE_CUB
+    cudaStreamCaptureStatus iscapturing;
+    CUDA_CHECK(cudaStreamIsCapturing(stream, &iscapturing));
+    if (nrows == 1 && ncols > (iscapturing == cudaStreamCaptureStatusNone ? 65536 : 32768)) {
+        ggml_cuda_pool & pool = ctx.pool();
+
+        size_t tmp_size = 0;
+        DeviceReduce::Sum(nullptr, tmp_size, src0_d, dst_d, ncols, stream);
+
+        ggml_cuda_pool_alloc<uint8_t> tmp_alloc(pool, tmp_size);
+        DeviceReduce::Sum(tmp_alloc.ptr, tmp_size, src0_d, dst_d, ncols, stream);
+
+        divide_by_count<float><<<1, 1, 0, stream>>>(dst_d, ncols);
+        return;
+    }
+#endif
+
     const dim3 block_nums(nrows, 1, 1);
-    reduce_rows_f32</*norm*/ true><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+
+    const int id  = ggml_cuda_get_device();
+    const int nsm = ggml_cuda_info().devices[id].nsm;
+    if ((nrows / nsm) < 2) {
+        const dim3 block_dims(512, 1, 1);
+        reduce_rows_f32</*norm=*/true><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+    } else {
+        const dim3 block_dims(ncols < 1024 ? 32 : 128, 1, 1);
+        reduce_rows_f32</*norm=*/true><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+    }
 }

@@ -1,3 +1,4 @@
+#include "reduce_rows.cuh"
 #include "sumrows.cuh"
 
 static __global__ void k_sum_rows_nc_f32(const char * x, char * y, const int ncols,
@@ -42,9 +43,16 @@ static __global__ void k_sum_rows_div_f32(const float * __restrict__ x, float * 
 }
 
 void sum_rows_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
-    const dim3 block_dims(WARP_SIZE, 1, 1);
+    const int  id  = ggml_cuda_get_device();
+    const int  nsm = ggml_cuda_info().devices[id].nsm;
     const dim3 block_nums(nrows, 1, 1);
-    reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
+    if ((nrows / nsm) < 2) {
+        const dim3 block_dims(512, 1, 1);
+        reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
+    } else {
+        const dim3 block_dims(ncols < 1024 ? 32 : 128, 1, 1);
+        reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
+    }
 }
 static void sum_rows_f32_cuda_nc(const char * x, char * dst, int ne0, int ne1, int ne2, int ne3,
         size_t nb00, size_t nb01, size_t nb02, size_t nb03, size_t nb1, size_t nb2, size_t nb3, cudaStream_t stream) {
@@ -149,10 +157,17 @@ void ggml_cuda_op_sum_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t ncols = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    const dim3 block_dims(WARP_SIZE, 1, 1);
     const dim3 block_nums(nrows, 1, 1);
 
-    reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+    const int id  = ggml_cuda_get_device();
+    const int nsm = ggml_cuda_info().devices[id].nsm;
+    if ((nrows / nsm) < 2) {
+        const dim3 block_dims(512, 1, 1);
+        reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+    } else {
+        const dim3 block_dims(ncols < 1024 ? 32 : 128, 1, 1);
+        reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+    }
 
 }
 
