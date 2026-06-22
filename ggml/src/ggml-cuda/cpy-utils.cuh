@@ -253,6 +253,43 @@ static __device__ void quantize_f32_iq4_nl_block(const float * __restrict__ x, b
     y->d = sumq2 > 0 ? sumqx/sumq2 : d;
 }
 
+static __device__ void quantize_f32_iq5_nl_block(const float * __restrict__ x, block_iq5_nl * __restrict__ y) {
+    float amax = 0.0f;
+    float vmax = 0.0f;
+
+    for (int j = 0; j < QK5_NL; ++j) {
+        const float v = x[j];
+        if (amax < fabsf(v)) {
+            amax = fabsf(v);
+            vmax = v;
+        }
+    }
+
+    float d = vmax / kvalues_iq5nl[0];
+    const float id = d ? 1.0f/d : 0.0f;
+
+    memset(y->qh, 0, sizeof(y->qh));
+
+    float sumqx = 0, sumq2 = 0;
+    for (int j = 0; j < QK5_NL/2; ++j) {
+        const float x0 = x[0        + j]*id;
+        const float x1 = x[QK5_NL/2 + j]*id;
+        int xi0 = best_index_int8(32, kvalues_iq5nl, x0);
+        int xi1 = best_index_int8(32, kvalues_iq5nl, x1);
+        y->qs[j] = (xi0 & 0xF) | ((xi1 & 0xF) << 4);
+        if (xi0 & 0x10) { y->qh[j/8] |= (1 << (j%8)); }
+        if (xi1 & 0x10) { y->qh[j/8 + 2] |= (1 << (j%8)); }
+        const float v0 = kvalues_iq5nl[xi0];
+        const float v1 = kvalues_iq5nl[xi1];
+        const float w0 = x[0        + j]*x[0        + j];
+        const float w1 = x[QK5_NL/2 + j]*x[QK5_NL/2 + j];
+        sumqx += w0*v0*x[j] + w1*v1*x[QK5_NL/2 + j];
+        sumq2 += w0*v0*v0 + w1*v1*v1;
+    }
+
+    y->d = sumq2 > 0 ? sumqx/sumq2 : d;
+}
+
 static __device__ void quantize_f32_q6_0_block(const float * __restrict__ xi, block_q6_0 * __restrict__ y) {
 
     float amax = 0.0f;
@@ -325,6 +362,10 @@ static __device__ void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
 
 static __device__ void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
     quantize_f32_iq4_nl_block((const float *)cxi, (block_iq4_nl *)cdsti);
+}
+
+static __device__ void cpy_blck_f32_iq5_nl(const char * cxi, char * cdsti) {
+    quantize_f32_iq5_nl_block((const float *)cxi, (block_iq5_nl *)cdsti);
 }
 
 template<typename src_t, typename dst_t>

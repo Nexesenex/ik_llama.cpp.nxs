@@ -1162,6 +1162,43 @@ static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4) {
     return get_int_from_table_16(q4, kvalues_iq4nl);
 }
 
+#define VDR_IQ5_NL_Q8_1_MMVQ 2
+#define VDR_IQ5_NL_Q8_1_MMQ  4
+
+static __device__ __forceinline__ float vec_dot_iq5_nl_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq5_nl * bq5 = (const block_iq5_nl *) vbq + kbx;
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+    const int qh_all = *(const int *)bq5->qh;
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < VDR_IQ5_NL_Q8_1_MMVQ; ++l) {
+        const int aux_q4 = get_int_b2(bq5->qs, iqs + l);
+        const int2 v_low  = get_int_from_table_16(aux_q4, kvalues_iq5nl + 0);
+        const int2 v_high = get_int_from_table_16(aux_q4, kvalues_iq5nl + 16);
+
+        const int qh0 = (qh_all >> (4*(iqs + l) +  0)) & 0xF;
+        const int qh1 = (qh_all >> (4*(iqs + l) + 16)) & 0xF;
+
+        int mask_even = (qh0 & 1) * 0xFF; mask_even |= ((qh0 >> 1) & 1) * 0xFF << 8;
+        mask_even |= ((qh0 >> 2) & 1) * 0xFF << 16; mask_even |= ((qh0 >> 3) & 1) * 0xFF << 24;
+
+        int mask_odd  = (qh1 & 1) * 0xFF; mask_odd  |= ((qh1 >> 1) & 1) * 0xFF << 8;
+        mask_odd  |= ((qh1 >> 2) & 1) * 0xFF << 16; mask_odd  |= ((qh1 >> 3) & 1) * 0xFF << 24;
+
+        const int vx = (v_low.x & ~mask_even) | (v_high.x & mask_even);
+        const int vy = (v_low.y & ~mask_odd)  | (v_high.y & mask_odd);
+
+        sumi = ggml_cuda_dp4a(vx, q8[2*l+0], sumi);
+        sumi = ggml_cuda_dp4a(vy, q8[2*l+1], sumi);
+    }
+
+    const float d = __half2float(bq5->d) * __low2float(bq8_1->ds);
+    return d * sumi;
+}
+
 #define VDR_IQ4_NL_Q8_1_MMVQ 2
 #define VDR_IQ4_NL_Q8_1_MMQ  4
 
