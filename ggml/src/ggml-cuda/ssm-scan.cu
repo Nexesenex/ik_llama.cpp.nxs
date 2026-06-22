@@ -1,24 +1,33 @@
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
+#define USE_CUB
+#endif
+
+#ifdef USE_CUB
+#include <cub/cub.cuh>
+using namespace cub;
+#endif
+
 #include "ssm-scan.cuh"
 
-template <size_t splitD, size_t N>
-__global__ void __launch_bounds__(splitD, 2)
-    ssm_scan_f32(const float * __restrict__ src0, const float * __restrict__ src1, const float * __restrict__ src2,
-                 const float * __restrict__ src3, const float * __restrict__ src4, const float * __restrict__ src5,
-                 const int src0_nb1, const int src0_nb2, const int src1_nb0, const int src1_nb1, const int src1_nb2,
-                 const int src1_nb3, const int src2_nb0, const int src2_nb1, const int src2_nb2, const int src3_nb1,
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpass-failed"
+#endif
+template <size_t splitD, size_t N, size_t L_template>
+__global__ void __launch_bounds__(splitD, 1)
+    ssm_scan_f32(const float *__restrict__ src0, const float *__restrict__ src1,
+                 const float *__restrict__ src2,
+                 const float *__restrict__ src3, const float *__restrict__ src4,
+                 const float *__restrict__ src5,
+                 float *__restrict__ dst,
+                 const int src0_nb1, const int src0_nb2,
+                 const int src1_nb1, const int src1_nb2, const int src1_nb3,
+                 const int src2_nb1, const int src2_nb2, const int src3_nb1,
                  const int src4_nb1, const int src4_nb2, const int src5_nb1, const int src5_nb2,
-                 float * __restrict__ dst, const int D, const int L, const int B) {
+                 const int D, const int L_param, const int B) {
+    const size_t L = L_template == 0 ? L_param : L_template;
     const int bidx = blockIdx.x;
     const int bidy = blockIdx.y;
-    const int tid  = threadIdx.x;
-    const int wid  = tid / 32;
-    const int wtid = tid % 32;
-
-    extern __shared__ float smem[];
-    const int               stride_sA  = N + 1;
-    const int               stride_ss0 = N + 1;
-    float *                 smem_A     = smem;
-    float *                 smem_s0    = smem_A + splitD * stride_sA;
 
     const float * s0_block = (const float *) ((const char *) src0 + bidx * src0_nb2 + bidy * splitD * src0_nb1);
     const float * x_block  = (const float *) ((const char *) src1 + (bidx * src1_nb2) + bidy * splitD * sizeof(float));
@@ -29,67 +38,153 @@ __global__ void __launch_bounds__(splitD, 2)
     float *       y_block  = (float *) ((char *) dst + (bidx * src1_nb2) + bidy * splitD * sizeof(float));
     float *       s_block  = (float *) ((char *) dst + src1_nb3 + bidx * src0_nb2 + bidy * splitD * src0_nb1);
 
-    const int stride_s0 = src0_nb1 / sizeof(float);
     const int stride_x  = src1_nb1 / sizeof(float);
     const int stride_dt = src2_nb1 / sizeof(float);
-    const int stride_A  = src3_nb1 / sizeof(float);
     const int stride_B  = src4_nb1 / sizeof(float);
     const int stride_C  = src5_nb1 / sizeof(float);
-    const int stride_s  = stride_s0;
     const int stride_y  = stride_x;
 
-    if (N == 16) {
+    float regA[N];
+    float regs0[N];
+
+    __shared__ float smemB[N];
+    __shared__ float smemC[N];
+
+#ifdef USE_CUB
+    using BlockLoad = cub::BlockLoad<float, splitD, N, cub::BLOCK_LOAD_WARP_TRANSPOSE>;
+    using BlockStore = cub::BlockStore<float, splitD, N, cub::BLOCK_STORE_WARP_TRANSPOSE>;
+
+    union CubTempStorage {
+        typename BlockLoad::TempStorage load_temp;
+        typename BlockStore::TempStorage store_temp;
+    };
+    __shared__ CubTempStorage cub_temp_storage;
+
+    BlockLoad(cub_temp_storage.load_temp).Load(A_block, regA);
+    BlockLoad(cub_temp_storage.load_temp).Load(s0_block, regs0);
+#else
+    const int stride_s0 = src0_nb1 / sizeof(float);
+    const int stride_A  = src3_nb1 / sizeof(float);
 #pragma unroll
-        for (int i = 0; i < splitD / 4; i += 2) {
-            float value = A_block[(wid * warpSize + i) * stride_A + wtid];
-            smem_A[(wid * warpSize + i) * stride_sA + wtid + ((wtid / 16) > 0 ? 1 : 0)] = value;
-        }
-#pragma unroll
-        for (int i = 0; i < splitD / 4; i += 2) {
-            float value = s0_block[(wid * warpSize + i) * stride_s0 + wtid];
-            smem_s0[(wid * warpSize + i) * stride_ss0 + wtid + ((wtid / 16) > 0 ? 1 : 0)] = value;
-        }
+    for (size_t n = 0; n < N; ++n) {
+        regA[n]   = A_block[threadIdx.x * stride_A + n];
+        regs0[n]  = s0_block[threadIdx.x * stride_s0 + n];
     }
+#endif
 
-    __syncthreads();
-
-    for (int i = 0; i < L; i++) {
-        float dt_soft_plus = dt_block[i * stride_dt + tid];
-        if (dt_soft_plus <= 20.0f) {
-            dt_soft_plus = log1pf(exp(dt_soft_plus));
-        }
-        float x_dt = x_block[i * stride_x + tid] * dt_soft_plus;
-        float sumf = 0.0f;
 #pragma unroll
-        for (int j = 0; j < N; j++) {
-            float state = (smem_s0[tid * stride_ss0 + j] * expf(dt_soft_plus * smem_A[tid * stride_sA + j])) +
-                          (B_block[i * stride_B + j] * x_dt);
-            ggml_cuda_mad(sumf, state, C_block[i * stride_C + j]);
-            if (i == L - 1) {
-                s_block[tid * stride_s + j] = state;
-            } else {
-                smem_s0[tid * stride_ss0 + j] = state;
-            }
+    for (size_t i = 0; i < L; i++) {
+        if (threadIdx.x < N) {
+            smemB[threadIdx.x] = B_block[i * stride_B + threadIdx.x];
+            smemC[threadIdx.x] = C_block[i * stride_C + threadIdx.x];
         }
         __syncthreads();
-        y_block[i * stride_y + tid] = sumf;
+
+        float dt_soft_plus = dt_block[i * stride_dt + threadIdx.x];
+        if (dt_soft_plus <= 20.0f) {
+            dt_soft_plus = log1pf(expf(dt_soft_plus));
+        }
+        float x_dt = x_block[i * stride_x + threadIdx.x] * dt_soft_plus;
+
+        float sumf = 0.0f;
+#pragma unroll
+        for (size_t n = 0; n < N; n++) {
+            float state = regs0[n] * expf(dt_soft_plus * regA[n]) + smemB[n] * x_dt;
+            sumf += state * smemC[n];
+            regs0[n] = state;
+        }
+        y_block[i * stride_y + threadIdx.x] = sumf;
     }
+
+#ifdef USE_CUB
+    BlockStore(cub_temp_storage.store_temp).Store(s_block, regs0);
+#else
+    const int stride_s = src0_nb1 / sizeof(float);
+#pragma unroll
+    for (size_t n = 0; n < N; ++n) {
+        s_block[threadIdx.x * stride_s + n] = regs0[n];
+    }
+#endif
 }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 static void ssm_scan_f32_cuda(const float * src0, const float * src1, const float * src2, const float * src3,
                               const float * src4, const float * src5, const int src0_nb1, const int src0_nb2,
-                              const int src1_nb0, const int src1_nb1, const int src1_nb2, const int src1_nb3,
-                              const int src2_nb0, const int src2_nb1, const int src2_nb2, const int src3_nb1,
+                              const int src1_nb1, const int src1_nb2, const int src1_nb3,
+                              const int src2_nb1, const int src2_nb2, const int src3_nb1,
                               const int src4_nb1, const int src4_nb2, const int src5_nb1, const int src5_nb2,
                               float * dst, const int N, const int D, const int L, const int B, cudaStream_t stream) {
     const int threads = 128;
     GGML_ASSERT(D % threads == 0);
     const dim3 blocks(B, (D + threads - 1) / threads, 1);
-    const int  smem_size = (threads * (N + 1) * 2) * sizeof(float);
     if (N == 16) {
-        ssm_scan_f32<128, 16><<<blocks, threads, smem_size, stream>>>(
-            src0, src1, src2, src3, src4, src5, src0_nb1, src0_nb2, src1_nb0, src1_nb1, src1_nb2, src1_nb3, src2_nb0,
-            src2_nb1, src2_nb2, src3_nb1, src4_nb1, src4_nb2, src5_nb1, src5_nb2, dst, D, L, B);
+        switch (L) {
+        case 1:
+            ssm_scan_f32<threads, 16, 1><<<blocks, threads, 0, stream>>>(
+                src0, src1, src2, src3, src4, src5, dst,
+                src0_nb1, src0_nb2, src1_nb1, src1_nb2, src1_nb3,
+                src2_nb1, src2_nb2, src3_nb1, src4_nb1, src4_nb2, src5_nb1, src5_nb2,
+                D, L, B);
+            break;
+        case 2:
+            ssm_scan_f32<threads, 16, 2><<<blocks, threads, 0, stream>>>(
+                src0, src1, src2, src3, src4, src5, dst,
+                src0_nb1, src0_nb2, src1_nb1, src1_nb2, src1_nb3,
+                src2_nb1, src2_nb2, src3_nb1, src4_nb1, src4_nb2, src5_nb1, src5_nb2,
+                D, L, B);
+            break;
+        case 3:
+            ssm_scan_f32<threads, 16, 3><<<blocks, threads, 0, stream>>>(
+                src0, src1, src2, src3, src4, src5, dst,
+                src0_nb1, src0_nb2, src1_nb1, src1_nb2, src1_nb3,
+                src2_nb1, src2_nb2, src3_nb1, src4_nb1, src4_nb2, src5_nb1, src5_nb2,
+                D, L, B);
+            break;
+        case 4:
+            ssm_scan_f32<threads, 16, 4><<<blocks, threads, 0, stream>>>(
+                src0, src1, src2, src3, src4, src5, dst,
+                src0_nb1, src0_nb2, src1_nb1, src1_nb2, src1_nb3,
+                src2_nb1, src2_nb2, src3_nb1, src4_nb1, src4_nb2, src5_nb1, src5_nb2,
+                D, L, B);
+            break;
+        case 5:
+            ssm_scan_f32<threads, 16, 5><<<blocks, threads, 0, stream>>>(
+                src0, src1, src2, src3, src4, src5, dst,
+                src0_nb1, src0_nb2, src1_nb1, src1_nb2, src1_nb3,
+                src2_nb1, src2_nb2, src3_nb1, src4_nb1, src4_nb2, src5_nb1, src5_nb2,
+                D, L, B);
+            break;
+        case 6:
+            ssm_scan_f32<threads, 16, 6><<<blocks, threads, 0, stream>>>(
+                src0, src1, src2, src3, src4, src5, dst,
+                src0_nb1, src0_nb2, src1_nb1, src1_nb2, src1_nb3,
+                src2_nb1, src2_nb2, src3_nb1, src4_nb1, src4_nb2, src5_nb1, src5_nb2,
+                D, L, B);
+            break;
+        case 7:
+            ssm_scan_f32<threads, 16, 7><<<blocks, threads, 0, stream>>>(
+                src0, src1, src2, src3, src4, src5, dst,
+                src0_nb1, src0_nb2, src1_nb1, src1_nb2, src1_nb3,
+                src2_nb1, src2_nb2, src3_nb1, src4_nb1, src4_nb2, src5_nb1, src5_nb2,
+                D, L, B);
+            break;
+        case 8:
+            ssm_scan_f32<threads, 16, 8><<<blocks, threads, 0, stream>>>(
+                src0, src1, src2, src3, src4, src5, dst,
+                src0_nb1, src0_nb2, src1_nb1, src1_nb2, src1_nb3,
+                src2_nb1, src2_nb2, src3_nb1, src4_nb1, src4_nb2, src5_nb1, src5_nb2,
+                D, L, B);
+            break;
+        default:
+            ssm_scan_f32<threads, 16, 0><<<blocks, threads, 0, stream>>>(
+                src0, src1, src2, src3, src4, src5, dst,
+                src0_nb1, src0_nb2, src1_nb1, src1_nb2, src1_nb3,
+                src2_nb1, src2_nb2, src3_nb1, src4_nb1, src4_nb2, src5_nb1, src5_nb2,
+                D, L, B);
+            break;
+        }
     } else {
         GGML_ABORT("doesn't support N!=16.");
     }
@@ -131,7 +226,9 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    ssm_scan_f32_cuda(src0_d, src1_d, src2_d, src3_d, src4_d, src5_d, src0->nb[1], src0->nb[2], src1->nb[0],
-                      src1->nb[1], src1->nb[2], src1->nb[3], src2->nb[0], src2->nb[1], src2->nb[2], src3->nb[1],
-                      src4->nb[1], src4->nb[2], src5->nb[1], src5->nb[2], dst_d, nc, nr, n_t, n_s, stream);
+    ssm_scan_f32_cuda(src0_d, src1_d, src2_d, src3_d, src4_d, src5_d, src0->nb[1], src0->nb[2],
+                      src1->nb[1], src1->nb[2], src1->nb[3],
+                      src2->nb[1], src2->nb[2], src3->nb[1],
+                      src4->nb[1], src4->nb[2], src5->nb[1], src5->nb[2],
+                      dst_d, nc, nr, n_t, n_s, stream);
 }
