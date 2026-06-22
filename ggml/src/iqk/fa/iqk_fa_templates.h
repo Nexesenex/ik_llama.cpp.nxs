@@ -676,6 +676,113 @@ struct HelperIQ4nl final : public BaseHelper {
 #endif
 };
 
+struct HelperIQ5nl final : public BaseHelper {
+    using Base = BaseHelper;
+    constexpr static ggml_type type = GGML_TYPE_IQ5_NL;
+#if defined(__AVX512F__)
+    using block_q8 = block_q8_2;
+    constexpr static int block_size_q = QK8_2;
+    HelperIQ5nl(const char * data, int stride) : Base(data, stride) {}
+    inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
+        auto dl = (const block_iq5_nl *)Base::lblock(l1) + i;
+        auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
+        auto qs = _mm_loadu_si128((const __m128i *)dl->qs);
+        auto lo_nib = _mm_and_si128(qs, mask);
+        auto hi_nib = _mm_and_si128(_mm_srli_epi16(qs, 4), mask);
+        auto fl_lo = _mm_shuffle_epi8(values_low, lo_nib);
+        auto fh_lo = _mm_shuffle_epi8(values_high, lo_nib);
+        auto fl_hi = _mm_shuffle_epi8(values_low, hi_nib);
+        auto fh_hi = _mm_shuffle_epi8(values_high, hi_nib);
+        uint32_t qh32; memcpy(&qh32, dl->qh, 4);
+        __m128i qm_lo = make_qh5_mask(qh32 & 0xFFFF);
+        __m128i qm_hi = make_qh5_mask((qh32 >> 16) & 0xFFFF);
+        auto r_lo = _mm_blendv_epi8(fl_lo, fh_lo, qm_lo);
+        auto r_hi = _mm_blendv_epi8(fl_hi, fh_hi, qm_hi);
+        v1 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(r_lo)));
+        v2 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(r_hi)));
+    }
+#elif defined(__aarch64__)
+    using block_q8 = block_q8_0;
+    constexpr static int block_size_q = QK8_0;
+    HelperIQ5nl(const char * data, int stride) : Base(data, stride) {}
+    inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
+        int j = F16::block_size*i;
+        auto dl = (const block_iq5_nl *)Base::lblock(l1) + j/QK5_NL;
+        auto vd = F16::set1(*(const float16_t *)&dl->d);
+        auto qs = vld1q_u8(dl->qs);
+        qs = (j%QK5_NL) ? vshrq_n_u8(qs, 4) : vandq_u8(qs, mask);
+        auto from_low = vqtbl1q_s8(values_low, qs);
+        auto from_high = vqtbl1q_s8(values_high, qs);
+        uint32_t qh32; memcpy(&qh32, dl->qh, 4);
+        int shift = (j%QK5_NL) ? 16 : 0;
+        uint16_t qh16 = (qh32 >> shift) & 0xFFFF;
+        uint8x16_t qm = make_qh5_mask_neon(qh16);
+        auto r = vbslq_s8(qm, from_high, from_low);
+        v1 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_low_s8(r))));
+        v2 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_high_s8(r))));
+    }
+#else
+    using block_q8 = block_q8_2;
+    constexpr static int block_size_q = QK8_2;
+    HelperIQ5nl(const char * data, int stride) : Base(data, stride) {}
+    inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
+        int j = F16::block_size*i;
+        auto dl = (const block_iq5_nl *)Base::lblock(l1) + j/QK5_NL;
+        auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
+        auto qs = _mm_loadu_si128((const __m128i *)dl->qs);
+        auto nibbles = (j%QK5_NL) ? _mm_and_si128(_mm_srli_epi16(qs, 4), mask) : _mm_and_si128(qs, mask);
+        auto from_low = _mm_shuffle_epi8(values_low, nibbles);
+        auto from_high = _mm_shuffle_epi8(values_high, nibbles);
+        uint32_t qh32; memcpy(&qh32, dl->qh, 4);
+        int shift = (j%QK5_NL) ? 16 : 0;
+        uint16_t qh16 = (qh32 >> shift) & 0xFFFF;
+        __m128i qm = make_qh5_mask(qh16);
+        auto r = _mm_blendv_epi8(from_low, from_high, qm);
+        auto q16 = _mm256_cvtepi8_epi16(r);
+        v1 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(q16))));
+        v2 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q16, 1))));
+    }
+#endif
+
+private:
+    static inline __m128i make_qh5_mask(uint16_t qh16) {
+        __m128i rep = _mm_shuffle_epi8(_mm_set1_epi16(*(const int16_t*)&qh16),
+                                        _mm_set_epi8(1,1,1,1,1,1,1,1, 0,0,0,0,0,0,0,0));
+        return _mm_cmpeq_epi8(_mm_or_si128(rep, qh5_testmask), _mm_set1_epi8(-1));
+    }
+#ifdef __aarch64__
+    static inline uint8x16_t make_qh5_mask_neon(uint16_t qh16) {
+        uint8x8_t qh_lo = vdup_n_u8((uint8_t)(qh16));
+        uint8x8_t qh_hi = vdup_n_u8((uint8_t)(qh16 >> 8));
+        uint8_t buf[16];
+        for (int k = 0; k < 8; ++k) {
+            buf[k]    = (qh16 >> k) & 1 ? 0xFF : 0x00;
+            buf[k+8]  = (qh16 >> (k+8)) & 1 ? 0xFF : 0x00;
+        }
+        return vld1q_u8(buf);
+    }
+#endif
+
+#if defined(__AVX512F__) || !defined(__aarch64__)
+    const __m128i mask = _mm_set1_epi8(0xf);
+    const __m128i values_low = load_iq5nl_low_values_128();
+    const __m128i values_high = load_iq5nl_high_values_128();
+    static const __m128i qh5_testmask;
+#endif
+#ifdef __aarch64__
+    const uint8x16_t mask = vdupq_n_u8(0xf);
+    const int8x16_t values_low = vld1q_s8(kvalues_iq5nl);
+    const int8x16_t values_high = vld1q_s8(kvalues_iq5nl + 16);
+#endif
+};
+
+#if !defined(__aarch64__)
+const __m128i HelperIQ5nl::qh5_testmask = _mm_set_epi8(
+    0x7f, 0xbf, 0xdf, 0xef, 0xf7, 0xfb, 0xfd, 0xfe,
+    0x7f, 0xbf, 0xdf, 0xef, 0xf7, 0xfb, 0xfd, 0xfe
+);
+#endif
+
 struct HelperQ60 final : public BaseHelper {
     constexpr static ggml_type type = GGML_TYPE_Q6_0;
 #ifdef __aarch64__
@@ -2187,6 +2294,10 @@ inline bool iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
             HelperIQ4nl vh(v, stride_v);
             iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
+        case GGML_TYPE_IQ5_NL: {
+            HelperIQ5nl vh(v, stride_v);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
+        } break;
 #endif
         default: return false;
     }
@@ -2232,6 +2343,10 @@ inline bool iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
         } break;
         case GGML_TYPE_IQ4_NL: {
             HelperIQ4nl kh(k, stride_k);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
+        } break;
+        case GGML_TYPE_IQ5_NL: {
+            HelperIQ5nl kh(k, stride_k);
             result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
 #endif
