@@ -3899,6 +3899,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_EXP:
                     ggml_cuda_op_exp(ctx, dst);
                     break;
+                case GGML_UNARY_OP_ELU:
+                    ggml_cuda_op_elu(ctx, dst);
+                    break;
                 case GGML_UNARY_OP_SOFTPLUS:
                     ggml_cuda_op_softplus(ctx, dst);
                     break;
@@ -4827,8 +4830,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
                     return ggml_is_contiguous(op->src[0]);
-                case GGML_UNARY_OP_GELU_ERF:
                 case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_ELU:
                 case GGML_UNARY_OP_SOFTPLUS:
                 case GGML_UNARY_OP_SQRT_SOFTPLUS:
                 case GGML_UNARY_OP_NEG:
