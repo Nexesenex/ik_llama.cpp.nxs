@@ -36,6 +36,7 @@
 #include "ggml-cuda/softcap.cuh"
 #include "ggml-cuda/softmax.cuh"
 #include "ggml-cuda/sumrows.cuh"
+#include "ggml-cuda/mean.cuh"
 #include "ggml-cuda/tsembd.cuh"
 #include "ggml-cuda/unary.cuh"
 #include "ggml-cuda/upscale.cuh"
@@ -4123,6 +4124,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_cuda_op_sum_rows(ctx, dst);
             }
             break;
+        case GGML_OP_MEAN:
+            ggml_cuda_op_mean(ctx, dst);
+            break;
         case GGML_OP_CUMSUM:
             ggml_cuda_op_cumsum(ctx, dst);
             break;
@@ -5016,6 +5020,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_IM2COL:
         case GGML_OP_POOL_2D:
         case GGML_OP_SUM_ROWS:
+        case GGML_OP_MEAN:
         case GGML_OP_ARGSORT:
         case GGML_OP_ARGSORT_THRESH:
         case GGML_OP_GROUPED_TOPK:
