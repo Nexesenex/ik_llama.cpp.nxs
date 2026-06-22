@@ -1129,6 +1129,24 @@ static __device__ __forceinline__ float vec_dot_iq1_m_q8_1(
 static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4, const int8_t * values) {
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
     return ggml_cuda_perm_table_16(q4, values);
+#elif defined(GGML_USE_HIP)
+    const uint32_t *values_u32 = (const uint32_t *)values;
+
+    const uint32_t q_even = q4;
+    const uint32_t q_odd  = (q4 >> 4);
+
+    uint32_t v_even_low = __builtin_amdgcn_perm(values_u32[1], values_u32[0], q_even & 0x07070707);
+    uint32_t v_odd_low = __builtin_amdgcn_perm(values_u32[1], values_u32[0], q_odd & 0x07070707);
+
+    uint32_t v_even_high = __builtin_amdgcn_perm(values_u32[3], values_u32[2], q_even & 0x07070707);
+    uint32_t v_odd_high = __builtin_amdgcn_perm(values_u32[3], values_u32[2], q_odd & 0x07070707);
+
+    uint32_t mask_even = 0x03020100 | ((q_even & 0x08080808) >> 1);
+    uint32_t res_x = __builtin_amdgcn_perm(v_even_high, v_even_low, mask_even);
+    uint32_t mask_odd = 0x03020100 | ((q_odd & 0x08080808) >> 1);
+    uint32_t res_y = __builtin_amdgcn_perm(v_odd_high, v_odd_low, mask_odd);
+
+    return make_int2(res_x, res_y);
 #elif defined(__CUDA_ARCH__)
     uint32_t v1, v2, v3, v4, mask;
     const uint32_t * values32 = (const uint32_t *)values;
