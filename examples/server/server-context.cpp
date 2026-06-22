@@ -5060,15 +5060,6 @@ void server_context::update_slots() {
         return;
     }
 
-    {
-        LOG_VERBOSE("posting NEXT_RESPONSE", {});
-        server_task task;
-        task.type = SERVER_TASK_TYPE_NEXT_RESPONSE;
-        task.id_target = -1;
-
-        queue_tasks.post(std::move(task));
-    }
-
     // apply context-shift if needed
     // TODO: simplify and improve
     context_shift();
@@ -5190,6 +5181,15 @@ void server_context::update_slots() {
 
     // process the created batch of tokens
     process_batch_tokens(n_batch); // Decode with batch
+
+    {
+        LOG_VERBOSE("posting NEXT_RESPONSE", {});
+        server_task task;
+        task.type = SERVER_TASK_TYPE_NEXT_RESPONSE;
+        task.id_target = -1;
+
+        queue_tasks.post(std::move(task));
+    }
 
     LOG_VERBOSE("run slots completed", {});
 }
