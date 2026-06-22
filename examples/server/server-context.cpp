@@ -627,6 +627,9 @@ void server_slot::release() {
         command = SLOT_COMMAND_RELEASE;
         state = SLOT_STATE_IDLE;
         task.reset();
+    } else if (command == SLOT_COMMAND_LOAD_PROMPT) {
+        command = SLOT_COMMAND_NONE;
+        task.reset();
     }
     llama_decode_reset();
 }
