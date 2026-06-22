@@ -823,24 +823,15 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
 
     if (!ggml_backend_cuda_buffer_type_initialized) {
 
-        // Set CUDA_SCALE_LAUNCH_QUEUES before any CUDA API call to improve multi-GPU pipeline parallelism performance
-        // PR: https://github.com/ggml-org/llama.cpp/pull/19042
-        // User can override via -cuda cslq=X argument (e.g., cslq=2x, cslq=4x)
-        const char * user_cslq = ggml_cuda_user_cslq.empty() ? nullptr : ggml_cuda_user_cslq.c_str();
+        // CUDA_SCALE_LAUNCH_QUEUES controls the CUDA command buffer size.
+        // It can be set externally (env var), via -cuda cslq=X (ggml_backend_cuda_set_cslq),
+        // or defaults to 1x (no scaling). See PR: https://github.com/ggml-org/llama.cpp/pull/19042
         if (getenv("CUDA_SCALE_LAUNCH_QUEUES") == nullptr) {
-            const char * cslq_value = user_cslq ? user_cslq : "1x";
 #ifdef _WIN32
-            _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", cslq_value);
+            _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "1x");
 #else
-            setenv("CUDA_SCALE_LAUNCH_QUEUES", cslq_value, 0); // don't overwrite if already set
+            setenv("CUDA_SCALE_LAUNCH_QUEUES", "1x", 0);
 #endif // _WIN32
-            if (!user_cslq) {
-                GGML_CUDA_LOG_WARN("==================================================================================\n");
-                GGML_CUDA_LOG_WARN("CUDA_SCALE_LAUNCH_QUEUES=1x EnVar has been enabled for increased Multi-GPUs perfs.\n");
-                GGML_CUDA_LOG_WARN("==================================================================================\n");
-            } else {
-                GGML_CUDA_LOG_INFO("CUDA_SCALE_LAUNCH_QUEUES=%s EnVar has been enabled via -cuda cslq argument.\n", cslq_value);
-            }
         }
 
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; i++) {
@@ -5422,10 +5413,10 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
     bool enable_p2p = true;
     if (param_string) {
         [[maybe_unused]] auto params = ggml_cuda_parse_params((const char *)param_string);
-        // Store user-provided cslq for use in buffer type init (must be set before first CUDA call)
+        // Apply user-provided cslq (normalizes value and sets env var immediately)
         if (!params.cslq.empty()) {
-            ggml_cuda_user_cslq = params.cslq;
-            GGML_CUDA_LOG_INFO("=========================== %s: setting CUDA_SCALE_LAUNCH_QUEUES to %s\n", __func__, params.cslq.c_str());
+            ggml_backend_cuda_set_cslq(params.cslq.c_str());
+            GGML_CUDA_LOG_INFO(" =========================== %s: setting CUDA_SCALE_LAUNCH_QUEUES to %s\n", __func__, params.cslq.c_str());
         }
         if (params.fusion != ctx->fusion) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting fusion to %d\n", __func__, params.fusion);
@@ -5550,7 +5541,33 @@ GGML_CALL int ggml_backend_cuda_reg_devices() {
 
 GGML_CALL void ggml_backend_cuda_set_cslq(const char * cslq) {
     if (cslq && strlen(cslq) > 0) {
-        ggml_cuda_user_cslq = cslq;
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_cslq: CUDA_SCALE_LAUNCH_QUEUES will be set to %s\n", cslq);
+        // Normalize: accept "2" or "2x", always store as "Nx"
+        std::string val = cslq;
+        if (!val.empty() && val.back() == 'x') {
+            val.pop_back();
+        }
+        // Validate it's a positive integer
+        bool valid = !val.empty();
+        for (char c : val) {
+            if (!isdigit(c)) { valid = false; break; }
+        }
+        if (!valid) {
+            GGML_CUDA_LOG_WARN("%s: invalid cslq value '%s' - expected a number >= 1, e.g. '2', '4', '2x', '4x'. Ignored.\n", __func__, cslq);
+            return;
+        }
+        int numeric = std::stoi(val);
+        if (numeric < 1) {
+            GGML_CUDA_LOG_WARN("%s: cslq value '%s' must be >= 1. Ignored.\n", __func__, cslq);
+            return;
+        }
+        val += 'x'; // Normalize to "Nx" format
+
+        ggml_cuda_user_cslq = val;
+#ifdef _WIN32
+        _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", val.c_str());
+#else
+        setenv("CUDA_SCALE_LAUNCH_QUEUES", val.c_str(), 0);
+#endif
+        GGML_CUDA_LOG_INFO("%s: CUDA_SCALE_LAUNCH_QUEUES=%s (from '%s')\n", __func__, val.c_str(), cslq);
     }
 }
