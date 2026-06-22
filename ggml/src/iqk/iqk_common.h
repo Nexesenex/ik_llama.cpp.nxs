@@ -291,6 +291,22 @@ static inline __m512i load_iq4nl_values_512() {
 }
 #endif
 
+static inline __m128i load_iq5nl_low_values_128() {
+    static const int8_t kvalues_iq5nl_low[16] = {-127, -115, -103, -92, -81, -71, -61, -52, -43, -34, -27, -20, -14, -8, -4, -1};
+    return _mm_loadu_si128((const __m128i *)kvalues_iq5nl_low);
+}
+static inline __m128i load_iq5nl_high_values_128() {
+    static const int8_t kvalues_iq5nl_high[16] = {1, 4, 8, 14, 20, 27, 34, 43, 52, 61, 71, 81, 92, 103, 115, 127};
+    return _mm_loadu_si128((const __m128i *)kvalues_iq5nl_high);
+}
+static inline __m256i load_iq5nl_low_values_256() {
+    auto val128 = load_iq5nl_low_values_128();
+    return MM256_SET_M128I(val128, val128);
+}
+static inline __m256i load_iq5nl_high_values_256() {
+    auto val128 = load_iq5nl_high_values_128();
+    return MM256_SET_M128I(val128, val128);
+}
 static inline __m128i load_iq4k_values_128() {
     return _mm_loadu_si128((const __m128i *)iq4k_values);
 }
