@@ -462,6 +462,7 @@ extern void mul_mat_vec_q4_0_q8_1_cuda(const mmvq_args & args, cudaStream_t stre
 extern void mul_mat_vec_q4_1_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_q5_0_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_q5_1_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
+extern void mul_mat_vec_q6_1_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_q6_0_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_q8_0_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_q2_K_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
