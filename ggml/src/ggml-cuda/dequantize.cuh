@@ -120,6 +120,25 @@ static __device__ __forceinline__ void dequantize_q6_0(const void * vx, const in
 #endif // GGML_CUDA_F16
 }
 
+static __device__ __forceinline__ void dequantize_q6_1(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
+    const block_q6_1 * x = (const block_q6_1 *) vx;
+
+    const dfloat d = __low2half(x[ib].dm);
+    const dfloat m = __high2half(x[ib].dm);
+
+    const uint8_t h = x[ib].qh[iqs%8] >> 4*(iqs/8);
+    v.x = ((x[ib].qs[iqs] & 0xf) | ((h & 0x3) << 4));
+    v.y = ((x[ib].qs[iqs] >>  4) | ((h & 0xc) << 2));
+
+#ifdef GGML_CUDA_F16
+    v = __hmul2(v, {d, d});
+    v = __hadd2(v, {m, m});
+#else
+    v.x = v.x * d + m;
+    v.y = v.y * d + m;
+#endif // GGML_CUDA_F16
+}
+
 static __device__ __forceinline__ void dequantize_q8_0(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
     const block_q8_0 * x = (const block_q8_0 *) vx;
 
