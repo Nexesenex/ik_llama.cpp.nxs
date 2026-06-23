@@ -710,6 +710,8 @@ static_assert(sizeof(block_tqp7) == sizeof(ggml_half) + 8*7, "wrong tqp7 block s
 // Bitnet and TriLM - implemented as 2.0 bpw
 //
 #define QK_IQ2BN 64
+#define QI2_BN (QK_IQ2BN / (4*QR2_BN))
+#define QR2_BN 8
 typedef struct {
     uint8_t qs[QK_IQ2BN/4];
 } block_iq2_bn;
