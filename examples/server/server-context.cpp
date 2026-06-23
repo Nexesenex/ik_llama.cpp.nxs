@@ -505,6 +505,8 @@ void server_slot::reset() {
     }
 
     positional_bans.clear();
+    ban_state.clear();
+    ban_state_n_past = -1;
     ban_phrases.clear();
     ban_regex.clear();
     ban_regex_ci.clear();
@@ -1807,22 +1809,26 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     slot.allow_ruless_prev = slot.allow_ruless;
 
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
-        params_base.can_ban_phrases = false;
-        bool do_checkpoint = params_base.ctx_checkpoints_n > 0;
-        // make checkpoints only for completion tasks
-        do_checkpoint = do_checkpoint && task.type == SERVER_TASK_TYPE_COMPLETION;
-        // make a checkpoint of the parts of the memory that cannot be rolled back.
-        // checkpoints are created only if:
-        // - the model architecture is marked as recurrent or hybrid
-        //
-        // TODO: try to make this conditional on the context or the memory module, instead of the model type
-        params_base.do_checkpoint = do_checkpoint;
-        if (slot.n_buffer != 0) {
-            LLAMA_LOG_WARN("banned strings is not supported by recurrent model, it will be disabled.\n");
-        }
-        if (params_base.ctx_shift) {
-            params_base.ctx_shift = false;
-            LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
+        if (!params_base.ignore_recurrent_model) {
+            bool do_checkpoint = params_base.ctx_checkpoints_n > 0;
+            // make checkpoints only for completion tasks
+            do_checkpoint = do_checkpoint && task.type == SERVER_TASK_TYPE_COMPLETION;
+            // make a checkpoint of the parts of the memory that cannot be rolled back.
+            // checkpoints are created only if:
+            // - the model architecture is marked as recurrent or hybrid
+            //
+            // TODO: try to make this conditional on the context or the memory module, instead of the model type
+            params_base.do_checkpoint = do_checkpoint;
+            if (slot.n_buffer != 0) {
+                if (llama_model_is_recurrent(llama_get_model(slot.ctx))) {
+                    params_base.can_ban_phrases = false;
+                    LLAMA_LOG_WARN("banned strings is not supported by purely recurrent model, it will be disabled.\n");
+                }
+            }
+            if (params_base.ctx_shift) {
+                params_base.ctx_shift = false;
+                LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
+            }
         }
     }
     if (llama_model_is_split_mode_tensor_parallel(llama_get_model(slot.ctx))) {
@@ -3654,15 +3660,19 @@ void server_context::apply_checkpoint(server_slot & slot) {
             }
 
             if (do_reset) {
-                SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
-                    "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
-                slot.n_past = 0;
-                slot.n_past_prompt = 0;
-                slot.n_past_se = 0;
-                slot.ga_i = 0;
-                slot.cache_tokens.keep_first(0);
-                pos_next = 0;
-                common_sampler_reset(slot.ctx_sampling);
+                if (params_base.ignore_recurrent_model && llama_model_is_hybrid(llama_get_model(slot.ctx))) {
+                    SLT_WRN(slot, "%s", "ignore_recurrent_model is set: preserving cache_tokens to avoid reset_state\n");
+                } else {
+                    SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
+                        "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+                    slot.n_past = 0;
+                    slot.n_past_prompt = 0;
+                    slot.n_past_se = 0;
+                    slot.ga_i = 0;
+                    slot.cache_tokens.keep_first(0);
+                    pos_next = 0;
+                    common_sampler_reset(slot.ctx_sampling);
+                }
             }
         }
     }
@@ -4014,18 +4024,22 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
 
                     // there is no common part left (except for the system prompt)
-                    slot.cache_tokens.clear();
-                    slot.n_past = 0;
-                    slot.n_past_prompt = 0;
-                    slot.n_past_offset = 0;
-                    slot.n_discarded_prompt = 0;
-                    slot.n_kept_prompt = 0;
-                    slot.n_past_se = 0;
-                    slot.n_prompt_tokens_cache = 0;
-                    slot.ga_i = 0;
-                    slot.server_cached_prompt.checkpoints.clear();
-                    // TODO: is the system prompt ever in the sampling context?
-                    common_sampler_reset(slot.ctx_sampling);
+                    if (params_base.ignore_recurrent_model && llama_model_is_hybrid(llama_get_model(slot.ctx))) {
+                        SLT_WRN(slot, "%s", "ignore_recurrent_model: preserving cache_tokens to keep pos_next() > 0\n");
+                    } else {
+                        slot.cache_tokens.clear();
+                        slot.n_past = 0;
+                        slot.n_past_prompt = 0;
+                        slot.n_past_offset = 0;
+                        slot.n_discarded_prompt = 0;
+                        slot.n_kept_prompt = 0;
+                        slot.n_past_se = 0;
+                        slot.n_prompt_tokens_cache = 0;
+                        slot.ga_i = 0;
+                        slot.server_cached_prompt.checkpoints.clear();
+                        // TODO: is the system prompt ever in the sampling context?
+                        common_sampler_reset(slot.ctx_sampling);
+                    }
                 }
 
                 LOG_VERBOSE("kv cache rm [p0, end)", {
@@ -4575,6 +4589,30 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
         n_keep_cache = (size_t)(ban_pos - 1);
     }
 
+    if (params_base.ignore_recurrent_model) {
+        // For hybrid models, restore the saved recurrent state
+        if (!slot.ban_state.empty()) {
+            if (slot.ban_state_n_past < ban_pos) {
+                // State saved at or before the banned position — safe to restore
+                // both K/V and recurrent state without position mismatch.
+                const size_t n = llama_state_seq_set_data(slot.ctx, slot.ban_state.data(), slot.ban_state.size(), slot.id, 0);
+                if (n != slot.ban_state.size()) {
+                    LLAMA_LOG_ERROR("ban state restore size mismatch: expected %zu, got %zu\n", slot.ban_state.size(), n);
+                }
+                n_keep_cache = (size_t)slot.ban_state_n_past;
+            // } else {
+                // State saved after the banned position (most common case: the
+                // ban matched within the buffer, after the saved position).
+                // Restoring the full state would set the recurrent s_l state
+                // ahead of the KV cache after trimming below, corrupting
+                // generation. Instead, fall through to the non-hybrid rewind
+                // and let s_l self-correct naturally.
+            }
+            slot.ban_state.clear();
+            slot.ban_state_n_past = -1;
+        }
+    }
+
     if (n_keep_cache > slot.cache_tokens.size()) {
         n_keep_cache = slot.cache_tokens.size();
     }
@@ -4604,6 +4642,21 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
 
 void server_context::buffer_and_check_string_ban(server_slot & slot, completion_token_output & result) {
     slot.token_buffer.push_back(result);
+
+    if (!params_base.ignore_recurrent_model) {
+        // Save state at start of buffer for hybrid models (needed to restore recurrent state on rewind)
+        if (slot.token_buffer.size() == 1 && slot.ban_state.empty() && llama_model_is_hybrid(llama_get_model(slot.ctx))) {
+            slot.ban_state_n_past = slot.n_past;
+            size_t state_size = llama_state_seq_get_size(slot.ctx, slot.id, 0);
+            slot.ban_state.resize(state_size);
+            const size_t n = llama_state_seq_get_data(slot.ctx, slot.ban_state.data(), state_size, slot.id, 0);
+            if (n != state_size) {
+                LLAMA_LOG_ERROR("ban state size mismatch: expected %zu, got %zu\n", state_size, n);
+                slot.ban_state.clear();
+                slot.ban_state_n_past = -1;
+            }
+        }
+    }
 
     bool next_token = has_next_token(result, slot);
     // If buffer full or generation stopped, we might send tokens
