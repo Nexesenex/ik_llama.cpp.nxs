@@ -207,6 +207,7 @@ void ggml_cuda_op_hadamard(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_Q5_0:   DISPATCH_HADAMARD_QUANT_NH(dequantize_q5_0,   QK5_0,  true);  break;
         case GGML_TYPE_Q5_1:   DISPATCH_HADAMARD_QUANT_NH(dequantize_q5_1,   QK5_1,  true);  break;
         case GGML_TYPE_Q6_0:   DISPATCH_HADAMARD_QUANT_NH(dequantize_q6_0,   QK6_0,  true);  break;
+        case GGML_TYPE_Q6_1:   DISPATCH_HADAMARD_QUANT_NH(dequantize_q6_1,   QK6_1,  true);  break;
         case GGML_TYPE_IQ4_NL: DISPATCH_HADAMARD_QUANT_NH(dequantize_iq4_nl, QK4_NL, true);  break;
         default:
             GGML_ABORT("hadamard: unsupported source type");
