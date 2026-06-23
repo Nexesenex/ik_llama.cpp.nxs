@@ -840,6 +840,27 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
+    [GGML_TYPE_Q6_1] = {
+        .type_name                = "q6_1",
+        .blck_size                = QK6_1,
+        .type_size                = sizeof(block_q6_1),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q6_1,
+        .from_float               = quantize_row_q6_1,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q6_1_ref,
+        .vec_dot                  = ggml_vec_dot_q6_1_q8_1,
+#if GGML_USE_IQK_MULMAT
+#ifdef __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+#else
+        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+#endif
+#else
+        .vec_dot_type             = GGML_TYPE_Q8_1,
+#endif
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
     [GGML_TYPE_Q8_0] = {
         .type_name                = "q8_0",
         .blck_size                = QK8_0,
@@ -5024,6 +5045,7 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_Q5_0:          wtype = GGML_TYPE_Q5_0;  break;
         case GGML_FTYPE_MOSTLY_Q5_1:          wtype = GGML_TYPE_Q5_1;  break;
         case GGML_FTYPE_MOSTLY_Q6_0:          wtype = GGML_TYPE_Q6_0;  break;
+        case GGML_FTYPE_MOSTLY_Q6_1:          wtype = GGML_TYPE_Q6_1;  break;
         case GGML_FTYPE_MOSTLY_Q8_0:          wtype = GGML_TYPE_Q8_0;  break;
         case GGML_FTYPE_MOSTLY_Q8_KV:         wtype = GGML_TYPE_Q8_KV; break;
         case GGML_FTYPE_MOSTLY_Q2_K:          wtype = GGML_TYPE_Q2_K;  break;
@@ -13147,6 +13169,7 @@ static void ggml_compute_forward_add(
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q6_0:
+        case GGML_TYPE_Q6_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q2_K_R4:
@@ -13697,6 +13720,7 @@ static void ggml_compute_forward_add1(
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q6_0:
+        case GGML_TYPE_Q6_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_Q8_0_X4:
@@ -18247,6 +18271,7 @@ static void ggml_compute_forward_out_prod(
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q6_0:
+        case GGML_TYPE_Q6_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q8_KV:
         case GGML_TYPE_Q2_K:
@@ -18997,6 +19022,7 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q6_0:
+        case GGML_TYPE_Q6_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q8_KV:
         case GGML_TYPE_Q8_1:
@@ -28903,6 +28929,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q5_0:    result = quantize_q5_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_Q5_1:    result = quantize_q5_1(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_Q6_0:    result = quantize_q6_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
+        case GGML_TYPE_Q6_1:    result = quantize_q6_1(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_Q8_0:    result = quantize_q8_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_Q8_KV:   result = quantize_q8_KV(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_Q2_K:    result = quantize_q2_K(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
