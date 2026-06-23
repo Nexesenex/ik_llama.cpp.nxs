@@ -165,6 +165,9 @@ static void ggml_cuda_mul_mat_q_switch_type_id(ggml_backend_cuda_context & ctx, 
         case GGML_TYPE_Q5_1:
             mul_mat_q_case_id<GGML_TYPE_Q5_1>(ctx, args, stream);
             break;
+        case GGML_TYPE_Q6_1:
+            mul_mat_q_case_id<GGML_TYPE_Q6_1>(ctx, args, stream);
+            break;
         case GGML_TYPE_Q6_0:
             mul_mat_q_case_id<GGML_TYPE_Q6_0>(ctx, args, stream);
             break;
@@ -515,6 +518,7 @@ bool ggml_cuda_can_use_mmq_id(enum ggml_type type, int cc, int64_t ne11) {
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q6_1:
         case GGML_TYPE_Q6_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_MXFP4:
@@ -590,7 +594,7 @@ bool ggml_cuda_can_use_mmq_id(enum ggml_type type, int cc, int64_t ne11) {
             return true;
         }
         if (ne11 <= 128 || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q5_0
-                        || type == GGML_TYPE_Q5_1 || type == GGML_TYPE_Q6_0) {
+                        || type == GGML_TYPE_Q5_1 || type == GGML_TYPE_Q6_1 || type == GGML_TYPE_Q6_0) {
             return true;
         }
         if (ne11 <= 256 && (type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K)) {
