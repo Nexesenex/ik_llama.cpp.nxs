@@ -296,6 +296,7 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_IQ5_K_R4:
             case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q5_K:   new_type = GGML_TYPE_Q6_0;   break;
+            case GGML_TYPE_Q6_1:
             case GGML_TYPE_IQ6_K:
             case GGML_TYPE_Q6_K_R4:
             case GGML_TYPE_Q8_K_R8:
@@ -1116,6 +1117,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_Q5_0: default_type = GGML_TYPE_Q5_0; break;
         case LLAMA_FTYPE_MOSTLY_Q5_1: default_type = GGML_TYPE_Q5_1; break;
         case LLAMA_FTYPE_MOSTLY_Q6_0: default_type = GGML_TYPE_Q6_0; break;
+        case LLAMA_FTYPE_MOSTLY_Q6_1: default_type = GGML_TYPE_Q6_1; break;
         case LLAMA_FTYPE_MOSTLY_Q8_0: default_type = GGML_TYPE_Q8_0; break;
         case LLAMA_FTYPE_MOSTLY_Q8_KV:default_type = GGML_TYPE_Q8_KV;break;
         case LLAMA_FTYPE_MOSTLY_F16:  default_type = GGML_TYPE_F16;  break;
