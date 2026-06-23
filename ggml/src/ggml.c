@@ -26970,7 +26970,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
 
             case GGML_OP_CROSS_ENTROPY_LOSS:
                 {
-                    cur = ggml_type_size(node->type)*(n_tasks + node->src[0]->ne[0]*n_tasks);
+                    cur = ggml_type_size(GGML_TYPE_F32)*(n_tasks + node->src[0]->ne[0]*n_tasks);
                 } break;
             case GGML_OP_COUNT:
                 {
