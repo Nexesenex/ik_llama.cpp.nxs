@@ -330,6 +330,53 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q6_0(
     return sum;
 }
 
+template<typename T, int Dk>
+static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q6_1(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_q6_1 * K_q6_1 = (const block_q6_1 *) K_c;
+    GGML_UNUSED(Q_v);
+
+    T sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < Dk/sizeof(int); k_KQ_0 += WARP_SIZE) {
+        const int k_KQ = k_KQ_0 + threadIdx.x;
+
+        const int ib    = k_KQ /  QI8_1;
+        const int iqs4  = k_KQ %  QI6_1;  // 0...3
+        const int shift = k_KQ & (QI8_1/2);
+
+        const int vh = (get_int_b2(K_q6_1[ib].qh, iqs4%2) >> (4*(iqs4/2) + shift/2)) & 0x03030303;
+        const int vl = (get_int_b2(K_q6_1[ib].qs, iqs4) >> shift) & 0x0F0F0F0F;
+        const int v  = vl | (vh << 4);
+
+        const int u = Q_q8[k_KQ_0/WARP_SIZE];
+
+        const int sumi = ggml_cuda_dp4a(v, u, 0);
+
+#ifdef FP16_AVAILABLE
+        if (std::is_same<T, half>::value) {
+            const half2  * Q_ds = (const half2  *) Q_ds_v;
+
+            const half2 d5d8_m5s8 = K_q6_1[ib].dm * Q_ds[k_KQ_0/WARP_SIZE];
+            const half2 sumid5d8_m5s8scaled = d5d8_m5s8 * make_half2(sumi, 1.0f/QI8_1);
+            sum += (T) (__low2half(sumid5d8_m5s8scaled) + __high2half(sumid5d8_m5s8scaled));
+        } else
+#endif // FP16_AVAILABLE
+        {
+            const float2 * Q_ds = (const float2 *) Q_ds_v;
+
+            const float sumid5d8   =  __low2float(K_q6_1[ib].dm)*Q_ds[k_KQ_0/WARP_SIZE].x * sumi;
+            const float m5s8scaled = __high2float(K_q6_1[ib].dm)*Q_ds[k_KQ_0/WARP_SIZE].y / QI8_1;
+
+            sum += (T) (sumid5d8 + m5s8scaled);
+        }
+    }
+
+    return sum;
+}
+
 template <typename T, int Dk>
 static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q8_0(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
@@ -588,6 +635,30 @@ static __device__ __forceinline__ T dequantize_1_q6_0(const void * __restrict__ 
 }
 
 template <typename T>
+static __device__ __forceinline__ T dequantize_1_q6_1(const void * __restrict__ vx, const int64_t i) {
+    const block_q6_1 * x = (const block_q6_1 *) vx;
+
+    const int64_t ib    =  i  /  QK6_1;
+    const int     idq   =  i  %  QK6_1;
+    const int     iqs   =  i  % (QK6_1/2);
+    const int     shift = idq / (QK6_1/2);
+
+    const T   d  = __low2half(x[ib].dm);
+    const T   m  = __high2half(x[ib].dm);
+    const int ql = x[ib].qs[iqs] >> 4*shift;
+    const int qh = x[ib].qh[idq%(QK6_1/4)] >> (4*((idq/(QK6_1/4))%2) + 2*shift);
+    const int q  = ((ql & 0x0f) | ((qh & 0x03) << 4));
+
+#ifdef FP16_AVAILABLE
+    if (std::is_same<T, half>::value) {
+        return ((half) d)*((half) q) + ((half) m);
+    }
+#endif // FP16_AVAILABLE
+
+    return ((float) d)*((float) q) + ((float) m);
+}
+
+template <typename T>
 static __device__ __forceinline__ T dequantize_1_q8_0(const void * __restrict__ vx, const int64_t i) {
     const block_q8_0 * x = (const block_q8_0 *) vx;
 
@@ -619,8 +690,9 @@ constexpr __device__ vec_dot_KQ_f16_t get_vec_dot_KQ_f16(ggml_type type_K) {
            type_K == GGML_TYPE_Q4_1   ? vec_dot_fattn_vec_KQ_q4_1<half, Dk>   :
            type_K == GGML_TYPE_IQ4_NL ? vec_dot_fattn_vec_KQ_iq4_nl<half, Dk> :
            type_K == GGML_TYPE_Q5_0   ? vec_dot_fattn_vec_KQ_q5_0<half, Dk>   :
-           type_K == GGML_TYPE_Q5_1   ? vec_dot_fattn_vec_KQ_q5_1<half, Dk>   :
-           type_K == GGML_TYPE_Q6_0   ? vec_dot_fattn_vec_KQ_q6_0<half, Dk>   :
+            type_K == GGML_TYPE_Q5_1   ? vec_dot_fattn_vec_KQ_q5_1<half, Dk>   :
+            type_K == GGML_TYPE_Q6_1   ? vec_dot_fattn_vec_KQ_q6_1<half, Dk>   :
+            type_K == GGML_TYPE_Q6_0   ? vec_dot_fattn_vec_KQ_q6_0<half, Dk>   :
            type_K == GGML_TYPE_Q8_0   ? vec_dot_fattn_vec_KQ_q8_0<half, Dk>   :
            type_K == GGML_TYPE_F16    ? vec_dot_fattn_vec_KQ_f16<half, Dk>    :
            nullptr;
@@ -632,8 +704,9 @@ constexpr __device__ vec_dot_KQ_f32_t get_vec_dot_KQ_f32(ggml_type type_K) {
            type_K == GGML_TYPE_Q4_1   ? vec_dot_fattn_vec_KQ_q4_1<float, Dk>   :
            type_K == GGML_TYPE_IQ4_NL ? vec_dot_fattn_vec_KQ_iq4_nl<float, Dk> :
            type_K == GGML_TYPE_Q5_0   ? vec_dot_fattn_vec_KQ_q5_0<float, Dk>   :
-           type_K == GGML_TYPE_Q5_1   ? vec_dot_fattn_vec_KQ_q5_1<float, Dk>   :
-           type_K == GGML_TYPE_Q6_0   ? vec_dot_fattn_vec_KQ_q6_0<float, Dk>   :
+            type_K == GGML_TYPE_Q5_1   ? vec_dot_fattn_vec_KQ_q5_1<float, Dk>   :
+            type_K == GGML_TYPE_Q6_1   ? vec_dot_fattn_vec_KQ_q6_1<float, Dk>   :
+            type_K == GGML_TYPE_Q6_0   ? vec_dot_fattn_vec_KQ_q6_0<float, Dk>   :
            type_K == GGML_TYPE_Q8_0   ? vec_dot_fattn_vec_KQ_q8_0<float, Dk>   :
            type_K == GGML_TYPE_F16    ? vec_dot_fattn_vec_KQ_f16<float, Dk>    :
            nullptr;
@@ -643,8 +716,9 @@ constexpr __device__ dequantize_1_f16_t get_dequantize_1_f16(ggml_type type_V) {
     return type_V == GGML_TYPE_Q4_0   ? dequantize_1_q4_0<half> :
            type_V == GGML_TYPE_Q4_1   ? dequantize_1_q4_1<half> :
            type_V == GGML_TYPE_Q5_0   ? dequantize_1_q5_0<half> :
-           type_V == GGML_TYPE_Q5_1   ? dequantize_1_q5_1<half> :
-           type_V == GGML_TYPE_Q6_0   ? dequantize_1_q6_0<half> :
+            type_V == GGML_TYPE_Q5_1   ? dequantize_1_q5_1<half> :
+            type_V == GGML_TYPE_Q6_1   ? dequantize_1_q6_1<half> :
+            type_V == GGML_TYPE_Q6_0   ? dequantize_1_q6_0<half> :
            type_V == GGML_TYPE_Q8_0   ? dequantize_1_q8_0<half> :
            type_V == GGML_TYPE_IQ4_NL ? dequantize_1_iq4_nl<half> :
            type_V == GGML_TYPE_F16    ? dequantize_1_f16<half> :
@@ -655,8 +729,9 @@ constexpr __device__ dequantize_1_f32_t get_dequantize_1_f32(ggml_type type_V) {
     return type_V == GGML_TYPE_Q4_0   ? dequantize_1_q4_0<float> :
            type_V == GGML_TYPE_Q4_1   ? dequantize_1_q4_1<float> :
            type_V == GGML_TYPE_Q5_0   ? dequantize_1_q5_0<float> :
-           type_V == GGML_TYPE_Q5_1   ? dequantize_1_q5_1<float> :
-           type_V == GGML_TYPE_Q6_0   ? dequantize_1_q6_0<float> :
+            type_V == GGML_TYPE_Q5_1   ? dequantize_1_q5_1<float> :
+            type_V == GGML_TYPE_Q6_1   ? dequantize_1_q6_1<float> :
+            type_V == GGML_TYPE_Q6_0   ? dequantize_1_q6_0<float> :
            type_V == GGML_TYPE_Q8_0   ? dequantize_1_q8_0<float> :
            type_V == GGML_TYPE_IQ4_NL ? dequantize_1_iq4_nl<float> :
            type_V == GGML_TYPE_F16    ? dequantize_1_f16<float> :
