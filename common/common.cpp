@@ -2837,6 +2837,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "-igrm" || arg == "--ignore-recurrent-model") {
+        params.ignore_recurrent_model = true;
+        return true;
+    }
     if (arg == "-ctx-ck" || arg == "--ctx-checkpoints") {
         CHECK_ARG
         params.ctx_checkpoints_n = std::stoi(argv[i]);
@@ -3071,6 +3075,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-c,    --ctx-size N",           "size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx });
     options.push_back({ "*",           "-cd,   --ctx-size-draft N",     "size of the prompt context for the draft model (default: %d, 0 = loaded from model)", params.speculative.n_ctx });
 
+    options.push_back({ "*",           "-igrm, --ignore-recurrent-model",       "disable recurrent model checkpoint behavior, treat as non-recurrent"});
     options.push_back({ "*",           "-ctx-ck N, --ctx-checkpoints N",           "max number of context checkpoints to create per slot (default: %d)",params.ctx_checkpoints_n});
     options.push_back({ "*",           "-ctx-ck-i N, --ctx-checkpoints-interval N",  "minimum number of tokens between each context checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_interval});
     options.push_back({ "*",           "-ctx-ck-t N, --ctx-checkpoints-tolerance N", "the number of tokens before the full prompt to create the checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_tolerance});
