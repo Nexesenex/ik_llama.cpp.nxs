@@ -615,6 +615,8 @@ static_assert(sizeof(block_ptq1_0_r8) == QK_PTQ1_0_R8_ROWS*sizeof(block_ptq1_0),
 // Bitnet and TriLM - implemented as 2.0 bpw
 //
 #define QK_IQ2BN 64
+#define QI2_BN (QK_IQ2BN / (4*QR2_BN))
+#define QR2_BN 8
 typedef struct {
     uint8_t qs[QK_IQ2BN/4];
 } block_iq2_bn;
