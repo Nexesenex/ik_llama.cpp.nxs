@@ -4874,6 +4874,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_Q6_1:
                     case GGML_TYPE_Q6_0:
                     case GGML_TYPE_Q8_0:
                     case GGML_TYPE_Q2_K:
@@ -4941,7 +4942,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             {
                 return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16 ||
                        op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q5_0 ||
-                       op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q6_0 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL || op->type == GGML_TYPE_IQ5_NL) &&
+                       op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q6_1 || op->type == GGML_TYPE_Q6_0 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL || op->type == GGML_TYPE_IQ5_NL) &&
                        op->src[0]->type == GGML_TYPE_F32 &&
                        (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32);
             } break;
@@ -4974,6 +4975,9 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     return true;
                 }
                 if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_Q5_1) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_Q6_1) {
                     return true;
                 }
                 if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_Q6_0) {
@@ -5023,6 +5027,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 case GGML_TYPE_Q4_1:
                 case GGML_TYPE_Q5_0:
                 case GGML_TYPE_Q5_1:
+                case GGML_TYPE_Q6_1:
                 case GGML_TYPE_Q6_0:
                 case GGML_TYPE_IQ4_NL:
                 case GGML_TYPE_IQ5_NL:
