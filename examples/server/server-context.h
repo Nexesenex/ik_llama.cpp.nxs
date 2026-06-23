@@ -107,6 +107,8 @@ struct server_slot {
     float ban_phrases_bias = 0;
     int32_t banned_n = 1;
 	std::map<int32_t, std::set<llama_token>> positional_bans;
+	std::vector<uint8_t> ban_state;
+	int ban_state_n_past = -1;
 
     // allowlist
     std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> allow_ruless_prev;
