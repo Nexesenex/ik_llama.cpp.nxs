@@ -939,6 +939,51 @@ void quantize_row_q6_0(const float * restrict x, void * restrict y, int64_t k) {
     quantize_row_q6_0_ref(x, y, k);
 }
 
+void quantize_row_q6_1_ref(const float * restrict x, block_q6_1 * restrict y, int64_t k) {
+    static const int qk = QK6_1;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        float min = FLT_MAX;
+        float max = -FLT_MAX;
+
+        for (int j = 0; j < qk; j++) {
+            const float v = x[i*qk + j];
+
+            if (v < min) min = v;
+            if (v > max) max = v;
+        }
+
+        const float d  = (max - min) / ((1 << 6) - 1);
+        const float id = d ? 1.0f/d : 0.0f;
+
+        y[i].d = GGML_FP32_TO_FP16(d);
+        y[i].m = GGML_FP32_TO_FP16(min);
+
+        memset(y[i].qh, 0, qk/4);
+
+        for (int j = 0; j < qk/2; ++j) {
+            const float x0 = (x[i*qk + 0    + j] - min)*id;
+            const float x1 = (x[i*qk + qk/2 + j] - min)*id;
+
+            const uint8_t xi0 = MIN(63, (int)(x0 + 0.5f));
+            const uint8_t xi1 = MIN(63, (int)(x1 + 0.5f));
+
+            y[i].qs[j] = (xi0 & 0x0F) | ((xi1 & 0x0F) << 4);
+
+            const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
+            y[i].qh[j%(qk/4)] |= (h << 4*(j/(qk/4)));
+        }
+    }
+}
+
+void quantize_row_q6_1(const float * restrict x, void * restrict y, int64_t k) {
+    quantize_row_q6_1_ref(x, y, k);
+}
+
 // reference implementation for deterministic creation of model files
 void quantize_row_q8_0_ref(const float * restrict x, block_q8_0 * restrict y, int64_t k) {
     assert(k % QK8_0 == 0);
@@ -1733,6 +1778,29 @@ void dequantize_row_q6_0(const block_q6_0 * restrict x, float * restrict y, int6
 
             y[i*qk + j + 0   ] = x0*d;
             y[i*qk + j + qk/2] = x1*d;
+        }
+    }
+}
+
+void dequantize_row_q6_1(const block_q6_1 * restrict x, float * restrict y, int64_t k) {
+    static const int qk = QK6_1;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+        const float m = GGML_FP16_TO_FP32(x[i].m);
+
+        for (int j = 0; j < qk/2; ++j) {
+            const uint8_t h = x[i].qh[j%(qk/4)] >> 4*(j/(qk/4));
+
+            const int32_t x0 = (x[i].qs[j] & 0x0F) | ((h << 4) & 0x30);
+            const int32_t x1 = (x[i].qs[j] >>   4) | ((h << 2) & 0x30);
+
+            y[i*qk + j + 0   ] = x0*d + m;
+            y[i*qk + j + qk/2] = x1*d + m;
         }
     }
 }
@@ -3700,6 +3768,16 @@ size_t quantize_q6_0(const float * restrict src, void * restrict dst, int64_t nr
         src += n_per_row;
         qrow += row_size;
     }
+    return nrow * row_size;
+}
+
+size_t quantize_q6_1(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
+        const struct quantize_user_data * user_data) {
+    GGML_UNUSED(user_data);
+    GGML_UNUSED(quant_weights);
+    (void)quant_weights; // not used
+    const size_t row_size = ggml_row_size(GGML_TYPE_Q6_1, n_per_row);
+    quantize_row_q6_1_ref(src, dst, (int64_t)nrow*n_per_row);
     return nrow * row_size;
 }
 
@@ -5706,6 +5784,16 @@ void ggml_vec_dot_q6_0_q8_0(int n, float * restrict s, size_t bs, const void * r
     }
 
     *s = sumf;
+}
+
+void ggml_vec_dot_q6_1_q8_1(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q6_1, vx, bx, GGML_TYPE_Q8_1, vy, by, s, bs, 0, 1)) {
+        return;
+    }
+#endif
+    // TODO
+    *s = 0;
 }
 
 void ggml_vec_dot_q8_0_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
@@ -15628,6 +15716,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_Q8_K_R16: break;
         case GGML_TYPE_Q8_KV:    break;
         case GGML_TYPE_BF16_R16: break;
+        case GGML_TYPE_Q6_1:    break;
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
             {
