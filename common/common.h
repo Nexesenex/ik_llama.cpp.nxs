@@ -571,6 +571,7 @@ struct gpt_params {
     float slot_prompt_similarity = 0.1f;
 
     bool do_checkpoint = false;               // do checkpoint for recurrent models only
+    bool ignore_recurrent_model = false;      // treat recurrent models as non-recurrent (disable checkpoints)
     int32_t ctx_checkpoints_n = 32;           // max number of context checkpoints per slot
     int32_t ctx_checkpoints_interval = n_batch * 3;   // minimum number of tokens between each context checkpoints
     int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint
