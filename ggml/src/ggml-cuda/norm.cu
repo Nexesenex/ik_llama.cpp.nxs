@@ -32,7 +32,7 @@ static __global__ void norm_f32(const T * x, float * dst, const int ncols, const
     const float inv_std = rsqrtf(var + eps);
 
     for (int col = tid; col < ncols; col += block_size) {
-        dst[row*ncols + col] = (T)(((float)x[row*ncols + col] - mean) * inv_std);
+        dst[row*ncols + col] = ((float)x[row*ncols + col] - mean) * inv_std;
     }
 }
 
