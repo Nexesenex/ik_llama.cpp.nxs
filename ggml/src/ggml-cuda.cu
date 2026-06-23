@@ -709,6 +709,7 @@ GGML_CALL static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t 
             CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(src), cudaMemcpyDeviceToDevice, cudaStreamPerThread));
         } else {
 #ifdef GGML_CUDA_NO_PEER_COPY
+            GGML_CUDA_LOG_WARN("%s: cross-device copy not available (GGML_CUDA_NO_PEER_COPY)\n", __func__);
             return false;
 #else
             CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, dst_ctx->device, src->data, src_ctx->device, ggml_nbytes(src), cudaStreamPerThread));
@@ -815,6 +816,7 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
     std::lock_guard<std::mutex> lock(mutex);
 
     if (device >= ggml_backend_cuda_get_device_count()) {
+        GGML_CUDA_LOG_WARN("%s: device %d out of range (max %d)\n", __func__, device, ggml_backend_cuda_get_device_count() - 1);
         return nullptr;
     }
 
@@ -897,7 +899,10 @@ GGML_CALL static void * ggml_backend_cuda_split_buffer_get_base(ggml_backend_buf
 }
 
 GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]] ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
-    if (!tensor->extra) return;
+    if (!tensor->extra) {
+        // GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
+        return;
+    }
     //printf("%s(%s, %p)\n", __func__, tensor->name, tensor->extra);
     auto extra = (ggml_split_tensor_t *)tensor->extra;
     GGML_ASSERT(extra->n_device <= ggml_backend_cuda_get_device_count());
@@ -1014,7 +1019,10 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             }
         }
     }
-    if (!tensor->extra) return;
+    if (!tensor->extra) {
+        // GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
+        return;
+    }
     static std::map<ggml_type, int> k_map = {
         { GGML_TYPE_Q4_0_R8   , 8},
         { GGML_TYPE_Q5_0_R4   , 4},
@@ -1042,8 +1050,8 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         { GGML_TYPE_IQ5_K_R4  , 4},
         { GGML_TYPE_IQ4_KS_R4 , 4},
         { GGML_TYPE_IQ5_KS_R4 , 4},
-        { GGML_TYPE_Q8_K_R16  , 4},
-        { GGML_TYPE_Q8_KV_R8  , 4},
+        { GGML_TYPE_Q8_K_R16  , 16},
+        { GGML_TYPE_Q8_KV_R8  , 8},
         { GGML_TYPE_Q8_K_R8   , 8},
     };
 
@@ -1244,7 +1252,10 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_get_tensor([[maybe_unused]]
     GGML_ASSERT(offset == 0);
     GGML_ASSERT(size == ggml_nbytes(tensor));
 
-    if (!tensor->extra) return;
+    if (!tensor->extra) {
+        // GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
+        return;
+    }
 
     // Inverse of split_buffer_set_tensor; refuses paths with no defined inverse.
     auto extra = (ggml_split_tensor_t *)tensor->extra;
@@ -1254,10 +1265,16 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_get_tensor([[maybe_unused]]
     {
         const ggml_type t = tensor->type;
         const bool is_repacked =
-            t == GGML_TYPE_Q4_0_R8  || t == GGML_TYPE_Q5_0_R4  || t == GGML_TYPE_Q8_0_R8  ||
-            t == GGML_TYPE_Q2_K_R4  || t == GGML_TYPE_Q3_K_R4  || t == GGML_TYPE_Q4_K_R4  ||
-            t == GGML_TYPE_Q5_K_R4  || t == GGML_TYPE_Q6_K_R4  || t == GGML_TYPE_IQ4_NL_R4 ||
-            t == GGML_TYPE_IQ4_XS_R8 || t == GGML_TYPE_Q6_0_R4;
+            t == GGML_TYPE_Q4_0_R8   || t == GGML_TYPE_Q5_0_R4   || t == GGML_TYPE_Q8_0_R8   ||
+            t == GGML_TYPE_Q2_K_R4   || t == GGML_TYPE_Q3_K_R4   || t == GGML_TYPE_Q4_K_R4   ||
+            t == GGML_TYPE_Q5_K_R4   || t == GGML_TYPE_Q6_K_R4   || t == GGML_TYPE_IQ4_NL_R4 ||
+            t == GGML_TYPE_IQ4_XS_R8 || t == GGML_TYPE_Q6_0_R4   ||
+            t == GGML_TYPE_IQ2_XXS_R4 || t == GGML_TYPE_IQ2_XS_R4 || t == GGML_TYPE_IQ3_XXS_R4 ||
+            t == GGML_TYPE_IQ1_S_R4   || t == GGML_TYPE_IQ3_S_R4  || t == GGML_TYPE_IQ2_S_R4   ||
+            t == GGML_TYPE_IQ1_M_R4   || t == GGML_TYPE_BF16_R16  || t == GGML_TYPE_IQ2_BN_R4 ||
+            t == GGML_TYPE_IQ2_K_R4   || t == GGML_TYPE_IQ3_K_R4  || t == GGML_TYPE_IQ4_K_R4   ||
+            t == GGML_TYPE_IQ5_K_R4   || t == GGML_TYPE_IQ4_KS_R4 || t == GGML_TYPE_IQ5_KS_R4 ||
+            t == GGML_TYPE_Q8_K_R16   || t == GGML_TYPE_Q8_KV_R8  || t == GGML_TYPE_Q8_K_R8;
         if (is_repacked) {
             GGML_ABORT("%s: get_tensor of repacked type %s is not invertible",
                        __func__, ggml_type_name(t));
@@ -3889,7 +3906,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     ggml_cuda_op_sqrt_softplus(ctx, dst);
                     break;
                 default:
-                    return -1;
+                    GGML_ABORT("%s: unsupported unary op %d", __func__, (int)ggml_get_unary_op(dst));
             }
             break;
         case GGML_OP_GLU:
@@ -3988,8 +4005,8 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_MUL_MAT:
             if (dst->src[0]->ne[3] != dst->src[1]->ne[3]) {
-                GGML_CUDA_LOG_ERROR("%s: cannot compute %s: src0->ne[3] = %" PRId64 ", src1->ne[3] = %" PRId64 " - fallback to CPU\n", __func__, dst->name, dst->src[0]->ne[3], dst->src[1]->ne[3]);
-                return -1;
+                GGML_CUDA_LOG_ERROR("%s: cannot compute %s: src0->ne[3] = %" PRId64 ", src1->ne[3] = %" PRId64 " - aborting\n", __func__, dst->name, dst->src[0]->ne[3], dst->src[1]->ne[3]);
+                GGML_ABORT("%s: ne[3] dimensions mismatch for MUL_MAT, cannot continue", __func__);
             } else {
                 i = ggml_cuda_mul_mat(ctx, dst->src[0], dst->src[1], dst, cgraph, i);
             }
@@ -4304,9 +4321,7 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
     ggml_backend_cuda_buffer_context * buf_ctx_dst = (ggml_backend_cuda_buffer_context *)buf_dst->context;
 
     if (cuda_ctx_src->device != buf_ctx_src->device || cuda_ctx_dst->device != buf_ctx_dst->device) {
-#ifndef NDEBUG
         GGML_CUDA_LOG_WARN("%s: backend and buffer devices do not match\n", __func__);
-#endif
         return false;
     }
 
@@ -4319,6 +4334,7 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
             CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
         } else {
 #ifdef GGML_CUDA_NO_PEER_COPY
+            GGML_CUDA_LOG_WARN("%s: cross-device tensor copy not available (GGML_CUDA_NO_PEER_COPY)\n", __func__);
             return false;
 #else
             if (false && src->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 && dst->ne[1] >= 32) {
@@ -4592,9 +4608,7 @@ static void update_cuda_graph_executable(ggml_cuda_graph * graph) {
 #endif // CUDART_VERSION >= 12000
 
     if (stat == cudaErrorGraphExecUpdateFailure) {
-#ifndef NDEBUG
-        GGML_CUDA_LOG_DEBUG("%s: CUDA graph update failed\n", __func__);
-#endif
+        GGML_CUDA_LOG_WARN("%s: CUDA graph update failed, re-instantiating\n", __func__);
 
         // The pre-existing graph exec cannot be updated due to violated constraints
         // so instead clear error and re-instantiate
@@ -4852,7 +4866,6 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_Q4_K:
                     case GGML_TYPE_Q5_K:
                     case GGML_TYPE_Q6_K:
-                    case GGML_TYPE_Q8_K:
                     case GGML_TYPE_IQ1_M:
                     case GGML_TYPE_IQ1_S:
                     case GGML_TYPE_IQ2_S:
@@ -5238,6 +5251,7 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
 
 static ggml_backend_event_t ggml_backend_cuda_event_new(ggml_backend_t backend) {
 #ifdef GGML_CUDA_NO_PEER_COPY
+    GGML_CUDA_LOG_WARN("%s: CUDA events not available (GGML_CUDA_NO_PEER_COPY)\n", __func__);
     return nullptr;
 #else
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
@@ -5535,8 +5549,8 @@ GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer) {
 
     cudaError_t err = cudaHostUnregister(buffer);
     if (err != cudaSuccess) {
-        // clear the error
-        cudaGetLastError();
+        GGML_CUDA_LOG_WARN("%s: cudaHostUnregister failed (%s)\n", __func__, cudaGetErrorString(err));
+        (void)cudaGetLastError();
     }
 }
 
