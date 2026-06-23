@@ -298,6 +298,38 @@ static __device__ void quantize_f32_q6_0_block(const float * __restrict__ xi, bl
     }
 }
 
+static __device__ void quantize_f32_q6_1_block(const float * __restrict__ xi, block_q6_1 * __restrict__ y) {
+
+    float vmin = FLT_MAX;
+    float vmax = -FLT_MAX;
+
+    for (int j = 0; j < QK6_1; ++j) {
+        const float v  = xi[j];
+        if (v < vmin) vmin = v;
+        if (v > vmax) vmax = v;
+    }
+
+    const float d  = (vmax - vmin) / ((1 << 6) - 1);
+    const float id = d ? 1.0f/d : 0.0f;
+
+    y->dm.x = d;
+    y->dm.y = vmin;
+
+    memset(y->qh, 0, QK6_1/4);
+
+    for (int j = 0; j < QK6_1/2; ++j) {
+        const float x0 = (xi[0       + j] - vmin)*id;
+        const float x1 = (xi[QK6_1/2 + j] - vmin)*id;
+
+        const uint8_t xi0 = min(63, (int8_t)(x0 + 0.5f));
+        const uint8_t xi1 = min(63, (int8_t)(x1 + 0.5f));
+
+        y->qs[j]  = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
+        const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
+        y->qh[j%(QK6_1/4)] |= (h << 4*(j/(QK6_1/4)));
+    }
+}
+
 // Wrapper functions for cpy.cu compatibility
 static __device__ void cpy_blck_f32_q4_0(const char * cxi, char * cdsti) {
     quantize_f32_q4_0_block((const float *)cxi, (block_q4_0 *)cdsti);
@@ -317,6 +349,10 @@ static __device__ void cpy_blck_f32_q5_1(const char * cxi, char * cdsti) {
 
 static __device__ void cpy_blck_f32_q6_0(const char * cxi, char * cdsti) {
     quantize_f32_q6_0_block((const float *)cxi, (block_q6_0 *)cdsti);
+}
+
+static __device__ void cpy_blck_f32_q6_1(const char * cxi, char * cdsti) {
+    quantize_f32_q6_1_block((const float *)cxi, (block_q6_1 *)cdsti);
 }
 
 static __device__ void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
