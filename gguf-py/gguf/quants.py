@@ -403,6 +403,60 @@ class Q6_0(__Quant, qtype=GGMLQuantizationType.Q6_0):
 
         return np.concatenate([d, qh, qs], axis=-1)
 
+class Q6_1(__Quant, qtype=GGMLQuantizationType.Q6_1):
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        max = blocks.max(axis=-1, keepdims=True)
+        min = blocks.min(axis=-1, keepdims=True)
+
+        d = (max - min) / 63
+        with np.errstate(divide="ignore"):
+            id = np.where(d == 0, 0, 1 / d)
+        q = np.trunc((blocks - min) * id + np.float32(0.5), dtype=np.float32).astype(np.uint8).clip(0, 63)
+
+        qs = q.reshape((n_blocks, 2, cls.block_size // 2))
+        qs = (qs[..., 0, :] & np.uint8(0x0F)) | (qs[..., 1, :] << np.uint8(4))
+
+        qh = np.zeros((n_blocks, cls.block_size // 4), dtype=np.uint8)
+        for j in range(cls.block_size // 2):
+            h = ((q[:, j] >> 4) | ((q[:, j + cls.block_size // 2] >> 4) << 2)).astype(np.uint8)
+            qh[:, j % (cls.block_size // 4)] |= (h << 4 * (j // (cls.block_size // 4)))
+
+        d = d.astype(np.float16).view(np.uint8)
+        m = min.astype(np.float16).view(np.uint8)
+
+        return np.concatenate([d, m, qh, qs], axis=-1)
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        d, rest = np.hsplit(blocks, [2])
+        m, rest = np.hsplit(rest, [2])
+        qh, qs = np.hsplit(rest, [8])
+
+        d = d.view(np.float16).astype(np.float32)
+        m = m.view(np.float16).astype(np.float32)
+
+        qs = qs.reshape((n_blocks, -1))
+        qh = qh.reshape((n_blocks, -1))
+
+        result = np.zeros((n_blocks, cls.block_size), dtype=np.float32)
+
+        for j in range(cls.block_size // 2):
+            h = (qh[:, j % (cls.block_size // 4)] >> (4 * (j // (cls.block_size // 4)))) & np.uint8(0x0F)
+
+            x0 = (qs[:, j] & np.uint8(0x0F)) | ((h << 4) & np.uint8(0x30))
+            x1 = (qs[:, j] >> np.uint8(4)) | ((h << 2) & np.uint8(0x30))
+
+            result[:, j] = x0.astype(np.float32) * d[:, 0] + m[:, 0]
+            result[:, j + cls.block_size // 2] = x1.astype(np.float32) * d[:, 0] + m[:, 0]
+
+        return result.reshape((n_blocks, -1))
+
+
 class Q8_0(__Quant, qtype=GGMLQuantizationType.Q8_0):
     @classmethod
     # Implementation of Q8_0 with bit-exact same results as reference implementation in ggml-quants.c
