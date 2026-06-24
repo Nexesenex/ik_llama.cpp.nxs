@@ -752,8 +752,8 @@ static __global__ void dequantize_block_iq5_nl(const void * __restrict__ vx, dst
     const float d = (float)x[ib].d;
     for (int j = 0; j < 4; ++j) {
         const uint8_t qs_byte = qs[j];
-        const int idx0 = (qs_byte & 0xf) | (((qh >> (8*il + 2*j + 0)) & 1) << 4);
-        const int idx1 = (qs_byte >>  4) | (((qh >> (8*il + 2*j + 1)) & 1) << 4);
+        const int idx0 = (qs_byte & 0xf) | (((qh >> (4*il + j + 0)) & 1) << 4);
+        const int idx1 = (qs_byte >>  4) | (((qh >> (4*il + j + 16)) & 1) << 4);
         y[j+ 0] = d * kvalues_iq5nl[idx0];
         y[j+16] = d * kvalues_iq5nl[idx1];
     }
