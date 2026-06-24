@@ -28,7 +28,7 @@ static __device__ __forceinline__ void dequantize_iq5_nl(const void * vx, const 
     memcpy(&qh, x[ib].qh, sizeof(qh));
 
     const int xh_0 = ((qh >> (iqs +  0)) << 4) & 0x10;
-    const int xh_1 = ((qh >> (iqs + 12))     ) & 0x10;
+    const int xh_1 = ((qh >> (iqs + 16))     ) & 0x10;
 
     v.x = kvalues_iq5nl[((x[ib].qs[iqs] & 0xF) | xh_0)];
     v.y = kvalues_iq5nl[((x[ib].qs[iqs] >> 4) | xh_1)];
