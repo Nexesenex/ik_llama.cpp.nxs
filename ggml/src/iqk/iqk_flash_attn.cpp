@@ -121,7 +121,7 @@ size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
 static inline const std::unordered_set<ggml_type> & supported_kv_types() {
 #ifdef GGML_IQK_FA_ALL_QUANTS
     static std::unordered_set<ggml_type> k_supported = {
-        GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q8_KV, GGML_TYPE_Q6_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL
+        GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q8_KV, GGML_TYPE_Q6_0, GGML_TYPE_Q6_1, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL
     };
 #else
     static std::unordered_set<ggml_type> k_supported = {
@@ -299,7 +299,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
             fprintf(stderr, "    %s, but only if K and V are both %s\n", ggml_type_name(GGML_TYPE_BF16), ggml_type_name(GGML_TYPE_BF16));
 #endif
 #ifndef GGML_IQK_FA_ALL_QUANTS
-            fprintf(stderr, "    To enable q4_0, q4_1, and iq4_nl KV cache types, recompile with -DGGML_IQK_FA_ALL_QUANTS=ON\n");
+            fprintf(stderr, "    To enable q4_0, q4_1, q6_1, and iq4_nl KV cache types, recompile with -DGGML_IQK_FA_ALL_QUANTS=ON\n");
 #endif
         }
         barrier(barrier_data);
