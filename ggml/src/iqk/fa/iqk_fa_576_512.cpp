@@ -99,6 +99,12 @@ inline bool iqk_deepseek_helper(ggml_type type_k,
         iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         return true;
     }
+    if (type_k == GGML_TYPE_IQ5_NL) {
+        HelperIQ5nl kh((const char *)k, stride_k);
+        HelperIQ5nl vh((const char *)v, stride_v);
+        iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
+        return true;
+    }
 #endif
     if (type_k == GGML_TYPE_F16) {
         HelperF16 kh((const char *)k, stride_k);
