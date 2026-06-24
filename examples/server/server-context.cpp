@@ -4476,7 +4476,7 @@ inline int32_t check_ban_phrase(server_slot& slot) {
     return -1;
 }
 
-inline void rewind_context(server_slot& slot, int32_t ban_pos) {
+inline void rewind_context(server_slot& slot, int32_t ban_pos, bool ignore_recurrent_model = false) {
     slot.rewind_count++;
 
     int32_t buffer_start_pos = slot.n_past - (int32_t)slot.token_buffer.size() + 1;
@@ -4508,28 +4508,27 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
         n_keep_cache = (size_t)(ban_pos - 1);
     }
 
-    if (params_base.ignore_recurrent_model) {
-        // For hybrid models, restore the saved recurrent state
-        if (!slot.ban_state.empty()) {
-            if (slot.ban_state_n_past < ban_pos) {
-                // State saved at or before the banned position — safe to restore
-                // both K/V and recurrent state without position mismatch.
-                const size_t n = llama_state_seq_set_data(slot.ctx, slot.ban_state.data(), slot.ban_state.size(), slot.id, 0);
-                if (n != slot.ban_state.size()) {
-                    LLAMA_LOG_ERROR("ban state restore size mismatch: expected %zu, got %zu\n", slot.ban_state.size(), n);
-                }
-                n_keep_cache = (size_t)slot.ban_state_n_past;
-            // } else {
-                // State saved after the banned position (most common case: the
-                // ban matched within the buffer, after the saved position).
-                // Restoring the full state would set the recurrent s_l state
-                // ahead of the KV cache after trimming below, corrupting
-                // generation. Instead, fall through to the non-hybrid rewind
-                // and let s_l self-correct naturally.
+    // For hybrid models, restore the saved recurrent state.
+    // This is recurrent-model behavior; skip when -igrm is set.
+    if (!ignore_recurrent_model && !slot.ban_state.empty()) {
+        if (slot.ban_state_n_past < ban_pos) {
+            // State saved at or before the banned position — safe to restore
+            // both K/V and recurrent state without position mismatch.
+            const size_t n = llama_state_seq_set_data(slot.ctx, slot.ban_state.data(), slot.ban_state.size(), slot.id, 0);
+            if (n != slot.ban_state.size()) {
+                LLAMA_LOG_ERROR("ban state restore size mismatch: expected %zu, got %zu\n", slot.ban_state.size(), n);
             }
-            slot.ban_state.clear();
-            slot.ban_state_n_past = -1;
+            n_keep_cache = (size_t)slot.ban_state_n_past;
+        } else {
+            // State saved after the banned position (most common case: the
+            // ban matched within the buffer, after the saved position).
+            // Restoring the full state would set the recurrent s_l state
+            // ahead of the KV cache after trimming below, corrupting
+            // generation. Instead, fall through to the non-hybrid rewind
+            // and let s_l self-correct naturally.
         }
+        slot.ban_state.clear();
+        slot.ban_state_n_past = -1;
     }
 
     if (n_keep_cache > slot.cache_tokens.size()) {
@@ -4615,7 +4614,7 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     }
 
     if (ban_pos >= 0 && allow_rewind) {
-        rewind_context(slot, ban_pos);
+        rewind_context(slot, ban_pos, params_base.ignore_recurrent_model);
         slot.rewind_status = true;
     }
     else if (buffer_full || !next_token) {
