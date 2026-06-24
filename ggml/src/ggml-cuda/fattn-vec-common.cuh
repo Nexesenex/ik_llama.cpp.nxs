@@ -197,11 +197,12 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_iq5_nl(
 
         const int ib    = k_KQ /  QI8_1;
         const int iqs4  = k_KQ %  QI5_NL;
-        const int iqs8  = k_KQ %  QI8_1;
         const int shift = k_KQ & (QI8_1/2);
 
         const int v_nibbles = (get_int_b2(K_iq5_nl[ib].qs, iqs4) >> shift) & 0x0F0F0F0F;
-        const int vh = get_int_b2(K_iq5_nl[ib].qh, 0) >> (iqs8 * QI5_NL);
+        const uint32_t qh32 = get_int_b2(K_iq5_nl[ib].qh, 0);
+        const int base = 8*iqs4 + (shift ? 1 : 0);
+        const int vh = ((qh32 >> base) & 1) | (((qh32 >> (base+2)) & 1) << 1) | (((qh32 >> (base+4)) & 1) << 2) | (((qh32 >> (base+6)) & 1) << 3);
         const int v = get_one_int_from_table_32_iq5_nl(v_nibbles, vh);
         const int u = Q_q8[k_KQ_0/WARP_SIZE];
 
