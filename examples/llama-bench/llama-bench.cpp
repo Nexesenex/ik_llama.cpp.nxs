@@ -420,6 +420,9 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "iq4_nl") {
         return GGML_TYPE_IQ4_NL;
     }
+    if (s == "iq4_nl") {
+        return GGML_TYPE_IQ5_NL;
+    }
     if (s == "q6_0") {
         return GGML_TYPE_Q6_0;
     }

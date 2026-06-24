@@ -2954,8 +2954,8 @@ static void llm_apply_khad_pretransform(llama_model & model) {
                t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q4_1 ||
                t == GGML_TYPE_Q5_0 || t == GGML_TYPE_Q5_1 ||
                t == GGML_TYPE_Q6_0 || t == GGML_TYPE_Q8_0 ||
-               t == GGML_TYPE_IQ4_NL ||
-               t == GGML_TYPE_Q4_K  || t == GGML_TYPE_Q5_K  || t == GGML_TYPE_Q6_K ||
+                t == GGML_TYPE_IQ4_NL || t == GGML_TYPE_IQ5_NL ||
+                t == GGML_TYPE_Q4_K  || t == GGML_TYPE_Q5_K  || t == GGML_TYPE_Q6_K ||
                t == GGML_TYPE_IQ4_K || t == GGML_TYPE_IQ5_K ||
                t == GGML_TYPE_IQ4_KS|| t == GGML_TYPE_IQ4_KSS||
                t == GGML_TYPE_IQ5_KS;
