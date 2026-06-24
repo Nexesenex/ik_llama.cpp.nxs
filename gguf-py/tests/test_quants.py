@@ -67,7 +67,7 @@ class GGMLQuants:
             "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "q6_0",
             "q2_K", "q3_K", "q4_K", "q5_K", "q6_K",
             "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq1_s", "iq1_m",
-            "iq4_nl", "iq4_xs",
+            "iq4_nl", "iq5_nl", "iq4_xs",
         ):
             dequant_func: ctypes._NamedFuncPointer = getattr(self.libggml, "dequantize_row_" + t)
             dequant_func.restype = None

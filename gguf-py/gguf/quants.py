@@ -1164,6 +1164,33 @@ class IQ1_M(__Quant, qtype=GGMLQuantizationType.IQ1_M):
         return (dl * (grid + delta)).reshape((n_blocks, -1))
 
 
+class IQ5_NL(__Quant, qtype=GGMLQuantizationType.IQ5_NL):
+    kvalues = (-127, -115, -103, -92, -81, -71, -61, -52, -43, -34, -27, -20, -14, -8, -4, -1,
+                1,    4,    8,  14,  20,  27,  34,  43,  52,  61,  71,  81,  92, 103, 115, 127)
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        d, rest = np.hsplit(blocks, [2])
+        qh, qs = np.hsplit(rest, [4])
+
+        d = d.view(np.float16).astype(np.float32)
+
+        qh = qh.view(np.uint32).reshape((n_blocks, 1))
+
+        qs = qs.reshape((n_blocks, -1, 1, cls.block_size // 2)) >> np.array([0, 4], dtype=np.uint8).reshape((1, 1, 2, 1))
+        qs = (qs & np.uint8(0x0F)).reshape((n_blocks, -1))
+
+        qh_bits = ((qh >> np.arange(cls.block_size, dtype=np.uint32).reshape((1, -1))) & np.uint32(1))
+        idx = qs.astype(np.uint32) | (qh_bits << np.uint32(4))
+
+        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape(1, -1)
+        result = np.take_along_axis(kvalues, idx.astype(np.int32), axis=-1).astype(np.float32)
+
+        return (d * result)
+
+
 class IQ4_NL(__Quant, qtype=GGMLQuantizationType.IQ4_NL):
     kvalues = (-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113)
 
@@ -1177,9 +1204,9 @@ class IQ4_NL(__Quant, qtype=GGMLQuantizationType.IQ4_NL):
 
         qs = qs.reshape((n_blocks, -1, 1, cls.block_size // 2)) >> np.array([0, 4], dtype=np.uint8).reshape((1, 1, 2, 1))
 
-        qs = (qs & np.uint8(0x0F)).reshape((n_blocks, -1, 1))
+        qs = (qs & np.uint8(0x0F)).reshape((n_blocks, -1))
 
-        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape(1, 1, 16)
+        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape(1, 16)
         qs = np.take_along_axis(kvalues, qs, axis=-1).astype(np.float32).reshape((n_blocks, -1))
 
         return (d * qs)
