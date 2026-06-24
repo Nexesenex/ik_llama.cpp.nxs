@@ -26,6 +26,11 @@
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
 
+// forward declarations
+static std::string get_cli_cmd(int argc, char ** argv);
+static int g_argc = 0;
+static char ** g_argv = nullptr;
+
 // Public C API for hot-swap (defined in src/llama.cpp)
 extern "C" bool llama_reload_changed_tensors(struct llama_context * ctx);
 
@@ -691,6 +696,7 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     if (nll2 > 0) {
         nll2 = sqrt(nll2/(count-1));
         printf("Final estimate: PPL over %d chunks for n_ctx=%d = %.4lf +/- %.5lf\n", n_chunk, n_ctx, ppl, nll2*ppl);
+        printf("CLI used : (%s)\n", get_cli_cmd(g_argc, g_argv).c_str());
     } else {
         printf("Unexpected negative standard deviation of log(prob)\n");
     }
@@ -1980,7 +1986,36 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
 
 }
 
+static std::string get_cli_cmd(int argc, char ** argv) {
+    std::string cmd;
+    for (int i = 0; i < argc; ++i) {
+        const std::string arg(argv[i]);
+        if (arg == "--minilog") {
+            continue;
+        }
+        if (!cmd.empty()) {
+            cmd += ' ';
+        }
+        if (i > 0 && (arg == "-m" || arg == "--model" || arg == "-f" || arg == "--file")) {
+            if (i + 1 < argc) {
+                cmd += arg + ' ';
+                const std::string path(argv[++i]);
+                const auto pos = path.find_last_of("/\\");
+                cmd += (pos == std::string::npos) ? path : path.substr(pos + 1);
+            } else {
+                cmd += arg;
+            }
+        } else {
+            cmd += arg;
+        }
+    }
+    return cmd;
+}
+
 int main(int argc, char ** argv) {
+    g_argc = argc;
+    g_argv = argv;
+
     gpt_params params;
 
     params.n_ctx = 512;
