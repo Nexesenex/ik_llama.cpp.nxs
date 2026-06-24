@@ -589,6 +589,8 @@ class Model:
                         data_qtype = gguf.GGMLQuantizationType.Q5_1
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0:
                         data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_1:
+                        data_qtype = gguf.GGMLQuantizationType.Q6_1
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0:
                         data_qtype = gguf.GGMLQuantizationType.Q8_0
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_0_M:
@@ -6943,9 +6945,7 @@ def parse_args() -> argparse.Namespace:
         help="path to write to; default: based on input. {ftype} will be replaced by the outtype.",
     )
     parser.add_argument(
-        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "q6_0", "auto"], default="f16",
-        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, q4_0, q4_1, q5_0, q5_1, q6_0 for a smaller conversion to then create an iMatrix file for example, and auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type",
-        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "q6_0",
+        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "q6_0", "q6_1",
                                         "q8_0_M", "q4_0_M", "q4_1_M", "q5_0_M", "q5_1_M", "q6_0_M",
                                         "q8_0_L", "q4_0_L", "q4_1_L", "q5_0_L", "q5_1_L", "q6_0_L",
                                         "q8_0_XL", "q4_0_XL", "q4_1_XL", "q5_0_XL", "q5_1_XL", "q6_0_XL",
@@ -6954,7 +6954,7 @@ def parse_args() -> argparse.Namespace:
                                         "q8_0_XS", "q4_1_XS", "q5_0_XS", "q5_1_XS", "q6_0_XS",
                                         "q8_0_XXS", "q4_1_XXS", "q5_0_XXS", "q5_1_XXS", "q6_0_XXS",
                                         "auto"], default="f16",
-        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, q4_0, q4_1, q5_0, q5_1, q6_0 for a smaller conversion to then create an iMatrix file for example, and auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type. _s Ftypes have attn_q tensors conv. to a lower quant (ex, q5_0 instead of q6_0). _xs FTypes have also FFN_up tensors converted to a lower quant. _xxs FTypes have also FFN_gate tensors converted to a lower quant. _M FTypes have embeddings, output, & attn_v tensors conv. to a higher quant. _L FTypes have also attn_k tensors conv. to a higher quant (ex, q6_0 vs q5_0). _XL FTypes have also FFN_down tensors converted to a higher quant. _XXL FTypes have also attn_output tensors converted to a higher quant.",
+        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, q4_0, q4_1, q5_0, q5_1, q6_0, q6_1 for a smaller conversion to then create an iMatrix file for example, and auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type. _s Ftypes have attn_q tensors conv. to a lower quant (ex, q5_0 instead of q6_0). _xs FTypes have also FFN_up tensors converted to a lower quant. _xxs FTypes have also FFN_gate tensors converted to a lower quant. _M FTypes have embeddings, output, & attn_v tensors conv. to a higher quant. _L FTypes have also attn_k tensors conv. to a higher quant (ex, q6_0 vs q5_0). _XL FTypes have also FFN_down tensors converted to a higher quant. _XXL FTypes have also attn_output tensors converted to a higher quant.",
     )
     parser.add_argument(
         "--bigendian", action="store_true",
@@ -7073,6 +7073,7 @@ def main() -> None:
         "q5_0": gguf.LlamaFileType.MOSTLY_Q5_0,
         "q5_1": gguf.LlamaFileType.MOSTLY_Q5_1,
         "q6_0": gguf.LlamaFileType.MOSTLY_Q6_0,
+        "q6_1": gguf.LlamaFileType.MOSTLY_Q6_1,
         "q8_0": gguf.LlamaFileType.MOSTLY_Q8_0,
 
         "q4_0_M": gguf.LlamaFileType.MOSTLY_Q4_0_M,
