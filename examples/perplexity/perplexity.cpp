@@ -2026,6 +2026,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    common_params_minilog(params);
+
     const int32_t n_ctx = params.n_ctx;
 
     if (n_ctx <= 0) {
