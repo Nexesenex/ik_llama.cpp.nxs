@@ -21,13 +21,19 @@
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
+#include <cstdarg>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
+#include <io.h>
+#else
+#include <unistd.h>
 #endif
 
 // forward declarations
 static std::string get_cli_cmd(int argc, char ** argv);
+static void tinylog_printf(const char * fmt, ...);
+static bool g_tinylog = false;
 static int g_argc = 0;
 static char ** g_argv = nullptr;
 
@@ -479,13 +485,13 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
         }
         // perplexity is e^(average negative log-likelihood)
         if (params.ppl_output_type == 0) {
-            printf("[%d]%.4lf,", i + 1, std::exp(nll / count));
+            tinylog_printf("[%d]%.4lf,", i + 1, std::exp(nll / count));
         } else {
-            printf("%8d  %.4lf\n", i*params.ppl_stride, std::exp(nll / count));
+            tinylog_printf("%8d  %.4lf\n", i*params.ppl_stride, std::exp(nll / count));
         }
         fflush(stdout);
     }
-    printf("\n");
+    tinylog_printf("\n");
 
     return {tokens, std::exp(nll / count), logit_history, prob_history};
 }
@@ -675,19 +681,19 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
 
             // perplexity is e^(average negative log-likelihood)
             if (params.ppl_output_type == 0) {
-                printf("[%d]%.4lf,", i + seq + 1, std::exp(nll / count));
+                tinylog_printf("[%d]%.4lf,", i + seq + 1, std::exp(nll / count));
             } else {
                 double av = nll/count;
                 double av2 = nll2/count - av*av;
                 if (av2 > 0) av2 = sqrt(av2/(count-1));
-                printf("%8d  %.4lf  %4lf  %4lf\n", i*n_ctx, std::exp(nll / count), av, av2);
+                tinylog_printf("%8d  %.4lf  %4lf  %4lf\n", i*n_ctx, std::exp(nll / count), av, av2);
             }
         }
         fflush(stdout);
 
         logits.clear();
     }
-    printf("\n");
+    tinylog_printf("\n");
 
     nll2 /= count;
     nll /= count;
@@ -695,10 +701,10 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     nll2 -= nll * nll;
     if (nll2 > 0) {
         nll2 = sqrt(nll2/(count-1));
-        printf("Final estimate: PPL over %d chunks for n_ctx=%d = %.4lf +/- %.5lf\n", n_chunk, n_ctx, ppl, nll2*ppl);
-        printf("CLI used : (%s)\n", get_cli_cmd(g_argc, g_argv).c_str());
+        tinylog_printf("Final estimate: PPL over %d chunks for n_ctx=%d = %.4lf +/- %.5lf\n", n_chunk, n_ctx, ppl, nll2*ppl);
+        tinylog_printf("CLI used : (%s)\n", get_cli_cmd(g_argc, g_argv).c_str());
     } else {
-        printf("Unexpected negative standard deviation of log(prob)\n");
+        tinylog_printf("Unexpected negative standard deviation of log(prob)\n");
     }
 
     llama_batch_free(batch);
@@ -1990,7 +1996,7 @@ static std::string get_cli_cmd(int argc, char ** argv) {
     std::string cmd;
     for (int i = 0; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg == "--minilog") {
+        if (arg == "--minilog" || arg == "--tinylog") {
             continue;
         }
         if (!cmd.empty()) {
@@ -2012,9 +2018,89 @@ static std::string get_cli_cmd(int argc, char ** argv) {
     return cmd;
 }
 
+static void tinylog_init(void) {
+    if (!g_tinylog) {
+        return;
+    }
+    llama_log_set([](ggml_log_level, const char *, void *) {}, nullptr);
+    fflush(stdout);
+#ifdef _MSC_VER
+    FILE * nul;
+    freopen_s(&nul, "NUL", "w", stdout);
+#else
+    freopen("/dev/null", "w", stdout);
+#endif
+}
+
+static void tinylog_printf(const char * fmt, ...) {
+    if (!g_tinylog) {
+        va_list args;
+        va_start(args, fmt);
+        vprintf(fmt, args);
+        va_end(args);
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+#ifdef _MSC_VER
+    FILE * f = fopen("CONOUT$", "w");
+    if (!f) { f = fopen("CON", "w"); }
+    if (f) {
+        vfprintf(f, fmt, args);
+        fclose(f);
+    }
+#else
+    FILE * f = fopen("/dev/tty", "w");
+    if (f) {
+        vfprintf(f, fmt, args);
+        fclose(f);
+    } else {
+        vfprintf(stderr, fmt, args);
+    }
+#endif
+    va_end(args);
+}
+
+static void tinylog_print_timings(struct llama_context * ctx) {
+    if (!g_tinylog) {
+        llama_print_timings(ctx);
+        return;
+    }
+    const llama_timings timings = llama_get_timings(ctx);
+    tinylog_printf("\n");
+    tinylog_printf("llama_print_timings:        load time = %10.2f ms\n",      timings.t_load_ms);
+    if (timings.n_sample) {
+        tinylog_printf("llama_print_timings:      sample time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
+                timings.t_sample_ms, timings.n_sample, timings.t_sample_ms / timings.n_sample, 1e3 / timings.t_sample_ms * timings.n_sample);
+    }
+    if (timings.n_p_eval) {
+        tinylog_printf("llama_print_timings: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
+                timings.t_p_eval_ms, timings.n_p_eval, timings.t_p_eval_ms / timings.n_p_eval, 1e3 / timings.t_p_eval_ms * timings.n_p_eval);
+    }
+    if (timings.n_eval) {
+        tinylog_printf("llama_print_timings:        eval time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
+                timings.t_eval_ms, timings.n_eval, timings.t_eval_ms / timings.n_eval, 1e3 / timings.t_eval_ms * timings.n_eval);
+    }
+    tinylog_printf("llama_print_timings:       total time = %10.2f ms / %5d tokens\n", (timings.t_end_ms - timings.t_start_ms), (timings.n_p_eval + timings.n_eval));
+}
+
 int main(int argc, char ** argv) {
     g_argc = argc;
     g_argv = argv;
+
+    // scan for --tinylog and remove it before gpt_params_parse
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--tinylog") == 0) {
+            g_tinylog = true;
+            for (int j = i; j < argc - 1; ++j) {
+                argv[j] = argv[j + 1];
+            }
+            argv[--argc] = nullptr;
+            g_argc = argc;
+            break;
+        }
+    }
+    tinylog_init();
 
     gpt_params params;
 
@@ -2118,7 +2204,7 @@ int main(int argc, char ** argv) {
             results = perplexity(ctx, params, n_ctx);
         }
 
-        llama_print_timings(ctx);
+        tinylog_print_timings(ctx);
         write_logfile(ctx, params, model, results);
 
         if (pre_script) {
