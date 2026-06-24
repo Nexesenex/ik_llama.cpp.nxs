@@ -3435,6 +3435,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.ppl_output_type = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "-ppl-run" || arg == "--ppl-run-params") {
+        CHECK_ARG
+        params.ppl_run_params.push_back(argv[i]);
+        return true;
+    }
     if (arg == "-ptc" || arg == "--print-token-count") {
         CHECK_ARG
         params.n_print = std::stoi(argv[i]);
@@ -4365,6 +4370,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "perplexity",  "       --ppl-stride N",         "stride for perplexity calculation (default: %d)", params.ppl_stride });
     options.push_back({ "perplexity",  "       --ppl-output-type {0,1}",
                                                                         "output type for perplexity calculation (default: %d)", params.ppl_output_type });
+    options.push_back({ "perplexity",  "   -ppl-run, --ppl-run-params S", "additional test run on the same loaded model (repeatable); S is a comma-separated list of overrides, e.g. \"ctx=4096,experts=8\" or \"file=french.txt\" or \"file=arc.bin,mode=mc\" or \"ctk=q8_0,ctv=q8_0,khad=1,vhad=1\" (keys: ctx, experts, file, mode, k_cache/ctk, v_cache/ctv, k_hadamard/khad, v_hadamard/vhad, ctk_first, ctk_last, ctv_first, ctv_last; the first/last keys take TYPE,N layer ranges)" });
 
     options.push_back({ "parallel" });
     options.push_back({ "*",           "-dt,   --defrag-thold N",       "KV cache defragmentation threshold (default: %.1f, < 0 - disabled)", (double)params.defrag_thold });
@@ -5285,6 +5291,47 @@ static void llama_init_sampler_from_model(const llama_model * model, common_para
     get_float("general.sampling.mirostat_eta",     sparams.mirostat_eta,    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA);
 }
 
+struct llama_context * common_create_context(struct llama_model * model, const gpt_params & params) {
+    auto cparams = common_context_params_to_llama(params);
+
+    llama_context * lctx = llama_init_from_model(model, cparams);
+    if (lctx == NULL) {
+        fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params.model.c_str());
+        return nullptr;
+    }
+
+    for (auto [op, on_off] : params.offload_policy) {
+        llama_set_offload_policy(lctx, op, on_off);
+    }
+
+    if (!params.control_vectors.empty()) {
+        LOG("================ Control vectors are being used to affect the model output!\n");
+        const int32_t layer_start = params.control_vector_layer_start <= 0 ? 1 : params.control_vector_layer_start;
+        const int32_t layer_end   = params.control_vector_layer_end   <= 0 ? llama_n_layer(model) : params.control_vector_layer_end;
+
+        const auto cvec = llama_control_vector_load(params.control_vectors);
+        if (cvec.n_embd == -1) {
+            fprintf(stderr, "%s: error: failed to load control vectors\n", __func__);
+            llama_free(lctx);
+            return nullptr;
+        }
+
+        const int err = llama_control_vector_apply(lctx,
+                                                   cvec.data.data(),
+                                                   cvec.data.size(),
+                                                   cvec.n_embd,
+                                                   layer_start,
+                                                   layer_end);
+        if (err) {
+            fprintf(stderr, "%s: error: failed to apply control vectors\n", __func__);
+            llama_free(lctx);
+            return nullptr;
+        }
+    }
+
+    return lctx;
+}
+
 struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     llama_init_result iparams;
 
@@ -5325,9 +5372,8 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
 
     auto cparams = common_context_params_to_llama(params);
 
-    llama_context * lctx = llama_init_from_model(model, cparams);
+    llama_context * lctx = common_create_context(model, params);
     if (lctx == NULL) {
-        fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params.model.c_str());
         llama_free_model(model);
         return iparams;
     }
@@ -6673,6 +6719,9 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
     fprintf(stream, "ppl_stride: %d # default: 0\n", params.ppl_stride);
+    for (const auto & spec : params.ppl_run_params) {
+        fprintf(stream, "ppl_run_params: %s\n", spec.c_str());
+    }
     fprintf(stream, "presence_penalty: %f # default: 0.0\n", sparams.penalty_present);
     yaml_dump_string_multiline(stream, "prompt", params.prompt.c_str());
     fprintf(stream, "prompt_cache: %s\n", params.path_prompt_cache.c_str());
