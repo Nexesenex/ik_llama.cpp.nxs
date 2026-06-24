@@ -2181,13 +2181,15 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         const block_iq5_nl * bxi = (const block_iq5_nl *)(x + i*stride) + kbx0 + kbx;
 
         const int ql = get_int_b2(bxi->qs, kqsx);
-        const int qh = *(const int *)bxi->qh >> (4 * kqsx);
 
         const int2 v_low  = get_int_from_table_16(ql, kvalues_iq5nl + 0);
         const int2 v_high = get_int_from_table_16(ql, kvalues_iq5nl + 16);
 
-        const int qh0 = (qh >>  0) & 0xF;
-        const int qh1 = (qh >> 16) & 0xF;
+        const uint32_t qh32 = *(const uint32_t *)bxi->qh;
+        const int base_even = 8*kqsx;
+        const int base_odd  = 8*kqsx + 1;
+        const int qh0 = ((qh32 >> base_even) & 1) | (((qh32 >> (base_even+2)) & 1) << 1) | (((qh32 >> (base_even+4)) & 1) << 2) | (((qh32 >> (base_even+6)) & 1) << 3);
+        const int qh1 = ((qh32 >> base_odd) & 1) | (((qh32 >> (base_odd+2)) & 1) << 1) | (((qh32 >> (base_odd+4)) & 1) << 2) | (((qh32 >> (base_odd+6)) & 1) << 3);
 
         int mask_even = (qh0 & 1) * 0xFF; mask_even |= ((qh0 >> 1) & 1) * 0xFF << 8;
         mask_even |= ((qh0 >> 2) & 1) * 0xFF << 16; mask_even |= ((qh0 >> 3) & 1) * 0xFF << 24;
