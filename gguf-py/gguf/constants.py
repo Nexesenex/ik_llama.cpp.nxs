@@ -1957,6 +1957,7 @@ class GGMLQuantizationType(IntEnum):
     IQ4_K     = 139
     IQ5_K     = 140
     IQ6_K     = 141
+    Q6_1      = 142
     IQ4_KS    = 144
     IQ2_KS    = 145
     IQ4_KSS   = 146
@@ -1991,6 +1992,7 @@ class GGMLQuantizationType(IntEnum):
     IQ1_M_R4  = 229
     BF16_R16  = 230
     Q6_0_R4   = 233
+    Q6_1_R4   = 234
     IQ2_BN_R4 = 335
     IQ2_K_R4  = 337
     IQ3_K_R4  = 338
@@ -2060,6 +2062,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ4_KS        = 145 #except 1d tensors
     MOSTLY_IQ3_KL        = 146 #except 1d tensors
     MOSTLY_IQ2_KS        = 147 #except 1d tensors
+    MOSTLY_Q6_1          = 181 #except 1d tensors
     MOSTLY_IQ4_KSS       = 148 #except 1d tensors
     MOSTLY_Q8_KV         = 149 #except 1d tensors
     MOSTLY_IQ5_KS        = 150 #except 1d tensors
@@ -2067,6 +2070,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ3_KT        = 152 #except 1d tensors
     MOSTLY_IQ4_KT        = 153 #except 1d tensors
     MOSTLY_IQ3_KS        = 154 #except 1d tensors
+    MOSTLY_Q6_1_R4       = 336 #except 1d tensors
     MOSTLY_IQ2_KL        = 155 #except 1d tensors
     MOSTLY_IQ1_KT        = 156 #except 1d tensors
 
@@ -2228,6 +2232,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.Q8_1_X4     : (  32,   36),
     GGMLQuantizationType.Q8_2_X4     : (  32,   36),
     GGMLQuantizationType.Q6_0        : (  32,   26),
+    GGMLQuantizationType.Q6_1        : (  32,   28),
     GGMLQuantizationType.IQ1_BN      : (  64,   13),
     GGMLQuantizationType.IQ2_BN      : (  64,   16),
     GGMLQuantizationType.Q8_K64      : (  64,   68),
@@ -2270,6 +2275,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ1_M_R4    : (  32,    7),
     GGMLQuantizationType.BF16_R16    : (   1,    2),
     GGMLQuantizationType.Q6_0_R4     : (  32,   26),
+    GGMLQuantizationType.Q6_1_R4     : (  32,   28),
     GGMLQuantizationType.IQ2_BN_R4   : (  64,   16),
     GGMLQuantizationType.IQ2_K_R4    : ( 256,   76),
     GGMLQuantizationType.IQ3_K_R4    : ( 256,  110),
