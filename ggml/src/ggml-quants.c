@@ -1753,6 +1753,22 @@ void dequantize_row_q8_0(const block_q8_0 * restrict x, float * restrict y, int6
     }
 }
 
+void dequantize_row_q8_1(const block_q8_1 * restrict x, float * restrict y, int64_t k) {
+    static const int qk = QK8_1;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+
+        for (int j = 0; j < qk; ++j) {
+            y[i*qk + j] = x[i].qs[j]*d;
+        }
+    }
+}
+
 //
 // 2-6 bit quantization in super-blocks
 //

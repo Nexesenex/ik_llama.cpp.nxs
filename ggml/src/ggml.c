@@ -876,6 +876,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .from_float               = quantize_row_q8_1,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q8_1_ref,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q8_1,
         .vec_dot_type             = GGML_TYPE_Q8_1,
         .nrows                    = 1,
         .row_meta_size            = 0,
