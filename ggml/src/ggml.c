@@ -14386,9 +14386,6 @@ static void ggml_compute_forward_sum_f32(
     }
 
     assert(ggml_is_scalar(dst));
-
-
-    assert(ggml_is_scalar(dst));
     assert(src0->nb[0] == sizeof(float));
 
     GGML_TENSOR_LOCALS(int64_t, ne0, src0, ne)
