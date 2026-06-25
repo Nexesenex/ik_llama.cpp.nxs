@@ -18798,6 +18798,88 @@ static void ggml_compute_forward_l2_norm_f32(
     }
 }
 
+static void ggml_compute_forward_l2_norm_f16(
+    const struct ggml_compute_params * params,
+    struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->nb[0] == sizeof(ggml_fp16_t));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    const float eps = ggml_get_op_params_f32(dst, 0);
+
+    GGML_ASSERT(eps >= 0.0f);
+
+    int nrows = ne01*ne02*ne03;
+    int nrows_per_thread = (nrows + nth - 1)/nth;
+    int first = ith*nrows_per_thread;
+    int last  = MIN(first + nrows_per_thread, nrows);
+
+    for (int ir = first; ir < last; ++ir) {
+        int i03 = ir/(ne01*ne02);
+        int i02 = (ir - i03*ne01*ne02)/ne01;
+        int i01 = ir - i03*ne01*ne02 - i02*ne01;
+        const ggml_fp16_t * x = (const ggml_fp16_t *) ((const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+        float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
+        ggml_float sum = 0.0;
+        for (int64_t i00 = 0; i00 < ne00; i00++) {
+            float xf = GGML_FP16_TO_FP32(x[i00]);
+            sum += (ggml_float) (xf * xf);
+        }
+        const float scale = 1.0f/fmaxf(sqrtf(sum), eps);
+        for (int j = 0; j < (int)ne00; ++j) {
+            y[j] = scale * GGML_FP16_TO_FP32(x[j]);
+        }
+    }
+}
+
+static void ggml_compute_forward_l2_norm_bf16(
+    const struct ggml_compute_params * params,
+    struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->nb[0] == sizeof(ggml_bf16_t));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    const float eps = ggml_get_op_params_f32(dst, 0);
+
+    GGML_ASSERT(eps >= 0.0f);
+
+    int nrows = ne01*ne02*ne03;
+    int nrows_per_thread = (nrows + nth - 1)/nth;
+    int first = ith*nrows_per_thread;
+    int last  = MIN(first + nrows_per_thread, nrows);
+
+    for (int ir = first; ir < last; ++ir) {
+        int i03 = ir/(ne01*ne02);
+        int i02 = (ir - i03*ne01*ne02)/ne01;
+        int i01 = ir - i03*ne01*ne02 - i02*ne01;
+        const ggml_bf16_t * x = (const ggml_bf16_t *) ((const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+        float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
+        ggml_float sum = 0.0;
+        for (int64_t i00 = 0; i00 < ne00; i00++) {
+            float xf = GGML_BF16_TO_FP32(x[i00]);
+            sum += (ggml_float) (xf * xf);
+        }
+        const float scale = 1.0f/fmaxf(sqrtf(sum), eps);
+        for (int j = 0; j < (int)ne00; ++j) {
+            y[j] = scale * GGML_BF16_TO_FP32(x[j]);
+        }
+    }
+}
+
 static void ggml_compute_forward_l2_norm(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
@@ -18808,6 +18890,14 @@ static void ggml_compute_forward_l2_norm(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_l2_norm_f32(params, dst);
+            } break;
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_l2_norm_f16(params, dst);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_l2_norm_bf16(params, dst);
             } break;
         default:
             {
