@@ -118,11 +118,11 @@ size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
 static inline const std::unordered_set<ggml_type> & supported_kv_types() {
 #ifdef GGML_IQK_FA_ALL_QUANTS
     static std::unordered_set<ggml_type> k_supported = {
-        GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q8_KV, GGML_TYPE_Q6_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL
+        GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q8_1, GGML_TYPE_Q8_KV, GGML_TYPE_Q6_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL
     };
 #else
     static std::unordered_set<ggml_type> k_supported = {
-        GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q8_KV, GGML_TYPE_Q6_0,
+        GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q8_1, GGML_TYPE_Q8_KV, GGML_TYPE_Q6_0,
     };
 #endif
     return k_supported;

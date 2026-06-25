@@ -4311,6 +4311,9 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
     if (s == "q8_0") {
         return GGML_TYPE_Q8_0;
     }
+    if (s == "q8_1") {
+        return GGML_TYPE_Q8_1;
+    }
     if (s == "q4_0") {
         return GGML_TYPE_Q4_0;
     }
