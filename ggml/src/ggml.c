@@ -21765,6 +21765,102 @@ static void ggml_compute_forward_diag_mask_f32(
     }
 }
 
+static void ggml_compute_forward_diag_mask_f16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst,
+        const float value) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int  n_past  = ((int32_t *) dst->op_params)[0];
+    const bool inplace = src0->data == dst->data;
+
+    GGML_ASSERT(n_past >= 0);
+
+    if (!inplace) {
+        if (ith == 0) {
+            GGML_ASSERT(ggml_nelements(dst) == ggml_nelements(src0));
+            GGML_ASSERT(ggml_is_contiguous(dst) && ggml_is_contiguous(src0));
+            const int64_t n = ggml_nelements(src0);
+            const ggml_fp16_t * sp = (const ggml_fp16_t *) src0->data;
+            float * dp = (float *) dst->data;
+            for (int64_t i = 0; i < n; ++i) {
+                dp[i] = GGML_FP16_TO_FP32(sp[i]);
+            }
+        }
+        ggml_barrier(params->shared);
+    }
+
+    const int n  = ggml_nrows(src0);
+    const int nc = src0->ne[0];
+    const int nr = src0->ne[1];
+    const int nz = n/nr;
+
+    GGML_ASSERT(dst->nb[0] == sizeof(float));
+    GGML_ASSERT(src0->nb[0] == sizeof(ggml_fp16_t));
+
+    for (int k = 0; k < nz; k++) {
+        for (int j = ith; j < nr; j += nth) {
+            for (int i = n_past; i < nc; i++) {
+                if (i > n_past + j) {
+                    *(float *)((char *) dst->data + k*dst->nb[2] + j*dst->nb[1] + i*dst->nb[0]) = value;
+                }
+            }
+        }
+    }
+}
+
+static void ggml_compute_forward_diag_mask_bf16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst,
+        const float value) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int  n_past  = ((int32_t *) dst->op_params)[0];
+    const bool inplace = src0->data == dst->data;
+
+    GGML_ASSERT(n_past >= 0);
+
+    if (!inplace) {
+        if (ith == 0) {
+            GGML_ASSERT(ggml_nelements(dst) == ggml_nelements(src0));
+            GGML_ASSERT(ggml_is_contiguous(dst) && ggml_is_contiguous(src0));
+            const int64_t n = ggml_nelements(src0);
+            const ggml_bf16_t * sp = (const ggml_bf16_t *) src0->data;
+            float * dp = (float *) dst->data;
+            for (int64_t i = 0; i < n; ++i) {
+                dp[i] = GGML_BF16_TO_FP32(sp[i]);
+            }
+        }
+        ggml_barrier(params->shared);
+    }
+
+    const int n  = ggml_nrows(src0);
+    const int nc = src0->ne[0];
+    const int nr = src0->ne[1];
+    const int nz = n/nr;
+
+    GGML_ASSERT(dst->nb[0] == sizeof(float));
+    GGML_ASSERT(src0->nb[0] == sizeof(ggml_bf16_t));
+
+    for (int k = 0; k < nz; k++) {
+        for (int j = ith; j < nr; j += nth) {
+            for (int i = n_past; i < nc; i++) {
+                if (i > n_past + j) {
+                    *(float *)((char *) dst->data + k*dst->nb[2] + j*dst->nb[1] + i*dst->nb[0]) = value;
+                }
+            }
+        }
+    }
+}
+
 static void ggml_compute_forward_diag_mask_inf(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
@@ -21775,6 +21871,14 @@ static void ggml_compute_forward_diag_mask_inf(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_diag_mask_f32(params, dst, -INFINITY);
+            } break;
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_diag_mask_f16(params, dst, -INFINITY);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_diag_mask_bf16(params, dst, -INFINITY);
             } break;
         default:
             {
@@ -21793,6 +21897,14 @@ static void ggml_compute_forward_diag_mask_zero(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_diag_mask_f32(params, dst, 0);
+            } break;
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_diag_mask_f16(params, dst, 0);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_diag_mask_bf16(params, dst, 0);
             } break;
         default:
             {
