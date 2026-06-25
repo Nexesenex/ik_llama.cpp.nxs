@@ -20453,6 +20453,90 @@ static void ggml_compute_forward_scale_f32(
 
 }
 
+static void ggml_compute_forward_scale_f16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+
+    float s, b;
+    memcpy(&s, (const float *)dst->op_params + 0, sizeof(float));
+    memcpy(&b, (const float *)dst->op_params + 1, sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t block_size = 1024;
+    int64_t nelements = ggml_nelements(dst);
+    int64_t nblocks = (nelements + block_size - 1)/block_size;
+
+    for (int ib = ith; ib < nblocks; ib += nth) {
+        const ggml_fp16_t * src_data = (const ggml_fp16_t *)src0->data + block_size*ib;
+              float * dst_data = (float *)dst->data  + block_size*ib;
+        int n = MIN(block_size, nelements - block_size*ib);
+        if (s == 0.0f && b == 0.0f) {
+            memset(dst_data, 0, n*sizeof(float));
+        } else {
+            for (int i = 0; i < n; ++i) {
+                dst_data[i] = GGML_FP16_TO_FP32(src_data[i]);
+            }
+            if (b == 0.0f) {
+                ggml_vec_scale_f32(n, dst_data, s);
+            } else {
+                for (int i = 0; i < n; ++i) {
+                    dst_data[i] = dst_data[i]*s + b;
+                }
+            }
+        }
+    }
+}
+
+static void ggml_compute_forward_scale_bf16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+
+    float s, b;
+    memcpy(&s, (const float *)dst->op_params + 0, sizeof(float));
+    memcpy(&b, (const float *)dst->op_params + 1, sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t block_size = 1024;
+    int64_t nelements = ggml_nelements(dst);
+    int64_t nblocks = (nelements + block_size - 1)/block_size;
+
+    for (int ib = ith; ib < nblocks; ib += nth) {
+        const ggml_bf16_t * src_data = (const ggml_bf16_t *)src0->data + block_size*ib;
+              float * dst_data = (float *)dst->data  + block_size*ib;
+        int n = MIN(block_size, nelements - block_size*ib);
+        if (s == 0.0f && b == 0.0f) {
+            memset(dst_data, 0, n*sizeof(float));
+        } else {
+            for (int i = 0; i < n; ++i) {
+                dst_data[i] = GGML_BF16_TO_FP32(src_data[i]);
+            }
+            if (b == 0.0f) {
+                ggml_vec_scale_f32(n, dst_data, s);
+            } else {
+                for (int i = 0; i < n; ++i) {
+                    dst_data[i] = dst_data[i]*s + b;
+                }
+            }
+        }
+    }
+}
+
 static void ggml_compute_forward_scale(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
@@ -20463,6 +20547,14 @@ static void ggml_compute_forward_scale(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_scale_f32(params, dst);
+            } break;
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_scale_f16(params, dst);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_scale_bf16(params, dst);
             } break;
         default:
             {
