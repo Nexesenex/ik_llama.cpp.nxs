@@ -15864,6 +15864,76 @@ static void ggml_compute_forward_argmax_f32(
     }
 }
 
+static void ggml_compute_forward_argmax_f16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    if (params->ith != 0) {
+        return;
+    }
+
+    assert(src0->nb[0] == sizeof(ggml_fp16_t));
+    assert(dst->nb[0] == sizeof(float));
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne01 = src0->ne[1];
+
+    const size_t nb01 = src0->nb[1];
+    const size_t nb0 = dst->nb[0];
+
+    for (int64_t i1 = 0; i1 < ne01; i1++) {
+        const ggml_fp16_t * src = (const ggml_fp16_t *) ((const char *) src0->data + i1*nb01);
+        int32_t * dst_ = (int32_t *) ((char *)  dst->data + i1*nb0);
+        float max_val = GGML_FP16_TO_FP32(src[0]);
+        int v = 0;
+        for (int64_t i0 = 1; i0 < ne00; i0++) {
+            float val = GGML_FP16_TO_FP32(src[i0]);
+            if (val > max_val) {
+                max_val = val;
+                v = i0;
+            }
+        }
+        dst_[0] = v;
+    }
+}
+
+static void ggml_compute_forward_argmax_bf16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    if (params->ith != 0) {
+        return;
+    }
+
+    assert(src0->nb[0] == sizeof(ggml_bf16_t));
+    assert(dst->nb[0] == sizeof(float));
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne01 = src0->ne[1];
+
+    const size_t nb01 = src0->nb[1];
+    const size_t nb0 = dst->nb[0];
+
+    for (int64_t i1 = 0; i1 < ne01; i1++) {
+        const ggml_bf16_t * src = (const ggml_bf16_t *) ((const char *) src0->data + i1*nb01);
+        int32_t * dst_ = (int32_t *) ((char *)  dst->data + i1*nb0);
+        float max_val = GGML_BF16_TO_FP32(src[0]);
+        int v = 0;
+        for (int64_t i0 = 1; i0 < ne00; i0++) {
+            float val = GGML_BF16_TO_FP32(src[i0]);
+            if (val > max_val) {
+                max_val = val;
+                v = i0;
+            }
+        }
+        dst_[0] = v;
+    }
+}
+
 static void ggml_compute_forward_argmax(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
@@ -15874,6 +15944,14 @@ static void ggml_compute_forward_argmax(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_argmax_f32(params, dst);
+            } break;
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_argmax_f16(params, dst);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_argmax_bf16(params, dst);
             } break;
         default:
             {
