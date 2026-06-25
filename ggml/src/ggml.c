@@ -18266,7 +18266,7 @@ static void ggml_compute_forward_out_prod(
             {
                 GGML_ABORT("fatal error"); // todo
                 // ggml_compute_forward_out_prod_f16_f32(params, dst);
-            }
+            } break;
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_out_prod_f32(params, dst);
