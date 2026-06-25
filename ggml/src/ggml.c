@@ -15598,7 +15598,18 @@ static void ggml_compute_forward_fill_f32(const struct ggml_compute_params * par
 }
 
 static void ggml_compute_forward_fill(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
-    ggml_compute_forward_fill_f32(params, dst);
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_fill_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
 }
 
 // ggml_compute_forward_tri
