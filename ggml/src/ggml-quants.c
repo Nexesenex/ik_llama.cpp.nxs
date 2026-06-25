@@ -952,13 +952,20 @@ void quantize_row_q8_0_ref(const float * restrict x, block_q8_0 * restrict y, in
         const float d = amax / ((1 << 7) - 1);
         const float id = d ? 1.0f/d : 0.0f;
 
-        y[i].d = GGML_FP32_TO_FP16(fudge * d);
-
+        float sumqx = 0, sumq2 = 0;
         for (int j = 0; j < QK8_0; ++j) {
-            const float x0 = x[i*QK8_0 + j]*id;
+            const float v = x[i*QK8_0 + j];
+            const float x0 = v*id;
+            const int8_t xi = roundf(x0);
+            float q = xi;
+            float w = v*v;
+            sumqx += w*q*v;
+            sumq2 += w*q*q;
 
-            y[i].qs[j] = roundf(x0);
+            y[i].qs[j] = xi;
         }
+
+        y[i].d = sumq2 > 0 ? GGML_FP32_TO_FP16(sumqx/sumq2) : GGML_FP32_TO_FP16(fudge*d);
     }
 }
 
