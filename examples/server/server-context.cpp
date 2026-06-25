@@ -3808,6 +3808,10 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         }
                         common_sampler_reset(slot.ctx_sampling);
 
+                        // Apply checkpoint before cache comparison so the KV cache is in the correct state.
+                        // Previously applied after comparison, causing stale-cache mismatches.
+                        apply_checkpoint(slot);
+
                         if (!slot.params.cache_prompt) {
                             slot.n_past_se = 0;
                             slot.ga_i = 0;
@@ -3847,7 +3851,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             }
                         }
                     }
-                    apply_checkpoint(slot);
                     if (slot.n_past_prompt == slot.n_prompt_tokens && slot.n_past_prompt > 0) {
                         // we have to evaluate at least 1 token to generate logits.
                         LOG_INFO("we have to evaluate at least 1 token to generate logits", {
