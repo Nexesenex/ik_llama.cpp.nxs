@@ -5859,8 +5859,42 @@ void ggml_vec_dot_q6_1_q8_1(int n, float * restrict s, size_t bs, const void * r
         return;
     }
 #endif
-    // TODO
-    *s = 0;
+    const int qk = QK8_1;
+    const int nb = n / qk;
+
+    int ib = 0;
+    float sumf = 0;
+
+    assert(n % qk == 0);
+    assert(qk == QK6_1);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q6_1 * restrict x = vx;
+    const block_q8_1 * restrict y = vy;
+
+    for (; ib < nb; ++ib) {
+        int sumi0 = 0;
+        int sumi1 = 0;
+
+        for (int j = 0; j < qk/2; ++j) {
+            const uint8_t h = x[ib].qh[j%(qk/4)] >> 4*(j/(qk/4));
+
+            const int32_t xi0 = (x[ib].qs[j] & 0x0F) | ((h << 4) & 0x30);
+            const int32_t xi1 = (x[ib].qs[j] >>   4) | ((h << 2) & 0x30);
+
+            sumi0 += xi0 * y[ib].qs[j];
+            sumi1 += xi1 * y[ib].qs[j + qk/2];
+        }
+
+        int sumi = sumi0 + sumi1;
+        sumf += GGML_FP16_TO_FP32(x[ib].d) * GGML_FP16_TO_FP32(y[ib].d) * sumi + GGML_FP16_TO_FP32(x[ib].m) * GGML_FP16_TO_FP32(y[ib].s);
+    }
+
+    *s = sumf;
 }
 
 void ggml_vec_dot_q8_0_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
