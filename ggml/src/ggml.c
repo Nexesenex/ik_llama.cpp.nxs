@@ -5338,7 +5338,7 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
     *ctx = (struct ggml_context) {
         /*.mem_size           =*/ mem_size,
         /*.mem_buffer         =*/ params.mem_buffer ? params.mem_buffer : GGML_ALIGNED_MALLOC(mem_size),
-        /*.mem_buffer_owned   =*/ params.mem_buffer ? false : true,
+        /*.mem_buffer_owned   =*/ !params.mem_buffer,
         /*.no_alloc           =*/ params.no_alloc,
         /*.no_alloc_save      =*/ params.no_alloc,
         /*.n_objects          =*/ 0,
