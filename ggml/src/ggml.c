@@ -15553,6 +15553,90 @@ static void ggml_compute_forward_sum_rows_f32(
     }
 }
 
+static void ggml_compute_forward_sum_rows_f16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(src0->nb[0] == sizeof(ggml_fp16_t));
+    GGML_ASSERT(dst->nb[0] == sizeof(ggml_fp16_t));
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    GGML_ASSERT(ne0 == 1);
+    GGML_ASSERT(ne1 == ne01);
+    GGML_ASSERT(ne2 == ne02);
+    GGML_ASSERT(ne3 == ne03);
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    int nrows = ggml_nrows(src0);
+    int nrows_per_thread = (nrows + nth - 1)/nth;
+    int first_row = nrows_per_thread*ith;
+    int last_row  = MIN(first_row + nrows_per_thread, nrows);
+
+    for (int ir = first_row; ir < last_row; ++ir) {
+        int i3 = ir / (ne01*ne02);
+        int i2 = (ir - i3*ne01*ne02)/ne01;
+        int i1 = ir - i3*ne01*ne02 - i2*ne01;
+        const ggml_fp16_t * src_row = (const ggml_fp16_t *)((const char *)src0->data + i1*nb01 + i2*nb02 + i3*nb03);
+              ggml_fp16_t * dst_row = (      ggml_fp16_t *)((      char *)dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
+        float row_sum = 0;
+        ggml_vec_sum_f16_ggf(ne00, &row_sum, src_row);
+        if (!isfinite(row_sum)) {
+            fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
+                    (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
+            GGML_ABORT("Fatal error");
+        }
+        dst_row[0] = GGML_FP32_TO_FP16(row_sum);
+    }
+
+}
+
+static void ggml_compute_forward_sum_rows_bf16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(src0->nb[0] == sizeof(ggml_bf16_t));
+    GGML_ASSERT(dst->nb[0] == sizeof(ggml_bf16_t));
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    GGML_ASSERT(ne0 == 1);
+    GGML_ASSERT(ne1 == ne01);
+    GGML_ASSERT(ne2 == ne02);
+    GGML_ASSERT(ne3 == ne03);
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    int nrows = ggml_nrows(src0);
+    int nrows_per_thread = (nrows + nth - 1)/nth;
+    int first_row = nrows_per_thread*ith;
+    int last_row  = MIN(first_row + nrows_per_thread, nrows);
+
+    for (int ir = first_row; ir < last_row; ++ir) {
+        int i3 = ir / (ne01*ne02);
+        int i2 = (ir - i3*ne01*ne02)/ne01;
+        int i1 = ir - i3*ne01*ne02 - i2*ne01;
+        const ggml_bf16_t * src_row = (const ggml_bf16_t *)((const char *)src0->data + i1*nb01 + i2*nb02 + i3*nb03);
+              ggml_bf16_t * dst_row = (      ggml_bf16_t *)((      char *)dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
+        float row_sum = 0;
+        ggml_vec_sum_bf16_ggf(ne00, &row_sum, src_row);
+        if (!isfinite(row_sum)) {
+            fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
+                    (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
+            GGML_ABORT("Fatal error");
+        }
+        dst_row[0] = GGML_FP32_TO_BF16(row_sum);
+    }
+
+}
+
 static void ggml_compute_forward_sum_rows(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
@@ -15563,6 +15647,14 @@ static void ggml_compute_forward_sum_rows(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_sum_rows_f32(params, dst);
+            } break;
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_sum_rows_f16(params, dst);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_sum_rows_bf16(params, dst);
             } break;
         default:
             {
