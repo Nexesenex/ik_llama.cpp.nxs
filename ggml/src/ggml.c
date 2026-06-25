@@ -21068,6 +21068,200 @@ static void ggml_compute_forward_soft_max_f32(
     }
 }
 
+static void ggml_compute_forward_soft_max_f16(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    const struct ggml_tensor * src2 = dst->src[2];
+
+    assert(ggml_is_contiguous(dst));
+    assert(ggml_are_same_shape(src0, dst));
+
+    float scale    = 1.0f;
+    float max_bias = 0.0f;
+
+    memcpy(&scale,    (float *) dst->op_params + 0, sizeof(float));
+    memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    const int64_t nb11 = src1 ? src1->nb[1] : 1;
+    const int64_t nb12 = src1 ? src1->nb[2] : 1;
+    const int64_t nb13 = src1 ? src1->nb[3] : 1;
+
+    const int64_t ne12 = src1 ? src1->ne[2] : 1;
+    const int64_t ne13 = src1 ? src1->ne[3] : 1;
+
+    const uint32_t n_head      = ne02;
+    const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
+
+    const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
+    const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
+
+    const int nc = src0->ne[0];
+
+    float * wp = (float *) params->wdata + (nc + CACHE_LINE_SIZE_F32) * ith;
+
+    const bool use_f16 = (src1 && src1->type == GGML_TYPE_F16);
+
+    const float * sk = src2 ? (float *)((char *) src2->data) : NULL;
+
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const int64_t i11 = i01;
+                const int64_t i12 = i02%ne12;
+                const int64_t i13 = i03%ne13;
+
+                const uint32_t h = i02;
+                const float slope = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
+
+                const ggml_fp16_t * sp = (const ggml_fp16_t *)((const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                float * dp = (float *)((char *)  dst->data + i01*nb1  + i02*nb2  + i03*nb3);
+
+                ggml_fp16_t * mp_f16 = src1 ? (ggml_fp16_t *)((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13) : NULL;
+                float       * mp_f32 = src1 ? (float       *)((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13) : NULL;
+
+                for (int i = 0; i < ne00; ++i) {
+                    wp[i] = GGML_FP16_TO_FP32(sp[i]);
+                }
+                ggml_vec_scale_f32(ne00, wp, scale);
+                if (mp_f32) {
+                    if (use_f16) {
+                        for (int i = 0; i < ne00; ++i) {
+                            wp[i] += slope*GGML_FP16_TO_FP32(mp_f16[i]);
+                        }
+                    } else {
+                        for (int i = 0; i < ne00; ++i) {
+                            wp[i] += slope*mp_f32[i];
+                        }
+                    }
+                }
+
+                float max = -INFINITY;
+                ggml_vec_max_f32(ne00, &max, wp);
+
+                if (sk) {
+                    max = MAX(max, sk[i02]);
+                }
+
+                ggml_float sum = ggml_vec_soft_max_f32(ne00, dp, wp, max);
+                assert(sum > 0.0);
+
+                if (sk) {
+                    sum += (ggml_float) expf(sk[i02] - max);
+                }
+
+                sum = 1.0/sum;
+                ggml_vec_scale_f32(ne00, dp, sum);
+
+            }
+        }
+    }
+}
+
+static void ggml_compute_forward_soft_max_bf16(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    const struct ggml_tensor * src2 = dst->src[2];
+
+    assert(ggml_is_contiguous(dst));
+    assert(ggml_are_same_shape(src0, dst));
+
+    float scale    = 1.0f;
+    float max_bias = 0.0f;
+
+    memcpy(&scale,    (float *) dst->op_params + 0, sizeof(float));
+    memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    const int64_t nb11 = src1 ? src1->nb[1] : 1;
+    const int64_t nb12 = src1 ? src1->nb[2] : 1;
+    const int64_t nb13 = src1 ? src1->nb[3] : 1;
+
+    const int64_t ne12 = src1 ? src1->ne[2] : 1;
+    const int64_t ne13 = src1 ? src1->ne[3] : 1;
+
+    const uint32_t n_head      = ne02;
+    const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
+
+    const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
+    const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
+
+    const int nc = src0->ne[0];
+
+    float * wp = (float *) params->wdata + (nc + CACHE_LINE_SIZE_F32) * ith;
+
+    const bool use_f16 = (src1 && src1->type == GGML_TYPE_F16);
+
+    const float * sk = src2 ? (float *)((char *) src2->data) : NULL;
+
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const int64_t i11 = i01;
+                const int64_t i12 = i02%ne12;
+                const int64_t i13 = i03%ne13;
+
+                const uint32_t h = i02;
+                const float slope = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
+
+                const ggml_bf16_t * sp = (const ggml_bf16_t *)((const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                float * dp = (float *)((char *)  dst->data + i01*nb1  + i02*nb2  + i03*nb3);
+
+                ggml_fp16_t * mp_f16 = src1 ? (ggml_fp16_t *)((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13) : NULL;
+                float       * mp_f32 = src1 ? (float       *)((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13) : NULL;
+
+                for (int i = 0; i < ne00; ++i) {
+                    wp[i] = GGML_BF16_TO_FP32(sp[i]);
+                }
+                ggml_vec_scale_f32(ne00, wp, scale);
+                if (mp_f32) {
+                    if (use_f16) {
+                        for (int i = 0; i < ne00; ++i) {
+                            wp[i] += slope*GGML_FP16_TO_FP32(mp_f16[i]);
+                        }
+                    } else {
+                        for (int i = 0; i < ne00; ++i) {
+                            wp[i] += slope*mp_f32[i];
+                        }
+                    }
+                }
+
+                float max = -INFINITY;
+                ggml_vec_max_f32(ne00, &max, wp);
+
+                if (sk) {
+                    max = MAX(max, sk[i02]);
+                }
+
+                ggml_float sum = ggml_vec_soft_max_f32(ne00, dp, wp, max);
+                assert(sum > 0.0);
+
+                if (sk) {
+                    sum += (ggml_float) expf(sk[i02] - max);
+                }
+
+                sum = 1.0/sum;
+                ggml_vec_scale_f32(ne00, dp, sum);
+
+            }
+        }
+    }
+}
+
 static void ggml_compute_forward_soft_max(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -21078,6 +21272,14 @@ static void ggml_compute_forward_soft_max(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_soft_max_f32(params, dst);
+            } break;
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_soft_max_f16(params, dst);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_soft_max_bf16(params, dst);
             } break;
         default:
             {
