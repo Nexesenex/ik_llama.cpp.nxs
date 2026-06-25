@@ -3825,13 +3825,52 @@ size_t quantize_q6_0(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+static void quantize_row_q6_1_impl(const float * restrict x, block_q6_1 * restrict y, int64_t n_per_row, const float * quant_weights) {
+    static_assert(QK6_1 == 32, "QK6_1 must be 32");
+
+    if (!quant_weights) {
+        quantize_row_q6_1_ref(x, y, n_per_row);
+        return;
+    }
+
+    float weight[QK6_1];
+    uint8_t L[QK6_1], Laux[QK6_1];
+
+    float sum_x2 = 0;
+    for (int j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
+    float sigma2 = sum_x2/n_per_row;
+
+    const int64_t nb = n_per_row/QK6_1;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float * xb = x + QK6_1 * ib;
+        const float * qw = quant_weights + QK6_1 * ib;
+        for (int j = 0; j < QK6_1; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+        float min;
+        float d = make_qkx3_quants(QK6_1, 63, xb, weight, L, &min, Laux, -0.9f, 0.05f, 36, false);
+        y[ib].d = GGML_FP32_TO_FP16(d);
+        y[ib].m = GGML_FP32_TO_FP16(-min);
+
+        memset(y[ib].qh, 0, QK6_1/4);
+        for (int j = 0; j < QK6_1/2; ++j) {
+            const uint8_t xi0 = L[j];
+            const uint8_t xi1 = L[j + QK6_1/2];
+            y[ib].qs[j] = (xi0 & 0x0F) | ((xi1 & 0x0F) << 4);
+            const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
+            y[ib].qh[j%(QK6_1/4)] |= (h << 4*(j/(QK6_1/4)));
+        }
+    }
+}
+
 size_t quantize_q6_1(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
     GGML_UNUSED(user_data);
-    GGML_UNUSED(quant_weights);
-    (void)quant_weights; // not used
-    const size_t row_size = ggml_row_size(GGML_TYPE_Q6_1, n_per_row);
-    quantize_row_q6_1_ref(src, dst, (int64_t)nrow*n_per_row);
+    size_t row_size = ggml_row_size(GGML_TYPE_Q6_1, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q6_1_impl(src, (block_q6_1*)qrow, n_per_row, quant_weights);
+        src += n_per_row;
+        qrow += row_size;
+    }
     return nrow * row_size;
 }
 
