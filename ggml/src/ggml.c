@@ -26733,8 +26733,9 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     if ((node->src[0]->type == GGML_TYPE_F16 ||
                          node->src[0]->type == GGML_TYPE_BF16) &&
                         node->src[1]->type == GGML_TYPE_F32) {
-                        cur += sizeof(ggml_fp16_t)*ne00*ne01*ne02;
-                        cur += sizeof(ggml_fp16_t)*ne10*ne11;
+                        const size_t ts = ggml_type_size(node->src[0]->type);
+                        cur += ts*ne00*ne01*ne02;
+                        cur += ts*ne10*ne11;
                     } else if (node->src[0]->type == GGML_TYPE_F32 &&
                                node->src[1]->type == GGML_TYPE_F32) {
                         cur += sizeof(float)*ne00*ne01*ne02;
