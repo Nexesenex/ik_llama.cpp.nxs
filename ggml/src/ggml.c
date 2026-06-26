@@ -17522,7 +17522,7 @@ static void ggml_compute_forward_mul_mat_id(
     };
 
     int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end); // [n_as]
-    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne11]
+    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne12]
 
     if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
@@ -17789,7 +17789,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     };
 
     int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end); // [n_as]
-    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne11]
+    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne12]
 
     if (src1->type != vec_dot_type) {
 
