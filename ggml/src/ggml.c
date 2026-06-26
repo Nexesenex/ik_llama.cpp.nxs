@@ -577,6 +577,8 @@ int64_t ggml_cycles_per_ms(void) {
 static wchar_t * ggml_mbstowcs(const char * mbs) {
     int wlen = MultiByteToWideChar(CP_UTF8, 0, mbs, -1, NULL, 0);
     if (!wlen) {
+        GGML_PRINT("%s: failed to convert UTF-8 string to wide char (error %lu)\n",
+                __func__, (unsigned long)GetLastError());
         errno = EINVAL;
         return NULL;
     }
@@ -584,6 +586,8 @@ static wchar_t * ggml_mbstowcs(const char * mbs) {
     wchar_t * wbuf = GGML_MALLOC(wlen * sizeof(wchar_t));
     wlen = MultiByteToWideChar(CP_UTF8, 0, mbs, -1, wbuf, wlen);
     if (!wlen) {
+        GGML_PRINT("%s: failed to convert UTF-8 string to wide char (error %lu)\n",
+                __func__, (unsigned long)GetLastError());
         GGML_FREE(wbuf);
         errno = EINVAL;
         return NULL;
