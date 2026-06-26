@@ -4909,6 +4909,7 @@ GGML_CALL size_t ggml_row_size(enum ggml_type type, int64_t ne) {
 }
 
 double ggml_type_sizef(enum ggml_type type) {
+    assert(ggml_blck_size(type) != 0);
     return ((double)(type_traits[type].type_size))/type_traits[type].blck_size;
 }
 
