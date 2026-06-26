@@ -666,6 +666,7 @@ GGML_CALL static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t 
             CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(src), cudaMemcpyDeviceToDevice, cudaStreamPerThread));
         } else {
 #ifdef GGML_CUDA_NO_PEER_COPY
+            GGML_CUDA_LOG_WARN("%s: cross-device copy not available (GGML_CUDA_NO_PEER_COPY)\n", __func__);
             return false;
 #else
             CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, dst_ctx->device, src->data, src_ctx->device, ggml_nbytes(src), cudaStreamPerThread));
@@ -4234,6 +4235,7 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
             CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
         } else {
 #ifdef GGML_CUDA_NO_PEER_COPY
+            GGML_CUDA_LOG_WARN("%s: cross-device tensor copy not available (GGML_CUDA_NO_PEER_COPY)\n", __func__);
             return false;
 #else
             if (false && src->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 && dst->ne[1] >= 32) {
@@ -5101,6 +5103,7 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
 
 static ggml_backend_event_t ggml_backend_cuda_event_new(ggml_backend_t backend) {
 #ifdef GGML_CUDA_NO_PEER_COPY
+    GGML_CUDA_LOG_WARN("%s: CUDA events not available (GGML_CUDA_NO_PEER_COPY)\n", __func__);
     return nullptr;
 #else
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
