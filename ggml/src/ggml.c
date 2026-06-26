@@ -20436,6 +20436,7 @@ static void ggml_compute_forward_im2col_f16(
     GGML_ASSERT( dst->type == GGML_TYPE_F16);
 
     GGML_TENSOR_BINARY_OP_LOCALS;
+    GGML_ASSERT(nb00 == ggml_type_size(src0->type));
 
     const int32_t s0 = ((const int32_t *)(dst->op_params))[0];
     const int32_t s1 = ((const int32_t *)(dst->op_params))[1];
