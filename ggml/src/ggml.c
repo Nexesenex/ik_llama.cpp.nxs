@@ -28696,7 +28696,7 @@ size_t ggml_quantize_chunk(
                 memcpy((uint8_t *)dst + start * elemsize, src + start, result);
             } break;
         default:
-            assert(false);
+            GGML_ABORT("fatal error: unsupported type %d (%s)", type, ggml_type_name(type));
     }
 
     GGML_ASSERT(result == nrows * row_size);
