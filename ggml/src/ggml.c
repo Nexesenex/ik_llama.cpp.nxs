@@ -28368,9 +28368,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const struct ggml_tensor * src0 = node->src[0];
                     const struct ggml_tensor * src2 = node->src[2];
                     const enum ggml_type vec_dot_type = type_traits[src0->type].vec_dot_type;
-                    if (src2->type != vec_dot_type) {
-                        cur += ggml_row_size(vec_dot_type, node->src[1]->ne[0]) * ggml_nrows(node->src[1]);
-                    }
+                    cur += ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
                 } break;
             case GGML_OP_OUT_PROD:
                 {
