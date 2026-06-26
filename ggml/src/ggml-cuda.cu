@@ -882,7 +882,10 @@ GGML_CALL static void * ggml_backend_cuda_split_buffer_get_base(ggml_backend_buf
 }
 
 GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]] ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
-    if (!tensor->extra) return;
+    if (!tensor->extra) {
+        GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
+        return;
+    }
     //printf("%s(%s, %p)\n", __func__, tensor->name, tensor->extra);
     auto extra = (ggml_split_tensor_t *)tensor->extra;
     GGML_ASSERT(extra->n_device <= ggml_backend_cuda_get_device_count());
@@ -999,7 +1002,10 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             }
         }
     }
-    if (!tensor->extra) return;
+    if (!tensor->extra) {
+        GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
+        return;
+    }
     static std::map<ggml_type, int> k_map = {
         { GGML_TYPE_Q4_0_R8   , 8},
         { GGML_TYPE_Q5_0_R4   , 4},
@@ -1229,7 +1235,10 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_get_tensor([[maybe_unused]]
     GGML_ASSERT(offset == 0);
     GGML_ASSERT(size == ggml_nbytes(tensor));
 
-    if (!tensor->extra) return;
+    if (!tensor->extra) {
+        GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
+        return;
+    }
 
     // Inverse of split_buffer_set_tensor; refuses paths with no defined inverse.
     auto extra = (ggml_split_tensor_t *)tensor->extra;
