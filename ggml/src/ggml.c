@@ -22890,6 +22890,7 @@ static void ggml_compute_forward_im2col_f16(
 
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F16);
+    GGML_ASSERT(nb00 == ggml_type_size(src0->type));
 
     GGML_TENSOR_BINARY_OP_LOCALS;
     GGML_ASSERT(nb00 == ggml_type_size(src0->type));
