@@ -812,6 +812,7 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
     std::lock_guard<std::mutex> lock(mutex);
 
     if (device >= ggml_backend_cuda_get_device_count()) {
+        GGML_CUDA_LOG_WARN("%s: device %d out of range (max %d)\n", __func__, device, ggml_backend_cuda_get_device_count() - 1);
         return nullptr;
     }
 
