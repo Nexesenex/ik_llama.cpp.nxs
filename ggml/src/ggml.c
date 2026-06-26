@@ -5539,10 +5539,8 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         if (ctx->scratch.data != NULL) {
             // allocate tensor data in the scratch buffer
             if (ctx->scratch.offs + data_size > ctx->scratch.size) {
-                GGML_PRINT("%s: not enough space in the scratch memory pool (needed %zu, available %zu)\n",
+                GGML_ABORT("%s: not enough space in the scratch memory pool (needed %zu, available %zu)",
                         __func__, ctx->scratch.offs + data_size, ctx->scratch.size);
-                assert(false);
-                return NULL;
             }
 
             data = (char * const) ctx->scratch.data + ctx->scratch.offs;
