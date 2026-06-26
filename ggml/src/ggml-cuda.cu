@@ -4220,9 +4220,7 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
     ggml_backend_cuda_buffer_context * buf_ctx_dst = (ggml_backend_cuda_buffer_context *)buf_dst->context;
 
     if (cuda_ctx_src->device != buf_ctx_src->device || cuda_ctx_dst->device != buf_ctx_dst->device) {
-#ifndef NDEBUG
         GGML_CUDA_LOG_WARN("%s: backend and buffer devices do not match\n", __func__);
-#endif
         return false;
     }
 
@@ -4509,9 +4507,7 @@ static void update_cuda_graph_executable(ggml_cuda_graph * graph) {
 #endif // CUDART_VERSION >= 12000
 
     if (stat == cudaErrorGraphExecUpdateFailure) {
-#ifndef NDEBUG
-        GGML_CUDA_LOG_DEBUG("%s: CUDA graph update failed\n", __func__);
-#endif
+        GGML_CUDA_LOG_WARN("%s: CUDA graph update failed, re-instantiating\n", __func__);
 
         // The pre-existing graph exec cannot be updated due to violated constraints
         // so instead clear error and re-instantiate
@@ -5389,8 +5385,8 @@ GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer) {
 
     cudaError_t err = cudaHostUnregister(buffer);
     if (err != cudaSuccess) {
-        // clear the error
-        cudaGetLastError();
+        GGML_CUDA_LOG_WARN("%s: cudaHostUnregister failed (%s)\n", __func__, cudaGetErrorString(err));
+        (void)cudaGetLastError();
     }
 }
 
