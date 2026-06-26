@@ -26311,7 +26311,9 @@ static void set_numa_thread_affinity(int thread_n) {
             }
             return;
         default:
-            return;
+            fprintf(stderr, "warning: unknown NUMA strategy %d, falling back to DISTRIBUTE\n", g_state.numa.numa_strategy);
+            node_num = thread_n % g_state.numa.n_nodes;
+            break;
     }
 
     struct ggml_numa_node * node = &g_state.numa.nodes[node_num];
