@@ -26567,8 +26567,9 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const int64_t ne11 = node->src[1]->ne[1]; // H
                     const int64_t ne12 = node->src[1]->ne[2]; // Channels In
 
-                    cur += sizeof(ggml_fp16_t)*ne00*ne01*ne02*ne03;
-                    cur += sizeof(ggml_fp16_t)*ne10*ne11*ne12;
+                    const size_t ts = ggml_type_size(node->src[0]->type);
+                    cur += ts*ne00*ne01*ne02*ne03;
+                    cur += ts*ne10*ne11*ne12;
                 } break;
             case GGML_OP_CONV_2D:
                 {
