@@ -5176,7 +5176,8 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
     }
 
     if (ctx == NULL) {
-        GGML_PRINT_DEBUG("%s: no unused context found\n", __func__);
+        GGML_PRINT("%s: no unused context found (all %d contexts are in use)\n",
+                __func__, GGML_MAX_CONTEXTS);
 
         ggml_critical_section_end();
 
