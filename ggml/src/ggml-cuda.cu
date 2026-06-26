@@ -3834,7 +3834,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     ggml_cuda_op_softplus(ctx, dst);
                     break;
                 default:
-                    return -1;
+                    GGML_ABORT("%s: unsupported unary op %d", __func__, (int)ggml_get_unary_op(dst));
             }
             break;
         case GGML_OP_GLU:
