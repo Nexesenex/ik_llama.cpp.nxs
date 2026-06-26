@@ -14836,8 +14836,9 @@ static void ggml_compute_forward_repeat_f16(
     const int nr3 = (int)(ne3/ne03);
 
     // TODO: support for transposed / permuted tensors
-    GGML_ASSERT(nb0  == sizeof(ggml_fp16_t));
-    GGML_ASSERT(nb00 == sizeof(ggml_fp16_t));
+    const size_t type_size = ggml_type_size(src0->type);
+    GGML_ASSERT(nb0  == type_size);
+    GGML_ASSERT(nb00 == type_size);
 
     // TODO: maybe this is not optimal?
     for                         (int i3 = 0; i3 < nr3;  i3++) {
@@ -14847,11 +14848,10 @@ static void ggml_compute_forward_repeat_f16(
                     for         (int i1 = 0; i1 < nr1;  i1++) {
                         for     (int k1 = 0; k1 < ne01; k1++) {
                             for (int i0 = 0; i0 < nr0;  i0++) {
-                                ggml_fp16_t * y = (ggml_fp16_t *) ((char *)  dst->data + (i3*ne03 + k3)*nb3  + (i2*ne02 + k2)*nb2  + (i1*ne01 + k1)*nb1  + (i0*ne00)*nb0);
-                                ggml_fp16_t * x = (ggml_fp16_t *) ((char *) src0->data + (          k3)*nb03 + (          k2)*nb02 + (          k1)*nb01);
-                                // ggml_vec_cpy_f16(ne00, y, x)
+                                char * y = (char *)  dst->data + (i3*ne03 + k3)*nb3  + (i2*ne02 + k2)*nb2  + (i1*ne01 + k1)*nb1  + (i0*ne00)*nb0;
+                                char * x = (char *) src0->data + (          k3)*nb03 + (          k2)*nb02 + (          k1)*nb01;
                                 for (int i = 0; i < ne00; ++i) {
-                                    y[i]  = x[i];
+                                    memcpy(y + i*type_size, x + i*type_size, type_size);
                                 }
                             }
                         }
