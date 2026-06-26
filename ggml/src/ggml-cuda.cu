@@ -5176,8 +5176,10 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
         }
 
         // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
+        // Only count updates of reused graphs. Fresh builds get a new build_id key and
+        // start with a clean counter; they are not indicative of an unstable topology.
         if (use_cuda_graph) {
-            if (cuda_graph_update_required) {
+            if (cuda_graph_update_required && cgraph->reused) {
                 graph->number_consecutive_updates++;
             } else {
                 graph->number_consecutive_updates = 0;
