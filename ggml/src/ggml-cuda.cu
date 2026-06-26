@@ -5060,9 +5060,10 @@ static void maintain_cuda_graph(ggml_backend_cuda_context * cuda_ctx, bool cuda_
     auto graph = cuda_ctx->cur_graph;
     if (graph->instance == nullptr) { // Create executable graph from captured graph.
         CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
-    }
-    if (cuda_graph_update_required) { // Update graph executable
-        update_cuda_graph_executable(graph);
+    } else if (cuda_graph_update_required) { // Re-instantiate when graph was rebuilt
+        CUDA_CHECK(cudaGraphExecDestroy(graph->instance));
+        graph->instance = nullptr;
+        CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
     }
     // Launch graph
     CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
