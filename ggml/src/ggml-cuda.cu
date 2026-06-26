@@ -844,7 +844,7 @@ GGML_CALL static void * ggml_backend_cuda_split_buffer_get_base(ggml_backend_buf
 
 GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]] ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     if (!tensor->extra) {
-        GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
+        // GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
         return;
     }
     //printf("%s(%s, %p)\n", __func__, tensor->name, tensor->extra);
@@ -964,7 +964,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         }
     }
     if (!tensor->extra) {
-        GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
+        // GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
         return;
     }
     static std::map<ggml_type, int> k_map = {
@@ -1197,7 +1197,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_get_tensor([[maybe_unused]]
     GGML_ASSERT(size == ggml_nbytes(tensor));
 
     if (!tensor->extra) {
-        GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
+        // GGML_CUDA_LOG_WARN("%s: tensor '%s' has no extra data, skipping\n", __func__, tensor->name);
         return;
     }
 
