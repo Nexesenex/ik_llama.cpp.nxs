@@ -23080,6 +23080,180 @@ static void ggml_compute_forward_rope_f16(
     }
 }
 
+static void ggml_compute_forward_rope_bf16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst,
+        const bool forward) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    const struct ggml_tensor * src2 = dst->src[2];
+
+    float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
+    int sections[4];
+
+    const int n_dims     = ((int32_t *) dst->op_params)[1];
+    const int mode       = ((int32_t *) dst->op_params)[2];
+    const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
+    memcpy(&freq_base,   (int32_t *) dst->op_params +  5, sizeof(float));
+    memcpy(&freq_scale,  (int32_t *) dst->op_params +  6, sizeof(float));
+    memcpy(&ext_factor,  (int32_t *) dst->op_params +  7, sizeof(float));
+    memcpy(&attn_factor, (int32_t *) dst->op_params +  8, sizeof(float));
+    memcpy(&beta_fast,   (int32_t *) dst->op_params +  9, sizeof(float));
+    memcpy(&beta_slow,   (int32_t *) dst->op_params + 10, sizeof(float));
+    memcpy(&sections,    (int32_t *) dst->op_params + 11, sizeof(int)*4);
+
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    GGML_ASSERT(nb0 == sizeof(ggml_bf16_t));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nr = ggml_nrows(dst);
+
+    GGML_ASSERT(n_dims <= ne0);
+    GGML_ASSERT(n_dims % 2 == 0);
+
+    const int dr = (nr + nth - 1)/nth;
+
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    int ir = 0;
+
+    const float theta_scale = powf(freq_base, -2.0f/n_dims);
+
+    float corr_dims[2];
+    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+
+    const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
+    const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;
+    const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
+    const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
+
+    if (is_mrope) {
+        GGML_ASSERT(sections[0] > 0 || sections[1] > 0 || sections[2] > 0);
+    }
+
+    if (is_vision) {
+        GGML_ASSERT(n_dims == ne0/2);
+    }
+
+    const float * freq_factors = NULL;
+    if (src2 != NULL) {
+        GGML_ASSERT(src2->type == GGML_TYPE_F32);
+        GGML_ASSERT(src2->ne[0] >= n_dims / 2);
+        freq_factors = (const float *) src2->data;
+    }
+
+    const float sin_sign = forward ? 1.0f : -1.0f;
+
+    const int32_t * pos = (const int32_t *) src1->data;
+
+    for (int64_t i3 = 0; i3 < ne3; i3++) {
+        for (int64_t i2 = 0; i2 < ne2; i2++) {
+
+            float * cache = (float *) params->wdata + (ne0 + CACHE_LINE_SIZE_F32)*ith;
+            if (!is_mrope) {
+                const int64_t p = pos[i2];
+                ggml_rope_cache_init(p, freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
+            }
+            else {
+                const int64_t p_t = pos[i2];
+                const int64_t p_h = pos[i2 + ne2];
+                const int64_t p_w = pos[i2 + ne2 * 2];
+                const int64_t p_e = pos[i2 + ne2 * 3];
+                ggml_mrope_cache_init(
+                    p_t, p_h, p_w, p_e, sections, is_imrope, is_vision,
+                    freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
+            }
+
+            for (int64_t i1 = 0; i1 < ne1; i1++) {
+                if (ir++ < ir0) continue;
+                if (ir   > ir1) break;
+
+                if (is_neox || is_mrope) {
+                    if (is_vision) {
+                        for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
+                            const int64_t ic = i0/2;
+
+                            const float cos_theta = cache[i0 + 0];
+                            const float sin_theta = cache[i0 + 1];
+
+                            const ggml_bf16_t * const src = (ggml_bf16_t *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
+                            ggml_bf16_t * dst_data  = (ggml_bf16_t *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
+
+                            const float x0 = GGML_BF16_TO_FP32(src[0]);
+                            const float x1 = GGML_BF16_TO_FP32(src[n_dims]);
+
+                            dst_data[0]      = GGML_FP32_TO_BF16(x0*cos_theta - x1*sin_theta);
+                            dst_data[n_dims] = GGML_FP32_TO_BF16(x0*sin_theta + x1*cos_theta);
+                        }
+                    } else {
+                        for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
+                            const int64_t ic = i0/2;
+
+                            const float cos_theta = cache[i0 + 0];
+                            const float sin_theta = cache[i0 + 1];
+
+                            const ggml_bf16_t * const src = (ggml_bf16_t *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
+                            ggml_bf16_t * dst_data  = (ggml_bf16_t *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
+
+                            const float x0 = GGML_BF16_TO_FP32(src[0]);
+                            const float x1 = GGML_BF16_TO_FP32(src[n_dims/2]);
+
+                            dst_data[0]        = GGML_FP32_TO_BF16(x0*cos_theta - x1*sin_theta);
+                            dst_data[n_dims/2] = GGML_FP32_TO_BF16(x0*sin_theta + x1*cos_theta);
+                        }
+                    }
+                } else {
+                    for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
+                        const float cos_theta = cache[i0 + 0];
+                        const float sin_theta = cache[i0 + 1];
+
+                        const ggml_bf16_t * const src = (ggml_bf16_t *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                              ggml_bf16_t * dst_data  = (ggml_bf16_t *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+
+                        const float x0 = GGML_BF16_TO_FP32(src[0]);
+                        const float x1 = GGML_BF16_TO_FP32(src[1]);
+
+                        dst_data[0] = GGML_FP32_TO_BF16(x0*cos_theta - x1*sin_theta);
+                        dst_data[1] = GGML_FP32_TO_BF16(x0*sin_theta + x1*cos_theta);
+                    }
+                }
+
+                if (is_vision) {
+                    for (int64_t i0 = n_dims; i0 < ne0; i0 += 2) {
+                        const int64_t ic = i0/2;
+
+                        const float cos_theta = cache[i0 + 0];
+                        const float sin_theta = cache[i0 + 1];
+
+                        const ggml_bf16_t * const src = (ggml_bf16_t *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
+                        ggml_bf16_t * dst_data  = (ggml_bf16_t *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
+
+                        const float x0 = GGML_BF16_TO_FP32(src[0]);
+                        const float x1 = GGML_BF16_TO_FP32(src[n_dims]);
+
+                        dst_data[0]      = GGML_FP32_TO_BF16(x0*cos_theta - x1*sin_theta);
+                        dst_data[n_dims] = GGML_FP32_TO_BF16(x0*sin_theta + x1*cos_theta);
+                    }
+                } else {
+                    for (int64_t i0 = n_dims; i0 < ne0; i0 += 2) {
+                        const ggml_bf16_t * const src = (ggml_bf16_t *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                        ggml_bf16_t * dst_data  = (ggml_bf16_t *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+
+                        dst_data[0] = src[0];
+                        dst_data[1] = src[1];
+                    }
+                }
+            }
+        }
+    }
+}
+
 static void ggml_compute_forward_rope(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
@@ -23094,6 +23268,10 @@ static void ggml_compute_forward_rope(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_rope_f32(params, dst, true);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_rope_bf16(params, dst, true);
             } break;
         default:
             {
@@ -23118,6 +23296,10 @@ static void ggml_compute_forward_rope_back(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_rope_f32(params, dst, false);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_rope_bf16(params, dst, false);
             } break;
         default:
             {
