@@ -27,6 +27,7 @@ struct ggml_cuda_graph {
     uint64_t uid = 0;
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t instance = nullptr;
+    uint64_t last_used_seq = 0;
     bool disable_due_to_gpu_arch = false;
     bool disable_due_to_too_many_updates = false;
     bool disable_due_to_failed_graph_capture = false;
