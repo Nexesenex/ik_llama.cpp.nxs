@@ -4778,24 +4778,28 @@ static size_t ggml_cuda_max_graphs() {
 static std::atomic<uint64_t> ggml_cuda_graph_seq{0};
 
 static inline ggml_cuda_graph * ggml_cuda_get_graph(ggml_backend_cuda_context & ctx, const void * key) {
-    auto & graph = ctx.cuda_graphs[key];
-    if (!graph) {
-        graph = std::make_unique<ggml_cuda_graph>();
-        graph->last_used_seq = ggml_cuda_graph_seq.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (ctx.cuda_graphs.size() > ggml_cuda_max_graphs()) {
-            uint64_t oldest_seq = UINT64_MAX;
-            const void * oldest_key = nullptr;
-            for (auto & it : ctx.cuda_graphs) {
-                if (it.second && it.second->last_used_seq < oldest_seq) {
-                    oldest_seq = it.second->last_used_seq;
-                    oldest_key = it.first;
-                }
-            }
-            if (oldest_key != key) {
-                ctx.cuda_graphs.erase(oldest_key);
+    auto it = ctx.cuda_graphs.find(key);
+    if (it != ctx.cuda_graphs.end()) {
+        return it->second.get();
+    }
+    // Evict oldest entry before inserting a new one, so the eviction scan
+    // never visits a just-created entry.
+    if (ctx.cuda_graphs.size() >= ggml_cuda_max_graphs()) {
+        uint64_t oldest_seq = UINT64_MAX;
+        auto oldest_it = ctx.cuda_graphs.end();
+        for (auto it2 = ctx.cuda_graphs.begin(); it2 != ctx.cuda_graphs.end(); ++it2) {
+            if (it2->second && it2->second->last_used_seq < oldest_seq) {
+                oldest_seq = it2->second->last_used_seq;
+                oldest_it = it2;
             }
         }
+        if (oldest_it != ctx.cuda_graphs.end()) {
+            ctx.cuda_graphs.erase(oldest_it);
+        }
     }
+    auto & graph = ctx.cuda_graphs[key];
+    graph = std::make_unique<ggml_cuda_graph>();
+    graph->last_used_seq = ggml_cuda_graph_seq.fetch_add(1, std::memory_order_relaxed) + 1;
     return graph.get();
 }
 
