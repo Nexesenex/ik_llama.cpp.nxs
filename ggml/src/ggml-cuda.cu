@@ -4541,6 +4541,21 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
             }
         }
 
+        // Disable CUDA graphs for SMTPS PP splits that process multiple tokens.
+        // A batch > 1 causes the graph topology to change every step (kv_self.n padding),
+        // making CUDA graph re-capture necessary each time with no replay benefit.
+        // Check src[1]->ne[1] (activation batch dimension), not src[0]->ne[1] (weight
+        // output dimension or K cache length which is always > 1 during decode).
+        // Only check 2D activation tensors (ne[2]==1, ne[3]==1) to avoid false-triggering
+        // on 3D K-cache matmuls or head-dimension reshapes.
+        if (node->op == GGML_OP_MUL_MAT && node->src[1]->ne[1] > 1 &&
+            node->src[1]->ne[2] == 1 && node->src[1]->ne[3] == 1) {
+            use_cuda_graph = false;
+#ifndef NDEBUG
+            GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to batch > 1 (SMTPS PP split)\n", __func__);
+#endif
+        }
+
         // Why was this needed? Leaving it in place but disabled in case it is actually needed.
         if (false && node->op == GGML_OP_ADD &&
             node->src[1] && node->src[1]->ne[1] > 1 &&
