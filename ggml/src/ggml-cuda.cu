@@ -5243,6 +5243,7 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
             use_cuda_graph = check_node_graph_compatibility_and_refresh_copy_ops(graph, cgraph, use_cuda_graph, cuda_ctx->stream());
 
             if (!use_cuda_graph) {
+                graph->cpy_node_indices.clear();
                 graph->disable_due_to_failed_graph_capture = true;
             }
         } else {
@@ -5264,6 +5265,7 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
         }
 
         if (graph->number_consecutive_updates >= 4) {
+            graph->cpy_node_indices.clear();
             graph->disable_due_to_too_many_updates = true;
             use_cuda_graph = false;
             cuda_ctx->cur_graph = nullptr;
