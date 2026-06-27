@@ -2854,7 +2854,6 @@ static bool mtp_model_uses_recurrent_conditioning(const common_speculative_state
     if (state.ctx_mtp == nullptr) {
         return false;
     }
-    return true;
 
     const llama_model * model = llama_get_model(state.ctx_mtp);
     if (!llama_model_has_recurrent(model)) {
