@@ -4880,6 +4880,7 @@ static void refresh_cuda_graph_copy_ops(ggml_cuda_graph * graph, ggml_cgraph * c
 
     graph->cpy_dest_ptrs.clear();
     if (!graph->cpy_node_indices.empty()) {
+        graph->cpy_dest_ptrs.reserve(graph->cpy_node_indices.size());
         for (int idx : graph->cpy_node_indices) {
             graph->cpy_dest_ptrs.push_back((char *) cgraph->nodes[idx]->src[1]->data);
         }
