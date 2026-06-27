@@ -4482,9 +4482,7 @@ static inline ggml_cuda_graph * ggml_cuda_get_graph(ggml_backend_cuda_context & 
                 ctx.cuda_graphs.erase(oldest_key);
             }
         }
-        return graph.get();
     }
-    graph->last_used_seq = ++ggml_cuda_graph_seq;
     return graph.get();
 }
 
