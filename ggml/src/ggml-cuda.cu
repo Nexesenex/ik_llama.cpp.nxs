@@ -4808,6 +4808,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
     graph->cpy_dest_ptrs.clear();
+    graph->cpy_dest_ptrs.reserve(cgraph->n_nodes);
     graph->cpy_node_indices.clear();
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -5154,7 +5155,11 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
             }
         }
 
-        if (graph->number_consecutive_updates >= 4) {
+        static const int max_consecutive_updates = []() -> int {
+            const char * env = getenv("GGML_CUDA_MAX_CONSECUTIVE_UPDATES");
+            return env ? std::max(1, atoi(env)) : 4;
+        }();
+        if (graph->number_consecutive_updates >= max_consecutive_updates) {
             graph->cpy_node_indices.clear();
             graph->disable_due_to_too_many_updates = true;
             use_cuda_graph = false;
