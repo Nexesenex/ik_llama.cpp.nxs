@@ -9,6 +9,10 @@
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #endif
 
+#if defined(GGML_USE_CUDA)
+#include "ggml-cuda.h"
+#endif
+
 #include "common.h"
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
@@ -887,6 +891,10 @@ bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tens
                 buft_list[ggml_backend_buft_name(buft)] = buft;
             }
         }
+#if defined(GGML_USE_CUDA)
+        buft_list[ggml_backend_buft_name(ggml_backend_cuda_host_buffer_type())]    = ggml_backend_cuda_host_buffer_type();
+        buft_list[ggml_backend_buft_name(ggml_backend_cuda_split_buffer_type(nullptr))] = ggml_backend_cuda_split_buffer_type(nullptr);
+#endif
     }
     for (const auto & override : string_split<std::string>(value, ',')) {
         std::string::size_type pos = override.find('=');
