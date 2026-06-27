@@ -4887,7 +4887,7 @@ static inline ggml_cuda_graph * ggml_cuda_get_graph(ggml_backend_cuda_context & 
     auto & graph = ctx.cuda_graphs[key];
     if (!graph) {
         graph = std::make_unique<ggml_cuda_graph>();
-        graph->last_used_seq = ++ggml_cuda_graph_seq;
+        graph->last_used_seq = ggml_cuda_graph_seq.fetch_add(1, std::memory_order_relaxed) + 1;
         if (ctx.cuda_graphs.size() > ggml_cuda_max_graphs()) {
             uint64_t oldest_seq = UINT64_MAX;
             const void * oldest_key = nullptr;
