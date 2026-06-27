@@ -889,6 +889,10 @@ bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tens
                 buft_list[ggml_backend_buft_name(buft)] = buft;
             }
         }
+#if defined(GGML_USE_CUDA)
+        buft_list[ggml_backend_buft_name(ggml_backend_cuda_host_buffer_type())]    = ggml_backend_cuda_host_buffer_type();
+        buft_list[ggml_backend_buft_name(ggml_backend_cuda_split_buffer_type(nullptr))] = ggml_backend_cuda_split_buffer_type(nullptr);
+#endif
     }
     for (const auto & override : string_split<std::string>(value, ',')) {
         std::string::size_type pos = override.find('=');
