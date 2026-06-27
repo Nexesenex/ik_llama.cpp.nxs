@@ -275,6 +275,23 @@ struct llama_context {
     size_t  logits_size = 0; // capacity (of floats) for logits
     float * logits      = nullptr;
 
+    // argmax/topk output: indices
+    // populated by backend sampling when cparams.backend_sampling is true
+    // For rank k at output position i: logits_argmax[i * K + k] = token_id
+    // where K = cparams.spec_max_candidates (or 1 if not set)
+    std::vector<int32_t> logits_argmax;
+
+    // top-k logit values (same indexing as logits_argmax)
+    std::vector<float> logits_argmax_values;
+
+    // number of top-k candidates stored per output position
+    int32_t logits_argmax_K = 0;
+
+    // Persistent context and tensor for backend sampling top-K (avoids throwaway
+    // allocations per decode; also stabilizes the tensor address for CUDA graph replay)
+    struct ggml_context * sampling_topk_ctx = nullptr;
+    struct ggml_tensor  * sampling_topk_tensor = nullptr;
+
     std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
     size_t  output_size = 0; // capacity (of tokens positions) for the output buffers
     int32_t n_outputs   = 0; // number of actually-used outputs in the current ubatch or last logical batch
@@ -497,6 +514,7 @@ struct llama_context {
     void set_mtp_op_type(llama_mtp_op_type value);
     void set_mtp_step_idx(int32_t value);
     void set_mtp_n_heads(int32_t value);
+    void set_skip_logits_d2h(bool value);
 
     int max_nodes(int n_tokens, int n_kv) const;
 };

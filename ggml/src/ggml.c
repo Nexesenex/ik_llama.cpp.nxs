@@ -4414,6 +4414,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "SUM_ROWS",
     "MEAN",
     "ARGMAX",
+    "TOPK",
     "REPEAT",
     "REPEAT_BACK",
     "CONCAT",
@@ -4515,7 +4516,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "BLEND",
 };
 
-static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
+static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4535,6 +4536,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "Σx_k",
     "Σx/n",
     "argmax(x)",
+    "topk(x)",
     "repeat(x)",
     "repeat_back(x)",
     "concat(x, y)",
@@ -4637,7 +4639,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
 };
 
-static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
+static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -7177,6 +7179,30 @@ struct ggml_tensor * ggml_argmax(
     result->op   = GGML_OP_ARGMAX;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
     result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_topk(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a,
+        int k) {
+    GGML_ASSERT(ggml_is_matrix(a));
+    GGML_ASSERT(k > 0 && k <= (int)a->ne[0]);
+    GGML_ASSERT(k <= 4096 && "topk K must be <= 4096");
+    bool is_node = false;
+
+    if (a->grad) {
+        GGML_ABORT("fatal error");
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2, k, a->ne[1]);
+
+    result->op   = GGML_OP_TOPK;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->op_params[0] = k;
 
     return result;
 }
@@ -10394,7 +10420,7 @@ struct ggml_tensor * ggml_delta_net(
         struct ggml_tensor  * saved_steps) {
     GGML_ASSERT(ggml_is_contiguous(q));
     GGML_ASSERT(ggml_is_contiguous(k));
-    GGML_ASSERT(ggml_is_contiguous(state));
+    // state may be strided (view from KV cache); the kernel handles it because n_seqs=1 => batch_idx=0.
 
     GGML_ASSERT(q->type == GGML_TYPE_F32);
     GGML_ASSERT(k->type == GGML_TYPE_F32);
@@ -14842,6 +14868,121 @@ static void ggml_compute_forward_mean(
             {
                 GGML_ABORT("fatal error");
             }
+    }
+}
+
+// ggml_compute_forward_topk
+
+// Min-heap sift-down helper for top-K: moves element at position p down
+// while it is larger than either child. The heap stores (val, idx) pairs
+// with ordering by val (smallest at root).
+static inline void heap_sift_down_f32(float * val, int32_t * idx, int hsize, int p) {
+    while (1) {
+        int smallest = p;
+        int left = 2*p + 1;
+        int right = 2*p + 2;
+        if (left < hsize && val[left] < val[smallest]) smallest = left;
+        if (right < hsize && val[right] < val[smallest]) smallest = right;
+        if (smallest == p) break;
+        float   tmpf = val[p]; val[p] = val[smallest]; val[smallest] = tmpf;
+        int32_t tmpi = idx[p]; idx[p] = idx[smallest]; idx[smallest] = tmpi;
+        p = smallest;
+    }
+}
+
+static void ggml_compute_forward_topk_f32(
+        const struct ggml_compute_params * params,
+        const struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    const int K = dst->op_params[0];
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(K > 0);
+    GGML_ASSERT((int64_t)K == dst->ne[1]);
+    GGML_ASSERT(dst->ne[0] == 2);
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t nrows = ggml_nrows(src0);
+
+    GGML_ASSERT(dst->ne[2] == nrows);
+    GGML_ASSERT(K <= 4096 && "topk CPU forward requires K <= 4096 (stack-allocated heap)");
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    float     heap_val[4096];
+    int32_t   heap_idx[4096];
+
+    for (int64_t r = ith; r < nrows; r += nth) {
+        const float * row = (const float *) src0->data + r * ne00;
+        float * out = (float *) dst->data;
+
+        // Fast path for K=1: single argmax pass
+        if (K == 1) {
+            float max_val = -FLT_MAX;
+            int32_t max_idx = -1;
+            for (int64_t c = 0; c < ne00; ++c) {
+                if (row[c] > max_val) {
+                    max_val = row[c];
+                    max_idx = (int32_t)c;
+                }
+            }
+            out[2 * r] = max_val;
+            out[2 * r + 1] = (float)max_idx;
+            continue;
+        }
+
+        // Build initial min-heap from the first K elements
+        for (int i = 0; i < K; ++i) {
+            heap_val[i] = row[i];
+            heap_idx[i] = i;
+        }
+        for (int i = K/2 - 1; i >= 0; --i) {
+            heap_sift_down_f32(heap_val, heap_idx, K, i);
+        }
+
+        // Scan remaining elements: insert into heap if larger than root (current minimum)
+        for (int64_t c = K; c < ne00; ++c) {
+            float val = row[c];
+            if (val > heap_val[0]) {
+                heap_val[0] = val;
+                heap_idx[0] = (int32_t)c;
+                heap_sift_down_f32(heap_val, heap_idx, K, 0);
+            }
+        }
+
+        // Extract from min-heap in descending order
+        // heap_val[0] is the smallest of the top-K; we pop it and write to the
+        // highest unfilled output slot so that out[0] = largest, out[K-1] = smallest.
+        int hsize = K;
+        while (hsize > 0) {
+            --hsize;
+            out[2 * hsize + 2 * K * r] = heap_val[0];
+            out[2 * hsize + 2 * K * r + 1] = (float)heap_idx[0];
+            if (hsize > 0) {
+                heap_val[0] = heap_val[hsize];
+                heap_idx[0] = heap_idx[hsize];
+                heap_sift_down_f32(heap_val, heap_idx, hsize, 0);
+            }
+        }
+    }
+}
+
+static void ggml_compute_forward_topk(
+        const struct ggml_compute_params * params,
+        const struct ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_topk_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            } break;
     }
 }
 
@@ -24886,6 +25027,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_argmax(params, tensor);
             } break;
+        case GGML_OP_TOPK:
+            {
+                ggml_compute_forward_topk(params, tensor);
+            } break;
         case GGML_OP_REPEAT:
             {
                 ggml_compute_forward_repeat(params, tensor);
@@ -25694,6 +25839,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
             } break;
         case GGML_OP_MEAN:
         case GGML_OP_ARGMAX:
+        case GGML_OP_TOPK:
             {
                 GGML_ABORT("fatal error"); // TODO: implement
             }
@@ -26903,6 +27049,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SUM:
         case GGML_OP_MEAN:
         case GGML_OP_ARGMAX:
+        case GGML_OP_TOPK:
         case GGML_OP_REPEAT_BACK:
         case GGML_OP_LEAKY_RELU:
             {

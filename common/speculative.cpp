@@ -215,6 +215,7 @@ static std::vector<llama_token> mtp_speculative_gen_draft(
     int n_draft,
     float p_min,
     int32_t mtp_heads,
+    bool backend_sampling,
     llama_token id_last,
     llama_pos n_past,
     llama_seq_id seq_id,
@@ -360,6 +361,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
             n_max,
             params.p_min,
             params.mtp_heads,
+            params.backend_sampling,
             id_last,
             n_past,
             seq_id,
@@ -1935,6 +1937,9 @@ bool common_speculative_load_draft_model(
 
     params.model_dft = loaded_model;
     params.cparams_dft = common_context_params_to_llama(params_dft);
+    params.cparams_dft.backend_sampling = params.backend_sampling;
+    params.cparams_dft.spec_max_candidates  = params.spec_max_candidates;
+
     return true;
 }
 
@@ -1963,9 +1968,11 @@ bool common_speculative_prepare_mtp_runtime(
         params.cparams_dft = common_context_params_to_llama(params_mtp);
     }
 
-    params.cparams_dft.mtp         = true;
-    params.cparams_dft.mtp_op_type = MTP_OP_WARMUP;
-    params.cparams_dft.embeddings  = true;
+    params.cparams_dft.mtp              = true;
+    params.cparams_dft.mtp_op_type      = MTP_OP_WARMUP;
+    params.cparams_dft.embeddings       = true;
+    params.cparams_dft.backend_sampling = params.backend_sampling;
+    params.cparams_dft.spec_max_candidates  = params.spec_max_candidates;
 
     return true;
 }
@@ -2629,7 +2636,6 @@ static bool mtp_model_uses_recurrent_conditioning(const common_speculative_state
     if (state.ctx_mtp == nullptr) {
         return false;
     }
-    return true;
 
     const llama_model * model = llama_get_model(state.ctx_mtp);
     if (!llama_model_has_recurrent(model)) {
@@ -2924,6 +2930,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     int n_draft,
     float p_min,
     int32_t mtp_heads,
+    bool backend_sampling,
     llama_token id_last,
     llama_pos n_past,
     llama_seq_id seq_id,
@@ -2977,6 +2984,13 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         i0 = 1;
     }
 
+    // Skip full logits D2H when backend sampling is active:
+    // - p_min == 0: always safe (argmax/top-1 only, greedy)
+    // - p_min > 0:  need logit values for probability estimation.
+    //               With spec_max_candidates >= 2, top-K values are available
+    //               for approximate softmax. With K=1, probability is 1.0
+    //               (no early termination, but still correct).
+    const bool skip_d2h = backend_sampling;
     int n_decode = 0;
     for (int i = i0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
@@ -2985,11 +2999,35 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         llama_set_mtp_step_idx(ctx, std::min(i, n_mtp_heads - 1));
 
         ++n_decode;
+        llama_set_skip_logits_d2h(ctx, skip_d2h);
         if (llama_decode(ctx, mtp_batch) != 0) {
             break;
         }
+        llama_set_skip_logits_d2h(ctx, false);
 
-        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, 0, prob_ptr);
+        llama_token id_next;
+        if (backend_sampling && p_min == 0.0f) {
+            id_next = llama_get_logits_argmax_ith(ctx, 0);
+            if (id_next == LLAMA_TOKEN_NULL) {
+                id_next = common_sampler_sample_speculative(smpl, ctx, 0, nullptr);
+            }
+        } else if (backend_sampling && p_min > 0.0f) {
+            float top1_val;
+            id_next = llama_get_logits_topk_ith(ctx, 0, 0, &top1_val);
+            if (id_next == LLAMA_TOKEN_NULL) {
+                id_next = common_sampler_sample_speculative(smpl, ctx, 0, prob_ptr);
+            } else {
+                float sum_exp = 1.0f;
+                for (int k = 1; ; ++k) {
+                    float val_k;
+                    if (llama_get_logits_topk_ith(ctx, 0, k, &val_k) == LLAMA_TOKEN_NULL) break;
+                    sum_exp += std::exp(val_k - top1_val);
+                }
+                prob = 1.0f / sum_exp;
+            }
+        } else {
+            id_next = common_sampler_sample_speculative(smpl, ctx, 0, prob_ptr);
+        }
 
         if (i > 0 && prob_ptr && prob < p_min) {
             break;
@@ -3015,6 +3053,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
             break;
         }
     }
+    llama_set_skip_logits_d2h(ctx, false);
     llama_batch_free(mtp_batch);
     llama_set_mtp_step_idx(ctx, 0);
     llama_set_mtp_n_heads(ctx, 0);

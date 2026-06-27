@@ -510,6 +510,8 @@ extern "C" {
         int  pipeline;          // 0=off, 1=lookahead, 2=selfcopy (experimental)
         int  sched_max_copies;   // max number of graph parallel copies (default: from GGML_SCHED_MAX_COPIES)
         bool mtp;   // Activate MTP if supported
+        bool backend_sampling; // offload draft sampling to the backend (default: true)
+        int  spec_max_candidates;   // top-K for backend sampling (0 = argmax, default: 0)
         enum llama_mtp_op_type mtp_op_type;
 
         // Abort callback
@@ -1131,6 +1133,15 @@ extern "C" {
     // Returns LLAMA_TOKEN_NULL if argmax is not available (falls back to logits path).
     LLAMA_API llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i);
 
+    // Get the argmax token ID for MTP draft position i via backend sampling.
+    // Returns LLAMA_TOKEN_NULL if backend sampling is not active or position is out of range.
+    LLAMA_API llama_token llama_get_logits_argmax_ith(struct llama_context * ctx, int32_t i);
+
+    // Get the top-K token ID and its logit value for MTP draft position i, rank k.
+    // Returns LLAMA_TOKEN_NULL if backend sampling is not active or position/rank is out of range.
+    // If logit_value_out is not null, fills it with the raw logit value.
+    LLAMA_API llama_token llama_get_logits_topk_ith(struct llama_context * ctx, int32_t i, int32_t k, float * logit_value_out);
+
     // Get all output token embeddings.
     // when pooling_type == LLAMA_POOLING_TYPE_NONE or when using a generative model,
     // the embeddings for which llama_batch.logits[i] != 0 are stored contiguously
@@ -1605,6 +1616,10 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
 
     // Set which, if any, MTP operation the context will use
     LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
+
+    // When true, skip the D2H transfer of the full logits tensor in MTP draft mode.
+    // Must only be used when the caller reads argmax via llama_get_logits_argmax_ith.
+    LLAMA_API void llama_set_skip_logits_d2h(struct llama_context * ctx, bool skip);
 
     LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 
