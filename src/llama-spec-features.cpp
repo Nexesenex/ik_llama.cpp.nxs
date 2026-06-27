@@ -41,6 +41,9 @@ bool llama_set_draft_input_hidden_state_copy(
         return false;
     }
 
+    if (ctx->draft_input_hidden_state_owned.capacity() < n_floats) {
+        ctx->draft_input_hidden_state_owned.reserve(n_floats);
+    }
     ctx->draft_input_hidden_state_owned.assign(hidden_state, hidden_state + n_floats);
     ctx->draft_input_hidden_state = ctx->draft_input_hidden_state_owned.data();
     ctx->draft_input_hidden_state_n_floats = n_floats;
