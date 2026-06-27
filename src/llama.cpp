@@ -6815,6 +6815,12 @@ static int llama_decode_internal(
                             GGML_ASSERT( n_outputs_prev_embd + n_outputs_new_embd <= n_outputs_embd);
                             GGML_ASSERT((n_outputs_prev_embd + n_outputs_new_embd)*n_embd_output <= (int64_t) lctx.embd_size);
                             ggml_backend_tensor_get_async(backend_embd, embd, embd_out, 0, n_outputs_new_embd*n_embd_output*sizeof(float));
+                            // Ensure embd data is ready before the MTP speculative capture
+                            // path reads it, removing the need for a separate llama_synchronize
+                            // in llama_spec_prepare_hidden_feature_view.
+                            if (cparams.mtp_op_type != MTP_OP_NONE) {
+                                ggml_backend_sched_synchronize(lctx.sched);
+                            }
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_MEAN:
