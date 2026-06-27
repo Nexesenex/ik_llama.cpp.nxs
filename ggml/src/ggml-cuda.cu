@@ -5028,7 +5028,6 @@ static void maintain_cuda_graph(ggml_backend_cuda_context * cuda_ctx, bool cuda_
 
 static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
     bool & graph_evaluated_or_captured, bool & use_cuda_graph, bool & cuda_graph_update_required) {
-    const bool integrated = ggml_cuda_info().devices[cuda_ctx->device].integrated;
 
 #if IK_PRINT_TIMING
     printf("======================== %s: graph with %d nodes on device %d. time = %ld\n", __func__, cgraph->n_nodes, cuda_ctx->device, ggml_time_us());
