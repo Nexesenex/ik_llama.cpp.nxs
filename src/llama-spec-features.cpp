@@ -44,8 +44,6 @@ static bool llama_spec_prepare_hidden_feature_view(
         return false;
     }
 
-    llama_synchronize(ctx);
-
     if (ctx->embd == nullptr) {
         return false;
     }
