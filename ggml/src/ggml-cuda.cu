@@ -4433,6 +4433,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
     graph->cpy_dest_ptrs.clear();
+    graph->cpy_node_indices.clear();
 
     const std::string gemma3n_per_layer_proj_src0_name = "inp_per_layer_selected";
     const std::string gemma3n_per_layer_proj_src1_name = "per_layer_proj";
@@ -4495,6 +4496,9 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 
         if (node->op == GGML_OP_CPY) {
 
+            // Cache the node index for fast CPY-only refresh on subsequent calls
+            graph->cpy_node_indices.push_back(i);
+
             // Store the pointers which are updated for each token, such that these can be sent
             // to the device and accessed using indirection from CUDA graph
             graph->cpy_dest_ptrs.push_back((char *) node->src[1]->data);
@@ -4525,11 +4529,17 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 static void refresh_cuda_graph_copy_ops(ggml_cuda_graph * graph, ggml_cgraph * cgraph, cudaStream_t stream) {
 
     graph->cpy_dest_ptrs.clear();
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        ggml_tensor * node = cgraph->nodes[i];
-        if (ggml_is_noop(node)) { continue; }
-        if (node->op == GGML_OP_CPY) {
-            graph->cpy_dest_ptrs.push_back((char *) node->src[1]->data);
+    if (!graph->cpy_node_indices.empty()) {
+        for (int idx : graph->cpy_node_indices) {
+            graph->cpy_dest_ptrs.push_back((char *) cgraph->nodes[idx]->src[1]->data);
+        }
+    } else {
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            ggml_tensor * node = cgraph->nodes[i];
+            if (ggml_is_noop(node)) { continue; }
+            if (node->op == GGML_OP_CPY) {
+                graph->cpy_dest_ptrs.push_back((char *) node->src[1]->data);
+            }
         }
     }
     if (!graph->cpy_dest_ptrs.empty()) {
@@ -4600,6 +4610,7 @@ static bool is_cuda_graph_update_required(ggml_cuda_graph * graph, ggml_cgraph *
     if (graph->ggml_graph_properties.size() != (size_t)cgraph->n_nodes) {
         cuda_graph_update_required = true;
         graph->ggml_graph_properties.resize(cgraph->n_nodes);
+        graph->cpy_node_indices.clear();
     }
 
     if (!cuda_graph_update_required && cgraph->reused) {
