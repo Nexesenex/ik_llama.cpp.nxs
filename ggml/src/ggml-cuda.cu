@@ -4618,6 +4618,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
             GGML_CUDA_LOG_DEBUG("%s(%s): disabling CUDA graphs due to unsupported node type %ld %ld\n",
                     __func__, node->src[0]->name, node->ne[2], node->src[2]->ne[0]);
 #endif
+            break;
         }
         if (node->op == GGML_OP_MOE_FUSED_UP_GATE) {
             auto src0_1 = node->src[0];
@@ -4626,6 +4627,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
             if (src1->ne[1] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || src1->type != GGML_TYPE_F32 ||
                 !ggml_is_quantized(src0_1->type) || (src0_2 && !ggml_is_quantized(src0_2->type))) {
                 use_cuda_graph = false;
+                break;
             } else {
                 if (i < cgraph->n_nodes-1) {
                     auto next = cgraph->nodes[i+1];
@@ -4650,6 +4652,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 #ifndef NDEBUG
             GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to batch > 1 (SMTPS PP split)\n", __func__);
 #endif
+            break;
         }
 
         if (node->op == GGML_OP_CPY) {
@@ -4668,10 +4671,8 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 #ifndef NDEBUG
                 GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported copy op\n", __func__);
 #endif
+                break;
             }
-        }
-        if (!use_cuda_graph) {
-            break;
         }
     }
 
