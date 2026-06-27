@@ -4719,7 +4719,9 @@ static void update_cuda_graph_executable(ggml_cuda_graph * graph) {
 #endif // CUDART_VERSION >= 12000
 
     if (stat == cudaErrorGraphExecUpdateFailure) {
-        GGML_CUDA_LOG_WARN("%s: CUDA graph update failed, re-instantiating\n", __func__);
+#ifndef NDEBUG
+        GGML_CUDA_LOG_DEBUG("%s: CUDA graph update failed\n", __func__);
+#endif
 
         // The pre-existing graph exec cannot be updated due to violated constraints
         // so instead clear error and re-instantiate
@@ -4736,10 +4738,11 @@ static void maintain_cuda_graph(ggml_backend_cuda_context * cuda_ctx, bool cuda_
     auto graph = cuda_ctx->cur_graph;
     if (graph->instance == nullptr) { // Create executable graph from captured graph.
         CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
-    } else if (cuda_graph_update_required) { // Re-instantiate when graph was rebuilt
-        CUDA_CHECK(cudaGraphExecDestroy(graph->instance));
-        graph->instance = nullptr;
-        CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
+    } else if (cuda_graph_update_required) { // Update executable when graph was rebuilt
+        // cudaGraphExecUpdate is faster than destroy+reinstantiate when only
+        // data pointers changed (common TG case). Falls back to full re-instantiate
+        // when topology changes prevent an in-place update.
+        update_cuda_graph_executable(graph);
     }
     // Launch graph
     CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
