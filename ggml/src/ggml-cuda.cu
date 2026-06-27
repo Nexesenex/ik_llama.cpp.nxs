@@ -4765,11 +4765,31 @@ static inline const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
     return cgraph->nodes[0];
 }
 
+static constexpr size_t GGML_CUDA_MAX_GRAPHS = 4096;
+
+static std::atomic<uint64_t> ggml_cuda_graph_seq{0};
+
 static inline ggml_cuda_graph * ggml_cuda_get_graph(ggml_backend_cuda_context & ctx, const void * key) {
     auto & graph = ctx.cuda_graphs[key];
     if (!graph) {
         graph = std::make_unique<ggml_cuda_graph>();
+        graph->last_used_seq = ++ggml_cuda_graph_seq;
+        if (ctx.cuda_graphs.size() > GGML_CUDA_MAX_GRAPHS) {
+            uint64_t oldest_seq = UINT64_MAX;
+            const void * oldest_key = nullptr;
+            for (auto & it : ctx.cuda_graphs) {
+                if (it.second && it.second->last_used_seq < oldest_seq) {
+                    oldest_seq = it.second->last_used_seq;
+                    oldest_key = it.first;
+                }
+            }
+            if (oldest_key != key) {
+                ctx.cuda_graphs.erase(oldest_key);
+            }
+        }
+        return graph.get();
     }
+    graph->last_used_seq = ++ggml_cuda_graph_seq;
     return graph.get();
 }
 
