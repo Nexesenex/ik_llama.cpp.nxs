@@ -5055,7 +5055,7 @@ static void maintain_cuda_graph(ggml_backend_cuda_context * cuda_ctx, bool cuda_
 #endif
 
 static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
-    bool & graph_evaluated_or_captured, bool & use_cuda_graph, bool & cuda_graph_update_required) {
+    bool use_cuda_graph, bool cuda_graph_update_required) {
 
 #if IK_PRINT_TIMING
     printf("======================== %s: graph with %d nodes on device %d. time = %ld\n", __func__, cgraph->n_nodes, cuda_ctx->device, ggml_time_us());
@@ -5085,21 +5085,16 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         }
 
         CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &cuda_ctx->cur_graph->graph));
-        graph_evaluated_or_captured = true; // CUDA graph has been captured
 
         std::lock_guard<std::mutex> lock(ggml_cuda_lock);
         if (--ggml_cuda_lock_counter == 0) {
             ggml_cuda_lock_cv.notify_all();
         }
-    } else {
-        graph_evaluated_or_captured = true; // ggml graph has been directly evaluated or replayed
     }
 
     if (use_cuda_graph) {
         maintain_cuda_graph(cuda_ctx, cuda_graph_update_required);
     }
-#else
-    graph_evaluated_or_captured = true;
 #endif
 }
 
@@ -5210,9 +5205,7 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     bool cuda_graph_update_required = false;
 #endif // USE_CUDA_GRAPH
 
-    bool graph_evaluated_or_captured = false;
-
-    evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required);
+    evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, use_cuda_graph, cuda_graph_update_required);
 
     return GGML_STATUS_SUCCESS;
 }
