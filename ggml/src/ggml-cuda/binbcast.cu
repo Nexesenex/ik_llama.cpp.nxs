@@ -1303,6 +1303,139 @@ static __global__ void k_add_iq4_nl_iq4_nl_f32(int nelem, const block_iq4_nl * x
     z[i] = dequantize_iq4_nl_elem(x, ib, iq) + dequantize_iq4_nl_elem(y, ib, iq);
 }
 
+static __device__ float dequantize_iq5_nl_elem(const block_iq5_nl * x, int ib, int i) {
+    float d = x[ib].d;
+    int p = i / 2;
+    uint32_t qh;
+    memcpy(&qh, x[ib].qh, sizeof(qh));
+    uint8_t nibble = (i & 1) ? (x[ib].qs[p] >> 4) : (x[ib].qs[p] & 0xf);
+    int xh = ((qh >> (p + ((i & 1) ? 16 : 0))) << 4) & 0x10;
+    return (float)kvalues_iq5nl[nibble | xh] * d;
+}
+
+template <int block_size>
+static __global__ void k_add_same_iq5_nl(int nelem, const block_iq5_nl * x, const float * y, block_iq5_nl * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK5_NL;
+    int iq = i % QK5_NL;
+    float sum = dequantize_iq5_nl_elem(x, ib, iq) + y[i];
+    float asum = fabsf(sum);
+    float max = warp_reduce_max(asum);
+    float d = max / 127.0f;
+    float id = d > 0 ? 1.0f/d : 1.0f;
+    float norm = sum * id;
+    int best = 0;
+    float best_diff = fabsf(norm - kvalues_iq5nl[0]);
+    for (int j = 1; j < 32; ++j) {
+        float diff = fabsf(norm - kvalues_iq5nl[j]);
+        if (diff < best_diff) { best_diff = diff; best = j; }
+    }
+    if (iq & 1) {
+        z[ib].qs[iq/2] = (z[ib].qs[iq/2] & 0x0f) | ((best & 0xf) << 4);
+    } else {
+        z[ib].qs[iq/2] = (z[ib].qs[iq/2] & 0xf0) | (best & 0xf);
+    }
+    if (best & 0x10) {
+        if (iq & 1) {
+            z[ib].qh[iq/2 / 8] |= (1 << (iq/2 % 8));
+        } else {
+            z[ib].qh[iq/2 / 8 + 2] |= (1 << (iq/2 % 8));
+        }
+    }
+    if (threadIdx.x % WARP_SIZE == 0) {
+        z[ib].d = (half)d;
+    }
+}
+
+template <int block_size, typename src1_t>
+static __global__ void k_add_iq5_nl_x_iq5_nl(int nelem, const block_iq5_nl * x, const src1_t * y, block_iq5_nl * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK5_NL;
+    int iq = i % QK5_NL;
+    float sum = dequantize_iq5_nl_elem(x, ib, iq) + (float)y[i];
+    float asum = fabsf(sum);
+    float max = warp_reduce_max(asum);
+    float d = max / 127.0f;
+    float id = d > 0 ? 1.0f/d : 1.0f;
+    float norm = sum * id;
+    int best = 0;
+    float best_diff = fabsf(norm - kvalues_iq5nl[0]);
+    for (int j = 1; j < 32; ++j) {
+        float diff = fabsf(norm - kvalues_iq5nl[j]);
+        if (diff < best_diff) { best_diff = diff; best = j; }
+    }
+    if (iq & 1) {
+        z[ib].qs[iq/2] = (z[ib].qs[iq/2] & 0x0f) | ((best & 0xf) << 4);
+    } else {
+        z[ib].qs[iq/2] = (z[ib].qs[iq/2] & 0xf0) | (best & 0xf);
+    }
+    if (best & 0x10) {
+        if (iq & 1) {
+            z[ib].qh[iq/2 / 8] |= (1 << (iq/2 % 8));
+        } else {
+            z[ib].qh[iq/2 / 8 + 2] |= (1 << (iq/2 % 8));
+        }
+    }
+    if (threadIdx.x % WARP_SIZE == 0) {
+        z[ib].d = (half)d;
+    }
+}
+
+template <int block_size>
+static __global__ void k_add_iq5_nl_iq5_nl_iq5_nl(int nelem, const block_iq5_nl * x, const block_iq5_nl * y, block_iq5_nl * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK5_NL;
+    int iq = i % QK5_NL;
+    float sum = dequantize_iq5_nl_elem(x, ib, iq) + dequantize_iq5_nl_elem(y, ib, iq);
+    float asum = fabsf(sum);
+    float max = warp_reduce_max(asum);
+    float d = max / 127.0f;
+    float id = d > 0 ? 1.0f/d : 1.0f;
+    float norm = sum * id;
+    int best = 0;
+    float best_diff = fabsf(norm - kvalues_iq5nl[0]);
+    for (int j = 1; j < 32; ++j) {
+        float diff = fabsf(norm - kvalues_iq5nl[j]);
+        if (diff < best_diff) { best_diff = diff; best = j; }
+    }
+    if (iq & 1) {
+        z[ib].qs[iq/2] = (z[ib].qs[iq/2] & 0x0f) | ((best & 0xf) << 4);
+    } else {
+        z[ib].qs[iq/2] = (z[ib].qs[iq/2] & 0xf0) | (best & 0xf);
+    }
+    if (best & 0x10) {
+        if (iq & 1) {
+            z[ib].qh[iq/2 / 8] |= (1 << (iq/2 % 8));
+        } else {
+            z[ib].qh[iq/2 / 8 + 2] |= (1 << (iq/2 % 8));
+        }
+    }
+    if (threadIdx.x % WARP_SIZE == 0) {
+        z[ib].d = (half)d;
+    }
+}
+
+template <int block_size>
+static __global__ void k_add_iq5_nl_f32(int nelem, const block_iq5_nl * x, const float * y, float * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK5_NL;
+    int iq = i % QK5_NL;
+    z[i] = dequantize_iq5_nl_elem(x, ib, iq) + y[i];
+}
+
+template <int block_size>
+static __global__ void k_add_iq5_nl_iq5_nl_f32(int nelem, const block_iq5_nl * x, const block_iq5_nl * y, float * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK5_NL;
+    int iq = i % QK5_NL;
+    z[i] = dequantize_iq5_nl_elem(x, ib, iq) + dequantize_iq5_nl_elem(y, ib, iq);
+}
+
 void ggml_op_add_same_type(ggml_backend_cuda_context & ctx, enum ggml_type type, size_t nelem,
         const void * x, const void * y, void * z) {
     constexpr int kBlockSize = 256;
@@ -1340,6 +1473,9 @@ void ggml_op_add_same_type(ggml_backend_cuda_context & ctx, enum ggml_type type,
     } else if (type == GGML_TYPE_IQ4_NL) {
         k_add_iq4_nl_iq4_nl_iq4_nl<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
                 (const block_iq4_nl *)x, (const block_iq4_nl *)y, (block_iq4_nl *)z);
+    } else if (type == GGML_TYPE_IQ5_NL) {
+        k_add_iq5_nl_iq5_nl_iq5_nl<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                (const block_iq5_nl *)x, (const block_iq5_nl *)y, (block_iq5_nl *)z);
     } else {
         GGML_ABORT("Unsupported add operation");
     }
@@ -1523,6 +1659,37 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                         (const block_iq4_nl *)dst->src[0]->data, (const block_iq4_nl *)dst->src[1]->data, (block_iq4_nl *)dst->data);
             } else {
                 GGML_ABORT("Unsupported IQ4_NL add combination");
+            }
+        } else if (dst->type == GGML_TYPE_IQ5_NL) {
+            if (dst->src[0]->type == GGML_TYPE_IQ5_NL && dst->src[1]->type == GGML_TYPE_F32) {
+                k_add_same_iq5_nl<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_iq5_nl *)dst->src[0]->data, (const float *)dst->src[1]->data, (block_iq5_nl *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_IQ5_NL) {
+                k_add_same_iq5_nl<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_iq5_nl *)dst->src[1]->data, (const float *)dst->src[0]->data, (block_iq5_nl *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_IQ5_NL && dst->src[1]->type == GGML_TYPE_F16) {
+                k_add_iq5_nl_x_iq5_nl<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_iq5_nl *)dst->src[0]->data, (const half *)dst->src[1]->data, (block_iq5_nl *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F16 && dst->src[1]->type == GGML_TYPE_IQ5_NL) {
+                k_add_iq5_nl_x_iq5_nl<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_iq5_nl *)dst->src[1]->data, (const half *)dst->src[0]->data, (block_iq5_nl *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_IQ5_NL && dst->src[1]->type == GGML_TYPE_BF16) {
+                k_add_iq5_nl_x_iq5_nl<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_iq5_nl *)dst->src[0]->data, (const nv_bfloat16 *)dst->src[1]->data, (block_iq5_nl *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_BF16 && dst->src[1]->type == GGML_TYPE_IQ5_NL) {
+                k_add_iq5_nl_x_iq5_nl<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_iq5_nl *)dst->src[1]->data, (const nv_bfloat16 *)dst->src[0]->data, (block_iq5_nl *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_IQ5_NL && dst->src[1]->type == GGML_TYPE_IQ5_NL) {
+                k_add_iq5_nl_iq5_nl_iq5_nl<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_iq5_nl *)dst->src[0]->data, (const block_iq5_nl *)dst->src[1]->data, (block_iq5_nl *)dst->data);
+            } else {
+                GGML_ABORT("Unsupported IQ5_NL add combination");
             }
         } else if (dst->type == GGML_TYPE_Q4_1) {
             if (dst->src[0]->type == GGML_TYPE_Q4_1 && dst->src[1]->type == GGML_TYPE_F32) {
@@ -1720,6 +1887,18 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_IQ4_NL) {
                 k_add_iq4_nl_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
                         (const block_iq4_nl *)dst->src[1]->data, (const float *)dst->src[0]->data, (float *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_IQ5_NL && dst->src[1]->type == GGML_TYPE_IQ5_NL) {
+                k_add_iq5_nl_iq5_nl_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_iq5_nl *)dst->src[0]->data, (const block_iq5_nl *)dst->src[1]->data, (float *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_IQ5_NL && dst->src[1]->type == GGML_TYPE_F32) {
+                k_add_iq5_nl_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_iq5_nl *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_IQ5_NL) {
+                k_add_iq5_nl_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_iq5_nl *)dst->src[1]->data, (const float *)dst->src[0]->data, (float *)dst->data);
             }
             else if (dst->src[0]->type == GGML_TYPE_Q4_1 && dst->src[1]->type == GGML_TYPE_Q4_1) {
                 k_add_q4_1_q4_1_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
