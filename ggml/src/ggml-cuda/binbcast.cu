@@ -493,6 +493,133 @@ static __global__ void k_add_q8_0_q8_0_f32(int nelem, const block_q8_0 * x, cons
     z[i] = (float)x[ib].d * x[ib].qs[iq] + (float)y[ib].d * y[ib].qs[iq];
 }
 
+static __device__ float dequantize_q6_0_elem(const block_q6_0 * x, int ib, int i) {
+    float d = x[ib].d;
+    int p = i / 2;
+    uint8_t h_nib = x[ib].qh[p % 8] >> (4 * (p / 8));
+    uint8_t qs_b = x[ib].qs[p];
+    uint8_t low = (i & 1) ? (qs_b >> 4) : (qs_b & 0xf);
+    uint8_t high = (i & 1) ? ((h_nib >> 2) & 0x3) : (h_nib & 0x3);
+    return ((float)((low | (high << 4)) - 32)) * d;
+}
+
+template <int block_size>
+static __global__ void k_add_same_q6_0(int nelem, const block_q6_0 * x, const float * y, block_q6_0 * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK6_0;
+    int iq = i % QK6_0;
+    float sum = dequantize_q6_0_elem(x, ib, iq) + y[i];
+    float asum = fabsf(sum);
+    float max = warp_reduce_max(asum);
+    float d = max / 32.0f;
+    float id = d > 0 ? 1.0f/d : 1.0f;
+    int p = iq / 2;
+    int in_pair = iq & 1;
+    int tmp = (int)roundf(sum * id + 32.0f);
+    uint8_t quant = (uint8_t)(tmp < 0 ? 0 : (tmp > 63 ? 63 : tmp));
+    if (in_pair == 0) {
+        z[ib].qs[p] = (z[ib].qs[p] & 0xf0) | (quant & 0x0f);
+    } else {
+        z[ib].qs[p] = (z[ib].qs[p] & 0x0f) | ((quant & 0x0f) << 4);
+    }
+    uint8_t high = quant >> 4;
+    int qh_idx = p % 8;
+    int h_shift = 4 * (p / 8);
+    if (in_pair == 0) {
+        z[ib].qh[qh_idx] = (z[ib].qh[qh_idx] & ~((uint8_t)(0x3 << h_shift))) | ((high & 0x3) << h_shift);
+    } else {
+        z[ib].qh[qh_idx] = (z[ib].qh[qh_idx] & ~((uint8_t)(0xc << h_shift))) | ((high & 0x3) << (h_shift + 2));
+    }
+    if (threadIdx.x % WARP_SIZE == 0) {
+        z[ib].d = (half)d;
+    }
+}
+
+template <int block_size, typename src1_t>
+static __global__ void k_add_q6_0_x_q6_0(int nelem, const block_q6_0 * x, const src1_t * y, block_q6_0 * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK6_0;
+    int iq = i % QK6_0;
+    float sum = dequantize_q6_0_elem(x, ib, iq) + (float)y[i];
+    float asum = fabsf(sum);
+    float max = warp_reduce_max(asum);
+    float d = max / 32.0f;
+    float id = d > 0 ? 1.0f/d : 1.0f;
+    int p = iq / 2;
+    int in_pair = iq & 1;
+    int tmp = (int)roundf(sum * id + 32.0f);
+    uint8_t quant = (uint8_t)(tmp < 0 ? 0 : (tmp > 63 ? 63 : tmp));
+    if (in_pair == 0) {
+        z[ib].qs[p] = (z[ib].qs[p] & 0xf0) | (quant & 0x0f);
+    } else {
+        z[ib].qs[p] = (z[ib].qs[p] & 0x0f) | ((quant & 0x0f) << 4);
+    }
+    uint8_t high = quant >> 4;
+    int qh_idx = p % 8;
+    int h_shift = 4 * (p / 8);
+    if (in_pair == 0) {
+        z[ib].qh[qh_idx] = (z[ib].qh[qh_idx] & ~((uint8_t)(0x3 << h_shift))) | ((high & 0x3) << h_shift);
+    } else {
+        z[ib].qh[qh_idx] = (z[ib].qh[qh_idx] & ~((uint8_t)(0xc << h_shift))) | ((high & 0x3) << (h_shift + 2));
+    }
+    if (threadIdx.x % WARP_SIZE == 0) {
+        z[ib].d = (half)d;
+    }
+}
+
+template <int block_size>
+static __global__ void k_add_q6_0_q6_0_q6_0(int nelem, const block_q6_0 * x, const block_q6_0 * y, block_q6_0 * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK6_0;
+    int iq = i % QK6_0;
+    float sum = dequantize_q6_0_elem(x, ib, iq) + dequantize_q6_0_elem(y, ib, iq);
+    float asum = fabsf(sum);
+    float max = warp_reduce_max(asum);
+    float d = max / 32.0f;
+    float id = d > 0 ? 1.0f/d : 1.0f;
+    int p = iq / 2;
+    int in_pair = iq & 1;
+    int tmp = (int)roundf(sum * id + 32.0f);
+    uint8_t quant = (uint8_t)(tmp < 0 ? 0 : (tmp > 63 ? 63 : tmp));
+    if (in_pair == 0) {
+        z[ib].qs[p] = (z[ib].qs[p] & 0xf0) | (quant & 0x0f);
+    } else {
+        z[ib].qs[p] = (z[ib].qs[p] & 0x0f) | ((quant & 0x0f) << 4);
+    }
+    uint8_t high = quant >> 4;
+    int qh_idx = p % 8;
+    int h_shift = 4 * (p / 8);
+    if (in_pair == 0) {
+        z[ib].qh[qh_idx] = (z[ib].qh[qh_idx] & ~((uint8_t)(0x3 << h_shift))) | ((high & 0x3) << h_shift);
+    } else {
+        z[ib].qh[qh_idx] = (z[ib].qh[qh_idx] & ~((uint8_t)(0xc << h_shift))) | ((high & 0x3) << (h_shift + 2));
+    }
+    if (threadIdx.x % WARP_SIZE == 0) {
+        z[ib].d = (half)d;
+    }
+}
+
+template <int block_size>
+static __global__ void k_add_q6_0_f32(int nelem, const block_q6_0 * x, const float * y, float * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK6_0;
+    int iq = i % QK6_0;
+    z[i] = dequantize_q6_0_elem(x, ib, iq) + y[i];
+}
+
+template <int block_size>
+static __global__ void k_add_q6_0_q6_0_f32(int nelem, const block_q6_0 * x, const block_q6_0 * y, float * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK6_0;
+    int iq = i % QK6_0;
+    z[i] = dequantize_q6_0_elem(x, ib, iq) + dequantize_q6_0_elem(y, ib, iq);
+}
+
 void ggml_op_add_same_type(ggml_backend_cuda_context & ctx, enum ggml_type type, size_t nelem,
         const void * x, const void * y, void * z) {
     constexpr int kBlockSize = 256;
@@ -509,6 +636,9 @@ void ggml_op_add_same_type(ggml_backend_cuda_context & ctx, enum ggml_type type,
     } else if (type == GGML_TYPE_Q8_0) {
         k_add_q8_0_q8_0_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
                 (const block_q8_0 *)x, (const block_q8_0 *)y, (block_q8_0 *)z);
+    } else if (type == GGML_TYPE_Q6_0) {
+        k_add_q6_0_q6_0_q6_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                (const block_q6_0 *)x, (const block_q6_0 *)y, (block_q6_0 *)z);
     } else {
         GGML_ABORT("Unsupported add operation");
     }
@@ -602,6 +732,37 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             } else {
                 GGML_ABORT("Unsupported Q8_0 add combination");
             }
+        } else if (dst->type == GGML_TYPE_Q6_0) {
+            if (dst->src[0]->type == GGML_TYPE_Q6_0 && dst->src[1]->type == GGML_TYPE_F32) {
+                k_add_same_q6_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q6_0 *)dst->src[0]->data, (const float *)dst->src[1]->data, (block_q6_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_Q6_0) {
+                k_add_same_q6_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q6_0 *)dst->src[1]->data, (const float *)dst->src[0]->data, (block_q6_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_Q6_0 && dst->src[1]->type == GGML_TYPE_F16) {
+                k_add_q6_0_x_q6_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q6_0 *)dst->src[0]->data, (const half *)dst->src[1]->data, (block_q6_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F16 && dst->src[1]->type == GGML_TYPE_Q6_0) {
+                k_add_q6_0_x_q6_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q6_0 *)dst->src[1]->data, (const half *)dst->src[0]->data, (block_q6_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_Q6_0 && dst->src[1]->type == GGML_TYPE_BF16) {
+                k_add_q6_0_x_q6_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q6_0 *)dst->src[0]->data, (const nv_bfloat16 *)dst->src[1]->data, (block_q6_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_BF16 && dst->src[1]->type == GGML_TYPE_Q6_0) {
+                k_add_q6_0_x_q6_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q6_0 *)dst->src[1]->data, (const nv_bfloat16 *)dst->src[0]->data, (block_q6_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_Q6_0 && dst->src[1]->type == GGML_TYPE_Q6_0) {
+                k_add_q6_0_q6_0_q6_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q6_0 *)dst->src[0]->data, (const block_q6_0 *)dst->src[1]->data, (block_q6_0 *)dst->data);
+            } else {
+                GGML_ABORT("Unsupported Q6_0 add combination");
+            }
         } else {
             if (dst->src[0]->type == GGML_TYPE_F16 && dst->src[1]->type == GGML_TYPE_F16) {
                 k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
@@ -638,6 +799,18 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_Q8_0) {
                 k_add_q8_0_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
                         (const block_q8_0 *)dst->src[1]->data, (const float *)dst->src[0]->data, (float *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_Q6_0 && dst->src[1]->type == GGML_TYPE_Q6_0) {
+                k_add_q6_0_q6_0_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q6_0 *)dst->src[0]->data, (const block_q6_0 *)dst->src[1]->data, (float *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_Q6_0 && dst->src[1]->type == GGML_TYPE_F32) {
+                k_add_q6_0_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q6_0 *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_Q6_0) {
+                k_add_q6_0_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q6_0 *)dst->src[1]->data, (const float *)dst->src[0]->data, (float *)dst->data);
             } else {
                 k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
                         (const float *)dst->src[0]->data, (const half *)dst->src[1]->data, (float *)dst->data);
