@@ -188,7 +188,8 @@ static void ggml_cpy_q_f32_cuda(
     const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12,
     const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
     cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
-    const int64_t num_blocks = ne;
+    GGML_ASSERT(ne % qk == 0);
+    const int64_t num_blocks = ne / qk;
     GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_q_f32<cpy_blck_q_f32<dequant, qk>, qk><<<num_blocks, 1, 0, stream>>>(
         cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
@@ -204,7 +205,8 @@ static void ggml_cpy_q_f16_cuda(
     const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12,
     const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
     cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
-    const int64_t num_blocks = ne;
+    GGML_ASSERT(ne % qk == 0);
+    const int64_t num_blocks = ne / qk;
     GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_q_f32<cpy_blck_q_f16<dequant, qk>, qk><<<num_blocks, 1, 0, stream>>>(
         cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
