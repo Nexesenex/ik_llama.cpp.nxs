@@ -414,6 +414,40 @@ static __global__ void k_add_same_q8_0(int nelem, const block_q8_0 * x, const bl
     }
 }
 
+template <int block_size, typename src1_t>
+static __global__ void k_add_q8_0_x_q8_0(int nelem, const block_q8_0 * x, const src1_t * y, block_q8_0 * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK8_0;
+    int iq = i % QK8_0;
+    float sum = (float)x[ib].d * x[ib].qs[iq] + (float)y[i];
+    float asum = fabsf(sum);
+    float max = warp_reduce_max(asum);
+    float d = max / 127;
+    float id = d > 0 ? 1/d : 0;
+    z[ib].qs[iq] = roundf(sum * id);
+    if (threadIdx.x % WARP_SIZE == 0) {
+        z[ib].d = (half)d;
+    }
+}
+
+template <int block_size>
+static __global__ void k_add_q8_0_q8_0_q8_0(int nelem, const block_q8_0 * x, const block_q8_0 * y, block_q8_0 * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK8_0;
+    int iq = i % QK8_0;
+    float sum = (float)x[ib].d * x[ib].qs[iq] + (float)y[ib].d * y[ib].qs[iq];
+    float asum = fabsf(sum);
+    float max = warp_reduce_max(asum);
+    float d = max / 127;
+    float id = d > 0 ? 1/d : 0;
+    z[ib].qs[iq] = roundf(sum * id);
+    if (threadIdx.x % WARP_SIZE == 0) {
+        z[ib].d = (half)d;
+    }
+}
+
 template <int block_size>
 static __global__ void k_add_same_q8_0(int nelem, const block_q8_0 * x, const float * y, block_q8_0 * z) {
     int i = blockIdx.x*block_size + threadIdx.x;
@@ -463,7 +497,7 @@ void ggml_op_add_same_type(ggml_backend_cuda_context & ctx, enum ggml_type type,
         k_add_same<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
                 (const nv_bfloat16 *)x, (const nv_bfloat16 *)y, (nv_bfloat16 *)z);
     } else if (type == GGML_TYPE_Q8_0) {
-        k_add_same_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+        k_add_q8_0_q8_0_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
                 (const block_q8_0 *)x, (const block_q8_0 *)y, (block_q8_0 *)z);
     } else {
         GGML_ABORT("Unsupported add operation");
@@ -533,6 +567,26 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_Q8_0) {
                 k_add_same_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
                         (const block_q8_0 *)dst->src[1]->data, (const float *)dst->src[0]->data, (block_q8_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_Q8_0 && dst->src[1]->type == GGML_TYPE_F16) {
+                k_add_q8_0_x_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q8_0 *)dst->src[0]->data, (const half *)dst->src[1]->data, (block_q8_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F16 && dst->src[1]->type == GGML_TYPE_Q8_0) {
+                k_add_q8_0_x_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q8_0 *)dst->src[1]->data, (const half *)dst->src[0]->data, (block_q8_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_Q8_0 && dst->src[1]->type == GGML_TYPE_BF16) {
+                k_add_q8_0_x_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q8_0 *)dst->src[0]->data, (const nv_bfloat16 *)dst->src[1]->data, (block_q8_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_BF16 && dst->src[1]->type == GGML_TYPE_Q8_0) {
+                k_add_q8_0_x_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q8_0 *)dst->src[1]->data, (const nv_bfloat16 *)dst->src[0]->data, (block_q8_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_Q8_0 && dst->src[1]->type == GGML_TYPE_Q8_0) {
+                k_add_q8_0_q8_0_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q8_0 *)dst->src[0]->data, (const block_q8_0 *)dst->src[1]->data, (block_q8_0 *)dst->data);
             } else {
                 GGML_ABORT("Unsupported Q8_0 add combination");
             }
