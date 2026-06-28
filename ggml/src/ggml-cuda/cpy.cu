@@ -312,6 +312,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
         ggml_cpy_q_f32_cuda<dequantize_q6_1, QK6_1>(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
     } else if (src0->type == GGML_TYPE_Q6_1 && src1->type == GGML_TYPE_F16) {
         ggml_cpy_q_f16_cuda<dequantize_q6_1, QK6_1>(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
+    } else if (src0->type == GGML_TYPE_Q6_1 && src1->type == GGML_TYPE_BF16) {
+        ggml_cpy_q_bf16_cuda<dequantize_q6_1, QK6_1>(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16) {
         ggml_cpy_flt_cuda<half, half> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_BF16) {
@@ -430,6 +432,8 @@ void* ggml_cuda_cpy_fn(const ggml_tensor * src0, ggml_tensor * src1) {
         return (void*) cpy_q_f32<cpy_blck_q_f32<dequantize_q6_1, QK6_1>, QK6_1>;
     } else if (src0->type == GGML_TYPE_Q6_1 && src1->type == GGML_TYPE_F16) {
         return (void*) cpy_q_f32<cpy_blck_q_f16<dequantize_q6_1, QK6_1>, QK6_1>;
+    } else if (src0->type == GGML_TYPE_Q6_1 && src1->type == GGML_TYPE_BF16) {
+        return (void*) cpy_q_f32<cpy_blck_q_bf16<dequantize_q6_1, QK6_1>, QK6_1>;
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16) {
         return (void*) cpy_flt<cpy_1_flt<half, half>>;
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_BF16) {
