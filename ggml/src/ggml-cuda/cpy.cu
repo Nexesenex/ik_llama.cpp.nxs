@@ -46,32 +46,32 @@ void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_des
 }
 
 static void ggml_cpy_q8_0_f32_cuda(
-    const char * cx, char * cdst, const int ne,
-    const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
-    const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11, const int nb12, const int nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+    const char * cx, char * cdst, const int64_t ne,
+    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
+    const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
 
     GGML_ASSERT(ne % QK8_0 == 0);
-    const int num_blocks = (ne/QK8_0 + CUDA_CPY_BLOCK_SIZE - 1)/CUDA_CPY_BLOCK_SIZE;
+    const int64_t num_blocks = (ne/QK8_0 + CUDA_CPY_BLOCK_SIZE - 1)/CUDA_CPY_BLOCK_SIZE;
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_q_f32<cpy_blck_q8_0_f32, QK8_0><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
 }
 
 static void ggml_cpy_q8_0_f16_cuda(
-    const char * cx, char * cdst, const int ne,
-    const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
-    const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11, const int nb12, const int nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+    const char * cx, char * cdst, const int64_t ne,
+    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
+    const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
 
     GGML_ASSERT(ne % QK8_0 == 0);
-    const int num_blocks = (ne/QK8_0 + CUDA_CPY_BLOCK_SIZE - 1)/CUDA_CPY_BLOCK_SIZE;
+    const int64_t num_blocks = (ne/QK8_0 + CUDA_CPY_BLOCK_SIZE - 1)/CUDA_CPY_BLOCK_SIZE;
     GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_q_f32<cpy_blck_q8_0_f16, QK8_0><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
-        (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
 }
 
 static __global__ void k_transpose_q8_0(const char * cx, char * cdst,
-                                   const int ne10, const int ne11, const int ne12,
-                                   const int nb01, const int nb02, const int nb03,
-                                   const int nb11, const int nb12, const int nb13) {
+                                   const int64_t ne10, const int64_t ne11, const int64_t ne12,
+                                   const int64_t nb01, const int64_t nb02, const int64_t nb03,
+                                   const int64_t nb11, const int64_t nb12, const int64_t nb13) {
     const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
 
     const int64_t i13 = i/(ne10 * ne11 * ne12);
@@ -105,7 +105,8 @@ static __global__ void k_transpose_q8_0(const char * cx, char * cdst,
 
 static void transpose_q8_0(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
     auto stream = ctx.stream();
-    auto num_blocks = ggml_nelements(dst)/QK8_0;
+    const int64_t num_blocks = ggml_nelements(dst)/QK8_0;
+    GGML_ASSERT(num_blocks <= INT_MAX);
     k_transpose_q8_0<<<num_blocks, QK8_0, 0, stream>>>(
             (const char *)src->data, (char *)dst->data,
             dst->ne[0], dst->ne[1], dst->ne[2], src->nb[0], src->nb[2], src->nb[3],
@@ -352,7 +353,7 @@ void* ggml_cuda_cpy_fn(const ggml_tensor * src0, ggml_tensor * src1) {
 }
 
 template <typename src_t, typename dst_t>
-static __global__ void cpy_flt_contiguous(const int ne, const char * cx1, const char * cx2, char * cdst_direct1, char * cdst_direct2,
+static __global__ void cpy_flt_contiguous(const int64_t ne, const char * cx1, const char * cx2, char * cdst_direct1, char * cdst_direct2,
                                char ** cdst_indirect, int graph_cpynode_index) {
     const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
 
@@ -376,10 +377,11 @@ static __global__ void cpy_flt_contiguous(const int ne, const char * cx1, const 
 
 template<typename src_t, typename dst_t>
 static void ggml_cpy_flt_contiguous_cuda_2(
-    const char * cx1, const char * cx2, char * cdst1, char * cdst2, const int ne,
+    const char * cx1, const char * cx2, char * cdst1, char * cdst2, const int64_t ne,
     cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
 
-    const int num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
+    const int64_t num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_flt_contiguous<src_t, dst_t><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
         (ne, cx1, cx2, cdst1, cdst2, cdst_indirect, graph_cpynode_index);
     graph_cpynode_index += 2;
@@ -424,14 +426,14 @@ bool ggml_cuda_cpy_2(ggml_backend_cuda_context & ctx, const ggml_tensor * src1, 
 }
 
 template <typename src_t, typename dst_t>
-static __global__ void concat_cpy(const char * csrc1, const char * csrc2, char * cdst, int ne1, int ne,
+static __global__ void concat_cpy(const char * csrc1, const char * csrc2, char * cdst, int64_t ne1, int64_t ne,
         char ** dest_ptrs, int copy_index) {
 
     auto dst = (dst_t *)(dest_ptrs ? dest_ptrs[copy_index] : cdst);
     auto src1 = (const src_t *)csrc1;
     auto src2 = (const src_t *)csrc2;
 
-    for (int i = threadIdx.x; i < ne; i += blockDim.x) {
+    for (int64_t i = threadIdx.x; i < ne; i += blockDim.x) {
         if constexpr (std::is_same_v<dst_t, nv_bfloat16>) {
             dst[i] = __float2bfloat16(i < ne1 ? src1[i] : src2[i - ne1]);
         } else {
@@ -441,10 +443,10 @@ static __global__ void concat_cpy(const char * csrc1, const char * csrc2, char *
 }
 
 template <typename src_t, typename dst_t>
-static void ggml_concat_cpy_cuda(const char * src1, const char * src2, char * dst, int ne1, int ne, cudaStream_t stream,
+static void ggml_concat_cpy_cuda(const char * src1, const char * src2, char * dst, int64_t ne1, int64_t ne, cudaStream_t stream,
         char ** dest_ptrs, int& copy_index) {
 
-    int block_dim = std::min(ne, 768);
+    int block_dim = (int)std::min(ne, (int64_t)768);
     concat_cpy<src_t, dst_t><<<1, block_dim, 0, stream>>>(src1, src2, dst, ne1, ne, dest_ptrs, copy_index);
     ++copy_index;
 }
