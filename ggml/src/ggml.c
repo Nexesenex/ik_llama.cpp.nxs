@@ -12441,39 +12441,75 @@ static void ggml_compute_forward_dup_q(
         return;
     }
 
-    if (dst->type != GGML_TYPE_F32) {
-        printf("%s: %s -> %s is of type %s\n", __func__, dst->src[0]->name, dst->name, ggml_type_name(dst->type));
-        GGML_ABORT("fatal error");
-    }
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-    struct ggml_tensor * src0 = dst->src[0];
-    GGML_ASSERT(src0->ne[0] == dst->ne[0] && src0->nb[0] == ggml_type_size(src0->type));
+    if (dst->type == GGML_TYPE_F32) {
+        struct ggml_tensor * src0 = dst->src[0];
+        GGML_ASSERT(src0->ne[0] == dst->ne[0] && src0->nb[0] == ggml_type_size(src0->type));
 
-    ggml_to_float_t to_float = type_traits[src0->type].to_float;
-    GGML_ASSERT(to_float != NULL);
+        ggml_to_float_t to_float = type_traits[src0->type].to_float;
+        GGML_ASSERT(to_float != NULL);
 
-    int n_packed = ggml_packed_rows(src0->type);
-    GGML_ASSERT(src0->ne[1] % n_packed == 0);
+        int n_packed = ggml_packed_rows(src0->type);
+        GGML_ASSERT(src0->ne[1] % n_packed == 0);
 
-    int64_t n_per_thread = n_packed*((nrows/n_packed + nth - 1)/nth);
-    int64_t first_row = ith*n_per_thread;
-    if (first_row >= nrows) return;
-    int64_t last_row = MIN(first_row + n_per_thread, nrows);
+        int64_t n_per_thread = n_packed*((nrows/n_packed + nth - 1)/nth);
+        int64_t first_row = ith*n_per_thread;
+        if (first_row >= nrows) return;
+        int64_t last_row = MIN(first_row + n_per_thread, nrows);
 
-    for (int64_t ir = first_row; ir < last_row; ir += n_packed) {
-        int64_t i03 = ir/(src0->ne[1]*src0->ne[2]);
-        int64_t i02 = (ir - i03*src0->ne[1]*src0->ne[2])/src0->ne[1];
-        int64_t i01 = ir - i03*src0->ne[1]*src0->ne[2] - i02*src0->ne[1];
-        int64_t i3  = ir/(dst->ne[1]*dst->ne[2]);
-        int64_t i2  = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
-        int64_t i1  = ir - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+        for (int64_t ir = first_row; ir < last_row; ir += n_packed) {
+            int64_t i03 = ir/(src0->ne[1]*src0->ne[2]);
+            int64_t i02 = (ir - i03*src0->ne[1]*src0->ne[2])/src0->ne[1];
+            int64_t i01 = ir - i03*src0->ne[1]*src0->ne[2] - i02*src0->ne[1];
+            int64_t i3  = ir/(dst->ne[1]*dst->ne[2]);
+            int64_t i2  = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+            int64_t i1  = ir - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
 
-        const char * q = (const char *)src0->data + i03*src0->nb[3] + i02*src0->nb[2] + i01*src0->nb[1];
-              char * f = (      char *)dst->data  +  i3* dst->nb[3] +  i2* dst->nb[2] +  i1* dst->nb[1];
+            const char * q = (const char *)src0->data + i03*src0->nb[3] + i02*src0->nb[2] + i01*src0->nb[1];
+                  char * f = (      char *)dst->data  +  i3* dst->nb[3] +  i2* dst->nb[2] +  i1* dst->nb[1];
 
-        to_float((const void *)q, (float *)f, src0->ne[0]*n_packed);
+            to_float((const void *)q, (float *)f, src0->ne[0]*n_packed);
+        }
+        return;
     }
 
+    if (dst->type == GGML_TYPE_F16) {
+        struct ggml_tensor * src0 = dst->src[0];
+        GGML_ASSERT(src0->ne[0] == dst->ne[0] && src0->nb[0] == ggml_type_size(src0->type));
+
+        ggml_to_float_t to_float = type_traits[src0->type].to_float;
+        GGML_ASSERT(to_float != NULL);
+
+        int n_packed = ggml_packed_rows(src0->type);
+        GGML_ASSERT(src0->ne[1] % n_packed == 0);
+
+        int64_t n_per_thread = n_packed*((nrows/n_packed + nth - 1)/nth);
+        int64_t first_row = ith*n_per_thread;
+        if (first_row >= nrows) return;
+        int64_t last_row = MIN(first_row + n_per_thread, nrows);
+
+        float * tmp = (float *)malloc(src0->ne[0]*n_packed*sizeof(float));
+        if (tmp) {
+            for (int64_t ir = first_row; ir < last_row; ir += n_packed) {
+                int64_t i03 = ir/(src0->ne[1]*src0->ne[2]);
+                int64_t i02 = (ir - i03*src0->ne[1]*src0->ne[2])/src0->ne[1];
+                int64_t i01 = ir - i03*src0->ne[1]*src0->ne[2] - i02*src0->ne[1];
+                int64_t i3  = ir/(dst->ne[1]*dst->ne[2]);
+                int64_t i2  = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+                int64_t i1  = ir - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+
+                const char * q = (const char *)src0->data + i03*src0->nb[3] + i02*src0->nb[2] + i01*src0->nb[1];
+                      char * f = (      char *)dst->data  +  i3* dst->nb[3] +  i2* dst->nb[2] +  i1* dst->nb[1];
+
+                to_float((const void *)q, tmp, src0->ne[0]*n_packed);
+                ggml_fp32_to_fp16_row(tmp, (ggml_fp16_t *)f, src0->ne[0]*n_packed);
+            }
+            free(tmp);
+        }
+        return;
+    }
+
+    printf("%s: %s -> %s unsupported output type %s\n", __func__, dst->src[0]->name, dst->name, ggml_type_name(dst->type));
+    GGML_ABORT("fatal error");
 }
 
 static void ggml_compute_forward_dup(
