@@ -7634,6 +7634,20 @@ struct llama_context * llama_init_from_model(
             int n_splits = ggml_backend_sched_get_n_splits(ctx->sched);
             LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, gf->n_nodes);
             LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits);
+
+            // debug: count nodes by op type
+            if (cparams.worst_graph_tokens) {
+                std::array<int, GGML_OP_COUNT> op_counts = {0};
+                for (int i = 0; i < gf->n_nodes; i++) {
+                    auto op = gf->nodes[i]->op;
+                    if (op >= 0 && op < GGML_OP_COUNT) op_counts[op]++;
+                }
+                for (int op = 0; op < GGML_OP_COUNT; op++) {
+                    if (op_counts[op] > 0) {
+                        LLAMA_LOG_INFO("%s:   %-30s %d\n", __func__, ggml_op_name(ggml_op(op)), op_counts[op]);
+                    }
+                }
+            }
         }
     }
 
