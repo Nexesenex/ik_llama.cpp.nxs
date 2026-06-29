@@ -174,7 +174,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     ggml_context * get_context_for_tensor(ggml_context * ctx, const std::string & name);
 
     void create_default_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool norm_bias);
-    void create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm = true, bool use_ctx_split = false);
+    void create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm = true);
 
     void create_std_attn(int i, const LLM_TN & tn, llama_layer & layer, int n_embd, int n_embd_gqa, ggml_context * ctx_split);
     void create_std_ffn(int i, const LLM_TN & tn, llama_layer & layer, int n_ff, int n_embd, ggml_context * ctx_split);
@@ -446,6 +446,17 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
 }
 
 ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx, const std::string & name) {
+    if (model.split_output_tensor) {
+        if (name == "output.weight" || name == "output_extra.weight") {
+            return ctx_output_split;
+        }
+        if (name.find("output_norm") == 0 || name.find(".output_norm") != std::string::npos || name == "output.bias") {
+            return ctx_output_split;
+        }
+        if (name == "token_embd.weight" && ctx == ctx_output) {
+            return ctx_output_split;
+        }
+    }
     for (auto & o : overrides) {
         if (std::regex_search(name, o.first)) {
             if (o.second == default_cpu_buft) has_buft_overrides = true;
@@ -505,23 +516,25 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
         } \
         ctx_input        = ctx_map.at(model.buft_input.buft); \
         ctx_output       = ctx_map.at(model.buft_output.buft); \
-        ctx_output_split = ctx_map.at(model.buft_output.buft_matrix); \
+        ctx_output_split = model.split_output_tensor ? ctx_map.at(model.buft_output.buft_matrix) : ctx_output; \
+        if (model.split_output_tensor) { \
+            LLAMA_LOG_INFO("split_output_tensor = ON\n"); \
+        } \
         model.layers.resize(n_layer);\
         bool use_mmap_buffer = true;
 
 
-void create_tensors_helper::create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm, bool use_ctx_split) {
+void create_tensors_helper::create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm) {
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
-    auto out_ctx = use_ctx_split ? ctx_output_split : ctx_output;
     if (has_norm) {
-        model.output_norm = create_tensor(out_ctx, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
+        model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
     }
-    model.output = create_tensor(out_ctx, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+    model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
     // if output is NULL, init from the input tok embed
     if (model.output == NULL) {
-        model.output = create_tensor(out_ctx, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
     }
 }
 
@@ -540,6 +553,7 @@ void create_tensors_helper::create_std_ffn(int i, const LLM_TN & tn, llama_layer
 
 bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
+
     create_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
@@ -607,7 +621,7 @@ bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_deci_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -668,7 +682,7 @@ bool create_tensors_helper::create_deci_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_llama4_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     GGML_ASSERT(hparams.n_moe_layer_step > 0 && "Llama 4 requires n_moe_layer_step > 0");
     for (int i = 0; i < n_layer; ++i) {
@@ -713,7 +727,7 @@ bool create_tensors_helper::create_grok_tensors(const LLM_TN & tn) {
         throw std::runtime_error("Grok model cannot have zero experts");
     }
 
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff/* / n_expert_used*/; // grok-1 n_ff_exp == n_ff
     for (int i = 0; i < n_layer; ++i) {
@@ -1301,7 +1315,7 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -1328,6 +1342,7 @@ bool create_tensors_helper::create_qwen2_tensors(const LLM_TN & tn) {
 
     // output
     {
+
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
         model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         model.output_b    = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "bias"),   {n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -1366,7 +1381,7 @@ bool create_tensors_helper::create_qwen2_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_qwen2_moe_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -1417,6 +1432,7 @@ bool create_tensors_helper::create_qwen3_tensors(const LLM_TN & tn) {
 
     // output
     {
+
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
         model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
@@ -1537,6 +1553,7 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
 
     // output
     {
+
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
         model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         if (model.output == NULL) {
@@ -1631,6 +1648,7 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
 
     // output
     {
+
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
         model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         if (model.output == NULL) {
@@ -1740,6 +1758,7 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
 
     // output
     {
+
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
         model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab},
                 llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -2497,7 +2516,7 @@ bool create_tensors_helper::create_mamba_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_xverse_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -2645,7 +2664,7 @@ bool create_tensors_helper::create_gptneox_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_arctix_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -3895,7 +3914,7 @@ bool create_tensors_helper::create_bailingmoe2_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_ernie45_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         auto& layer = model.layers[i];
@@ -3942,7 +3961,7 @@ bool create_tensors_helper::create_ernie45_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_hunyuan_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_split = ctx_for_layer_split(i);
@@ -4055,7 +4074,7 @@ bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_minimaxm2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context* ctx_split = ctx_for_layer_split(i);
@@ -4085,7 +4104,7 @@ bool create_tensors_helper::create_minimaxm3_tensors(const LLM_TN & tn) {
     const int64_t n_expert_shared = hparams.n_expert_shared;
     const int64_t n_ff_exp        = hparams.n_ff_exp;
 
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context* ctx_split = ctx_for_layer_split(i);
@@ -4122,7 +4141,7 @@ bool create_tensors_helper::create_minimaxm3_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_smollm3_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context* ctx_layer = ctx_for_layer(i);
