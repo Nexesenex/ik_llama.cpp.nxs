@@ -7115,6 +7115,8 @@ static void llama_concatenate_up_gate_shexp(llama_context & lctx) {
     }
     auto & model = lctx.model;
     bool needs_concatenate = false;
+    static int64_t func_start_time = 0;
+    static int processed_layers = 0;
     for (auto & l : model.layers) {
         if (l.ffn_up_gate_shexp && l.ffn_up_shexp && l.ffn_gate_shexp &&
            !l.ffn_up_gate_shexp->extra) {
@@ -7131,6 +7133,9 @@ static void llama_concatenate_up_gate_shexp(llama_context & lctx) {
             GGML_ASSERT(l.ffn_up_gate_shexp->type  == l.ffn_up_shexp->type  && l.ffn_up_gate_shexp->type  == l.ffn_gate_shexp->type);
             GGML_ASSERT(l.ffn_up_gate_shexp->ne[0] == l.ffn_up_shexp->ne[0] && l.ffn_up_gate_shexp->ne[0] == l.ffn_gate_shexp->ne[0]);
             GGML_ASSERT(l.ffn_up_gate_shexp->ne[1] == l.ffn_up_shexp->ne[1] + l.ffn_gate_shexp->ne[1]);
+            if (func_start_time == 0) {
+                func_start_time = ggml_time_us();
+            }
             auto nbytes = ggml_nbytes(l.ffn_up_shexp);
             GGML_ASSERT(nbytes == ggml_nbytes(l.ffn_gate_shexp));
             if (nbytes > aux_buffer_up.size()) {
@@ -7139,7 +7144,7 @@ static void llama_concatenate_up_gate_shexp(llama_context & lctx) {
             if (nbytes > aux_buffer_gate.size()) {
                 aux_buffer_gate.resize(nbytes);
             }
-            LLAMA_LOG_INFO("%s: Concatenating up/gate shared experts weight in layer %d\n", __func__, il);
+            int64_t layer_start = ggml_time_us();
             ggml_backend_tensor_get(l.ffn_up_shexp, aux_buffer_up.data(), 0, nbytes);
             ggml_backend_tensor_get(l.ffn_gate_shexp, aux_buffer_gate.data(), 0, nbytes);
             if (aux_buffer_up_gate.size() < 2*nbytes) {
@@ -7148,6 +7153,17 @@ static void llama_concatenate_up_gate_shexp(llama_context & lctx) {
             std::memcpy(aux_buffer_up_gate.data(), aux_buffer_gate.data(), nbytes);
             std::memcpy(aux_buffer_up_gate.data() + nbytes, aux_buffer_up.data(), nbytes);
             ggml_backend_tensor_set(l.ffn_up_gate_shexp, aux_buffer_up_gate.data(), 0, 2*nbytes);
+            processed_layers++;
+            int64_t layer_end = ggml_time_us();
+            double layer_sec = (layer_end - layer_start) / 1000000.0;
+            double total_sec = (layer_end - func_start_time) / 1000000.0;
+            double layers_per_sec = total_sec > 0 ? processed_layers / total_sec : 0.0;
+            LLAMA_LOG_INFO("time=%lld, %s: layer %d in %.2f sec. %d layers in %.2f sec, %.2f layer/s\n",
+                (long long)time(nullptr), __func__, il,
+                layer_sec,
+                processed_layers,
+                total_sec,
+                layers_per_sec);
         }
     }
 }
