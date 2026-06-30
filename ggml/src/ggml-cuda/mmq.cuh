@@ -1932,7 +1932,9 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q6_K       + kbxd] = bxi->d;
 #else
-        x_df[i*(WARP_SIZE/QI6_K) + i/QI6_K + kbxd] = bxi->d;
+        constexpr int blocks_per_tile_x_row_q6_k = WARP_SIZE/QI6_K;
+        const int i_dm_q6_k = i/QI6_K;
+        x_df[i*blocks_per_tile_x_row_q6_k + i_dm_q6_k + kbxd] = bxi->d;
 #endif // INT8_MMA_AVAILABLE
     }
 
@@ -1949,7 +1951,9 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #ifdef INT8_MMA_AVAILABLE
         x_sc[i*MMQ_MMA_TILE_X_K_Q6_K + threadIdx.x % (WARP_SIZE/8)] = get_int_b2(bxi->scales, threadIdx.x % (QI6_K/8));
 #else
-        x_sc[i*(WARP_SIZE/8) + i/8   + threadIdx.x % (WARP_SIZE/8)] = get_int_b2(bxi->scales, threadIdx.x % (QI6_K/8));
+        constexpr int blocks_per_tile_x_sc_row_q6_k = WARP_SIZE/8;
+        const int i_sc_q6_k = i/8;
+        x_sc[i*blocks_per_tile_x_sc_row_q6_k + i_sc_q6_k + threadIdx.x % (WARP_SIZE/8)] = get_int_b2(bxi->scales, threadIdx.x % (QI6_K/8));
 #endif // INT8_MMA_AVAILABLE
     }
 }
