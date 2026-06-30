@@ -649,13 +649,13 @@ json server_slot::get_formatted_timings() const {
     json timings = json{
         {"prompt_n",               n_prompt_tokens_processed},
         {"prompt_ms",              t_prompt_processing},
-        {"prompt_per_token_ms",    t_prompt_processing / n_prompt_tokens_processed},
-        {"prompt_per_second",      1e3 / t_prompt_processing * n_prompt_tokens_processed},
+        {"prompt_per_token_ms",    n_prompt_tokens_processed > 0 ? t_prompt_processing / n_prompt_tokens_processed : 0.0},
+        {"prompt_per_second",      t_prompt_processing > 0.0 ? 1e3 / t_prompt_processing * n_prompt_tokens_processed : 0.0},
 
         {"predicted_n",            n_decoded},
         {"predicted_ms",           t_token_generation},
-        {"predicted_per_token_ms", t_token_generation / n_decoded},
-        {"predicted_per_second",   1e3 / t_token_generation * n_decoded},
+        {"predicted_per_token_ms", n_decoded > 0 ? t_token_generation / n_decoded : 0.0},
+        {"predicted_per_second",   t_token_generation > 0.0 ? 1e3 / t_token_generation * n_decoded : 0.0},
 
         {"n_ctx",           n_ctx},
         {"n_past",           n_past},
@@ -687,13 +687,13 @@ result_timings server_slot::get_timings() const {
     result_timings timings;
     timings.prompt_n = n_prompt_tokens_processed;
     timings.prompt_ms = t_prompt_processing;
-    timings.prompt_per_token_ms = t_prompt_processing / n_prompt_tokens_processed;
-    timings.prompt_per_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+    timings.prompt_per_token_ms = n_prompt_tokens_processed > 0 ? t_prompt_processing / n_prompt_tokens_processed : 0.0;
+    timings.prompt_per_second = t_prompt_processing > 0.0 ? 1e3 / t_prompt_processing * n_prompt_tokens_processed : 0.0;
 
     timings.predicted_n = n_decoded;
     timings.predicted_ms = t_token_generation;
-    timings.predicted_per_token_ms = t_token_generation / n_decoded;
-    timings.predicted_per_second = 1e3 / t_token_generation * n_decoded;
+    timings.predicted_per_token_ms = n_decoded > 0 ? t_token_generation / n_decoded : 0.0;
+    timings.predicted_per_second = t_token_generation > 0.0 ? 1e3 / t_token_generation * n_decoded : 0.0;
 
     timings.n_ctx = n_ctx;
     timings.n_past = n_past;
