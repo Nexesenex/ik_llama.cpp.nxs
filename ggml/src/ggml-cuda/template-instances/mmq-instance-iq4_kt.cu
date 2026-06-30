@@ -60,6 +60,8 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
+        constexpr int blocks_per_tile_x_row_iq4_kt = WARP_SIZE/4;
+        const int i_dm_iq4_kt = i/4;
         const float * dptr = (const float *)(x + i*stride);
         const block_iq4_kt * bxi = (const block_iq4_kt *)(dptr + 1) + kbx0;
         const int ls = (bxi->qs[threadIdx.x % 8] & 0xff) >> 1;
@@ -67,7 +69,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + threadIdx.x % 8] = dptr[0] * (ls - 64);
 #else
-        x_df[i*(WARP_SIZE/4) + i/4   + threadIdx.x % 8] = dptr[0] * (ls - 64);
+        x_df[i*blocks_per_tile_x_row_iq4_kt + i_dm_iq4_kt + threadIdx.x % 8] = dptr[0] * (ls - 64);
 #endif // INT8_MMA_AVAILABLE
     }
 }
