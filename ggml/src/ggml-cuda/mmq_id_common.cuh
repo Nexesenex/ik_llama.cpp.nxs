@@ -983,40 +983,11 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     half2 * x_dm = (half2 *) (x_qs + txs.qs);
 #endif // INT8_MMA_AVAILABLE
 
-    const int kbx  = threadIdx.x / QI6_1;
-    const int kqsx = threadIdx.x % QI6_1;
+    const int kbxd = threadIdx.x / 4;
 
 #pragma unroll
-    for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
-        int i = i0 + threadIdx.y;
-
-        if (need_check) {
-            i = min(i, i_max);
-        }
-
-        const block_q6_1 * bxi = (const block_q6_1 *)(x + i*stride) + kbx0 + kbx;
-
-        const int ql = get_int_b2(bxi->qs, kqsx);
-        const int qh = get_int_b2(bxi->qh, kqsx%2) >> 4*(kqsx/2);
-
-        const int qs0 = ((ql >> 0) & 0x0F0F0F0F) | ((qh << 4) & 0x30303030);
-        const int qs1 = ((ql >> 4) & 0x0F0F0F0F) | ((qh << 2) & 0x30303030);
-
-#ifdef INT8_MMA_AVAILABLE
-        x_qs[i*MMQ_MMA_TILE_X_K_Q8_1 + kbx*(2*QI6_1) + kqsx + 0]     = qs0;
-        x_qs[i*MMQ_MMA_TILE_X_K_Q8_1 + kbx*(2*QI6_1) + kqsx + QI6_1] = qs1;
-#else
-        x_qs[i*(2*WARP_SIZE + 1)     + kbx*(2*QI6_1) + kqsx + 0]     = qs0;
-        x_qs[i*(2*WARP_SIZE + 1)     + kbx*(2*QI6_1) + kqsx + QI6_1] = qs1;
-#endif // INT8_MMA_AVAILABLE
-    }
-
-    constexpr int blocks_per_tile_x_row = WARP_SIZE / QI6_1;
-    const int kbxd = threadIdx.x % blocks_per_tile_x_row;
-
-#pragma unroll
-    for (int i0 = 0; i0 < mmq_y; i0 += nwarps * QI6_1) {
-        int i = i0 + threadIdx.y * QI6_1 + threadIdx.x / blocks_per_tile_x_row;
+    for (int i0 = 0; i0 < mmq_y; i0 += 4*nwarps) {
+        int i = i0 + 4*threadIdx.y + threadIdx.x%4;
 
         if (need_check) {
             i = min(i, i_max);
@@ -1024,6 +995,21 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 
         const block_q6_1 * bxi = (const block_q6_1 *)(x + i*stride) + kbx0 + kbxd;
 
+        const int ql = get_int_b2(bxi->qs, threadIdx.x%4);
+        const int qh = get_int_b2(bxi->qh, (threadIdx.x%4)%2) >> 4*((threadIdx.x%4)/2);
+
+        const int qs0 = ((ql >> 0) & 0x0F0F0F0F) | ((qh << 4) & 0x30303030);
+        const int qs1 = ((ql >> 4) & 0x0F0F0F0F) | ((qh << 2) & 0x30303030);
+
+#ifdef INT8_MMA_AVAILABLE
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_1 + kbxd*(2*QI6_1) + threadIdx.x%4 + 0]     = qs0;
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_1 + kbxd*(2*QI6_1) + threadIdx.x%4 + QI6_1] = qs1;
+#else
+        x_qs[i*(2*WARP_SIZE + 1)     + kbxd*(2*QI6_1) + threadIdx.x%4 + 0]     = qs0;
+        x_qs[i*(2*WARP_SIZE + 1)     + kbxd*(2*QI6_1) + threadIdx.x%4 + QI6_1] = qs1;
+#endif // INT8_MMA_AVAILABLE
+
+        constexpr int blocks_per_tile_x_row = WARP_SIZE / QI6_1;
 #ifdef INT8_MMA_AVAILABLE
         x_dm[i*MMQ_MMA_TILE_X_K_Q8_1       + kbxd] = bxi->dm;
 #else
