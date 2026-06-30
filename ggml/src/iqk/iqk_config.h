@@ -55,9 +55,15 @@
 #endif
 #if defined(__AVX_VNNI_INT8__)
     #define HAVE_VNNIINT8
-    #define ggml_mm256_dpbssd_epi32 _mm256_dpbssd_epi32
-    #define ggml_mm256_dpbsud_epi32 _mm256_dpbsud_epi32
-    #define ggml_mm256_dpbuud_epi32 _mm256_dpbuud_epi32
+    #ifdef _MSC_VER
+        #define ggml_mm256_dpbssd_epi32 _mm256_dpbssd_avx_epi32
+        #define ggml_mm256_dpbsud_epi32 _mm256_dpbsud_avx_epi32
+        #define ggml_mm256_dpbuud_epi32 _mm256_dpbuud_avx_epi32
+    #else
+        #define ggml_mm256_dpbssd_epi32 _mm256_dpbssd_epi32
+        #define ggml_mm256_dpbsud_epi32 _mm256_dpbsud_epi32
+        #define ggml_mm256_dpbuud_epi32 _mm256_dpbuud_epi32
+    #endif
 #endif
 #if defined(__AVX_IFMA__)
     #define HAVE_IFMA256
