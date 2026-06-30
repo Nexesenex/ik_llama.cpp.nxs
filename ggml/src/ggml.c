@@ -4692,7 +4692,7 @@ static void ggml_barrier(struct ggml_compute_state_shared * shared) {
     ggml_barrier_impl(shared);
 }
 void ggml_set_batch_thread_threshold(const char * expr) { (void)expr; }
-void ggml_set_actual_batch_size(int batch_size) { (void)batch_size; }
+void ggml_set_pp_batch_size(int batch_size) { (void)batch_size; }
 const char * ggml_get_batch_thread_threshold(void) { return ">32"; }
 #endif
 
