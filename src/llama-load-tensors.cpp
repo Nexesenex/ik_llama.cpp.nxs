@@ -5298,7 +5298,7 @@ bool create_tensors_helper::create_tensors() {
             }
             if (model.max_gpu_per_split > 0 && model.max_gpu_per_split < int(model.splits.size()) && il % adjust_step == 0) {
                 cur_splits = model.splits;
-                adjust_split(cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor, model.max_gpu_per_split, model.split_vram_free_factor > 0.0f);
+                adjust_split(cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor, model.max_gpu_per_split, model.split_adjust_vram_aware);
                 LLAMA_LOG_INFO("Adjusted split at layer %2d:  ", il);
                 float last_split = 0;
                 for (int i = 0; i < (int)cur_splits.size(); ++i) {
