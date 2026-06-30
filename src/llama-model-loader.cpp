@@ -1080,7 +1080,7 @@ bool llama_model_loader::load_all_data(
     std::vector<void*> host_ptrs;
     std::vector<ggml_backend_event_t> events;
 
-    ggml_backend_t cuda_backend = nullptr;
+    std::atomic<ggml_backend_t> cuda_backend{nullptr};
     if (!use_mmap && !check_tensors) {
         // When not using mmaped io use async uploads from pinned memory to GPU memory.
         // First determine if the CUDA backend is active, and if so, determine the device ID.
@@ -1090,7 +1090,7 @@ bool llama_model_loader::load_all_data(
             for (int i = 0; i < ggml_backend_cuda_get_device_count(); ++i) {
                 auto * cuda_buffer_type = ggml_backend_cuda_buffer_type(i);
                 if (buffer_type == cuda_buffer_type) {
-                    cuda_backend = ggml_backend_cuda_init(i, nullptr, model);
+                    cuda_backend.store(ggml_backend_cuda_init(i, nullptr, model), std::memory_order_relaxed);
                     break;
                 }
             }
@@ -1261,13 +1261,16 @@ bool llama_model_loader::load_all_data(
     auto worker = [&](int thread_idx) {
         try {
             while (!cancelled.load() && !failed.load()) {
-                if (progress_callback) {
+                if (progress_callback && !cancelled.load()) {
                     const size_t done   = loaded.load(std::memory_order_relaxed);
                     std::lock_guard<std::mutex> lock(load_mutex);
                     if (!progress_callback((float) done / size_data, progress_callback_user_data)) {
                         cancelled.store(true);
                         break;
                     }
+                }
+                if (cancelled.load()) {
+                    break;
                 }
                 ggml_tensor * cur = next_tensor();
                 if (!cur) {
