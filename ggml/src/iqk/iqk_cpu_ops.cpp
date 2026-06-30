@@ -935,8 +935,20 @@ inline float sum_row_squared(int ncols, const ggml_half * x) {
 }
 inline float sum_row_squared(int ncols, const ggml_bf16_t * x) {
     float sum = 0;
-    for (int j = 0; j < ncols; ++j) {
-        float v = GGML_BF16_TO_FP32(x[j]);
+    int i = 0;
+#if defined(HAVE_NECONVERT) && defined(__AVX2__) && defined(__FMA__)
+    auto vsum = _mm256_setzero_ps();
+    for (; i + 15 < ncols; i += 16) {
+        __m256i bf16 = _mm256_loadu_si256((const __m256i*)(x + i));
+        __m256 f32_even = _mm256_cvtneebf16_ps(bf16);
+        __m256 f32_odd  = _mm256_cvtneobf16_ps(bf16);
+        vsum = _mm256_fmadd_ps(f32_even, f32_even, vsum);
+        vsum = _mm256_fmadd_ps(f32_odd,  f32_odd,  vsum);
+    }
+    sum = hsum_float_8(vsum);
+#endif
+    for (; i < ncols; ++i) {
+        float v = GGML_BF16_TO_FP32(x[i]);
         sum += v*v;
     }
     return sum;
@@ -967,7 +979,32 @@ inline void rms_rms_add(int ncols, float scale1, float scale2, const ggml_half *
     }
 }
 inline void rms_rms_add(int ncols, float scale1, float scale2, const ggml_bf16_t * x1, const ggml_bf16_t * x2, const float * c1, const float * c2, float * dst) {
-    for (int j = 0; j < ncols; ++j) {
+    int j = 0;
+#if defined(HAVE_NECONVERT) && defined(__AVX2__) && defined(__FMA__)
+    auto vs1 = _mm256_set1_ps(scale1);
+    auto vs2 = _mm256_set1_ps(scale2);
+    for (; j + 15 < ncols; j += 16) {
+        __m256i bf16_1 = _mm256_loadu_si256((const __m256i*)(x1 + j));
+        __m256i bf16_2 = _mm256_loadu_si256((const __m256i*)(x2 + j));
+        __m256 vx1_even = _mm256_cvtneebf16_ps(bf16_1);
+        __m256 vx1_odd  = _mm256_cvtneobf16_ps(bf16_1);
+        __m256 vx2_even = _mm256_cvtneebf16_ps(bf16_2);
+        __m256 vx2_odd  = _mm256_cvtneobf16_ps(bf16_2);
+        __m256 vc1_even = _mm256_loadu_ps(c1 + j);
+        __m256 vc1_odd  = _mm256_loadu_ps(c1 + j + 8);
+        __m256 vc2_even = _mm256_loadu_ps(c2 + j);
+        __m256 vc2_odd  = _mm256_loadu_ps(c2 + j + 8);
+        __m256 vy_even = _mm256_add_ps(
+            _mm256_mul_ps(_mm256_mul_ps(vs1, vc1_even), vx1_even),
+            _mm256_mul_ps(_mm256_mul_ps(vs2, vc2_even), vx2_even));
+        __m256 vy_odd = _mm256_add_ps(
+            _mm256_mul_ps(_mm256_mul_ps(vs1, vc1_odd), vx1_odd),
+            _mm256_mul_ps(_mm256_mul_ps(vs2, vc2_odd), vx2_odd));
+        _mm256_storeu_ps(dst + j,     vy_even);
+        _mm256_storeu_ps(dst + j + 8, vy_odd);
+    }
+#endif
+    for (; j < ncols; ++j) {
         float v1 = GGML_BF16_TO_FP32(x1[j]);
         float v2 = GGML_BF16_TO_FP32(x2[j]);
         dst[j] = scale1 * c1[j] * v1 + scale2 * c2[j] * v2;
