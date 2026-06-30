@@ -2207,7 +2207,9 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
         const int ksc = threadIdx.x % (MMQ_TILE_NE_K/8);
         const int scales8 = unpack_scales_q45_K(scales, ksc);
 
-        x_sc[i*(MMQ_TILE_NE_K/8) + i/8 + ksc] = scales8;
+        constexpr int blocks_per_tile_x_sc_row_q4_k = MMQ_TILE_NE_K/8;
+        const int i_sc_q4_k = i/8;
+        x_sc[i*blocks_per_tile_x_sc_row_q4_k + i_sc_q4_k + ksc] = scales8;
     }
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
 }
