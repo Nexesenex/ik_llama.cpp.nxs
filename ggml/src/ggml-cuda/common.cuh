@@ -821,8 +821,8 @@ static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const half2 v,
 }
 
 static __device__ __forceinline__ void ggml_cuda_mad(half2 & acc, const half2 v, const half2 u) {
-#ifdef FAST_FP16_AVAILABLE
-    acc += v*u;
+#if defined(FAST_FP16_AVAILABLE) && !defined(GGML_USE_HIPBLAS)
+    acc = __hfma2(v, u, acc);
 #else
     const float2 tmpv = __half22float2(v);
     const float2 tmpu = __half22float2(u);
