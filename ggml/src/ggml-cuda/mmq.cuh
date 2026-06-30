@@ -2392,8 +2392,10 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+0] = ((ls &  0x0F)*d + d/2)/4;
         x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+1] = ((ls >>    4)*d + d/2)/4;
 #else
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+0] = ((ls &  0x0F)*d + d/2)/4;
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+1] = ((ls >>    4)*d + d/2)/4;
+        constexpr int blocks_per_tile_x_row_iq2_s = 2*WARP_SIZE*2/QI8_0;
+        const int i_dm_iq2_s = i/(QI8_0/4);
+        x_df[i*blocks_per_tile_x_row_iq2_s + i_dm_iq2_s + 2*kqsx+0] = ((ls &  0x0F)*d + d/2)/4;
+        x_df[i*blocks_per_tile_x_row_iq2_s + i_dm_iq2_s + 2*kqsx+1] = ((ls >>    4)*d + d/2)/4;
 #endif // INT8_MMA_AVAILABLE
     }
 }
