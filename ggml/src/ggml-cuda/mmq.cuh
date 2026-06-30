@@ -1827,7 +1827,9 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         const int ksc = threadIdx.x % (WARP_SIZE/8);
         const int scales8 = unpack_scales_q45_K(scales, ksc);
 
-        x_sc[i*(WARP_SIZE/8) + i/8 + ksc] = scales8;
+        constexpr int blocks_per_tile_x_sc_row_q5_k = WARP_SIZE/8;
+        const int i_sc_q5_k = i/8;
+        x_sc[i*blocks_per_tile_x_sc_row_q5_k + i_sc_q5_k + ksc] = scales8;
     }
 #endif // INT8_MMA_AVAILABLE
 }
