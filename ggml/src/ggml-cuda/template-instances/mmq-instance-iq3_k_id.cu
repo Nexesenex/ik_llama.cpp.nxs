@@ -65,8 +65,10 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
         x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+0] = d * ((2*(bxi->scales_l[kqsx] & 0xf) + 1) * (sh & 1 ? -1 : 1));
         x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+1] = d * ((2*(bxi->scales_l[kqsx] >>  4) + 1) * (sh & 2 ? -1 : 1));
 #else
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+0] = d * ((2*(bxi->scales_l[kqsx] & 0xf) + 1) * (sh & 1 ? -1 : 1));
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+1] = d * ((2*(bxi->scales_l[kqsx] >>  4) + 1) * (sh & 2 ? -1 : 1));
+        constexpr int blocks_per_tile_x_row_iq3_k = 2*WARP_SIZE*2/QI8_0;
+        const int i_dm_iq3_k = i/(QI8_0/4);
+        x_df[i*blocks_per_tile_x_row_iq3_k + i_dm_iq3_k + 2*kqsx+0] = d * ((2*(bxi->scales_l[kqsx] & 0xf) + 1) * (sh & 1 ? -1 : 1));
+        x_df[i*blocks_per_tile_x_row_iq3_k + i_dm_iq3_k + 2*kqsx+1] = d * ((2*(bxi->scales_l[kqsx] >>  4) + 1) * (sh & 2 ? -1 : 1));
 #endif // INT8_MMA_AVAILABLE
     }
 }
@@ -139,8 +141,10 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
         x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+0] = dl1;
         x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+1] = dl2;
 #else
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+0] = dl1;
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+1] = dl2;
+        constexpr int blocks_per_tile_x_row_iq3_k_r4 = 2*WARP_SIZE*2/QI8_0;
+        const int i_dm_iq3_k_r4 = i/(QI8_0/4);
+        x_df[i*blocks_per_tile_x_row_iq3_k_r4 + i_dm_iq3_k_r4 + 2*kqsx+0] = dl1;
+        x_df[i*blocks_per_tile_x_row_iq3_k_r4 + i_dm_iq3_k_r4 + 2*kqsx+1] = dl2;
 #endif // INT8_MMA_AVAILABLE
     }
 }
