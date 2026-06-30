@@ -439,12 +439,12 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
     GGML_ASSERT(vram_total.size() == splits.size());
     size_t tot_memory_used = 1;
     for (auto & mem : mem_used) tot_memory_used += mem;
-    size_t tot_vram_free = 1;
+    // size_t tot_vram_free = 1;  // unused after remaining_ratio switched to tot_vram_total
     size_t tot_vram_total = 1;
     int min_vram_gpu_index = 0;
     size_t min_vram_gpu_vram_total = vram_total[0];
     for (int i = 0; i < (int)vram_free.size(); ++i) {
-        tot_vram_free += vram_free[i];
+        // tot_vram_free += vram_free[i];
         tot_vram_total += vram_total[i];
         if (vram_total[i] < min_vram_gpu_vram_total) { min_vram_gpu_vram_total = vram_total[i]; min_vram_gpu_index = i; }
     }
@@ -5148,13 +5148,13 @@ static void adjust_split(std::vector<float> & split, const std::vector<size_t> &
     if (max_gpu_per_split < 1 || max_gpu_per_split >= int(split.size()) || split.size() != mem_used.size()) {
         return;
     }
-    size_t tot_vram_free = 1;
+    // size_t tot_vram_free = 1;  // unused after remaining_ratio switched to tot_vram_total
     size_t tot_vram_total = 1;
     int min_vram_gpu_index = 0;
     size_t min_vram_gpu_vram_total = vram_total[0];
     if (use_vram_aware) {
         for (int i = 0; i < (int)vram_free.size(); ++i) {
-            tot_vram_free += vram_free[i];
+            // tot_vram_free += vram_free[i];
             tot_vram_total += vram_total[i];
             if (vram_total[i] < min_vram_gpu_vram_total) { min_vram_gpu_vram_total = vram_total[i]; min_vram_gpu_index = i; }
         }
