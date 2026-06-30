@@ -513,7 +513,7 @@ if (n_split_detect > 1) {
         gguf_free(ctx_all_gguf);
         for (size_t i = 0; i < ctx_ggufs.size(); i++) {
             gguf_free(ctx_ggufs[i]);
-            if (i > 0) ggml_free(ctx_metas[i]);
+            ggml_free(ctx_metas[i]);
             delete f_inputs[i];
         }
         
