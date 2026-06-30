@@ -505,8 +505,10 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
         if (split_tensor_split_factor != 1.0f || split_vram_free_factor != 0.0f || split_usage_penalty_factor != 0.0f) {
             float cf = get_ceiling_factor(i, min_vram_gpu_index, split_vram_reserve_factor);
             size_t ceiling = (size_t)(vram_total[i] * cf);
-            if (mem_used[i] + (size_t)result[i] * (tot_memory_used / nchunk) > ceiling) {
-                result[i] = std::max(0, int((ceiling - mem_used[i]) / (tot_memory_used / nchunk)));
+            size_t chunk_size = tot_memory_used / nchunk;
+            if (chunk_size == 0) chunk_size = 1;
+            if (mem_used[i] + (size_t)result[i] * chunk_size > ceiling) {
+                result[i] = std::max(0, int((ceiling - mem_used[i]) / chunk_size));
             }
         }
         if (verbose) LLAMA_LOG_INFO("i = %d, p0 = %g, p = %g, result = %d\n", i, p0, p, result[i]);
