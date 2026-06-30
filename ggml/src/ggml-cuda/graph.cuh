@@ -14,6 +14,9 @@ struct ggml_graph_node_properties {
 struct ggml_cuda_graph {
 #ifdef USE_CUDA_GRAPH
     ~ggml_cuda_graph() {
+        if (dest_ptrs_d != nullptr) {
+            CUDA_CHECK(cudaFree(dest_ptrs_d));
+        }
         if (instance != nullptr) {
             CUDA_CHECK(cudaGraphExecDestroy(instance));
         }
@@ -32,7 +35,7 @@ struct ggml_cuda_graph {
     std::vector<int> cpy_node_indices;
     bool use_cpy_indirection = false;
     std::vector<char *> cpy_dest_ptrs;
-    char ** dest_ptrs_d;
+    char ** dest_ptrs_d = nullptr;
     int dest_ptrs_size = 0;
     // Index to allow each cpy kernel to be aware of it's position within the graph
     // relative to other cpy nodes.
