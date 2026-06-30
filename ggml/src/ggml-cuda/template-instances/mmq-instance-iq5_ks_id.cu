@@ -60,7 +60,9 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0               + kqsx] = d * ((bxi->scales[kqsx] & 254) - 127);
 #else
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + kqsx] = d * ((bxi->scales[kqsx] & 254) - 127);
+        constexpr int blocks_per_tile_x_row_iq5_ks = 2*WARP_SIZE*2/QI8_0;
+        const int i_dm_iq5_ks = i/(QI8_0/4);
+        x_df[i*blocks_per_tile_x_row_iq5_ks + i_dm_iq5_ks + kqsx] = d * ((bxi->scales[kqsx] & 254) - 127);
 #endif // INT8_MMA_AVAILABLE
     }
 }
@@ -121,7 +123,9 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx] = dptr[ir] * ls;
 #else
-        x_df[i*(WARP_SIZE/4) + i/4   + kqsx] = dptr[ir] * ls;
+        constexpr int blocks_per_tile_x_row_iq5_ks_r4 = WARP_SIZE/4;
+        const int i_dm_iq5_ks_r4 = i/4;
+        x_df[i*blocks_per_tile_x_row_iq5_ks_r4 + i_dm_iq5_ks_r4 + kqsx] = dptr[ir] * ls;
 #endif // INT8_MMA_AVAILABLE
 
     }
