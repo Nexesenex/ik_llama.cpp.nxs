@@ -19221,7 +19221,7 @@ static void ggml_compute_forward_fused_moe_silu(
                 const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
                 if (expert_idx >= 0 && expert_idx < n_as) {
                     atomic_int * ctr = (atomic_int *)(atomic_current_chunk + expert_idx * n_tokens + iid1);
-                    atomic_store(ctr, 0);
+                    atomic_store(ctr, nth);
                 }
             }
         }
@@ -29403,7 +29403,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                         // per-(expert,token) atomic counters + per-thread quant buffers
                         const size_t fused_cur =
                             n_as * n_tokens * CACHE_LINE_SIZE +
-                            nchunk0 * (full_quant + CACHE_LINE_SIZE);
+                            n_tasks * (full_quant + CACHE_LINE_SIZE);
                         cur = MAX((size_t)cur, fused_cur);
                     }
                 } break;
