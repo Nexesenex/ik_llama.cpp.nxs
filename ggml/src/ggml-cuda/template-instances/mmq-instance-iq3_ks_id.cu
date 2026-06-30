@@ -25,6 +25,8 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
+        constexpr int blocks_per_tile_x_row_iq3_ks = WARP_SIZE/4;
+        const int i_dm_iq3_ks = i/4;
         const half * dptr = (const half *)(x + i*stride);
         const float d = __half2float(dptr[0]);
         const block_iq3_ks * bxi = (const block_iq3_ks *)(dptr + 1) + kbx0;
@@ -64,7 +66,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx] = d * (int(((bxi->scales[kqsx%4] >> 4*(kqsx/4)) & 0xf) | (((bxi->extra >> kqsx) & 1) << 4)) - 16);
 #else
-        x_df[i*(WARP_SIZE/4) + i/4   + kqsx] = d * (int(((bxi->scales[kqsx%4] >> 4*(kqsx/4)) & 0xf) | (((bxi->extra >> kqsx) & 1) << 4)) - 16);
+        x_df[i*blocks_per_tile_x_row_iq3_ks + i_dm_iq3_ks + kqsx] = d * (int(((bxi->scales[kqsx%4] >> 4*(kqsx/4)) & 0xf) | (((bxi->extra >> kqsx) & 1) << 4)) - 16);
 #endif // INT8_MMA_AVAILABLE
     }
 }
