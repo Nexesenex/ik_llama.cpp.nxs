@@ -12464,23 +12464,24 @@ static void ggml_compute_forward_dup_q(
         int64_t last_row = MIN(first_row + n_per_thread, nrows);
 
         float * tmp = (float *)malloc(src0->ne[0]*n_packed*sizeof(float));
-        if (tmp) {
-            for (int64_t ir = first_row; ir < last_row; ir += n_packed) {
-                int64_t i03 = ir/(src0->ne[1]*src0->ne[2]);
-                int64_t i02 = (ir - i03*src0->ne[1]*src0->ne[2])/src0->ne[1];
-                int64_t i01 = ir - i03*src0->ne[1]*src0->ne[2] - i02*src0->ne[1];
-                int64_t i3  = ir/(dst->ne[1]*dst->ne[2]);
-                int64_t i2  = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
-                int64_t i1  = ir - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
-
-                const char * q = (const char *)src0->data + i03*src0->nb[3] + i02*src0->nb[2] + i01*src0->nb[1];
-                      char * f = (      char *)dst->data  +  i3* dst->nb[3] +  i2* dst->nb[2] +  i1* dst->nb[1];
-
-                to_float((const void *)q, tmp, src0->ne[0]*n_packed);
-                ggml_fp32_to_fp16_row(tmp, (ggml_fp16_t *)f, src0->ne[0]*n_packed);
-            }
-            free(tmp);
+        if (!tmp) {
+            GGML_ABORT("malloc failed");
         }
+        for (int64_t ir = first_row; ir < last_row; ir += n_packed) {
+            int64_t i03 = ir/(src0->ne[1]*src0->ne[2]);
+            int64_t i02 = (ir - i03*src0->ne[1]*src0->ne[2])/src0->ne[1];
+            int64_t i01 = ir - i03*src0->ne[1]*src0->ne[2] - i02*src0->ne[1];
+            int64_t i3  = ir/(dst->ne[1]*dst->ne[2]);
+            int64_t i2  = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+            int64_t i1  = ir - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+
+            const char * q = (const char *)src0->data + i03*src0->nb[3] + i02*src0->nb[2] + i01*src0->nb[1];
+                  char * f = (      char *)dst->data  +  i3* dst->nb[3] +  i2* dst->nb[2] +  i1* dst->nb[1];
+
+            to_float((const void *)q, tmp, src0->ne[0]*n_packed);
+            ggml_fp32_to_fp16_row(tmp, (ggml_fp16_t *)f, src0->ne[0]*n_packed);
+        }
+        free(tmp);
         return;
     }
 
