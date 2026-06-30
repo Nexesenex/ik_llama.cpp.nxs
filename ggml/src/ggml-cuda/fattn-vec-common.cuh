@@ -365,7 +365,7 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_f16(
             const int k_KQ = k_KQ_0 + threadIdx.x;
 
             const half2 K_ik = K_h2[k_KQ];
-            sum2 += K_ik * Q_h2[k_KQ_0/WARP_SIZE];
+            ggml_cuda_mad(sum2, K_ik, Q_h2[k_KQ_0/WARP_SIZE]);
         }
 
         return __low2half(sum2) + __high2half(sum2);
