@@ -27,8 +27,9 @@ static __global__ void setup_trsm_batch_pointers(
     if (batch_idx >= total_batches) return;
 
     // Decompose batch_idx into i02, i03 using fastdiv
-    const int64_t i02 = fastmodulo((uint32_t)batch_idx, ne02_fd);
-    const int64_t i03 = fastdiv((uint32_t)batch_idx, ne02_fd);
+    const uint2   i02_i03 = fast_div_modulo((uint32_t)batch_idx, ne02_fd);
+    const int64_t i02     = i02_i03.y;
+    const int64_t i03     = i02_i03.x;
 
     A_ptrs[batch_idx] = A + i02 * nb02 + i03 * nb03;
     X_ptrs[batch_idx] = X + i02 * nb2  + i03 * nb3;
