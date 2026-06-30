@@ -500,7 +500,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
             }
             last_split = splits[i];
         }
-        GGML_ASSERT(ibest >= 0 && result[ibest] > 0);
+        if (ibest < 0) break;  // all eligible GPUs at ceiling, keep surplus
         --result[ibest];
         --sum;
     }
@@ -529,7 +529,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
             }
             last_split = splits[i];
         }
-        GGML_ASSERT(ibest >= 0);
+        if (ibest < 0) break;  // all GPUs at ceiling, can't add more
         ++result[ibest];
         ++sum;
     }
