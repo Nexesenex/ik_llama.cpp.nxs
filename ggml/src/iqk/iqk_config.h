@@ -55,21 +55,26 @@
 #endif
 #if defined(__AVX_VNNI_INT8__)
     #define HAVE_VNNIINT8
-    #ifdef _MSC_VER
-        #define ggml_mm256_dpbssd_epi32 _mm256_dpbssd_avx_epi32
-        #define ggml_mm256_dpbsud_epi32 _mm256_dpbsud_avx_epi32
-        #define ggml_mm256_dpbuud_epi32 _mm256_dpbuud_avx_epi32
-    #else
-        #define ggml_mm256_dpbssd_epi32 _mm256_dpbssd_epi32
-        #define ggml_mm256_dpbsud_epi32 _mm256_dpbsud_epi32
-        #define ggml_mm256_dpbuud_epi32 _mm256_dpbuud_epi32
-    #endif
+    #define ggml_mm256_dpbssd_epi32 _mm256_dpbssd_epi32
+    #define ggml_mm256_dpbsud_epi32 _mm256_dpbsud_epi32
+    #define ggml_mm256_dpbuud_epi32 _mm256_dpbuud_epi32
 #endif
 #if defined(__AVX_IFMA__) && defined(GGML_FORCE_IFMA)
     #define HAVE_IFMA256
 #endif
 #if defined(__AVX_NECONVERT__)
     #define HAVE_NECONVERT
+    #ifdef _MSC_VER
+        static inline __m256 ggml_cvtneebf16_ps(__m256i a) {
+            return _mm256_cvtneebf16_ps((const __m256bh*)&a);
+        }
+        static inline __m256 ggml_cvtneobf16_ps(__m256i a) {
+            return _mm256_cvtneobf16_ps((const __m256bh*)&a);
+        }
+    #else
+        #define ggml_cvtneebf16_ps _mm256_cvtneebf16_ps
+        #define ggml_cvtneobf16_ps _mm256_cvtneobf16_ps
+    #endif
 #endif
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__)
     #define ggml_mm256_dpbusd_epi32 _mm256_dpbusd_epi32
