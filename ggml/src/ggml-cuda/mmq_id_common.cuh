@@ -601,7 +601,7 @@ static __device__ __forceinline__ void vec_dot_q4_0_q8_1_dp4a(
     const int   * y_qs = (const int   *) y + 4;
     const half2 * y_ds = (const half2 *) y;
 
-// #pragma unroll
+#pragma unroll
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR4_0*VDR_Q4_0_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
