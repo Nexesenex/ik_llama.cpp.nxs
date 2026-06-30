@@ -2822,7 +2822,9 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0   + kqsx] = (ls*d + d/2)/4;
 #else
-        x_df[i*(MMQ_TILE_NE_K/4) + i/4 + kqsx] = (ls*d + d/2)/4;
+        constexpr int blocks_per_tile_x_row_iq2_xxs = MMQ_TILE_NE_K/4;
+        const int i_dm_iq2_xxs = i/4;
+        x_df[i*blocks_per_tile_x_row_iq2_xxs + i_dm_iq2_xxs + kqsx] = (ls*d + d/2)/4;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
     }
 }
