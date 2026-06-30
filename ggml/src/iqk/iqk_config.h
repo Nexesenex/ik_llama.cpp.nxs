@@ -65,7 +65,7 @@
         #define ggml_mm256_dpbuud_epi32 _mm256_dpbuud_epi32
     #endif
 #endif
-#if defined(__AVX_IFMA__)
+#if defined(__AVX_IFMA__) && defined(GGML_FORCE_IFMA)
     #define HAVE_IFMA256
 #endif
 #if defined(__AVX_NECONVERT__)
