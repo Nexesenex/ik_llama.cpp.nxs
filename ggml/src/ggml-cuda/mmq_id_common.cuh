@@ -3146,7 +3146,9 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_ds[i*MMQ_MMA_TILE_X_K_Q8_1     + kqsx] = make_half2(d1q, d1q*delta);
 #else
-        x_ds[i*(MMQ_TILE_NE_K/4) + i/4   + kqsx] = make_half2(d1q, d1q*delta);
+        constexpr int blocks_per_tile_x_row_iq1_s = MMQ_TILE_NE_K/4;
+        const int i_dm_iq1_s = i/4;
+        x_ds[i*blocks_per_tile_x_row_iq1_s + i_dm_iq1_s + kqsx] = make_half2(d1q, d1q*delta);
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
     }
 }
