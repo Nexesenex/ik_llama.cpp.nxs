@@ -784,14 +784,15 @@ void ggml_cuda_op_rope_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
 
 template <bool forward, bool has_ff>
 static __global__ void k_rope_cache(int nelem, int ne0, float * dst, const int * pos, const float * freq_factors,
-        float theta_scale, float freq_scale, rope_corr_dims corr_dims, float ext_factor, float attn_factor) {
+        float theta_scale, float freq_scale, rope_corr_dims corr_dims, float ext_factor, float attn_factor,
+        const uint3 ne0_fd) {
 
     int i = 2*(blockIdx.x*blockDim.x + threadIdx.x);
     if (i >= nelem) {
         return;
     }
-    int i2 = i / ne0;
-    int i0 = i % ne0;
+    int i2 = fastdiv((uint32_t)i, ne0_fd);
+    int i0 = fastmodulo((uint32_t)i, ne0_fd);
 
     const float theta_base = pos[i2]*powf(theta_scale, i0/2.0f);
 
@@ -861,13 +862,14 @@ void ggml_cuda_op_rope_cache_impl(ggml_backend_cuda_context & ctx, ggml_tensor *
 
     int nelem = ggml_nelements(dst);
     int nblocks = (nelem + 2*CUDA_ROPE_BLOCK_SIZE - 1)/(2*CUDA_ROPE_BLOCK_SIZE);
+    const uint3 ne0_fd = init_fastdiv_values((uint32_t) dst->ne[0]);
 
     if (freq_factors) {
         k_rope_cache<true, true ><<<nblocks, CUDA_ROPE_BLOCK_SIZE, 0, ctx.stream()>>>(ggml_nelements(dst), dst->ne[0],
-                (float *)dst->data, pos, freq_factors, theta_scale, freq_scale, corr_dims, ext_factor, attn_factor);
+                (float *)dst->data, pos, freq_factors, theta_scale, freq_scale, corr_dims, ext_factor, attn_factor, ne0_fd);
     } else {
         k_rope_cache<true, false><<<nblocks, CUDA_ROPE_BLOCK_SIZE, 0, ctx.stream()>>>(ggml_nelements(dst), dst->ne[0],
-                (float *)dst->data, pos, freq_factors, theta_scale, freq_scale, corr_dims, ext_factor, attn_factor);
+                (float *)dst->data, pos, freq_factors, theta_scale, freq_scale, corr_dims, ext_factor, attn_factor, ne0_fd);
     }
 }
 
