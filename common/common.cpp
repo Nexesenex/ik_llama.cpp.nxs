@@ -439,19 +439,29 @@ int32_t cpu_get_num_physical_cores() {
     }
 
     int32_t num_physical_cores = 0;
+    int32_t num_logical_cores  = 0;
     PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data());
     while (buffer_size > 0) {
         if (info->Relationship == RelationProcessorCore) {
-            num_physical_cores += info->Processor.GroupCount;
+            num_physical_cores += 1;
+            num_logical_cores  += info->Processor.GroupCount;
         }
         buffer_size -= info->Size;
-        info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(reinterpret_cast<char*>(info) + info->Size);
+        info = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(reinterpret_cast<char*>(info) + info->Size);
     }
 
-    return num_physical_cores > 0 ? num_physical_cores : default_threads;
+    if (num_physical_cores > 0) {
+        return num_physical_cores;
+    }
+    return default_threads;
 #endif
     unsigned int n_threads = std::thread::hardware_concurrency();
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
+}
+
+int32_t cpu_get_num_logical_cores() {
+    unsigned int n_threads = std::thread::hardware_concurrency();
+    return n_threads > 0 ? (int32_t)n_threads : 1;
 }
 
 #if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
