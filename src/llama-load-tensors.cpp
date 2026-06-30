@@ -412,7 +412,7 @@ static float get_ceiling_factor(int i, int min_vram_gpu_index, const std::vector
 }
 
 static std::vector<int> create_split(int nr, int granularity, const std::vector<float> & splits, const std::vector<size_t> & mem_used,
-        const std::vector<size_t> & vram_free, const std::vector<size_t> & vram_total, const std::vector<float> & split_vram_reserve_factor, float split_tensor_split_factor, float split_vram_free_factor, float split_usage_penalty_factor, bool verbose = false) {
+        const std::vector<size_t> & vram_free, const std::vector<size_t> & vram_total, size_t tensor_nbytes, const std::vector<float> & split_vram_reserve_factor, float split_tensor_split_factor, float split_vram_free_factor, float split_usage_penalty_factor, bool verbose = false) {
     // VRAM allocation tracking:
     // - vram_total[i]: constant total VRAM of GPU i
     // - mem_used[i]: model tensors currently assigned to GPU i (accumulates during loading)
@@ -463,7 +463,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
         if (split_tensor_split_factor != 1.0f || split_vram_free_factor != 0.0f || split_usage_penalty_factor != 0.0f) {
             float cf = get_ceiling_factor(i, min_vram_gpu_index, split_vram_reserve_factor);
             size_t ceiling = (size_t)(vram_total[i] * cf);
-            size_t chunk_size = tot_memory_used / nchunk;
+            size_t chunk_size = tensor_nbytes > 0 ? tensor_nbytes / nchunk : tot_memory_used / nchunk;
             if (chunk_size == 0) chunk_size = 1;
             if (mem_used[i] + (size_t)result[i] * chunk_size > ceiling) {
                 result[i] = std::max(0, int((ceiling - mem_used[i]) / chunk_size));
@@ -4889,7 +4889,7 @@ static void distribute_mla_tensors_for_split_mode_tensor_parallel(
     const int n_embd_head_v = hparams.n_embd_head_v(il);
 
     // granularity=4: keeps wo row blocks K-quant-aligned (% 256) and gqa_ratio % 4 == 0 for FA-MMA.
-    auto split_heads = create_split(n_head, 4, cur_splits, mem_used, vram_free, vram_total, split_vram_reserve_factor,
+    auto split_heads = create_split(n_head, 4, cur_splits, mem_used, vram_free, vram_total, layer.wo ? ggml_nbytes(layer.wo) : 0, split_vram_reserve_factor,
                 split_tensor_split_factor, split_vram_free_factor, split_usage_penalty_factor);
 
     // Derive per-tensor column/row splits from head splits.
@@ -5181,7 +5181,7 @@ static void split_recurrent_tensors(const llama_hparams & hparams, llama_layer &
         GGML_ABORT("Quantization types with per row meta data are not supported for the ssm_out tensor when using split mode tensor parallel");
     }
 
-    auto split = create_split(num_k_heads, k_head_granularity, cur_splits, mem_used, vram_free, vram_total, split_vram_reserve_factor,
+    auto split = create_split(num_k_heads, k_head_granularity, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.ssm_a), split_vram_reserve_factor,
                 split_tensor_split_factor, split_vram_free_factor, split_usage_penalty_factor);
     LLAMA_LOG_DEBUG("================ %s(%d)", __func__, il);
     int n_on = 0;
@@ -5282,7 +5282,7 @@ static void split_bailingmoe3_kda_tensors(const llama_hparams & hparams, llama_l
         head_granularity = type_traits.blck_size / n_embd_head;
     }
 
-    auto split_heads = create_split(n_head, head_granularity, cur_splits, mem_used, vram_free, vram_total,
+    auto split_heads = create_split(n_head, head_granularity, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.ssm_a),
                 split_vram_reserve_factor, split_tensor_split_factor, split_vram_free_factor, split_usage_penalty_factor);
     auto split_channels = split_heads;
     for (auto & channels : split_channels) {
@@ -5621,7 +5621,7 @@ bool create_tensors_helper::create_tensors() {
             auto & layer = model.layers[il];
             auto ctx_split = ctx_for_layer_split(il);
             if (layer.attn_norm) {
-                // auto split = create_split(ggml_nrows(layer.attn_norm), -1, cur_splits, mem_used, vram_free, vram_total,
+                // auto split = create_split(ggml_nrows(layer.attn_norm), -1, cur_splits, mem_used, vram_free, vram_total, 0,
                     // model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                 prepare_split_tensors(-1, ctx_split, layer.attn_norm, layer.split_attn_norm, mirror, mem_used);
             }
@@ -5629,7 +5629,7 @@ bool create_tensors_helper::create_tensors() {
                 prepare_split_tensors(-1, ctx_split, layer.attn_post_norm, layer.split_attn_post_norm, mirror, mem_used);
             }
             if (layer.rope_freqs) {
-                auto split = create_split(ggml_nrows(layer.rope_freqs), -1, cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                auto split = create_split(ggml_nrows(layer.rope_freqs), -1, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.rope_freqs), model.split_vram_reserve_factor,
                 model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                 prepare_split_tensors(-1, ctx_split, layer.rope_freqs, layer.split_rope_freqs, split, mem_used);
             }
@@ -5705,9 +5705,9 @@ bool create_tensors_helper::create_tensors() {
                         }
                     }
                 }
-                auto split_vo = create_split(layer.wo->ne[0], granularity_vo, cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                auto split_vo = create_split(layer.wo->ne[0], granularity_vo, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.wo), model.split_vram_reserve_factor,
                 model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
-                auto split_kq = create_split(layer.wq->ne[1], granularity_kq, cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                auto split_kq = create_split(layer.wq->ne[1], granularity_kq, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.wq), model.split_vram_reserve_factor,
                 model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                 LLAMA_LOG_DEBUG("  split_vo:"); for ([[maybe_unused]] auto s : split_vo) LLAMA_LOG_DEBUG(" %d", s);
                 LLAMA_LOG_DEBUG("\n");
@@ -5807,7 +5807,7 @@ bool create_tensors_helper::create_tensors() {
 
             if (layer.ffn_norm) {
                 if (auto it = split_tensors.find(layer.ffn_norm); it != split_tensors.end()) {
-                    // auto split = create_split(ggml_nrows(layer.ffn_norm), -1, cur_splits, mem_used, vram_free, vram_total,
+                    // auto split = create_split(ggml_nrows(layer.ffn_norm), -1, cur_splits, mem_used, vram_free, vram_total, 0,
                         // model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_norm, layer.split_ffn_norm, mirror, mem_used);
                 }
@@ -5864,7 +5864,7 @@ bool create_tensors_helper::create_tensors() {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
-                    auto split = create_split(layer.ffn_down->ne[0], ffn_granularity, cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                    auto split = create_split(layer.ffn_down->ne[0], ffn_granularity, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.ffn_down), model.split_vram_reserve_factor,
                         model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     LLAMA_LOG_DEBUG("  split_ffn:"); for ([[maybe_unused]] auto s : split) LLAMA_LOG_DEBUG(" %d", s); LLAMA_LOG_DEBUG("\n");
                     prepare_split_tensors(0, ctx_split, layer.ffn_down, layer.split_ffn_down, split, mem_used);
@@ -5885,7 +5885,7 @@ bool create_tensors_helper::create_tensors() {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down_exps->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
-                    ffn_split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                    ffn_split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.ffn_down_exps), model.split_vram_reserve_factor,
                         model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     LLAMA_LOG_DEBUG("  split_ffn_exps:"); for ([[maybe_unused]] auto s : ffn_split) LLAMA_LOG_DEBUG(" %d", s);
                     LLAMA_LOG_DEBUG("\n");
@@ -5927,7 +5927,7 @@ bool create_tensors_helper::create_tensors() {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
-                    auto split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                    auto split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.ffn_down_shexp), model.split_vram_reserve_factor,
                         model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     bool ok = true;
                     if (!ffn_split.empty()) {
@@ -5951,7 +5951,7 @@ bool create_tensors_helper::create_tensors() {
                             aux[j] = sum;
                         }
                         for (auto& s : aux) s /= sum;
-                        split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, aux, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                        split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, aux, mem_used, vram_free, vram_total, ggml_nbytes(layer.ffn_down_shexp), model.split_vram_reserve_factor,
                         model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                         fprintf(stderr, "        new:"); for (auto& s : split    ) fprintf(stderr, " %d", s); fprintf(stderr, "\n");
                     } else {
@@ -5969,21 +5969,21 @@ bool create_tensors_helper::create_tensors() {
 
             if (layer.ffn_gate_inp) {
                 if (auto it = split_tensors.find(layer.ffn_gate_inp); it != split_tensors.end()) {
-                    auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp), -1, cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                    auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp), -1, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.ffn_gate_inp), model.split_vram_reserve_factor,
                         model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp, layer.split_ffn_gate_inp, shared_split, mem_used);
                 }
             }
             if (layer.ffn_gate_inp_b) {
                 if (auto it = split_tensors.find(layer.ffn_gate_inp_b); it != split_tensors.end()) {
-                    auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp_b), -1, cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                    auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp_b), -1, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.ffn_gate_inp_b), model.split_vram_reserve_factor,
                         model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp_b, layer.split_ffn_gate_inp_b, shared_split, mem_used);
                 }
             }
             if (layer.ffn_exp_probs_b) {
                 if (auto it = split_tensors.find(layer.ffn_exp_probs_b); it != split_tensors.end()) {
-                    auto shared_split = create_split(ggml_nrows(layer.ffn_exp_probs_b), -1, cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                    auto shared_split = create_split(ggml_nrows(layer.ffn_exp_probs_b), -1, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.ffn_exp_probs_b), model.split_vram_reserve_factor,
                         model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, shared_split, mem_used);
                 }
@@ -6034,7 +6034,7 @@ bool create_tensors_helper::create_tensors() {
                         }
                         LLAMA_LOG_INFO("%s: splitting output tensor on top %d GPUs by remaining VRAM\n", __func__, n_gpus);
                     } else {
-                        split = create_split(nr, granularity, model.splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                        split = create_split(nr, granularity, model.splits, mem_used, vram_free, vram_total, ggml_nbytes(model.output), model.split_vram_reserve_factor,
                         model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     }
                     prepare_split_tensors(1, ctx_split, model.output, model.split_output, split, mem_used);
