@@ -913,7 +913,31 @@ namespace {
 inline float sum_row_squared(int ncols, const float * x) {
     float sum = 0;
     int i = 0;
-#ifdef __AVX2__
+#if defined(HAVE_IFMA256) && defined(__AVX2__)
+    __m256i acc_i64 = _mm256_setzero_si256();
+    for (; i + 15 < ncols; i += 16) {
+        __m256 v0 = _mm256_loadu_ps(x + i);
+        __m256 v1 = _mm256_loadu_ps(x + i + 8);
+        __m256i i0 = _mm256_cvtps_epi32(v0);
+        __m256i i1 = _mm256_cvtps_epi32(v1);
+        __m256i i0_lo = _mm256_cvtepu32_epi64(_mm256_castsi256_si128(i0));
+        __m256i i0_hi = _mm256_cvtepu32_epi64(_mm256_extracti128_si256(i0, 1));
+        __m256i i1_lo = _mm256_cvtepu32_epi64(_mm256_castsi256_si128(i1));
+        __m256i i1_hi = _mm256_cvtepu32_epi64(_mm256_extracti128_si256(i1, 1));
+        acc_i64 = _mm256_madd52luq_epi64(acc_i64, i0_lo, i0_lo);
+        acc_i64 = _mm256_madd52luq_epi64(acc_i64, i0_hi, i0_hi);
+        acc_i64 = _mm256_madd52luq_epi64(acc_i64, i1_lo, i1_lo);
+        acc_i64 = _mm256_madd52luq_epi64(acc_i64, i1_hi, i1_hi);
+    }
+    {
+        __m128i lo = _mm256_castsi256_si128(acc_i64);
+        __m128i hi = _mm256_extracti128_si256(acc_i64, 1);
+        __m128i sum128 = _mm_add_epi64(lo, hi);
+        uint64_t s0 = (uint64_t)_mm_cvtsi128_si64(sum128);
+        uint64_t s1 = (uint64_t)_mm_extract_epi64(sum128, 1);
+        sum = (float)((double)s0 + (double)s1);
+    }
+#elif defined(__AVX2__)
     auto vsum = _mm256_setzero_ps();
     for (; i < ncols - 7; i += 8) {
         auto vx = _mm256_loadu_ps(x + i);
@@ -936,7 +960,32 @@ inline float sum_row_squared(int ncols, const ggml_half * x) {
 inline float sum_row_squared(int ncols, const ggml_bf16_t * x) {
     float sum = 0;
     int i = 0;
-#if defined(HAVE_NECONVERT) && defined(__AVX2__) && defined(__FMA__)
+#if defined(HAVE_NECONVERT) && defined(HAVE_IFMA256) && defined(__AVX2__)
+    __m256i acc_i64 = _mm256_setzero_si256();
+    for (; i + 15 < ncols; i += 16) {
+        __m256i bf16 = _mm256_loadu_si256((const __m256i*)(x + i));
+        __m256 f32_even = _mm256_cvtneebf16_ps(bf16);
+        __m256 f32_odd  = _mm256_cvtneobf16_ps(bf16);
+        __m256i i32_even = _mm256_cvtps_epi32(f32_even);
+        __m256i i32_odd  = _mm256_cvtps_epi32(f32_odd);
+        __m256i e_lo = _mm256_cvtepu32_epi64(_mm256_castsi256_si128(i32_even));
+        __m256i e_hi = _mm256_cvtepu32_epi64(_mm256_extracti128_si256(i32_even, 1));
+        __m256i o_lo = _mm256_cvtepu32_epi64(_mm256_castsi256_si128(i32_odd));
+        __m256i o_hi = _mm256_cvtepu32_epi64(_mm256_extracti128_si256(i32_odd, 1));
+        acc_i64 = _mm256_madd52luq_epi64(acc_i64, e_lo, e_lo);
+        acc_i64 = _mm256_madd52luq_epi64(acc_i64, e_hi, e_hi);
+        acc_i64 = _mm256_madd52luq_epi64(acc_i64, o_lo, o_lo);
+        acc_i64 = _mm256_madd52luq_epi64(acc_i64, o_hi, o_hi);
+    }
+    {
+        __m128i lo = _mm256_castsi256_si128(acc_i64);
+        __m128i hi = _mm256_extracti128_si256(acc_i64, 1);
+        __m128i sum128 = _mm_add_epi64(lo, hi);
+        uint64_t s0 = (uint64_t)_mm_cvtsi128_si64(sum128);
+        uint64_t s1 = (uint64_t)_mm_extract_epi64(sum128, 1);
+        sum = (float)((double)s0 + (double)s1);
+    }
+#elif defined(HAVE_NECONVERT) && defined(__AVX2__) && defined(__FMA__)
     auto vsum = _mm256_setzero_ps();
     for (; i + 15 < ncols; i += 16) {
         __m256i bf16 = _mm256_loadu_si256((const __m256i*)(x + i));
