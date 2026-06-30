@@ -80,15 +80,15 @@ static __global__ void rope_norm(
 }
 
 static __global__ void rope_norm_fast(const float * src0, const float * src1, float * dst, int ne0, int ne1, int nelem,
-        int s01, int s02, int n_dims) {
+        int s01, int s02, int n_dims, const uint3 prod_fd, const uint3 ne0_fd) {
     int i = 2*(blockDim.x*blockIdx.x + threadIdx.x);
 
     if (i >= nelem) {
         return;
     }
 
-    int i2 = i / (ne0*ne1); i -= i2*ne0*ne1;
-    int i1 = i / ne0;
+    int i2 = fastdiv((uint32_t)i, prod_fd); i -= i2 * prod_fd.z;
+    int i1 = fastdiv((uint32_t)i, ne0_fd);
     int i0 = i - i1*ne0;
 
     const int idst = i2*ne0*ne1 + i1*ne0 + i0;
@@ -153,15 +153,15 @@ static __global__ void rope_neox(
 }
 
 static __global__ void rope_neox_fast(const float * src0, const float * src1, float * dst, int ne0, int ne1, int nelem,
-        int s01, int s02, int n_dims) {
+        int s01, int s02, int n_dims, const uint3 prod_fd, const uint3 ne0_fd) {
     int i = 2*(blockDim.x*blockIdx.x + threadIdx.x);
 
     if (i >= nelem) {
         return;
     }
     //i = i0 + i1*ne0 + i2*ne0*ne1;
-    int i2 = i / (ne0*ne1); i -= i2*ne0*ne1;
-    int i1 = i / ne0;
+    int i2 = fastdiv((uint32_t)i, prod_fd); i -= i2 * prod_fd.z;
+    int i1 = fastdiv((uint32_t)i, ne0_fd);
     int i0 = i - i1*ne0;
 
     const int idst = i2*ne0*ne1 + i1*ne0 + i0/2;
@@ -186,7 +186,8 @@ static __global__ void rope_neox_fast(const float * src0, const float * src1, fl
 
 static __global__ void fused_rope_neox_fast(const float * src0_1, const float * src0_2, const float * src1,
         float * dst_1, float * dst_2, int ne0, int ne1_1, int ne1_2, int nelem1, int nelem,
-        int s01_1, int s02_1, int s01_2, int s02_2, int n_dims) {
+        int s01_1, int s02_1, int s01_2, int s02_2, int n_dims,
+        const uint3 prod1_fd, const uint3 prod2_fd, const uint3 ne0_fd) {
     int i = 2*(blockDim.x*blockIdx.x + threadIdx.x);
 
     if (i >= nelem) {
@@ -195,12 +196,14 @@ static __global__ void fused_rope_neox_fast(const float * src0_1, const float * 
     const float * src0;
     float * dst;
     int ne1, s01, s02;
+    uint3 prod_fd;
     if (i < nelem1) {
         src0 = src0_1;
         dst  = dst_1;
         ne1  = ne1_1;
         s01  = s01_1;
         s02  = s02_1;
+        prod_fd = prod1_fd;
     } else {
         i -= nelem1;
         src0 = src0_2;
@@ -208,9 +211,10 @@ static __global__ void fused_rope_neox_fast(const float * src0_1, const float * 
         ne1  = ne1_2;
         s01  = s01_2;
         s02  = s02_2;
+        prod_fd = prod2_fd;
     }
-    int i2 = i / (ne0*ne1); i -= i2*ne0*ne1;
-    int i1 = i / ne0;
+    int i2 = fastdiv((uint32_t)i, prod_fd); i -= i2 * prod_fd.z;
+    int i1 = fastdiv((uint32_t)i, ne0_fd);
     int i0 = i - i1*ne0;
 
     const int idst = i2*ne0*ne1 + i1*ne0 + i0/2;
@@ -294,7 +298,8 @@ static __global__ void fused_rms_rope_neox_fast(const float * src0_1, const floa
 
 static __global__ void fused_rope_norm_fast(const float * src0_1, const float * src0_2, const float * src1,
         float * dst_1, float * dst_2, int ne0, int ne1_1, int ne1_2, int nelem1, int nelem,
-        int s01_1, int s02_1, int s01_2, int s02_2, int n_dims) {
+        int s01_1, int s02_1, int s01_2, int s02_2, int n_dims,
+        const uint3 prod1_fd, const uint3 prod2_fd, const uint3 ne0_fd) {
     int i = 2*(blockDim.x*blockIdx.x + threadIdx.x);
 
     if (i >= nelem) {
@@ -303,12 +308,14 @@ static __global__ void fused_rope_norm_fast(const float * src0_1, const float * 
     const float * src0;
     float * dst;
     int ne1, s01, s02;
+    uint3 prod_fd;
     if (i < nelem1) {
         src0 = src0_1;
         dst  = dst_1;
         ne1  = ne1_1;
         s01  = s01_1;
         s02  = s02_1;
+        prod_fd = prod1_fd;
     } else {
         i -= nelem1;
         src0 = src0_2;
@@ -316,9 +323,10 @@ static __global__ void fused_rope_norm_fast(const float * src0_1, const float * 
         ne1  = ne1_2;
         s01  = s01_2;
         s02  = s02_2;
+        prod_fd = prod2_fd;
     }
-    int i2 = i / (ne0*ne1); i -= i2*ne0*ne1;
-    int i1 = i / ne0;
+    int i2 = fastdiv((uint32_t)i, prod_fd); i -= i2 * prod_fd.z;
+    int i1 = fastdiv((uint32_t)i, ne0_fd);
     int i0 = i - i1*ne0;
 
     const int idst = i2*ne0*ne1 + i1*ne0 + i0;
@@ -510,7 +518,9 @@ static void rope_neox_fast_cuda(const float * src0, const float * src1, float * 
     const dim3 block_dims(CUDA_ROPE_BLOCK_SIZE, 1, 1);
     const int n_blocks = (ne00*ne01*ne02 + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
     const dim3 block_nums(n_blocks, 1, 1);
-    rope_neox_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne00*ne01*ne02, s01, s02, n_dims);
+    const uint3 prod_fd = init_fastdiv_values((uint32_t)(ne00 * ne01));
+    const uint3 ne0_fd  = init_fastdiv_values((uint32_t) ne00);
+    rope_neox_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne00*ne01*ne02, s01, s02, n_dims, prod_fd, ne0_fd);
 }
 
 static void fused_rope_neox_fast_cuda(const float * src0_1, const float * src0_2, const float * src1,
@@ -523,8 +533,11 @@ static void fused_rope_neox_fast_cuda(const float * src0_1, const float * src0_2
     const int nelem  = nelem1 + nelem2;
     const int n_blocks = (nelem + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
     const dim3 block_nums(n_blocks, 1, 1);
+    const uint3 prod1_fd = init_fastdiv_values((uint32_t)(ne0 * ne1_1));
+    const uint3 prod2_fd = init_fastdiv_values((uint32_t)(ne0 * ne1_2));
+    const uint3 ne0_fd   = init_fastdiv_values((uint32_t) ne0);
     fused_rope_neox_fast<<<block_nums, block_dims, 0, stream>>>(src0_1, src0_2, src1, dst_1, dst_2, ne0, ne1_1, ne1_2, nelem1, nelem,
-            s01_1, s02_1, s01_2, s02_2, n_dims);
+            s01_1, s02_1, s01_2, s02_2, n_dims, prod1_fd, prod2_fd, ne0_fd);
 }
 
 static void fused_rms_rope_neox_fast_cuda(const float * src0_1, const float * src0_2, const float * src1,
@@ -549,8 +562,11 @@ static void fused_rope_norm_fast_cuda(const float * src0_1, const float * src0_2
     const int nelem  = nelem1 + nelem2;
     const int n_blocks = (nelem + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
     const dim3 block_nums(n_blocks, 1, 1);
+    const uint3 prod1_fd = init_fastdiv_values((uint32_t)(ne0 * ne1_1));
+    const uint3 prod2_fd = init_fastdiv_values((uint32_t)(ne0 * ne1_2));
+    const uint3 ne0_fd   = init_fastdiv_values((uint32_t) ne0);
     fused_rope_norm_fast<<<block_nums, block_dims, 0, stream>>>(src0_1, src0_2, src1, dst_1, dst_2, ne0, ne1_1, ne1_2, nelem1, nelem,
-            s01_1, s02_1, s01_2, s02_2, n_dims);
+            s01_1, s02_1, s01_2, s02_2, n_dims, prod1_fd, prod2_fd, ne0_fd);
 }
 
 static void rope_norm_fast_cuda(const float * src0, const float * src1, float * dst, int ne00, int ne01, int ne02, int s01, int s02,
@@ -559,7 +575,9 @@ static void rope_norm_fast_cuda(const float * src0, const float * src1, float * 
     const dim3 block_dims(CUDA_ROPE_BLOCK_SIZE, 1, 1);
     const int n_blocks = (ne00*ne01*ne02 + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
     const dim3 block_nums(n_blocks, 1, 1);
-    rope_norm_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne00*ne01*ne02, s01, s02, n_dims);
+    const uint3 prod_fd = init_fastdiv_values((uint32_t)(ne00 * ne01));
+    const uint3 ne0_fd  = init_fastdiv_values((uint32_t) ne00);
+    rope_norm_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne00*ne01*ne02, s01, s02, n_dims, prod_fd, ne0_fd);
 }
 
 static void rope_multi_fast_cuda(const float * src0, const float * src1, float * dst, int ne00, int ne01, int ne02, int s01, int s02,
@@ -568,8 +586,9 @@ static void rope_multi_fast_cuda(const float * src0, const float * src1, float *
     const dim3 block_dims(CUDA_ROPE_BLOCK_SIZE, 1, 1);
     const int n_blocks = (ne00*ne01*ne02 + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
     const dim3 block_nums(n_blocks, 1, 1);
-    // TODO
-    rope_neox_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne02, s01, s02, n_dims);
+    const uint3 prod_fd = init_fastdiv_values((uint32_t)(ne00 * ne01));
+    const uint3 ne0_fd  = init_fastdiv_values((uint32_t) ne00);
+    rope_neox_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne02, s01, s02, n_dims, prod_fd, ne0_fd);
 }
 
 static void rope_vision_fast_cuda(const float * src0, const float * src1, float * dst, int ne00, int ne01, int ne02, int s01, int s02,
@@ -578,8 +597,9 @@ static void rope_vision_fast_cuda(const float * src0, const float * src1, float 
     const dim3 block_dims(CUDA_ROPE_BLOCK_SIZE, 1, 1);
     const int n_blocks = (ne00*ne01*ne02 + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
     const dim3 block_nums(n_blocks, 1, 1);
-    // TODO
-    rope_neox_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne02, s01, s02, n_dims);
+    const uint3 prod_fd = init_fastdiv_values((uint32_t)(ne00 * ne01));
+    const uint3 ne0_fd  = init_fastdiv_values((uint32_t) ne00);
+    rope_neox_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne02, s01, s02, n_dims, prod_fd, ne0_fd);
 }
 
 template<bool forward, typename T>
