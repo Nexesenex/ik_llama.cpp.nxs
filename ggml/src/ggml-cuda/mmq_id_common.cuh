@@ -1088,7 +1088,9 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_df[i*MMQ_MMA_TILE_X_K_Q8_1                 + kbxd] = ggml_cuda_e8m0_to_fp32(bxi->e)*0.5f;
 #else
-        x_df[i*(MMQ_TILE_NE_K/QI_MXFP4) + i/QI_MXFP4 + kbxd] = ggml_cuda_e8m0_to_fp32(bxi->e)*0.5f;
+        constexpr int blocks_per_tile_x_row_mxfp4 = MMQ_TILE_NE_K/QI_MXFP4;
+        const int i_dm_mxfp4 = i/QI_MXFP4;
+        x_df[i*blocks_per_tile_x_row_mxfp4 + i_dm_mxfp4 + kbxd] = ggml_cuda_e8m0_to_fp32(bxi->e)*0.5f;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
     }
 }
