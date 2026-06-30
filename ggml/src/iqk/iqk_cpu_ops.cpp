@@ -964,8 +964,8 @@ inline float sum_row_squared(int ncols, const ggml_bf16_t * x) {
     __m256i acc_i64 = _mm256_setzero_si256();
     for (; i + 15 < ncols; i += 16) {
         __m256i bf16 = _mm256_loadu_si256((const __m256i*)(x + i));
-        __m256 f32_even = _mm256_cvtneebf16_ps(bf16);
-        __m256 f32_odd  = _mm256_cvtneobf16_ps(bf16);
+        __m256 f32_even = ggml_cvtneebf16_ps(bf16);
+        __m256 f32_odd  = ggml_cvtneobf16_ps(bf16);
         __m256i i32_even = _mm256_cvtps_epi32(f32_even);
         __m256i i32_odd  = _mm256_cvtps_epi32(f32_odd);
         __m256i e_lo = _mm256_cvtepu32_epi64(_mm256_castsi256_si128(i32_even));
@@ -989,8 +989,8 @@ inline float sum_row_squared(int ncols, const ggml_bf16_t * x) {
     auto vsum = _mm256_setzero_ps();
     for (; i + 15 < ncols; i += 16) {
         __m256i bf16 = _mm256_loadu_si256((const __m256i*)(x + i));
-        __m256 f32_even = _mm256_cvtneebf16_ps(bf16);
-        __m256 f32_odd  = _mm256_cvtneobf16_ps(bf16);
+        __m256 f32_even = ggml_cvtneebf16_ps(bf16);
+        __m256 f32_odd  = ggml_cvtneobf16_ps(bf16);
         vsum = _mm256_fmadd_ps(f32_even, f32_even, vsum);
         vsum = _mm256_fmadd_ps(f32_odd,  f32_odd,  vsum);
     }
@@ -1035,10 +1035,10 @@ inline void rms_rms_add(int ncols, float scale1, float scale2, const ggml_bf16_t
     for (; j + 15 < ncols; j += 16) {
         __m256i bf16_1 = _mm256_loadu_si256((const __m256i*)(x1 + j));
         __m256i bf16_2 = _mm256_loadu_si256((const __m256i*)(x2 + j));
-        __m256 vx1_even = _mm256_cvtneebf16_ps(bf16_1);
-        __m256 vx1_odd  = _mm256_cvtneobf16_ps(bf16_1);
-        __m256 vx2_even = _mm256_cvtneebf16_ps(bf16_2);
-        __m256 vx2_odd  = _mm256_cvtneobf16_ps(bf16_2);
+        __m256 vx1_even = ggml_cvtneebf16_ps(bf16_1);
+        __m256 vx1_odd  = ggml_cvtneobf16_ps(bf16_1);
+        __m256 vx2_even = ggml_cvtneebf16_ps(bf16_2);
+        __m256 vx2_odd  = ggml_cvtneobf16_ps(bf16_2);
         __m256 vc1_even = _mm256_loadu_ps(c1 + j);
         __m256 vc1_odd  = _mm256_loadu_ps(c1 + j + 8);
         __m256 vc2_even = _mm256_loadu_ps(c2 + j);
