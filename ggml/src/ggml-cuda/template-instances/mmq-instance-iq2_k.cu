@@ -80,8 +80,10 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+0] = d * (((bxi->scales[kqsx] >> 0) & 0xf) - 8);
         x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+1] = d * (((bxi->scales[kqsx] >> 4) & 0xf) - 8);
 #else
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+0] = d * (((bxi->scales[kqsx] >> 0) & 0xf) - 8);
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+1] = d * (((bxi->scales[kqsx] >> 4) & 0xf) - 8);
+        constexpr int blocks_per_tile_x_row_iq2_k = 2*WARP_SIZE*2/QI8_0;
+        const int i_dm_iq2_k = i/(QI8_0/4);
+        x_df[i*blocks_per_tile_x_row_iq2_k + i_dm_iq2_k + 2*kqsx+0] = d * (((bxi->scales[kqsx] >> 0) & 0xf) - 8);
+        x_df[i*blocks_per_tile_x_row_iq2_k + i_dm_iq2_k + 2*kqsx+1] = d * (((bxi->scales[kqsx] >> 4) & 0xf) - 8);
 #endif // INT8_MMA_AVAILABLE
     }
 }
@@ -171,8 +173,10 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+0] = dl1;
         x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+1] = dl2;
 #else
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+0] = dl1;
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+1] = dl2;
+        constexpr int blocks_per_tile_x_row_iq2_k_r4 = 2*WARP_SIZE*2/QI8_0;
+        const int i_dm_iq2_k_r4 = i/(QI8_0/4);
+        x_df[i*blocks_per_tile_x_row_iq2_k_r4 + i_dm_iq2_k_r4 + 2*kqsx+0] = dl1;
+        x_df[i*blocks_per_tile_x_row_iq2_k_r4 + i_dm_iq2_k_r4 + 2*kqsx+1] = dl2;
 #endif // INT8_MMA_AVAILABLE
     }
 }
