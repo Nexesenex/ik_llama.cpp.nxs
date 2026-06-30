@@ -1518,7 +1518,9 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             x_df[i*MMQ_MMA_TILE_X_K_Q3_K + sizeof(int)*(threadIdx.x % (WARP_SIZE/8)) + l] = d*sc8[l];
         }
 #else
-        x_sc[i*(WARP_SIZE/8) + i/8 + threadIdx.x % (WARP_SIZE/8)] = sc;
+        constexpr int blocks_per_tile_x_sc_row_q3_k = WARP_SIZE/8;
+        const int i_sc_q3_k = i/8;
+        x_sc[i*blocks_per_tile_x_sc_row_q3_k + i_sc_q3_k + threadIdx.x % (WARP_SIZE/8)] = sc;
 #endif // INT8_MMA_AVAILABLE
     }
 

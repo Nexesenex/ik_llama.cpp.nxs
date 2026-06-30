@@ -2031,7 +2031,9 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             x_df[i*MMQ_MMA_TILE_X_K_Q3_K + sizeof(int)*ksc + l] = d*sc8[l];
         }
 #else
-        x_sc[i*(MMQ_TILE_NE_K/8) + i/8 + ksc] = sc;
+        constexpr int blocks_per_tile_x_sc_row_q3_k = MMQ_TILE_NE_K/8;
+        const int i_sc_q3_k = i/8;
+        x_sc[i*blocks_per_tile_x_sc_row_q3_k + i_sc_q3_k + ksc] = sc;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
     }
 
