@@ -4301,11 +4301,13 @@ void mul_mat_q_case_id(ggml_backend_cuda_context & ctx, const mmq_args_id & args
 
     const int mmq_x_max = get_mmq_x_max_host(cc);
     const int mmq_y = get_mmq_y_host(cc);
+    const int block_num_y = (args.nrows_x + mmq_y - 1) / mmq_y;
+    const bool use_stream_k = cc >= CC_VOLTA && cc < CC_OFFSET_AMD;
 
     int mmq_x_best  = 0;
-    int ntiles_x_best = INT_MAX;
+    int nparts_best = INT_MAX;
 
-    for (int mmq_x = 8; mmq_x <= mmq_x_max && ntiles_x_best > 1; mmq_x += 8) {
+    for (int mmq_x = 8; mmq_x <= mmq_x_max && nparts_best > 1; mmq_x += 8) {
         const int granularity = mmq_get_granularity_host(mmq_x, cc);
 
         if (mmq_x % granularity != 0 || mmq_get_nbytes_shared<type>(mmq_x, mmq_y, cc, warp_size, nwarps) > smpbo) {
@@ -4313,10 +4315,11 @@ void mul_mat_q_case_id(ggml_backend_cuda_context & ctx, const mmq_args_id & args
         }
 
         const int ntiles_x = (args.ncols_max + mmq_x - 1) / mmq_x;
+        const int nparts = use_stream_k ? ntiles_x : ntiles_x * block_num_y;
 
-        if (ntiles_x < ntiles_x_best) {
-            mmq_x_best = mmq_x;
-            ntiles_x_best = ntiles_x;
+        if (nparts < nparts_best) {
+            mmq_x_best  = mmq_x;
+            nparts_best = nparts;
         }
     }
 
