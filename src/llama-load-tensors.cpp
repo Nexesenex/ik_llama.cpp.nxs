@@ -5401,7 +5401,7 @@ bool create_tensors_helper::create_tensors() {
                         }
                         LLAMA_LOG_INFO("%s: splitting output tensor on top %d GPUs by remaining VRAM\n", __func__, n_gpus);
                     } else {
-                        split = create_split(nr, granularity, model.splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor,
+                        split = create_split(nr, granularity, model.splits, mem_used, vram_free, vram_total, ggml_nbytes(model.output), model.split_vram_reserve_factor,
                             model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     }
                     prepare_split_tensors(1, ctx_split, model.output, model.split_output, split, mem_used);
