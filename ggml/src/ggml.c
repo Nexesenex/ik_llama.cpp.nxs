@@ -30123,7 +30123,7 @@ int ggml_cpu_has_avx_vnni(void) {
 }
 
 int ggml_cpu_has_avx_vnni_int8(void) {
-#if defined(__AVX_VNNI_INT8__)
+#if defined(__AVXVNNIINT8__)
     return 1;
 #else
     return 0;

@@ -11174,7 +11174,7 @@ const char * llama_print_system_info(void) {
     s  = "";
     s += "AVX = "         + std::to_string(ggml_cpu_has_avx())         + " | ";
     s += "AVX_VNNI = "    + std::to_string(ggml_cpu_has_avx_vnni())    + " | ";
-    s += "AVX_VNNI_INT8 = " + std::to_string(ggml_cpu_has_avx_vnni_int8()) + " | ";
+    s += "AVXVNNIINT8 = " + std::to_string(ggml_cpu_has_avx_vnni_int8()) + " | ";
     s += "AVX_IFMA = "    + std::to_string(ggml_cpu_has_avx_ifma())    + " | ";
     s += "AVX_NE_CONVERT = " + std::to_string(ggml_cpu_has_avx_ne_convert()) + " | ";
     s += "CMPccXADD = "   + std::to_string(ggml_cpu_has_cmpccxadd())   + " | ";
