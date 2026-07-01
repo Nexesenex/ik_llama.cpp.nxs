@@ -6762,6 +6762,7 @@ struct llama_context_params llama_context_default_params() {
         /*.split_mode_tensor_parallel_scheduling =*/ false,
         // /*.split_mode_f16           =*/ true,
         /*.scheduler_async             =*/ false,
+        /*.pipeline                    =*/ false,
         /*.sched_max_copies            =*/ -1,
         /*.mtp                         =*/ false,
         /*.mtp_op_type                 =*/ MTP_OP_NONE,
@@ -7292,6 +7293,7 @@ struct llama_context * llama_init_from_model(
     cparams.split_mode_tensor_parallel_scheduling = params.split_mode_tensor_parallel_scheduling;
     //cparams.split_mode_f16   = params.split_mode_f16;
     cparams.scheduler_async  = params.scheduler_async;
+    cparams.pipeline         = params.pipeline;
     cparams.sched_max_copies = params.sched_max_copies;
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
@@ -7427,6 +7429,7 @@ struct llama_context * llama_init_from_model(
     //LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
     LLAMA_LOG_INFO("%s: reduce_type   = %s\n",     __func__, ggml_type_name(cparams.reduce_type));
     LLAMA_LOG_INFO("%s: sched_async   = %d\n",     __func__, cparams.scheduler_async);
+    LLAMA_LOG_INFO("%s: pipeline      = %d\n",     __func__, cparams.pipeline);
     LLAMA_LOG_INFO("%s: ser           = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",     __func__, cparams.rope_freq_scale);
@@ -7812,6 +7815,7 @@ struct llama_context * llama_init_from_model(
     if (model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL && (!model->has_tensor_overrides() || cparams.split_mode_tensor_parallel_scheduling)) {
         ggml_backend_sched_set_split_mode_tensor_parallel(ctx->sched, true, cparams.scheduler_async);
         ggml_backend_sched_set_max_extra_alloc(ctx->sched, params.max_extra_alloc);
+        ggml_backend_sched_set_pipeline(ctx->sched, cparams.pipeline);
         if (model->has_tensor_overrides() && cparams.split_mode_tensor_parallel_scheduling) {
             LLAMA_LOG_INFO("XXXXXXXX split mode tensor parallel Scheduling is FORCED despite tensor overrides due to user choice.\n");
             LLAMA_LOG_INFO("XXXXXXXX It may or might NOT infer properly due to unsupported combinations between SMTPS and every possible tensor overrides.\n");
