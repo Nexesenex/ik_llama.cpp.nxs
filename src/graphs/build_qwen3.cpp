@@ -50,6 +50,7 @@ ggml_cgraph * llm_build_context::build_qwen3() {
                         model.layers[il].wq, nullptr,
                         model.layers[il].wk, nullptr,
                         model.layers[il].wv, nullptr,
+                        model.layers[il].wkv, nullptr,
                         model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0, il);
 
                 if (rope_cache) {
