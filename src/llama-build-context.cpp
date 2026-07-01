@@ -2343,6 +2343,7 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
             ggml_tensor * wq, ggml_tensor * bq,
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
+            ggml_tensor * wkv, ggml_tensor * bkv,
             ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il, bool add_graph_split) const {
     int n_head    = hparams.n_head(il);
     int n_head_kv = hparams.n_head_kv(il);
@@ -2417,6 +2418,39 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
 
         return {Qcur, Kcur, Vcur};
 
+    }
+
+    if (wkv) {
+        auto Qcur = llm_build_lora_mm(lctx, ctx0, wq, cur);
+        cb(Qcur, "Qcur", il);
+        auto kv = llm_build_lora_mm(lctx, ctx0, wkv, cur);
+        cb(kv, "kv", il);
+        if (bq) {
+            Qcur = ggml_add(ctx0, Qcur, bq);
+            cb(Qcur, "Qcur", il);
+        }
+        if (bkv) {
+            kv = ggml_add(ctx0, kv, bkv);
+            cb(kv, "kv_b", il);
+        }
+        ggml_build_forward_expand(gf, Qcur);
+        ggml_build_forward_expand(gf, kv);
+        auto Kcur = ggml_view_3d(ctx0, kv, n_embd_head_k, n_head_kv, n_tokens, n_embd_head_k*sizeof(float), kv->nb[1], 0);
+        auto Vcur = ggml_view_2d(ctx0, kv, n_embd_gqa, n_tokens, kv->nb[1], n_embd_gqa*sizeof(float));
+        cb(Kcur, "Kcur", il);
+        cb(Vcur, "Vcur", il);
+        if (q_norm) {
+            Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, LLM_NORM_RMS, cb, il);
+            cb(Qcur, "Qcur_normed", il);
+            ggml_build_forward_expand(gf, Qcur);
+        }
+        if (k_norm) {
+            Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, LLM_NORM_RMS, cb, il);
+            cb(Kcur, "Kcur_normed", il);
+            ggml_build_forward_expand(gf, Kcur);
+        }
+
+        return {Qcur, Kcur, Vcur};
     }
 
     auto [Q, K, V] = llm_build_mul_mat_qkv(gf, cur, wq, bq, wk, bk, wv, bv, attention_scale, il, add_graph_split);
@@ -3100,6 +3134,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                             split_wq, bq ? bq->splits[id] : nullptr,
                             split_wk, bk ? bk->splits[id] : nullptr,
                             split_wv, bv ? bv->splits[id] : nullptr,
+                            nullptr, nullptr,
                             the_q_norm, the_k_norm, f_attn_scale, il, add_graph_split);
                     Qcur = Q; Kcur = K; Vcur = V;
                     if (model.arch == LLM_ARCH_MIMO2 && std::abs(model.hparams.f_attn_v_scale - 1) > 1e-4f) {
@@ -3332,6 +3367,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 model.layers[il].wqkv, model.layers[il].bqkv,
                 model.layers[il].wqk,  model.layers[il].bqk,
                 model.layers[il].wq,   model.layers[il].bq, model.layers[il].wk, model.layers[il].bk, model.layers[il].wv, model.layers[il].bv,
+                model.layers[il].wkv, model.layers[il].bkv,
                 model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, f_attn_scale, il);
         Qcur = Q; Kcur = K; Vcur = V;
         if (model.arch == LLM_ARCH_MIMO2 && std::abs(model.hparams.f_attn_v_scale - 1) > 1e-4f) {
