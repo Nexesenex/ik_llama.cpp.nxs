@@ -962,6 +962,10 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                         type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU :
                         type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI;
+        {
+            static int fg_count = 0;
+            if (++fg_count <= 3) LLAMA_LOG_INFO("%s: ggml_fused_up_gate called (up=%s, gate=%s, cur=%s)\n", __func__, up->name, gate->name, cur->name);
+        }
         cur = ggml_fused_up_gate(ctx, up, gate, cur, unary_op);
         cb(cur, "ffn_up_gate", il);
         if (lctx.model.arch == LLM_ARCH_STEP35) {
