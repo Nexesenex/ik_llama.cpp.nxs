@@ -1828,6 +1828,7 @@ bool common_speculative_load_draft_model(
         params_dft.graph_reuse = params_base.graph_reuse;
         params_dft.split_mode_tensor_parallel_scheduling = params_base.split_mode_tensor_parallel_scheduling;
         params_dft.scheduler_async = params_base.scheduler_async;
+        params_dft.pipeline = params_base.pipeline;
         params_dft.max_extra_alloc_MiB = params_base.max_extra_alloc_MiB;
         params_dft.reduce_type = params_base.reduce_type;
     }

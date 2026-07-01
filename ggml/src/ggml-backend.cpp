@@ -1225,6 +1225,7 @@ struct ggml_backend_sched {
     bool debug;
     bool has_reduce = false;
     bool has_pipeline = false;
+    bool pipeline_enabled = false;
 
     // double-buffered pipeline slots for async input preloading
     // slot_pipe_events[b][slot] signaled when copy into that slot is done (preloader -> GPU)
@@ -1271,6 +1272,11 @@ void ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extr
     if (extra_alloc_MiB >= 0) {
         sched->max_extra_alloc = size_t(extra_alloc_MiB)*1024*1024;
     }
+}
+
+void ggml_backend_sched_set_pipeline(ggml_backend_sched_t sched, bool on_or_off) {
+    if (!sched) return;
+    sched->pipeline_enabled = on_or_off;
 }
 
 static inline bool ggml_backend_sched_offload_enabled(ggml_backend_sched_t sched, enum ggml_op op) {
@@ -2768,7 +2774,7 @@ static void ggml_sched_prepare_graph(ggml_backend_sched_t sched) {
             if (!can_alloc || !max_input_size) continue;
 
             // enable double-buffered pipeline for multi-GPU with reduce ops
-            bool use_pipeline = sched->n_backends > 2 && sched->has_reduce;
+            bool use_pipeline = sched->pipeline_enabled && sched->n_backends > 2 && sched->has_reduce;
             size_t alloc_size = use_pipeline ? 2 * max_input_size : max_input_size;
 
             if (sched->input_memory_bufs[backend_id] &&
