@@ -41,6 +41,7 @@ ggml_cgraph * llm_build_context::build_bailingmoe2() {
         {
             auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wqkv, model.layers[il].bqkv,
                     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    model.layers[il].wkv, model.layers[il].bkv,
                     model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0.0f, il);
 
             if (rope_cache) {
