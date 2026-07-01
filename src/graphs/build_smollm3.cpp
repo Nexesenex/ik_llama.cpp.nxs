@@ -39,6 +39,7 @@ ggml_cgraph* llm_build_context::build_smollm3() {
                     model.layers[il].wq,   model.layers[il].bq,
                     model.layers[il].wk,   model.layers[il].bk,
                     model.layers[il].wv,   model.layers[il].bv,
+                    model.layers[il].wkv, model.layers[il].bkv,
                     model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0, il);
 
             if (use_rope) {
