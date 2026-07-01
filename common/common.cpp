@@ -2416,6 +2416,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.scheduler_async = true;
         return true;
     }
+    if (arg == "-pipe" || arg == "--pipeline") {
+        params.pipeline = true;
+        return true;
+    }
     if (arg == "-smc" || arg == "--sched-max-copies") {
         CHECK_ARG
         params.sched_max_copies = std::atoi(argv[i]);
@@ -3303,6 +3307,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-smtps, -smgs, --split-mode-tensor-parallel-scheduling, --split-mode-graph-scheduling,", "Force Split Mode Tensor Parallel (Graph) Scheduling (default: %d)", params.split_mode_tensor_parallel_scheduling});
     options.push_back({ "*",         "-sot, --split-output-tensor [N]", "Split output tensor (no arg=all GPUs, N=top N GPUs by VRAM) (default: %d)", params.split_output_tensor});
     options.push_back({ "*",         "-sas,  --scheduler-async",        "Async evaluation of compute graphs (default: %d)", params.scheduler_async});
+    options.push_back({ "*",         "-pipe, --pipeline,",              "Preloader lookahead pipeline (experimental): %d)", params.pipeline});
     options.push_back({ "*",         "-smc,  --sched-max-copies,",      "Max graph parallel copies (default: %d)", params.sched_max_copies});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
@@ -4702,6 +4707,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.split_mode_tensor_parallel_scheduling = params.split_mode_tensor_parallel_scheduling;
     //cparams.split_mode_f16    = params.split_mode_f16;
     cparams.scheduler_async   = params.scheduler_async;
+    cparams.pipeline          = params.pipeline;
     cparams.sched_max_copies  = params.sched_max_copies;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
@@ -5783,6 +5789,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");
     fprintf(stream, "ser: %d,%g # default: -1,0\n", params.min_experts, params.thresh_experts);
+    fprintf(stream, "pipeline: %s # default: false (experimental)\n", params.pipeline ? "true" : "false");
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 
     const std::vector<float> tensor_split_vector(params.tensor_split, params.tensor_split + llama_max_devices());
