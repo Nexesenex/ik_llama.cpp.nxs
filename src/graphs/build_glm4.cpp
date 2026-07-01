@@ -60,6 +60,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
                         model.layers[il].wq, model.layers[il].bq,
                         model.layers[il].wk, model.layers[il].bk,
                         model.layers[il].wv, model.layers[il].bv,
+                        model.layers[il].wkv, model.layers[il].bkv,
                         model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0.f, il);
 
                 // apply RoPE
@@ -324,6 +325,7 @@ ggml_cgraph * llm_build_context::build_glm4_with_mtp() {
                     layer.wq, layer.bq,
                     layer.wk, layer.bk,
                     layer.wv, layer.bv,
+                    layer.wkv, layer.bkv,
                     layer.attn_q_norm, layer.attn_k_norm, 0.f, il);
 
             Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
@@ -449,6 +451,7 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
                 mtp_layer.wq, mtp_layer.bq,
                 mtp_layer.wk, mtp_layer.bk,
                 mtp_layer.wv, mtp_layer.bv,
+                nullptr, nullptr,
                 mtp_layer.attn_q_norm, mtp_layer.attn_k_norm,
                 0.f, il);
         Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
