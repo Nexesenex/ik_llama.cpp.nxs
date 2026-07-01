@@ -68,6 +68,7 @@ ggml_cgraph * llm_build_context::build_llama() {
                     model.layers[il].wq, model.layers[il].bq,
                     model.layers[il].wk, model.layers[il].bk,
                     model.layers[il].wv, model.layers[il].bv,
+                    model.layers[il].wkv, model.layers[il].bkv,
                     nullptr, nullptr, hparams.f_attention_scale, il);
 
             if (use_rope) {
