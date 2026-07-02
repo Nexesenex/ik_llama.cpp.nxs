@@ -212,6 +212,7 @@ static std::vector<llama_token> mtp_speculative_gen_draft(
     struct llama_context * ctx,
     int n_draft,
     float p_min,
+    bool backend_sampling,
     llama_token id_last,
     llama_pos n_past,
     llama_seq_id seq_id,
@@ -323,6 +324,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
             ctx,
             params.n_max,
             params.p_min,
+            params.backend_sampling,
             id_last,
             n_past,
             seq_id,
@@ -1863,6 +1865,7 @@ bool common_speculative_load_draft_model(
 
     params.model_dft = loaded_model;
     params.cparams_dft = common_context_params_to_llama(params_dft);
+    params.cparams_dft.backend_sampling = params.backend_sampling;
     return true;
 }
 
@@ -1891,9 +1894,10 @@ bool common_speculative_prepare_mtp_runtime(
         params.cparams_dft = common_context_params_to_llama(params_mtp);
     }
 
-    params.cparams_dft.mtp         = true;
-    params.cparams_dft.mtp_op_type = MTP_OP_WARMUP;
-    params.cparams_dft.embeddings  = true;
+    params.cparams_dft.mtp              = true;
+    params.cparams_dft.mtp_op_type      = MTP_OP_WARMUP;
+    params.cparams_dft.embeddings       = true;
+    params.cparams_dft.backend_sampling = params.backend_sampling;
 
     return true;
 }
@@ -2838,6 +2842,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     struct llama_context * ctx,
     int n_draft,
     float p_min,
+    bool backend_sampling,
     llama_token id_last,
     llama_pos n_past,
     llama_seq_id seq_id,
@@ -2894,7 +2899,15 @@ std::vector<llama_token> mtp_speculative_gen_draft(
             break;
         }
 
-        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, 0, prob_ptr);
+        llama_token id_next;
+        if (backend_sampling && p_min == 0.0f) {
+            id_next = llama_get_logits_argmax_ith(ctx, 0);
+            if (id_next == LLAMA_TOKEN_NULL) {
+                id_next = common_sampler_sample_speculative(smpl, ctx, 0, nullptr);
+            }
+        } else {
+            id_next = common_sampler_sample_speculative(smpl, ctx, 0, prob_ptr);
+        }
 
         if (i > 0 && prob_ptr && prob < p_min) {
             break;

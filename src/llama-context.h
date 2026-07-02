@@ -241,6 +241,10 @@ struct llama_context {
     size_t  logits_size = 0; // capacity (of floats) for logits
     float * logits      = nullptr;
 
+    // argmax output (1-dimensional array: [n_outputs])
+    // populated by backend sampling when cparams.backend_sampling is true
+    std::vector<int32_t> logits_argmax;
+
     std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
     size_t  output_size = 0; // capacity (of tokens positions) for the output buffers
     int32_t n_outputs   = 0; // number of actually-used outputs in the current ubatch or last logical batch
