@@ -5615,7 +5615,7 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
-            // Add ARGMAX node to the MTP draft graph for backend sampling
+            // Add ARGMAX or TOPK node to the MTP draft graph for backend sampling
             if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && cparams.backend_sampling) {
                 struct ggml_tensor * result_output = nullptr;
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
@@ -5631,9 +5631,15 @@ static int llama_decode_internal(
                         /*.no_alloc   =*/ true,
                     };
                     struct ggml_context * argmax_ctx = ggml_init(argmax_params);
-                    struct ggml_tensor * argmax = ggml_argmax(argmax_ctx, result_output);
-                    ggml_set_name(argmax, "result_argmax");
-                    ggml_build_forward_expand(gf, argmax);
+                    if (cparams.max_candidates > 1) {
+                        struct ggml_tensor * topk = ggml_topk(argmax_ctx, result_output, cparams.max_candidates);
+                        ggml_set_name(topk, "result_argmax");
+                        ggml_build_forward_expand(gf, topk);
+                    } else {
+                        struct ggml_tensor * argmax = ggml_argmax(argmax_ctx, result_output);
+                        ggml_set_name(argmax, "result_argmax");
+                        ggml_build_forward_expand(gf, argmax);
+                    }
                 }
             }
             ggml_backend_sched_alloc_graph(lctx.sched, gf);
@@ -5782,7 +5788,7 @@ static int llama_decode_internal(
                 if (argmax_tensor) {
                     ggml_backend_t backend_argmax = ggml_backend_sched_get_tensor_backend(lctx.sched, argmax_tensor);
                     if (backend_argmax != nullptr) {
-                        const int32_t n_argmax = argmax_tensor->ne[0];
+                        const int64_t n_argmax = ggml_nelements(argmax_tensor);
                         lctx.logits_argmax.resize(n_argmax);
                         ggml_backend_tensor_get_async(backend_argmax, argmax_tensor,
                             lctx.logits_argmax.data(), 0,
