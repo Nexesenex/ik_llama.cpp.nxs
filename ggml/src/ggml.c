@@ -15144,32 +15144,36 @@ static void ggml_compute_forward_topk_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
+    const size_t bitmap_ints = ((size_t)ne00 + 31) / 32;
+    // Ensure no overflow
+    GGML_ASSERT(bitmap_ints <= (size_t)(1 << 30));
+
     for (int64_t r = ith; r < nrows; r += nth) {
         const float * row = (const float *) src0->data + r * ne00;
         float * out = (float *) dst->data;
 
-        int32_t selected[256]; // K <= 256 asserted in ggml_topk
+        uint32_t * bitmap = (uint32_t *)calloc(bitmap_ints, sizeof(uint32_t));
+        GGML_ASSERT(bitmap != NULL);
+
         int n_selected = 0;
 
         while (n_selected < K) {
             float max_val = -FLT_MAX;
             int32_t max_idx = -1;
             for (int64_t c = 0; c < ne00; ++c) {
-                bool skip = false;
-                for (int s = 0; s < n_selected; ++s) {
-                    if (selected[s] == c) { skip = true; break; }
-                }
-                if (skip) continue;
+                if (bitmap[c >> 5] & (1u << (c & 31))) continue;
                 if (row[c] > max_val) {
                     max_val = row[c];
-                    max_idx = c;
+                    max_idx = (int32_t)c;
                 }
             }
-            selected[n_selected] = max_idx;
+            bitmap[max_idx >> 5] |= (1u << (max_idx & 31));
             out[n_selected * nrows + r] = max_val;
             out[(K + n_selected) * nrows + r] = (float)max_idx;
             ++n_selected;
         }
+
+        free(bitmap);
     }
 }
 
