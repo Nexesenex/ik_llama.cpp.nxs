@@ -14894,13 +14894,28 @@ static void ggml_compute_forward_topk_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const size_t bitmap_ints = ((size_t)ne00 + 31) / 32;
-    // Ensure no overflow
-    GGML_ASSERT(bitmap_ints <= (size_t)(1 << 30));
-
     for (int64_t r = ith; r < nrows; r += nth) {
         const float * row = (const float *) src0->data + r * ne00;
         float * out = (float *) dst->data;
+
+        // Fast path for K=1: single argmax pass, no bitmap needed
+        if (K == 1) {
+            float max_val = -FLT_MAX;
+            int32_t max_idx = -1;
+            for (int64_t c = 0; c < ne00; ++c) {
+                if (row[c] > max_val) {
+                    max_val = row[c];
+                    max_idx = (int32_t)c;
+                }
+            }
+            out[r] = max_val;
+            out[1 * nrows + r] = (float)max_idx;
+            continue;
+        }
+
+        // General path: bitmap for O(1) skip checks
+        const size_t bitmap_ints = ((size_t)ne00 + 31) / 32;
+        GGML_ASSERT(bitmap_ints <= (size_t)(1 << 30));
 
         uint32_t * bitmap = (uint32_t *)calloc(bitmap_ints, sizeof(uint32_t));
         GGML_ASSERT(bitmap != NULL);
