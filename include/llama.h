@@ -1124,6 +1124,11 @@ extern "C" {
     // Returns LLAMA_TOKEN_NULL if backend sampling is not active or position is out of range.
     LLAMA_API llama_token llama_get_logits_argmax_ith(struct llama_context * ctx, int32_t i);
 
+    // Get the top-K token ID and its logit value for MTP draft position i, rank k.
+    // Returns LLAMA_TOKEN_NULL if backend sampling is not active or position/rank is out of range.
+    // If logit_value_out is not null, fills it with the raw logit value.
+    LLAMA_API llama_token llama_get_logits_topk_ith(struct llama_context * ctx, int32_t i, int32_t k, float * logit_value_out);
+
     // Get all output token embeddings.
     // when pooling_type == LLAMA_POOLING_TYPE_NONE or when using a generative model,
     // the embeddings for which llama_batch.logits[i] != 0 are stored contiguously

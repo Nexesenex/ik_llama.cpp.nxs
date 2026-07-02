@@ -7288,7 +7288,7 @@ struct ggml_tensor * ggml_topk(
         is_node = true;
     }
 
-    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, k, a->ne[1]);
+    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2, k, a->ne[1]);
 
     result->op   = GGML_OP_TOPK;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -15131,22 +15131,23 @@ static void ggml_compute_forward_topk_f32(
     GGML_ASSERT(ggml_is_contiguous(src0));
     GGML_ASSERT(ggml_is_contiguous(dst));
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_I32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
     GGML_ASSERT(K > 0);
-    GGML_ASSERT((int64_t)K == dst->ne[0]);
+    GGML_ASSERT((int64_t)K == dst->ne[1]);
+    GGML_ASSERT(dst->ne[0] == 2);
 
     const int64_t ne00 = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
+
+    GGML_ASSERT(dst->ne[2] == nrows);
 
     const int ith = params->ith;
     const int nth = params->nth;
 
     for (int64_t r = ith; r < nrows; r += nth) {
         const float * row = (const float *) src0->data + r * ne00;
-        int32_t * out_row = (int32_t *) dst->data + r * K;
+        float * out = (float *) dst->data;
 
-        // Copy indices and sort values (simple O(N*K) selection)
-        // Use an array to track selected indices
         int32_t selected[256]; // K <= 256 asserted in ggml_topk
         int n_selected = 0;
 
@@ -15165,7 +15166,8 @@ static void ggml_compute_forward_topk_f32(
                 }
             }
             selected[n_selected] = max_idx;
-            out_row[n_selected] = max_idx;
+            out[n_selected * nrows + r] = max_val;
+            out[(K + n_selected) * nrows + r] = (float)max_idx;
             ++n_selected;
         }
     }

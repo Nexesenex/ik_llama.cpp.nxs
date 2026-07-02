@@ -1257,8 +1257,10 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
-    // top-k indices along rows, K stored in op_params[0]
-    // output shape: [K, nrows] int32
+    // top-k indices and values along rows, K stored in op_params[0]
+    // output shape: [2, K, nrows] F32
+    //   plane 0: top-K logit values (float32)
+    //   plane 1: top-K indices stored as float32 (cast to int32_t on CPU)
     GGML_API struct ggml_tensor * ggml_topk(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
