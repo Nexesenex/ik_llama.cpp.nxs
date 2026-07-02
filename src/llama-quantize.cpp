@@ -290,6 +290,7 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_IQ5_K_R4:
             case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q5_K:   new_type = GGML_TYPE_Q6_0;   break;
+            case GGML_TYPE_Q6_1:
             case GGML_TYPE_IQ6_K:
             case GGML_TYPE_Q6_K_R4:
             case GGML_TYPE_Q8_K_R8:
