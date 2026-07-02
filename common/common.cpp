@@ -1615,6 +1615,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.speculative.backend_sampling = true;
         return true;
     }
+    if (arg == "-sdmc" || arg == "--spec-draft-max-candidates") {
+        CHECK_ARG
+        params.speculative.spec_max_candidates = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "--chunks") {
         CHECK_ARG
         params.n_chunks = std::stoi(argv[i]);
@@ -3439,6 +3444,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                               "legacy --spec-stage, --draft-*, --spec-ngram-*, --suffix-* and -mtp flags are rejected" });
     options.push_back({ "*", "--spec-autotune",          "automatically tune speculative params to maximize tokens/sec" });
     options.push_back({ "*",           "sdbs,  --spec-draft-backend-sampling", "offload draft token sampling to GPU backend (default: on)" });
+    options.push_back({ "*",           "sdmc,  --spec-draft-max-candidates N", "top-K candidates for GPU backend sampling (default: %d, 0 = argmax)", 0 });
 
     options.push_back({ "retrieval" });
     options.push_back({ "retrieval",   "       --context-file FNAME",   "file to load context from (repeat to specify multiple files)" });
