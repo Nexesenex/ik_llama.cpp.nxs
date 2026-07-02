@@ -5920,6 +5920,15 @@ bool create_tensors_helper::create_tensors() {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
+                    {
+                        int nr = layer.ffn_down->ne[0];
+                        for (int64_t g = 128; g > ffn_granularity; g /= 2) {
+                            if (nr % g == 0) {
+                                ffn_granularity = (int)g;
+                                break;
+                            }
+                        }
+                    }
                     auto split = create_split(layer.ffn_down->ne[0], ffn_granularity, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.ffn_down), model.split_vram_reserve_factor,
                         model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                     LLAMA_LOG_DEBUG("  split_ffn:"); for ([[maybe_unused]] auto s : split) LLAMA_LOG_DEBUG(" %d", s); LLAMA_LOG_DEBUG("\n");
@@ -5940,6 +5949,15 @@ bool create_tensors_helper::create_tensors() {
                     if (ggml_is_quantized(layer.ffn_down_exps->type)) {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down_exps->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
+                    }
+                    {
+                        int nr = layer.ffn_down_exps->ne[0];
+                        for (int64_t g = 128; g > ffn_granularity; g /= 2) {
+                            if (nr % g == 0) {
+                                ffn_granularity = (int)g;
+                                break;
+                            }
+                        }
                     }
                     ffn_split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.ffn_down_exps), model.split_vram_reserve_factor,
                         model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
@@ -6001,6 +6019,15 @@ bool create_tensors_helper::create_tensors() {
                                 auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
                                 if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                             }
+                            {
+                                int nr = layer.ffn_down_shexp->ne[0];
+                                for (int64_t g = 128; g > ffn_granularity; g /= 2) {
+                                    if (nr % g == 0) {
+                                        ffn_granularity = (int)g;
+                                        break;
+                                    }
+                                }
+                            }
                             std::vector<float> ratios(ffn_split.size());
                             float sum = 0;
                             for (int j = 0; j < int(ffn_split.size()); ++j) {
@@ -6015,6 +6042,15 @@ bool create_tensors_helper::create_tensors() {
                             if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
                                 auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
                                 if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
+                            }
+                            {
+                                int nr = layer.ffn_down_shexp->ne[0];
+                                for (int64_t g = 128; g > ffn_granularity; g /= 2) {
+                                    if (nr % g == 0) {
+                                        ffn_granularity = (int)g;
+                                        break;
+                                    }
+                                }
                             }
                             split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.ffn_down_shexp), model.split_vram_reserve_factor,
                                 model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
@@ -6162,6 +6198,14 @@ bool create_tensors_helper::create_tensors() {
                     std::vector<int> split;
                     int nr = model.output->ne[1];
                     int granularity = 16;
+                    {
+                        for (int64_t g = 128; g > granularity; g /= 2) {
+                            if (nr % g == 0) {
+                                granularity = (int)g;
+                                break;
+                            }
+                        }
+                    }
                     if (model.split_output_tensor > 1 && model.split_output_tensor < (int)model.splits.size()) {
                         int n_devices = (int)mem_used.size();
                         std::vector<std::pair<size_t, int>> remaining;
