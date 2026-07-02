@@ -606,6 +606,7 @@ extern "C" {
         GGML_OP_SUM_ROWS,
         GGML_OP_MEAN,
         GGML_OP_ARGMAX,
+        GGML_OP_TOPK,
         GGML_OP_REPEAT,
         GGML_OP_REPEAT_BACK,
         GGML_OP_CONCAT,
@@ -1250,6 +1251,13 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_argmax(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
+
+    // top-k indices along rows, K stored in op_params[0]
+    // output shape: [K, nrows] int32
+    GGML_API struct ggml_tensor * ggml_topk(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int k);
 
 
     // if a is the same shape as b, and a is not parameter, return a
