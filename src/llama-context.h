@@ -406,6 +406,7 @@ struct llama_context {
     bool prepare_mtp_graph_inputs(
         struct llama_context & lctx);
     void set_mtp_op_type(llama_mtp_op_type value);
+    void set_skip_logits_d2h(bool value);
 
     int max_nodes(int n_tokens, int n_kv) const;
 };

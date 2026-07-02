@@ -1599,6 +1599,10 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     // Set which, if any, MTP operation the context will use
     LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
 
+    // When true, skip the D2H transfer of the full logits tensor in MTP draft mode.
+    // Must only be used when the caller reads argmax via llama_get_logits_argmax_ith.
+    LLAMA_API void llama_set_skip_logits_d2h(struct llama_context * ctx, bool skip);
+
     LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 
     LLAMA_API bool llama_reload_changed_tensors(struct llama_context * ctx);
