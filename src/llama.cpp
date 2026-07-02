@@ -5575,9 +5575,8 @@ static int llama_decode_internal(
         struct ggml_tensor * res  = gf->nodes[gf->n_nodes - 1];
         struct ggml_tensor * embd = nullptr;
 
-        // DFlash GPU argmax draft_argmax node
-        if (lctx.dflash.draft_tokens_tensor != nullptr &&
-            strcmp(res->name, "result_output") != 0) {
+        // The last node might not be result_output (e.g. DFlash draft_argmax or backend sampling result_argmax)
+        if (strcmp(res->name, "result_output") != 0) {
             for (int i = gf->n_nodes - 2; i >= 0; --i) {
                 if (strcmp(gf->nodes[i]->name, "result_output") == 0) {
                     res = gf->nodes[i];
