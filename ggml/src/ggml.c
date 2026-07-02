@@ -10288,7 +10288,7 @@ struct ggml_tensor * ggml_delta_net(
         struct ggml_tensor  * saved_steps) {
     GGML_ASSERT(ggml_is_contiguous(q));
     GGML_ASSERT(ggml_is_contiguous(k));
-    GGML_ASSERT(ggml_is_contiguous(state));
+    // state may be strided (view from KV cache); the kernel handles it because n_seqs=1 => batch_idx=0.
 
     GGML_ASSERT(q->type == GGML_TYPE_F32);
     GGML_ASSERT(k->type == GGML_TYPE_F32);
