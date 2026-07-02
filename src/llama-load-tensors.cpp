@@ -4995,6 +4995,15 @@ bool create_tensors_helper::create_tensors() {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
+                    {
+                        int nr = layer.ffn_down->ne[0];
+                        for (int64_t g = 128; g > ffn_granularity; g /= 2) {
+                            if (nr % g == 0) {
+                                ffn_granularity = (int)g;
+                                break;
+                            }
+                        }
+                    }
                     auto split = create_split(layer.ffn_down->ne[0], ffn_granularity, cur_splits, mem_used);
                     LLAMA_LOG_DEBUG("  split_ffn:"); for ([[maybe_unused]] auto s : split) LLAMA_LOG_DEBUG(" %d", s); LLAMA_LOG_DEBUG("\n");
                     prepare_split_tensors(0, ctx_split, layer.ffn_down, layer.split_ffn_down, split, mem_used);
@@ -5014,6 +5023,15 @@ bool create_tensors_helper::create_tensors() {
                     if (ggml_is_quantized(layer.ffn_down_exps->type)) {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down_exps->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
+                    }
+                    {
+                        int nr = layer.ffn_down_exps->ne[0];
+                        for (int64_t g = 128; g > ffn_granularity; g /= 2) {
+                            if (nr % g == 0) {
+                                ffn_granularity = (int)g;
+                                break;
+                            }
+                        }
                     }
                     ffn_split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, cur_splits, mem_used);
                     LLAMA_LOG_DEBUG("  split_ffn_exps:"); for ([[maybe_unused]] auto s : ffn_split) LLAMA_LOG_DEBUG(" %d", s);
@@ -5055,6 +5073,15 @@ bool create_tensors_helper::create_tensors() {
                     if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
+                    }
+                    {
+                        int nr = layer.ffn_down_shexp->ne[0];
+                        for (int64_t g = 128; g > ffn_granularity; g /= 2) {
+                            if (nr % g == 0) {
+                                ffn_granularity = (int)g;
+                                break;
+                            }
+                        }
                     }
                     auto split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, cur_splits, mem_used);
                     bool ok = true;
@@ -5135,7 +5162,17 @@ bool create_tensors_helper::create_tensors() {
                     LLAMA_LOG_INFO("%s: not splitting output tensor becausee buffer is host\n", __func__);
                 } else {
                     auto ctx_split = ctx_map[model.buft_output.buft_matrix];
-                    auto split = create_split(model.output->ne[1], 16, model.splits, mem_used);
+                    int nr = model.output->ne[1];
+                    int granularity = 16;
+                    {
+                        for (int64_t g = 128; g > granularity; g /= 2) {
+                            if (nr % g == 0) {
+                                granularity = (int)g;
+                                break;
+                            }
+                        }
+                    }
+                    auto split = create_split(nr, granularity, model.splits, mem_used);
                     prepare_split_tensors(1, ctx_split, model.output, model.split_output, split, mem_used);
                     if (auto it = split_tensors.find(model.output_norm); it != split_tensors.end() && !ggml_backend_buft_is_host(model.buft_output.buft_matrix)) {
                         auto ctx_split = ctx_map[model.buft_output.buft_matrix];
