@@ -2268,58 +2268,53 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 //   - output_ready_events[bid] synchronizes producers and consumers
                 //   - unrelated splits progress in parallel across backends
                 auto gpu_compute = [&](int ith) {
-                    struct ggml_backend_sched_split * splits = sched->splits;
+                    int const bid = ith;
 
                     std::vector<int32_t> ids;
                     std::vector<uint32_t> unique_ids;
                     ggml_tensor * last_ids_tensor = nullptr;
 
-                    for (int i = 0; i < sched->n_splits; i++) {
-                        auto split = &splits[i];
-                        int bid = split->backend_id;
+                    // iterate only this backend's splits (no skipped items, better cache)
+                    for (auto split : sched->backend_splits[bid]) {
+                        // For cross-backend inputs, wait on source backends' output-ready events
+                        for (int j = 0; j < split->n_inputs; j++) {
+                            int src_bid = tensor_backend_id(split->inputs[j]);
+                            if (src_bid >= 0 && src_bid != bid) {
+                                if (auto ev = sched->output_ready_events[src_bid]) {
+                                    ggml_backend_event_wait(sched->backends[bid], ev);
+                                }
+                            }
+                        }
 
-                        if (ith == bid) {
-                            // For cross-backend inputs, wait on source backends' output-ready events
-                            for (int j = 0; j < split->n_inputs; j++) {
-                                ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[j]);
-                                int src_bid = ggml_backend_sched_backend_id(sched, input_backend);
+                        // For REDUCE splits, wait on source backends' output-ready events
+                        if (split->graph.n_nodes > 0 && split->graph.nodes[0]->op == GGML_OP_REDUCE) {
+                            auto node = split->graph.nodes[0];
+                            int n = node->op_params[1];
+                            for (int j = 0; j < n; ++j) {
+                                if (!node->src[j]) continue;
+                                int src_bid = tensor_backend_id(node->src[j]);
                                 if (src_bid >= 0 && src_bid != bid) {
                                     if (auto ev = sched->output_ready_events[src_bid]) {
                                         ggml_backend_event_wait(sched->backends[bid], ev);
                                     }
                                 }
                             }
+                        }
 
-                            // For REDUCE splits, wait on source backends' output-ready events
-                            if (split->graph.n_nodes > 0 && split->graph.nodes[0]->op == GGML_OP_REDUCE) {
-                                auto node = split->graph.nodes[0];
-                                int n = node->op_params[1];
-                                for (int j = 0; j < n; ++j) {
-                                    if (!node->src[j]) continue;
-                                    int src_bid = tensor_backend_id(node->src[j]);
-                                    if (src_bid >= 0 && src_bid != bid) {
-                                        if (auto ev = sched->output_ready_events[src_bid]) {
-                                            ggml_backend_event_wait(sched->backends[bid], ev);
-                                        }
-                                    }
-                                }
-                            }
+                        ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync,
+                            ids, unique_ids, last_ids_tensor);
 
-                            ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync,
-                                ids, unique_ids, last_ids_tensor);
+                        sched->statuses[bid] = ggml_backend_sched_eval(sched, sched->backends[bid], split);
 
-                            sched->statuses[ith] = ggml_backend_sched_eval(sched, sched->backends[bid], split);
+                        // signal consumers: this backend's output is ready
+                        if (auto ev = sched->output_ready_events[bid]) {
+                            ggml_backend_event_record(ev);
+                        }
 
-                            // signal consumers: this backend's output is ready
-                            if (auto ev = sched->output_ready_events[bid]) {
-                                ggml_backend_event_record(ev);
-                            }
-
-                            // record event for next split's needs_sync wait
-                            if (sched->n_copies > 1 && split->n_inputs > 0) {
-                                if (sched->events[bid][sched->cur_copy] != NULL) {
-                                    ggml_backend_event_record(sched->events[bid][sched->cur_copy]);
-                                }
+                        // record event for next split's needs_sync wait
+                        if (sched->n_copies > 1 && split->n_inputs > 0) {
+                            if (sched->events[bid][sched->cur_copy] != NULL) {
+                                ggml_backend_event_record(sched->events[bid][sched->cur_copy]);
                             }
                         }
                     }
