@@ -250,7 +250,7 @@ struct llama_context {
     // argmax/topk output: indices
     // populated by backend sampling when cparams.backend_sampling is true
     // For rank k at output position i: logits_argmax[i * K + k] = token_id
-    // where K = cparams.max_candidates (or 1 if not set)
+    // where K = cparams.spec_max_candidates (or 1 if not set)
     std::vector<int32_t> logits_argmax;
 
     // top-k logit values (same indexing as logits_argmax)

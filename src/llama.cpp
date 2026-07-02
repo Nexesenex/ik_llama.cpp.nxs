@@ -5636,7 +5636,7 @@ static int llama_decode_internal(
                     };
                     struct ggml_context * argmax_ctx = ggml_init(argmax_params);
                     {
-                        int topk_k = cparams.max_candidates > 0 ? cparams.max_candidates : 1;
+                        int topk_k = cparams.spec_max_candidates > 0 ? cparams.spec_max_candidates : 1;
                         struct ggml_tensor * topk = ggml_topk(argmax_ctx, result_output, topk_k);
                         ggml_set_name(topk, "result_argmax");
                         ggml_build_forward_expand(gf, topk);
@@ -6811,6 +6811,7 @@ struct llama_context_params llama_context_default_params() {
         /*.sched_max_copies            =*/ -1,
         /*.mtp                         =*/ false,
         /*.backend_sampling             =*/ true,
+        /*.spec_max_candidates          =*/ 0,
         /*.mtp_op_type                 =*/ MTP_OP_NONE,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
@@ -7287,6 +7288,7 @@ struct llama_context * llama_init_from_model(
     cparams.cuda_params      = params.cuda_params;
     cparams.mtp              = params.mtp;
     cparams.backend_sampling = params.backend_sampling;
+    cparams.spec_max_candidates  = params.spec_max_candidates;
     cparams.worst_graph_tokens = params.worst_case_tokens;
 
     cparams.reduce_type      = params.type_reduce;

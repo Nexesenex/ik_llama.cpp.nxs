@@ -1867,6 +1867,8 @@ bool common_speculative_load_draft_model(
     params.model_dft = loaded_model;
     params.cparams_dft = common_context_params_to_llama(params_dft);
     params.cparams_dft.backend_sampling = params.backend_sampling;
+    params.cparams_dft.spec_max_candidates  = params.spec_max_candidates;
+
     return true;
 }
 
@@ -1899,6 +1901,7 @@ bool common_speculative_prepare_mtp_runtime(
     params.cparams_dft.mtp_op_type      = MTP_OP_WARMUP;
     params.cparams_dft.embeddings       = true;
     params.cparams_dft.backend_sampling = params.backend_sampling;
+    params.cparams_dft.spec_max_candidates  = params.spec_max_candidates;
 
     return true;
 }
@@ -2892,7 +2895,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     // Skip full logits D2H when backend sampling is active:
     // - p_min == 0: always safe (argmax/top-1 only, greedy)
     // - p_min > 0:  need logit values for probability estimation.
-    //               With max_candidates >= 2, top-K values are available
+    //               With spec_max_candidates >= 2, top-K values are available
     //               for approximate softmax. With K=1, probability is 1.0
     //               (no early termination, but still correct).
     const bool skip_d2h = backend_sampling;

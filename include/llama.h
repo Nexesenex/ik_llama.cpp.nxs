@@ -505,6 +505,7 @@ extern "C" {
         int  sched_max_copies;   // max number of graph parallel copies (default: from GGML_SCHED_MAX_COPIES)
         bool mtp;   // Activate MTP if supported
         bool backend_sampling; // offload draft sampling to the backend (default: true)
+        int  spec_max_candidates;   // top-K for backend sampling (0 = argmax, default: 0)
         enum llama_mtp_op_type mtp_op_type;
 
         // Abort callback
