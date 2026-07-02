@@ -117,6 +117,7 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
     // state from KV cache has a strided last dim (nb[3] = state_row_size > S_v * S_v * H_v * sizeof(float));
     // the kernel handles this natively because n_seqs=1 always, making batch_idx=0, so the stride is never
     // used for address arithmetic. skip the wasted ggml_cont D2D copy.
+    GGML_ASSERT(n_seqs == 1 && "delta_net state contiguity skip requires n_seqs == 1");
     ggml_tensor * state_flat = ggml_reshape_4d(ctx0, state, S_v, S_v * H_v, 1, n_seqs);
 
     cb(q,         "q_fused", il);
