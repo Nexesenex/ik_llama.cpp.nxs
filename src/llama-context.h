@@ -247,9 +247,17 @@ struct llama_context {
     size_t  logits_size = 0; // capacity (of floats) for logits
     float * logits      = nullptr;
 
-    // argmax output (1-dimensional array: [n_outputs])
+    // argmax/topk output: indices
     // populated by backend sampling when cparams.backend_sampling is true
+    // For rank k at output position i: logits_argmax[i * K + k] = token_id
+    // where K = cparams.max_candidates (or 1 if not set)
     std::vector<int32_t> logits_argmax;
+
+    // top-k logit values (same indexing as logits_argmax)
+    std::vector<float> logits_argmax_values;
+
+    // number of top-k candidates stored per output position
+    int32_t logits_argmax_K = 0;
 
     std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
     size_t  output_size = 0; // capacity (of tokens positions) for the output buffers

@@ -5619,7 +5619,7 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
-            // Add ARGMAX or TOPK node to the MTP draft graph for backend sampling
+            // Add TOPK node to the MTP draft graph for backend sampling
             if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && cparams.backend_sampling) {
                 struct ggml_tensor * result_output = nullptr;
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
@@ -5635,14 +5635,11 @@ static int llama_decode_internal(
                         /*.no_alloc   =*/ true,
                     };
                     struct ggml_context * argmax_ctx = ggml_init(argmax_params);
-                    if (cparams.max_candidates > 1) {
-                        struct ggml_tensor * topk = ggml_topk(argmax_ctx, result_output, cparams.max_candidates);
+                    {
+                        int topk_k = cparams.max_candidates > 0 ? cparams.max_candidates : 1;
+                        struct ggml_tensor * topk = ggml_topk(argmax_ctx, result_output, topk_k);
                         ggml_set_name(topk, "result_argmax");
                         ggml_build_forward_expand(gf, topk);
-                    } else {
-                        struct ggml_tensor * argmax = ggml_argmax(argmax_ctx, result_output);
-                        ggml_set_name(argmax, "result_argmax");
-                        ggml_build_forward_expand(gf, argmax);
                     }
                 }
             }
@@ -5793,14 +5790,35 @@ static int llama_decode_internal(
                 if (argmax_tensor) {
                     ggml_backend_t backend_argmax = ggml_backend_sched_get_tensor_backend(lctx.sched, argmax_tensor);
                     if (backend_argmax != nullptr) {
-                        const int64_t n_argmax = ggml_nelements(argmax_tensor);
-                        lctx.logits_argmax.resize(n_argmax);
+                        // Tensor is F32 shape [2, K, nrows]:
+                        //   plane 0 = values, plane 1 = indices (as float)
+                        const int64_t K_val = argmax_tensor->ne[1];
+                        lctx.logits_argmax_K = (int32_t)K_val;
+                        const int64_t nrows = argmax_tensor->ne[2];
+                        const size_t n_floats = (size_t)ggml_nelements(argmax_tensor); // 2 * K * nrows
+                        std::vector<float> buf(n_floats);
                         ggml_backend_tensor_get_async(backend_argmax, argmax_tensor,
-                            lctx.logits_argmax.data(), 0,
-                            n_argmax * sizeof(int32_t));
+                            buf.data(), 0,
+                            n_floats * sizeof(float));
+                        // Decompose into indices and values
+                        const int64_t n_total = K_val * nrows;
+                        lctx.logits_argmax.resize((size_t)n_total);
+                        lctx.logits_argmax_values.resize((size_t)n_total);
+                        for (int64_t r = 0; r < nrows; ++r) {
+                            for (int64_t k = 0; k < K_val; ++k) {
+                                const int64_t off = k * nrows + r;
+                                lctx.logits_argmax_values[(size_t)(r * K_val + k)] = buf[(size_t)off];
+                                lctx.logits_argmax[(size_t)(r * K_val + k)] = (int32_t)buf[(size_t)((K_val + k) * nrows + r)];
+                            }
+                        }
                         have_argmax = true;
                     }
                 }
+            }
+            if (!have_argmax) {
+                lctx.logits_argmax_K = 0;
+                lctx.logits_argmax.clear();
+                lctx.logits_argmax_values.clear();
             }
             // If the caller asked to skip the full logits D2H (e.g. when p_min == 0),
             // suppress the normal logits extraction and rely solely on argmax.
@@ -10176,10 +10194,31 @@ llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t
 }
 
 llama_token llama_get_logits_argmax_ith(struct llama_context * ctx, int32_t i) {
-    if ((size_t) i >= ctx->logits_argmax.size()) {
+    int32_t K = ctx->logits_argmax_K;
+    if (K == 0) {
         return LLAMA_TOKEN_NULL;
     }
-    return (llama_token) ctx->logits_argmax[(size_t) i];
+    size_t offset = (size_t)i * (size_t)K;
+    if (offset >= ctx->logits_argmax.size()) {
+        return LLAMA_TOKEN_NULL;
+    }
+    return (llama_token) ctx->logits_argmax[offset];
+}
+
+llama_token llama_get_logits_topk_ith(struct llama_context * ctx, int32_t i, int32_t k, float * logit_value_out) {
+    int32_t K = ctx->logits_argmax_K;
+    if (K == 0) {
+        return LLAMA_TOKEN_NULL;
+    }
+    if (k >= K) { return LLAMA_TOKEN_NULL; }
+    size_t offset = (size_t)i * (size_t)K + (size_t)k;
+    if (offset >= ctx->logits_argmax.size()) {
+        return LLAMA_TOKEN_NULL;
+    }
+    if (logit_value_out) {
+        *logit_value_out = ctx->logits_argmax_values[offset];
+    }
+    return (llama_token) ctx->logits_argmax[offset];
 }
 
 float * llama_get_embeddings(struct llama_context * ctx) {

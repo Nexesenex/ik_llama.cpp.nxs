@@ -2889,7 +2889,13 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         i0 = 1;
     }
 
-    const bool skip_d2h = backend_sampling && p_min == 0.0f;
+    // Skip full logits D2H when backend sampling is active:
+    // - p_min == 0: always safe (argmax/top-1 only, greedy)
+    // - p_min > 0:  need logit values for probability estimation.
+    //               With max_candidates >= 2, top-K values are available
+    //               for approximate softmax. With K=1, probability is 1.0
+    //               (no early termination, but still correct).
+    const bool skip_d2h = backend_sampling;
     int n_decode = 0;
     for (int i = i0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
@@ -2908,6 +2914,20 @@ std::vector<llama_token> mtp_speculative_gen_draft(
             id_next = llama_get_logits_argmax_ith(ctx, 0);
             if (id_next == LLAMA_TOKEN_NULL) {
                 id_next = common_sampler_sample_speculative(smpl, ctx, 0, nullptr);
+            }
+        } else if (backend_sampling && p_min > 0.0f) {
+            float top1_val;
+            id_next = llama_get_logits_topk_ith(ctx, 0, 0, &top1_val);
+            if (id_next == LLAMA_TOKEN_NULL) {
+                id_next = common_sampler_sample_speculative(smpl, ctx, 0, prob_ptr);
+            } else {
+                float sum_exp = 1.0f;
+                for (int k = 1; ; ++k) {
+                    float val_k;
+                    if (llama_get_logits_topk_ith(ctx, 0, k, &val_k) == LLAMA_TOKEN_NULL) break;
+                    sum_exp += std::exp(val_k - top1_val);
+                }
+                prob = 1.0f / sum_exp;
             }
         } else {
             id_next = common_sampler_sample_speculative(smpl, ctx, 0, prob_ptr);
