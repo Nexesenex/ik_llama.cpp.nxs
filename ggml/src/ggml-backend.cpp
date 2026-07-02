@@ -2268,10 +2268,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                     // iterate only this backend's splits (no skipped items, better cache)
                     for (auto split : sched->backend_splits[bid]) {
+                        // Deduplicate waits per backend: avoid redundant event-wait
+                        // commands in the GPU stream when multiple inputs come from
+                        // the same source backend.
+                        bool waited[GGML_SCHED_MAX_BACKENDS] = {false};
+
                         // For cross-backend inputs, wait on source backends' output-ready events
                         for (int j = 0; j < split->n_inputs; j++) {
                             int src_bid = tensor_backend_id(split->inputs[j]);
-                            if (src_bid >= 0 && src_bid != bid) {
+                            if (src_bid >= 0 && src_bid != bid && !waited[src_bid]) {
+                                waited[src_bid] = true;
                                 if (auto ev = sched->output_ready_events[src_bid]) {
                                     ggml_backend_event_wait(sched->backends[bid], ev);
                                 }
@@ -2285,7 +2291,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             for (int j = 0; j < n; ++j) {
                                 if (!node->src[j]) continue;
                                 int src_bid = tensor_backend_id(node->src[j]);
-                                if (src_bid >= 0 && src_bid != bid) {
+                                if (src_bid >= 0 && src_bid != bid && !waited[src_bid]) {
+                                    waited[src_bid] = true;
                                     if (auto ev = sched->output_ready_events[src_bid]) {
                                         ggml_backend_event_wait(sched->backends[bid], ev);
                                     }
