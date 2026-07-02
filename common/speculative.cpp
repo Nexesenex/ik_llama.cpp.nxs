@@ -2889,6 +2889,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         i0 = 1;
     }
 
+    const bool skip_d2h = backend_sampling && p_min == 0.0f;
     int n_decode = 0;
     for (int i = i0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
@@ -2896,9 +2897,11 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         common_batch_add(mtp_batch, current_input_id, draft_pos, {seq_id}, true);
 
         ++n_decode;
+        llama_set_skip_logits_d2h(ctx, skip_d2h);
         if (llama_decode(ctx, mtp_batch) != 0) {
             break;
         }
+        llama_set_skip_logits_d2h(ctx, false);
 
         llama_token id_next;
         if (backend_sampling && p_min == 0.0f) {
@@ -2934,6 +2937,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
             break;
         }
     }
+    llama_set_skip_logits_d2h(ctx, false);
     llama_batch_free(mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 

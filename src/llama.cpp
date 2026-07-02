@@ -757,6 +757,10 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
     cparams.mtp_op_type = value;
 }
 
+void llama_context::set_skip_logits_d2h(bool value) {
+    cparams.skip_logits_d2h = value;
+}
+
 llama_context::~llama_context() {
     if (dflash.kv.cache_sched != nullptr) {
         ggml_backend_sched_free(dflash.kv.cache_sched);
@@ -5782,7 +5786,8 @@ static int llama_decode_internal(
             if (dflash_skip_logits) {
                 res = nullptr;
             }
-            // MTP draft backend sampling: additionally read the GPU-side argmax result
+            // MTP draft backend sampling: read the GPU-side argmax/topk result
+            bool have_argmax = false;
             if (!dflash_skip_logits && cparams.mtp_op_type == MTP_OP_DRAFT_GEN && cparams.backend_sampling) {
                 struct ggml_tensor * argmax_tensor = lctx.sampling_topk_tensor;
                 if (argmax_tensor) {
@@ -5793,8 +5798,14 @@ static int llama_decode_internal(
                         ggml_backend_tensor_get_async(backend_argmax, argmax_tensor,
                             lctx.logits_argmax.data(), 0,
                             n_argmax * sizeof(int32_t));
+                        have_argmax = true;
                     }
                 }
+            }
+            // If the caller asked to skip the full logits D2H (e.g. when p_min == 0),
+            // suppress the normal logits extraction and rely solely on argmax.
+            if (have_argmax && cparams.skip_logits_d2h) {
+                res = nullptr;
             }
         }
         if (res) {
@@ -10081,6 +10092,10 @@ int32_t llama_decode(
 
 void llama_set_mtp_op_type(llama_context * ctx, llama_mtp_op_type mtp_op_type) {
     ctx->set_mtp_op_type(mtp_op_type);
+}
+
+void llama_set_skip_logits_d2h(struct llama_context * ctx, bool skip) {
+    ctx->set_skip_logits_d2h(skip);
 }
 
 void llama_synchronize(struct llama_context * ctx) {

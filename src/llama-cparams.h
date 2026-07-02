@@ -53,6 +53,7 @@ struct llama_cparams {
     float thresh_experts;
     bool mtp;
     bool backend_sampling;
+    bool skip_logits_d2h; // skip full logits D2H (use argmax/topk instead)
     int  worst_graph_tokens;
     int  max_candidates = 0; // top-k for backend sampling (0 = use argmax / full logits)
 
