@@ -32,9 +32,11 @@ static __global__ void topk_f32(
     float * s_maxval = (float *)(smem + bitmap_ints * sizeof(int));
     int   * s_argmax = (int   *)(smem + bitmap_ints * sizeof(int) + 32 * sizeof(float));
 
-    // Initialize bitmap to 0
-    for (int i = threadIdx.x; i < bitmap_ints; i += blockDim.x) {
-        bitmap[i] = 0;
+    // Initialize bitmap only when K > 1 (K=1 is a single argmax pass)
+    if (K > 1) {
+        for (int i = threadIdx.x; i < bitmap_ints; i += blockDim.x) {
+            bitmap[i] = 0;
+        }
     }
     __syncthreads();
 
@@ -44,7 +46,7 @@ static __global__ void topk_f32(
 
         // Scan this thread's columns, using the bitmap for O(1) skip
         for (int32_t col = threadIdx.x; col < ncols; col += blockDim.x) {
-            if (bitmap[col >> 5] & (1u << (col & 31))) continue;
+            if (K > 1 && (bitmap[col >> 5] & (1u << (col & 31)))) continue;
             const float val = rowx[col];
             if (val > maxval) {
                 maxval = val;
@@ -91,7 +93,9 @@ static __global__ void topk_f32(
             // Plane 0: values, Plane 1: indices
             dst[k * nrows + row] = maxval;
             dst[(K + k) * nrows + row] = (float)argmax;
-            bitmap[argmax >> 5] |= (1u << (argmax & 31));
+            if (K > 1) {
+                bitmap[argmax >> 5] |= (1u << (argmax & 31));
+            }
         }
         __syncthreads();
     }
