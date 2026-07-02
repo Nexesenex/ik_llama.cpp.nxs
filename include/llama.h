@@ -504,6 +504,7 @@ extern "C" {
         int  pipeline;          // 0=off, 1=lookahead, 2=selfcopy (experimental)
         int  sched_max_copies;   // max number of graph parallel copies (default: from GGML_SCHED_MAX_COPIES)
         bool mtp;   // Activate MTP if supported
+        bool backend_sampling; // offload draft sampling to the backend (default: true)
         enum llama_mtp_op_type mtp_op_type;
 
         // Abort callback
@@ -1111,6 +1112,10 @@ extern "C" {
     // Get the argmax token ID for DFlash draft position i without materializing full logits.
     // Returns LLAMA_TOKEN_NULL if argmax is not available (falls back to logits path).
     LLAMA_API llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i);
+
+    // Get the argmax token ID for MTP draft position i via backend sampling.
+    // Returns LLAMA_TOKEN_NULL if backend sampling is not active or position is out of range.
+    LLAMA_API llama_token llama_get_logits_argmax_ith(struct llama_context * ctx, int32_t i);
 
     // Get all output token embeddings.
     // when pooling_type == LLAMA_POOLING_TYPE_NONE or when using a generative model,

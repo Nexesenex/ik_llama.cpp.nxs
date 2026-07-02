@@ -5615,6 +5615,27 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
+            // Add ARGMAX node to the MTP draft graph for backend sampling
+            if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && cparams.backend_sampling) {
+                struct ggml_tensor * result_output = nullptr;
+                for (int i = gf->n_nodes - 1; i >= 0; --i) {
+                    if (strcmp(gf->nodes[i]->name, "result_output") == 0) {
+                        result_output = gf->nodes[i];
+                        break;
+                    }
+                }
+                if (result_output) {
+                    struct ggml_init_params argmax_params = {
+                        /*.mem_size   =*/ ggml_tensor_overhead() * 2 + ggml_graph_overhead(),
+                        /*.mem_buffer =*/ nullptr,
+                        /*.no_alloc   =*/ true,
+                    };
+                    struct ggml_context * argmax_ctx = ggml_init(argmax_params);
+                    struct ggml_tensor * argmax = ggml_argmax(argmax_ctx, result_output);
+                    ggml_set_name(argmax, "result_argmax");
+                    ggml_build_forward_expand(gf, argmax);
+                }
+            }
             ggml_backend_sched_alloc_graph(lctx.sched, gf);
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
@@ -5754,6 +5775,20 @@ static int llama_decode_internal(
                 && !lctx.dflash.draft_tokens.empty());
             if (dflash_skip_logits) {
                 res = nullptr;
+            }
+            // MTP draft backend sampling: additionally read the GPU-side argmax result
+            if (!dflash_skip_logits && cparams.mtp_op_type == MTP_OP_DRAFT_GEN && cparams.backend_sampling) {
+                struct ggml_tensor * argmax_tensor = lctx.sampling_topk_tensor;
+                if (argmax_tensor) {
+                    ggml_backend_t backend_argmax = ggml_backend_sched_get_tensor_backend(lctx.sched, argmax_tensor);
+                    if (backend_argmax != nullptr) {
+                        const int32_t n_argmax = argmax_tensor->ne[0];
+                        lctx.logits_argmax.resize(n_argmax);
+                        ggml_backend_tensor_get_async(backend_argmax, argmax_tensor,
+                            lctx.logits_argmax.data(), 0,
+                            n_argmax * sizeof(int32_t));
+                    }
+                }
             }
         }
         if (res) {
@@ -6740,6 +6775,7 @@ struct llama_context_params llama_context_default_params() {
         /*.pipeline                    =*/ 0,
         /*.sched_max_copies            =*/ -1,
         /*.mtp                         =*/ false,
+        /*.backend_sampling             =*/ true,
         /*.mtp_op_type                 =*/ MTP_OP_NONE,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
@@ -7215,6 +7251,7 @@ struct llama_context * llama_init_from_model(
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
     cparams.mtp              = params.mtp;
+    cparams.backend_sampling = params.backend_sampling;
     cparams.worst_graph_tokens = params.worst_case_tokens;
 
     cparams.reduce_type      = params.type_reduce;
@@ -10115,6 +10152,13 @@ llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t
         return LLAMA_TOKEN_NULL;
     }
     return ctx->dflash.draft_tokens[(size_t) i];
+}
+
+llama_token llama_get_logits_argmax_ith(struct llama_context * ctx, int32_t i) {
+    if ((size_t) i >= ctx->logits_argmax.size()) {
+        return LLAMA_TOKEN_NULL;
+    }
+    return (llama_token) ctx->logits_argmax[(size_t) i];
 }
 
 float * llama_get_embeddings(struct llama_context * ctx) {
