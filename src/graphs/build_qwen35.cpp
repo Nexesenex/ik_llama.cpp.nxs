@@ -74,8 +74,9 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         }
 
         if (lctx.cparams.mtp) {
-            cb(inpL, "result_mtp_embd", -1);
-            ggml_set_output(inpL);
+            auto mtp_hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
+            cb(mtp_hidden, "result_mtp_embd", -1);
+            ggml_set_output(mtp_hidden);
         }
 
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
@@ -153,11 +154,9 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         }
 
         if (lctx.cparams.mtp) {
-            //struct ggml_tensor * embd_copy = ggml_dup(ctx0, inpL);
-            //cb(embd_copy, "result_mtp_embd", -1);
-            //ggml_set_output(embd_copy);
-            cb(inpL, "result_mtp_embd", -1);
-            ggml_set_output(inpL);
+            auto mtp_hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
+            cb(mtp_hidden, "result_mtp_embd", -1);
+            ggml_set_output(mtp_hidden);
         }
 
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
