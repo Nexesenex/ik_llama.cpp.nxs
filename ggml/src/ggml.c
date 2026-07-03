@@ -27381,7 +27381,6 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     // if (src1 && src1->type != vec_dot_type) {
                         cur += ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
                         quant_buf = ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
-                        cur += quant_buf;
                     }
                     const int n_as = src0->ne[2];
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
