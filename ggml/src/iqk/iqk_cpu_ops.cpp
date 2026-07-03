@@ -67,7 +67,7 @@ inline float32x4_t v_sigmoid(float32x4_t x) {
     return vdivq_f32(one, one_plus_exp_neg_x);
 }
 #endif
-#ifdef __AVX2__
+#if defined(__AVX2__) && defined(__FMA__)
 inline __m256 v_sigmoid(__m256 x) {
     const __m256 one = _mm256_set1_ps(1);
     const __m256 zero  = _mm256_setzero_ps();
