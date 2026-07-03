@@ -27356,8 +27356,8 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += (2 * n_as + 2) * sizeof(int32_t);  // active_count + active_experts[] + chunk_start[] (prefix-sum)
                     // Fused MoE silu path (ggml_compute_forward_fused_moe_silu) uses a
                     // larger scratch layout. Ensure buffer is big enough when fusion
-                    // might trigger (n_tokens <= 4, matching the fusion gate).
-                    if (src1 && ggml_nrows(src1) <= 4 && src1->type != vec_dot_type) {
+                    // might trigger (n_tokens <= n_batch, matching the fusion gate).
+                    if (src1 && (int)ggml_nrows(src1) <= cgraph->n_batch && src1->type != vec_dot_type) {
                         const size_t row_size  = ggml_row_size(vec_dot_type, src1->ne[0]);
                         const int64_t n_tokens = ggml_nrows(src1);
                         const int64_t nr0      = src0->ne[1];
@@ -27541,7 +27541,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
                 struct ggml_tensor * glu = cgraph->nodes[node_n + 2];
                 if (node1->op == GGML_OP_MUL_MAT_ID && glu->op == GGML_OP_GLU &&
                     node->src[1] == node1->src[1] && node->src[2] == node1->src[2] &&
-                    ggml_nrows(node->src[1]) <= 4 &&
+                    (int)ggml_nrows(node->src[1]) <= params.shared->n_batch &&
                     ggml_get_glu_op(glu) == GGML_GLU_OP_SWIGLU) {
                     ggml_compute_forward_fused_moe_silu(&params, node, node1, glu);
                     fused_nodes = 2;
