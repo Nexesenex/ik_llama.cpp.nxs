@@ -704,6 +704,21 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
             std::replace(arg.begin(), arg.end(), '_', '-');
         }
         if (!gpt_params_find_arg(argc, argv, arg, params, i, invalid_param)) {
+            if (params.ignore_unknown) {
+                fprintf(stderr, "warning: ignoring unknown argument: %s", argv[i]);
+                std::string raw = argv[i];
+                if (raw.find('=') == std::string::npos && !raw.empty() && raw[0] == '-') {
+                    if (i + 1 < argc) {
+                        std::string next = argv[i + 1];
+                        if (!next.empty() && next[0] != '-') {
+                            i++;
+                            fprintf(stderr, " %s", next.c_str());
+                        }
+                    }
+                }
+                fprintf(stderr, "\n");
+                continue;
+            }
             throw std::invalid_argument("error: unknown argument: " + arg);
         }
         if (invalid_param) {
@@ -2431,6 +2446,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--dry-run" || arg == "-dr") {
         params.dry_run = true;
+        return true;
+    }
+    if (arg == "-iu" || arg == "--ignore-unknown") {
+        params.ignore_unknown = true;
         return true;
     }
     if (arg == "--in-prefix-bos") {
