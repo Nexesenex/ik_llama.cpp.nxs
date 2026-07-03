@@ -18250,21 +18250,29 @@ static void ggml_compute_forward_fused_moe_silu(
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
     const int64_t nr0 = ne01;
-    const int64_t nchunk0_calc = (nr0 + 64 - 1) / 64;
-    const int64_t nchunk0 = (nchunk0_calc < (int64_t)nth * 4 && !ggml_is_numa()) ? nchunk0_calc : nth;
 
     void * wdata_cur = params->wdata;
 
-    // Per-(expert, token) atomic counters at the start of scratch space.
-    // Must come before quantization buffers to avoid write-after-init overwrite
-    // (thread 0 initialises counters then all threads write quant data).
-    char (*atomic_current_chunk)[CACHE_LINE_SIZE] = (char (*)[CACHE_LINE_SIZE])wdata_cur;
-    const size_t counter_bytes = n_as * n_tokens * CACHE_LINE_SIZE;
+    // Mapping data stored at start of scratch space:
+    //   matrix_row_counts: n_as * int64_t
+    //   matrix_rows:       n_as * n_tokens * {int32_t id, int32_t iid1}
+    //   pool_start:        active_count + active_list[n_as] + chunk_start[n_as+1]
+    struct mmid_row_mapping_fused {
+        int32_t i1;
+        int32_t i2;
+    };
+    int64_t * matrix_row_counts = (int64_t *)wdata_cur;
+    struct mmid_row_mapping_fused * mmid_rows = (struct mmid_row_mapping_fused *)(matrix_row_counts + n_as);
+    int32_t * pool_start = (int32_t *)(mmid_rows + n_as * n_tokens);
+    const size_t mapping_end = n_as * sizeof(int64_t) +
+        n_as * n_tokens * sizeof(struct mmid_row_mapping_fused) +
+        (2 * n_as + 2) * sizeof(int32_t);
+    const size_t quant_off = (mapping_end + CACHE_LINE_SIZE - 1) & ~(CACHE_LINE_SIZE - 1);
 
     const char * src1_q = (const char *) src1->data;
     if (src1->type != vec_dot_type) {
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
-        char * base = (char *)wdata_cur + counter_bytes;
+        char * base = (char *)wdata_cur + quant_off;
         if (n_tokens <= 4) {
             // TG/MTP: per-thread quant, no barrier needed
             const size_t stride = ne11 * row_size + CACHE_LINE_SIZE;
@@ -18284,73 +18292,91 @@ static void ggml_compute_forward_fused_moe_silu(
     }
 
     if (ith == 0) {
+        // Build per-expert (token, slot) mapping
+        memset(matrix_row_counts, 0, n_as * sizeof(int64_t));
         for (int64_t iid1 = 0; iid1 < n_tokens; ++iid1) {
             for (int id = 0; id < n_ids; ++id) {
-                const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
-                if (expert_idx >= 0 && expert_idx < n_as) {
-                    atomic_int * ctr = (atomic_int *)(atomic_current_chunk + expert_idx * n_tokens + iid1);
-                    atomic_store(ctr, nth);
-                }
+                const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+                if (i02 < 0 || i02 >= n_as) continue;
+                mmid_rows[i02 * n_tokens + matrix_row_counts[i02]] = (struct mmid_row_mapping_fused){(int32_t)id, (int32_t)iid1};
+                matrix_row_counts[i02] += 1;
             }
         }
+        // Build active_experts list and chunk_start prefix-sum
+        int32_t * active_list = pool_start + 1;
+        int32_t * chunk_start = active_list + n_as;
+        int64_t total_pairs = 0;
+        int n_active = 0;
+        for (int a = 0; a < n_as; a++) {
+            if (matrix_row_counts[a] <= 0) continue;
+            active_list[n_active] = a;
+            total_pairs += matrix_row_counts[a];
+            n_active++;
+        }
+        const int base_chunks = MAX(1, MIN(nth, (int)(nr0 / 16)));
+        int sum_chunks = 0;
+        chunk_start[0] = 0;
+        for (int i = 0; i < n_active; i++) {
+            const int a = active_list[i];
+            int c = (int)((int64_t)base_chunks * n_active * matrix_row_counts[a] / total_pairs);
+            c = MAX(1, MIN(nth, c));
+            sum_chunks += c;
+            chunk_start[i + 1] = sum_chunks;
+        }
+        pool_start[0] = n_active;
+
+        // Init chunk pool counter
+        atomic_store(&params->shared->current_chunk, 0);
     }
 
     ggml_barrier(params->shared);
 
     // PP: all threads switch to the shared quant buffer after the barrier
     if (src1->type != vec_dot_type && n_tokens > 4) {
-        src1_q = (const char *)wdata_cur + counter_bytes;
+        src1_q = (const char *)wdata_cur + quant_off;
     }
 
-    const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
+    // Cross-expert chunk pooling: threads steal row-chunks from a unified pool
+    const int32_t active_count = pool_start[0];
+    const int32_t * active_list = pool_start + 1;
+    const int32_t * chunk_start = active_list + n_as;
+    const int total_chunks = chunk_start[active_count];
 
-    for (int64_t iid1 = 0; iid1 < n_tokens; ++iid1) {
-        const char * token_activations = src1_q + iid1 * row_size;
+    int chunk_id;
+    while ((chunk_id = atomic_fetch_add(&params->shared->current_chunk, 1)) < total_chunks) {
+        // Binary search on chunk_start prefix-sum (O(log active_count))
+        int lo = 0, hi = active_count;
+        while (lo < hi) {
+            const int mid = (lo + hi) / 2;
+            if (chunk_start[mid] <= chunk_id) { lo = mid + 1; }
+            else                               { hi = mid;     }
+        }
+        const int idx   = lo - 1;
+        const int cur_a = active_list[idx];
+        const int local_chunk = chunk_id - chunk_start[idx];
+        const int chunks_for_expert = chunk_start[idx + 1] - chunk_start[idx];
 
-        for (int id = 0; id < n_ids; ++id) {
-            const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+        const char * gate_cur = (const char *) weights_gate->data + cur_a * gate_nb02;
+        const char * up_cur   = (const char *) weights_up->data   + cur_a * up_nb02;
 
-            // Prefetch next expert's gate/up weights while computing current expert.
-            // Spans both within-token and cross-token boundaries.
-#if defined(_MSC_VER) || defined(__SSE__)
-            int64_t pf_iid1 = iid1;
-            int     pf_id   = id + 1;
-            if (pf_id >= n_ids) { pf_iid1 = iid1 + 1; pf_id = 0; }
-            if (pf_iid1 < n_tokens) {
-                const int32_t next_expert = *(const int32_t *) ((const char *) ids->data + pf_iid1*ids->nb[1] + pf_id*ids->nb[0]);
-                if (next_expert >= 0 && next_expert < n_as) {
-                    _mm_prefetch((const char *) weights_gate->data + next_expert * gate_nb02, _MM_HINT_T0);
-                    _mm_prefetch((const char *) weights_up->data + next_expert * up_nb02, _MM_HINT_T0);
-                }
-            }
-#endif
+        // Row range for this chunk within this expert
+        const int64_t dr0 = (nr0 + chunks_for_expert - 1) / chunks_for_expert;
+        const int64_t ir0_start = dr0 * local_chunk;
+        const int64_t ir0_end = MIN(ir0_start + dr0, nr0);
 
-            if (expert_idx < 0 || expert_idx >= n_as) continue;
+        for (int64_t j = 0; j < matrix_row_counts[cur_a]; ++j) {
+            const struct mmid_row_mapping_fused mapping = mmid_rows[cur_a * n_tokens + j];
+            const int       id   = mapping.i1;
+            const int64_t   iid1 = mapping.i2;
 
-            const char * gate_cur = (const char *) weights_gate->data + expert_idx * gate_nb02;
-            const char * up_cur = (const char *) weights_up->data + expert_idx * up_nb02;
-
+            const char * token_activations = src1_q + iid1 * row_size;
             float * glu_col = (float *) ((char *) glu_node->data + id*glu_nb1 + iid1*glu_nb2);
 
-            atomic_int * current_chunk_ctr = (atomic_int *)(atomic_current_chunk + expert_idx * n_tokens + iid1);
-
-            int current_chunk = ith;
-            while (current_chunk < nchunk0) {
-                const int64_t ir0_start = dr0 * current_chunk;
-                const int64_t ir0_end = MIN(ir0_start + dr0, nr0);
-
-                for (int64_t ir0 = ir0_start; ir0 < ir0_end; ++ir0) {
-                    float gate_val, up_val;
-                    vec_dot(ne00, &gate_val, 0, gate_cur + ir0*gate_nb01, 0, token_activations, 0, 1);
-                    vec_dot(ne00, &up_val, 0, up_cur + ir0*up_nb01, 0, token_activations, 0, 1);
-                    glu_col[ir0] = ggml_silu_f32(gate_val) * up_val;
-                }
-
-                if (nth >= nchunk0) {
-                    break;
-                }
-
-                current_chunk = atomic_fetch_add(current_chunk_ctr, 1);
+            for (int64_t ir0 = ir0_start; ir0 < ir0_end; ++ir0) {
+                float gate_val, up_val;
+                vec_dot(ne00, &gate_val, 0, gate_cur + ir0*gate_nb01, 0, token_activations, 0, 1);
+                vec_dot(ne00, &up_val, 0, up_cur + ir0*up_nb01, 0, token_activations, 0, 1);
+                glu_col[ir0] = ggml_silu_f32(gate_val) * up_val;
             }
         }
     }
@@ -27380,10 +27406,13 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                         const int64_t nr0      = src0->ne[1];
                         const size_t full_quant = row_size * n_tokens;
                         const size_t fused_cur =
-                            n_as * n_tokens * CACHE_LINE_SIZE +
+                            n_as * sizeof(int64_t) +                                 // matrix_row_counts
+                            n_as * n_tokens * sizeof(int64_t) +                      // matrix_rows
+                            (2 * n_as + 2) * sizeof(int32_t) +                       // active_pool
+                            CACHE_LINE_SIZE +                                         // alignment
                             (n_tokens <= 4
-                                ? n_tasks * (full_quant + CACHE_LINE_SIZE) // TG: per-thread quant buffers
-                                : full_quant);                              // PP: shared quant buffer
+                                ? n_tasks * (full_quant + CACHE_LINE_SIZE) // TG: per-thread quant
+                                : full_quant);                              // PP: shared quant
                         cur = MAX((size_t)cur, fused_cur);
                     }
                 } break;
