@@ -951,8 +951,22 @@ inline float sum_row_squared(int ncols, const float * x) {
 }
 inline float sum_row_squared(int ncols, const ggml_half * x) {
     float sum = 0;
-    for (int j = 0; j < ncols; ++j) {
-        float v = GGML_FP16_TO_FP32(x[j]);
+    int i = 0;
+#if defined(__AVX2__) && defined(__F16C__) && defined(__FMA__)
+    __m256 vsum = _mm256_setzero_ps();
+    for (; i + 15 < ncols; i += 16) {
+        __m256i hw = _mm256_loadu_si256((const __m256i*)(x + i));
+        __m128i lo = _mm256_castsi256_si128(hw);
+        __m128i hi = _mm256_extracti128_si256(hw, 1);
+        __m256 f32_lo = _mm256_cvtph_ps(lo);
+        __m256 f32_hi = _mm256_cvtph_ps(hi);
+        vsum = _mm256_fmadd_ps(f32_lo, f32_lo, vsum);
+        vsum = _mm256_fmadd_ps(f32_hi, f32_hi, vsum);
+    }
+    sum = hsum_float_8(vsum);
+#endif
+    for (; i < ncols; ++i) {
+        float v = GGML_FP16_TO_FP32(x[i]);
         sum += v*v;
     }
     return sum;
