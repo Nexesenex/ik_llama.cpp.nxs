@@ -3460,11 +3460,11 @@ static bool llm_load_tensors(
         }
         if (tgt_model) {
             split_mode = tgt_model->split_mode;
-            if ((split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) &&
+            if ((split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || split_mode == LLAMA_SPLIT_MODE_ATTN) &&
                 (int)model.devices.size() < 2) {
                 LLAMA_LOG_WARN("\n=========================================================\n");
                 LLAMA_LOG_WARN("Target model uses split mode '%s' but this model has only %d device(s)\n",
-                        split_mode == LLAMA_SPLIT_MODE_GRAPH ? "graph" : "attn", (int)model.devices.size());
+                        split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? "tenpar - graph" : "attn", (int)model.devices.size());
                 LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
                 LLAMA_LOG_WARN("===========================================================\n\n");
                 split_mode = LLAMA_SPLIT_MODE_LAYER;
