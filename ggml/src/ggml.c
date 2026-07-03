@@ -18297,16 +18297,20 @@ static void ggml_compute_forward_fused_moe_silu(
         for (int id = 0; id < n_ids; ++id) {
             const int32_t expert_idx = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
 
-            // Prefetch next expert's gate/up weights while computing current expert
-            if (id + 1 < n_ids) {
-                const int32_t next_expert = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + (id+1)*ids->nb[0]);
-                if (next_expert >= 0 && next_expert < n_as) {
+            // Prefetch next expert's gate/up weights while computing current expert.
+            // Spans both within-token and cross-token boundaries.
 #if defined(_MSC_VER) || defined(__SSE__)
+            int64_t pf_iid1 = iid1;
+            int     pf_id   = id + 1;
+            if (pf_id >= n_ids) { pf_iid1 = iid1 + 1; pf_id = 0; }
+            if (pf_iid1 < n_tokens) {
+                const int32_t next_expert = *(const int32_t *) ((const char *) ids->data + pf_iid1*ids->nb[1] + pf_id*ids->nb[0]);
+                if (next_expert >= 0 && next_expert < n_as) {
                     _mm_prefetch((const char *) weights_gate->data + next_expert * gate_nb02, _MM_HINT_T0);
                     _mm_prefetch((const char *) weights_up->data + next_expert * up_nb02, _MM_HINT_T0);
-#endif
                 }
             }
+#endif
 
             if (expert_idx < 0 || expert_idx >= n_as) continue;
 
