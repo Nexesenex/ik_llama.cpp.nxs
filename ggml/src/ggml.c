@@ -27376,23 +27376,15 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const struct ggml_tensor * src0 = node->src[0];
                     const struct ggml_tensor * src2 = node->src[2];
                     const enum ggml_type vec_dot_type = type_traits[src0->type].vec_dot_type;
-                    size_t quant_buf = 0;
                     if (src2->type != vec_dot_type) {
                     // if (src1 && src1->type != vec_dot_type) {
                         cur += ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
-                        quant_buf = ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
                     }
                     const int n_as = src0->ne[2];
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * ggml_nrows(src2) * sizeof(int64_t); // matrix_rows [n_as][n_tokens]
                     cur += (2 * n_as + 2) * sizeof(int32_t);  // active_count + active_experts[] + chunk_start[] (prefix-sum)
-                    if (src2 && ggml_nrows(src2) == 1) {
-                        const int64_t nr0 = src0->ne[1];
-                        const int64_t nchunk0 = (nr0 + 64 - 1) / 64;
-                        quant_buf = (quant_buf + CACHE_LINE_SIZE) * (nchunk0 < n_tasks ? nchunk0 : n_tasks);
-                    }
-                    cur += quant_buf + sizeof(int64_t);
                 } break;
             case GGML_OP_FUSED_UP_GATE:
                 {
