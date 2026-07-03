@@ -27361,7 +27361,6 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                         const size_t row_size  = ggml_row_size(vec_dot_type, src1->ne[0]);
                         const int64_t n_tokens = ggml_nrows(src1);
                         const int64_t nr0      = src0->ne[1];
-                        const int64_t nchunk0  = MIN((nr0 + 64 - 1) / 64, n_tasks);
                         const size_t full_quant = row_size * n_tokens;
                         // per-(expert,token) atomic counters + per-thread quant buffers
                         const size_t fused_cur =
