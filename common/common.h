@@ -613,6 +613,8 @@ struct gpt_params {
     bool sweep_bench_output_jsonl = false;
     bool minilog = false;
     bool dumplog = false;
+
+    std::string error_message;
 };
 
 
