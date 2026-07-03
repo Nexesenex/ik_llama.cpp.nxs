@@ -18263,16 +18263,24 @@ static void ggml_compute_forward_fused_moe_silu(
 
     const char * src1_q = (const char *) src1->data;
     if (src1->type != vec_dot_type) {
-        const size_t stride = ne11 * row_size + CACHE_LINE_SIZE;
-
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
-        char * wdata = (char *)wdata_cur + counter_bytes + ith * stride;
-        for (int64_t i11 = 0; i11 < ne11; ++i11) {
-            from_float((float *)((char *) src1->data + i11*nb11),
-                       (void *)(wdata + i11*row_size),
-                       ne10);
+        char * base = (char *)wdata_cur + counter_bytes;
+        if (n_tokens <= 4) {
+            // TG/MTP: per-thread quant, no barrier needed
+            const size_t stride = ne11 * row_size + CACHE_LINE_SIZE;
+            char * wdata = base + ith * stride;
+            for (int64_t i11 = 0; i11 < ne11; ++i11) {
+                from_float((float *)((char *) src1->data + i11*nb11),
+                           (void *)(wdata + i11*row_size), ne10);
+            }
+            src1_q = wdata;
+        } else if (ith == 0) {
+            // PP: thread 0 quantizes once into shared buffer
+            for (int64_t i11 = 0; i11 < ne11; ++i11) {
+                from_float((float *)((char *) src1->data + i11*nb11),
+                           (void *)(base + i11*row_size), ne10);
+            }
         }
-        src1_q = wdata;
     }
 
     if (ith == 0) {
@@ -18288,6 +18296,11 @@ static void ggml_compute_forward_fused_moe_silu(
     }
 
     ggml_barrier(params->shared);
+
+    // PP: all threads switch to the shared quant buffer after the barrier
+    if (src1->type != vec_dot_type && n_tokens > 4) {
+        src1_q = (const char *)wdata_cur + counter_bytes;
+    }
 
     const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
 
@@ -27359,17 +27372,18 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += n_as * ggml_nrows(src1) * sizeof(int64_t); // matrix_rows [n_as][n_tokens]
                     cur += (2 * n_as + 2) * sizeof(int32_t);  // active_count + active_experts[] + chunk_start[] (prefix-sum)
                     // Fused MoE silu path (ggml_compute_forward_fused_moe_silu) uses a
-                    // larger scratch layout. Ensure buffer is big enough when fusion
-                    // might trigger (n_tokens <= n_batch, matching the fusion gate).
+                    // larger scratch layout when n_tokens <= 4 (per-thread quant buffers).
+                    // For larger batches the quant buffer is shared (thread 0 only).
                     if (src1 && (int)ggml_nrows(src1) <= cgraph->n_batch && src1->type != vec_dot_type) {
                         const size_t row_size  = ggml_row_size(vec_dot_type, src1->ne[0]);
                         const int64_t n_tokens = ggml_nrows(src1);
                         const int64_t nr0      = src0->ne[1];
                         const size_t full_quant = row_size * n_tokens;
-                        // per-(expert,token) atomic counters + per-thread quant buffers
                         const size_t fused_cur =
                             n_as * n_tokens * CACHE_LINE_SIZE +
-                            n_tasks * (full_quant + CACHE_LINE_SIZE);
+                            (n_tokens <= 4
+                                ? n_tasks * (full_quant + CACHE_LINE_SIZE) // TG: per-thread quant buffers
+                                : full_quant);                              // PP: shared quant buffer
                         cur = MAX((size_t)cur, fused_cur);
                     }
                 } break;
