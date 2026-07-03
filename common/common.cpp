@@ -817,6 +817,7 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
     } catch (const std::invalid_argument & ex) {
         fprintf(stderr, "%s\n", ex.what());
         params = params_org;
+        params.error_message = ex.what();
         return false;
     }
 
@@ -3512,6 +3513,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         printf("%s\n", desc.substr(start).c_str());
     }
     printf("\n");
+    if (!params.error_message.empty()) {
+        fprintf(stderr, "%s\n", params.error_message.c_str());
+    }
 }
 
 std::string gpt_params_get_system_info(const gpt_params & params) {
