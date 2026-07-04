@@ -2417,7 +2417,20 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-pipe" || arg == "--pipeline") {
-        params.pipeline = true;
+        if (i+1 < argc) {
+            std::string val(argv[i+1]);
+            if (val == "lookahead") {
+                params.pipeline = 1;
+                i++;
+                return true;
+            } else if (val == "selfcopy") {
+                params.pipeline = 2;
+                i++;
+                return true;
+            }
+        }
+        // default when no value: old -pipe boolean flag -> lookahead
+        params.pipeline = 1;
         return true;
     }
     if (arg == "-smc" || arg == "--sched-max-copies") {
@@ -3307,7 +3320,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-smtps, -smgs, --split-mode-tensor-parallel-scheduling, --split-mode-graph-scheduling,", "Force Split Mode Tensor Parallel (Graph) Scheduling (default: %d)", params.split_mode_tensor_parallel_scheduling});
     options.push_back({ "*",         "-sot, --split-output-tensor [N]", "Split output tensor (no arg=all GPUs, N=top N GPUs by VRAM) (default: %d)", params.split_output_tensor});
     options.push_back({ "*",         "-sas,  --scheduler-async",        "Async evaluation of compute graphs (default: %d)", params.scheduler_async});
-    options.push_back({ "*",         "-pipe, --pipeline,",              "Preloader lookahead pipeline (experimental): %d)", params.pipeline});
+    options.push_back({ "*",         "-pipe, --pipeline {lookahead,selfcopy}", "Pipeline mode (experimental): %s)", params.pipeline == 1 ? "lookahead" : params.pipeline == 2 ? "selfcopy" : "off"});
     options.push_back({ "*",         "-smc,  --sched-max-copies,",      "Max graph parallel copies (default: %d)", params.sched_max_copies});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
@@ -5789,7 +5802,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");
     fprintf(stream, "ser: %d,%g # default: -1,0\n", params.min_experts, params.thresh_experts);
-    fprintf(stream, "pipeline: %s # default: false (experimental)\n", params.pipeline ? "true" : "false");
+    fprintf(stream, "pipeline: %s # default: off (experimental)\n", params.pipeline == 1 ? "lookahead" : params.pipeline == 2 ? "selfcopy" : "off");
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 
     const std::vector<float> tensor_split_vector(params.tensor_split, params.tensor_split + llama_max_devices());
