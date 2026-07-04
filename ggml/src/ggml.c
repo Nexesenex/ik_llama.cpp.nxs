@@ -18198,6 +18198,22 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
                             matrix_rows + cur_a*mmid_stride, limit, local_chunk, chunks_for_expert)) GGML_ABORT("fatal error");
+
+#if defined(_MSC_VER) || defined(__SSE__)
+        if (local_chunk + 1 >= chunks_for_expert) {
+            const int next_idx = idx + 1;
+            if (next_idx < active_count) {
+                const int next_a = active_list[next_idx];
+                if (src0_2) {
+                    _mm_prefetch((const char *) src0_1->data + next_a * nb02, _MM_HINT_T0);
+                    _mm_prefetch((const char *) src0_2->data + next_a * nb02, _MM_HINT_T0);
+                } else {
+                    _mm_prefetch((const char *) src0_1->data + next_a * nb02, _MM_HINT_T0);
+                    _mm_prefetch((const char *) src0_1->data + next_a * nb02 + nb02/2, _MM_HINT_T0);
+                }
+            }
+        }
+#endif
     }
 
 #undef MMID_MATRIX_ROW
