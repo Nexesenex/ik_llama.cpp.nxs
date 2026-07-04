@@ -2354,21 +2354,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         if (!has_cpu_work) {
-        // IK_OPENMP: Standard parallel region without proc_bind
-        // proc_bind(close) tested and showed worse performance on Intel 265K
-        #pragma omp parallel num_threads(sched->n_backends)
-        {
-
-            int last_reduce = first_reduce;
-            int ith = omp_get_thread_num();
-
-            struct ggml_backend_sched_split * splits = sched->splits;
-
-            std::vector<int32_t> ids;
-            std::vector<uint32_t> unique_ids;
-            ggml_tensor * last_ids_tensor = nullptr;
-
-            if (sched->has_pipeline && ith == 0) {
+            if (sched->has_pipeline) {
                 // Preloader lookahead path:
                 //   - dedicated preloader thread copies inputs for future splits
                 //   - GPU threads evaluate using preloaded data
@@ -2478,69 +2464,84 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 sched->workers.clear();
 
                 preloader.join();
+                work_done = true;
             } else {
-                // Original path: single copy_thread, global barriers
-                for (int i = 0; i < sched->n_splits; i++) {
+                // IK_OPENMP: Standard parallel region without proc_bind
+                // proc_bind(close) tested and showed worse performance on Intel 265K
+                #pragma omp parallel num_threads(sched->n_backends)
+                {
+
+                    int last_reduce = first_reduce;
+                    int ith = omp_get_thread_num();
+
+                    struct ggml_backend_sched_split * splits = sched->splits;
+
+                    std::vector<int32_t> ids;
+                    std::vector<uint32_t> unique_ids;
+                    ggml_tensor * last_ids_tensor = nullptr;
+
+                    // Original path: single copy_thread, global barriers
+                    for (int i = 0; i < sched->n_splits; i++) {
 #if IK_PRINT_TIMING
-                    int64_t tim1 = ggml_time_us();
+                        int64_t tim1 = ggml_time_us();
 #endif
-                    struct ggml_backend_sched_split * split = &splits[i];
-                    int split_backend_id = split->backend_id;
-                    ggml_backend_t split_backend = sched->backends[split_backend_id];
+                        struct ggml_backend_sched_split * split = &splits[i];
+                        int split_backend_id = split->backend_id;
+                        ggml_backend_t split_backend = sched->backends[split_backend_id];
 
-                    bool needs_barrier = split->n_inputs > 0 || split->graph.nodes[0]->op == GGML_OP_REDUCE;
+                        bool needs_barrier = split->n_inputs > 0 || split->graph.nodes[0]->op == GGML_OP_REDUCE;
 
-                    if (needs_barrier) {
-                        #pragma omp barrier
-                    }
-
-                    if (split->n_inputs > 0) {
-                        int copy_thread = last_reduce >= 0 ? last_reduce : 0;
-                        if (ith == copy_thread) {
-                            ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
+                        if (needs_barrier) {
+                            #pragma omp barrier
                         }
-                        #pragma omp barrier
-                    }
 
-                    if (ith == split_backend_id) {
-
-                        sched->statuses[ith] = ggml_backend_sched_eval(sched, split_backend, split);
-
-                        if (split->n_inputs > 0 && !sched->own_cpy[split_backend_id]) {
-                            sched->needs_sync[split_backend_id] = true;
-                        } else {
-                            for (int j = 0; j < split->n_inputs; ++j) {
-                                if (ggml_backend_buffer_is_host(split->inputs[j]->buffer)) {
-                                    sched->needs_sync[split_backend_id] = true;
-                                }
+                        if (split->n_inputs > 0) {
+                            int copy_thread = last_reduce >= 0 ? last_reduce : 0;
+                            if (ith == copy_thread) {
+                                ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
                             }
+                            #pragma omp barrier
                         }
-                    }
 
-                    if (split->graph.nodes[0]->op == GGML_OP_REDUCE && i < sched->n_splits - 1) {
-                        last_reduce = split_backend_id;
                         if (ith == split_backend_id) {
-                            auto node = split->graph.nodes[0];
-                            int n = node->op_params[1];
-                            for (int j = 0; j < n; ++j) {
-                                if (node->src[j]) {
-                                    sched->needs_sync[j] = false;
+
+                            sched->statuses[ith] = ggml_backend_sched_eval(sched, split_backend, split);
+
+                            if (split->n_inputs > 0 && !sched->own_cpy[split_backend_id]) {
+                                sched->needs_sync[split_backend_id] = true;
+                            } else {
+                                for (int j = 0; j < split->n_inputs; ++j) {
+                                    if (ggml_backend_buffer_is_host(split->inputs[j]->buffer)) {
+                                        sched->needs_sync[split_backend_id] = true;
+                                    }
                                 }
                             }
                         }
-                        #pragma omp barrier
-                    }
 
-                    // record the event of this copy
-                    if (sched->n_copies > 1 && split->n_inputs > 0) {
-                        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                            ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
+                        if (split->graph.nodes[0]->op == GGML_OP_REDUCE && i < sched->n_splits - 1) {
+                            last_reduce = split_backend_id;
+                            if (ith == split_backend_id) {
+                                auto node = split->graph.nodes[0];
+                                int n = node->op_params[1];
+                                for (int j = 0; j < n; ++j) {
+                                    if (node->src[j]) {
+                                        sched->needs_sync[j] = false;
+                                    }
+                                }
+                            }
+                            #pragma omp barrier
+                        }
+
+                        // record the event of this copy
+                        if (sched->n_copies > 1 && split->n_inputs > 0) {
+                            if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                                ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
+                            }
                         }
                     }
                 }
+                work_done = true;
             }
-        }
-        work_done = true;
         }
 #endif
         if (!work_done) {
