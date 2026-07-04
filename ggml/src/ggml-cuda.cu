@@ -995,8 +995,8 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         { GGML_TYPE_IQ5_K_R4  , 4},
         { GGML_TYPE_IQ4_KS_R4 , 4},
         { GGML_TYPE_IQ5_KS_R4 , 4},
-        { GGML_TYPE_Q8_K_R16  , 4},
-        { GGML_TYPE_Q8_KV_R8  , 4},
+        { GGML_TYPE_Q8_K_R16  , 16},
+        { GGML_TYPE_Q8_KV_R8  , 8},
         { GGML_TYPE_Q8_K_R8   , 8},
     };
 
