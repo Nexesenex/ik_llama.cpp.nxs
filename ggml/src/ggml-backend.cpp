@@ -1161,6 +1161,9 @@ struct ggml_backend_sched_split {
     int i_end;
     struct ggml_tensor * inputs[GGML_SCHED_MAX_SPLIT_INPUTS];
     int n_inputs;
+    // per-input destination data pointer in input_memory_buf (set by prepare_graph)
+    // avoids stale data pointer when the same input tensor is used by multiple splits
+    char * input_dest_data[GGML_SCHED_MAX_SPLIT_INPUTS];
     // graph view of this split
     struct ggml_cgraph graph;
 };
@@ -1826,6 +1829,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 split->backend_id = node_backend_id;
                 split->i_start = i;
                 split->n_inputs = 0;
+                for (int _j = 0; _j < GGML_SCHED_MAX_SPLIT_INPUTS; _j++) split->input_dest_data[_j] = nullptr;
                 cur_backend_id = node_backend_id;
             }
 
@@ -2051,6 +2055,13 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
         ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[j]);
         struct ggml_tensor * input = split->inputs[j];
         struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
+        // use per-split destination pointer so that copies go to this split's
+        // input buffer region, even if the same cached tensor copy is shared
+        // across multiple splits
+        struct ggml_tensor input_cpy_dst = *input_cpy;
+        if (split->input_dest_data[j]) {
+            input_cpy_dst.data = split->input_dest_data[j];
+        }
 
         if (input->flags & GGML_TENSOR_FLAG_INPUT) {
             // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
@@ -2063,7 +2074,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                 }
                 synced_on_input = true;
             }
-            ggml_backend_tensor_copy(input, input_cpy);
+            ggml_backend_tensor_copy(input, &input_cpy_dst);
         } else {
             // wait for the split backend to finish using the input before overwriting it
             if (needs_sync[split_backend_id]) {
@@ -2140,7 +2151,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                         const size_t padding_end = last_id < n_expert - 1 ? std::min<size_t>(expert_size, padding) : 0;
 
                         ggml_backend_tensor_set_async(split_backend,
-                                input_cpy,
+                                &input_cpy_dst,
                                 (const uint8_t *)input->data + expert_offset, expert_offset,
                                 // copy a bit extra to ensure there are no NaNs in the padding
                                 expert_size_copy + padding_end);
@@ -2165,13 +2176,13 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
 
                 } else {
                     auto copy_size = ggml_nbytes(input);
-                    ggml_backend_tensor_set_async(split_backend, input_cpy, input->data, 0, copy_size);
+                    ggml_backend_tensor_set_async(split_backend, &input_cpy_dst, input->data, 0, copy_size);
                 }
 
             } else
                 // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                 // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
-                if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
+                if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, &input_cpy_dst)) {
                     ggml_backend_synchronize(input_backend);
                     if (needs_sync[split_backend_id]) {
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
@@ -2181,7 +2192,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                         }
                         needs_sync[split_backend_id] = k_set_sync;
                     }
-                    ggml_backend_tensor_copy(input, input_cpy);
+                    ggml_backend_tensor_copy(input, &input_cpy_dst);
                 }
         }
     }
@@ -2744,15 +2755,19 @@ static void ggml_sched_prepare_graph(ggml_backend_sched_t sched) {
             auto ptr = (char *)ggml_backend_buffer_get_base(sched->input_memory_bufs[backend_id]);
             for (int i = 0; i < int(sched->backend_splits[backend_id].size()); ++i) {
                 auto split = sched->backend_splits[backend_id][i];
-                size_t this_size = 0;
+                int n = 0;
                 for (int j = 0; j < split->n_inputs; ++j) {
                     if (!ggml_backend_buffer_is_host(split->inputs[j]->buffer)) {
-                        this_size += tensor_size(split->inputs[j]);
+                        n++;
                     }
                 }
-                if (this_size == 0) continue;
+                if (n == 0) continue;
+                // store per-split input destination pointers so that copy_inputs
+                // uses the correct buffer offset even if the same tensor copy
+                // is shared across multiple splits
                 for (int j = 0; j < split->n_inputs; ++j) {
-                    if (ggml_backend_buffer_is_host(split->inputs[j]->buffer)) continue;
+                    if (ggml_backend_buffer_is_host(split->inputs[j]->buffer)) { split->input_dest_data[j] = nullptr; continue; }
+                    split->input_dest_data[j] = ptr;
                     auto input_cpy = tensor_copy(split->inputs[j], backend_id, sched->cur_copy);
                     for (int k = 0; k < split->graph.n_nodes; ++k) {
                         auto node = split->graph.nodes[k];
