@@ -18385,6 +18385,17 @@ static void ggml_compute_forward_fused_moe_silu(
                 glu_col[ir0] = ggml_silu_f32(gate_val) * up_val;
             }
         }
+
+#if defined(_MSC_VER) || defined(__SSE__)
+        if (local_chunk + 1 >= chunks_for_expert) {
+            const int next_idx = idx + 1;
+            if (next_idx < active_count) {
+                const int next_a = active_list[next_idx];
+                _mm_prefetch((const char *) weights_gate->data + next_a * gate_nb02, _MM_HINT_T0);
+                _mm_prefetch((const char *) weights_up->data   + next_a * up_nb02,   _MM_HINT_T0);
+            }
+        }
+#endif
     }
 }
 
