@@ -523,7 +523,7 @@ struct gpt_params {
     int  split_output_tensor_subset = 0; // 0=off, -1=follow -sot, 1=all output GPUs, N>1=top N output GPUs
     bool output_subset_host   = false; // if true and the output logits subset is set, keep the full output tensor in host memory (CUDA_Host with CUDA, CPU otherwise) and free its GPU buffer
     bool scheduler_async   = false; // if true, in split mode graph the scheduler will use multiple threads to evaluate the graph
-    bool pipeline          = false; // if true, enable preloader lookahead pipeline (experimental)
+    int  pipeline          = 0; // 0=off, 1=lookahead, 2=selfcopy
     int  sched_max_copies  = -1;    // GGML_SCHED_MAX_COPIES override (-1 = default from cmake)
     int  fused_delta_net   = 0;     // use fused delta-net if number of tokens in the batch is less than this value
     bool has_mtp           = false; // enable MTP if supported by the model
