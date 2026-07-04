@@ -4733,6 +4733,7 @@ GGML_CALL size_t ggml_nbytes(const struct ggml_tensor * tensor) {
     }
     size_t nbytes;
     size_t blck_size = ggml_blck_size(tensor->type);
+    assert(blck_size != 0);
     if (blck_size == 1) {
         nbytes = ggml_type_size(tensor->type);
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
