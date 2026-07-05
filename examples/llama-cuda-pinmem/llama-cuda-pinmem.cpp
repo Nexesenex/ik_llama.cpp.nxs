@@ -24,6 +24,15 @@ static bool g_bare_mode = false;
 #define LOG_WARN(...)  fprintf(stdout, "warning: " __VA_ARGS__)
 #define LOG_DBG(...)   do { if (g_verbose) fprintf(stdout, "  [debug] " __VA_ARGS__); } while (0)
 
+enum display_unit {
+    DISPUNIT_AUTO,
+    DISPUNIT_MIB,
+    DISPUNIT_MB,
+    DISPUNIT_GIB,
+    DISPUNIT_GB,
+};
+static enum display_unit g_disp_unit = DISPUNIT_AUTO;
+
 // -----------------------------------------------------------------------
 // Pin method specification
 // -----------------------------------------------------------------------
@@ -122,6 +131,8 @@ static void print_usage(const char * prog) {
     LOG_INFO("  -M, --method M   Allocation method: va | malloc_p | malloc_np | amalloc_p | chost | all\n");
     LOG_INFO("                   (default: va = VirtualAlloc + cudaHostRegister)\n");
     LOG_INFO("  --list-methods   List available allocation methods and exit\n");
+    LOG_INFO("  -units, --units U Display unit: auto, MiB, MB, GiB, GB (default: auto)\n");
+    LOG_INFO("  --list-units     List available display units and exit\n");
     LOG_INFO("  --bare           Minimal init: llama_backend_init() only, then raw CUDA API.\n");
     LOG_INFO("                   Avoids ggml backend context state on all devices.\n");
     LOG_INFO("\n");
@@ -179,14 +190,30 @@ static size_t get_free_physical_ram() {
 }
 
 static void print_size(const char * label, size_t bytes, bool newline = true) {
-    if (bytes >= (1024LL * 1024LL * 1024LL)) {
-        LOG_INFO("%s%.2f GiB", label, bytes / (1024.0 * 1024.0 * 1024.0));
-    } else if (bytes >= (1024LL * 1024LL)) {
-        LOG_INFO("%s%.2f MiB", label, bytes / (1024.0 * 1024.0));
-    } else if (bytes >= 1024LL) {
-        LOG_INFO("%s%.2f KiB", label, bytes / 1024.0);
-    } else {
-        LOG_INFO("%s%zu B", label, bytes);
+    switch (g_disp_unit) {
+        case DISPUNIT_MIB:
+            LOG_INFO("%s%.2f MiB", label, bytes / (1024.0 * 1024.0));
+            break;
+        case DISPUNIT_MB:
+            LOG_INFO("%s%.2f MB", label, bytes / (1000.0 * 1000.0));
+            break;
+        case DISPUNIT_GIB:
+            LOG_INFO("%s%.2f GiB", label, bytes / (1024.0 * 1024.0 * 1024.0));
+            break;
+        case DISPUNIT_GB:
+            LOG_INFO("%s%.2f GB", label, bytes / (1000.0 * 1000.0 * 1000.0));
+            break;
+        default:
+            if (bytes >= (1024LL * 1024LL * 1024LL)) {
+                LOG_INFO("%s%.2f GiB", label, bytes / (1024.0 * 1024.0 * 1024.0));
+            } else if (bytes >= (1024LL * 1024LL)) {
+                LOG_INFO("%s%.2f MiB", label, bytes / (1024.0 * 1024.0));
+            } else if (bytes >= 1024LL) {
+                LOG_INFO("%s%.2f KiB", label, bytes / 1024.0);
+            } else {
+                LOG_INFO("%s%zu B", label, bytes);
+            }
+            break;
     }
     if (newline) {
         LOG_INFO("\n");
@@ -374,6 +401,7 @@ int main(int argc, char ** argv) {
     bool test_all = true;
     bool raw_ordinal = false;
     bool list_methods = false;
+    bool list_units = false;
     enum pin_method_id test_method = PIN_METHOD_VA;
     std::vector<int> test_devices;
 
@@ -400,6 +428,25 @@ int main(int argc, char ** argv) {
             test_method = m;
         } else if (strcmp(argv[i], "--list-methods") == 0) {
             list_methods = true;
+        } else if (strcmp(argv[i], "-units") == 0 || strcmp(argv[i], "--units") == 0) {
+            if (i + 1 >= argc) { LOG_ERR("-units requires an argument (MiB, MB, GiB, GB, auto)\n"); return 1; }
+            i++;
+            if (strcmp(argv[i], "MiB") == 0 || strcmp(argv[i], "mib") == 0) {
+                g_disp_unit = DISPUNIT_MIB;
+            } else if (strcmp(argv[i], "MB") == 0 || strcmp(argv[i], "mb") == 0) {
+                g_disp_unit = DISPUNIT_MB;
+            } else if (strcmp(argv[i], "GiB") == 0 || strcmp(argv[i], "gib") == 0) {
+                g_disp_unit = DISPUNIT_GIB;
+            } else if (strcmp(argv[i], "GB") == 0 || strcmp(argv[i], "gb") == 0) {
+                g_disp_unit = DISPUNIT_GB;
+            } else if (strcmp(argv[i], "auto") == 0) {
+                g_disp_unit = DISPUNIT_AUTO;
+            } else {
+                LOG_ERR("unknown unit '%s' (try: MiB, MB, GiB, GB, auto)\n", argv[i]);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--list-units") == 0) {
+            list_units = true;
         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--all") == 0) {
             test_all = true;
             test_devices.clear();
@@ -422,6 +469,16 @@ int main(int argc, char ** argv) {
             LOG_INFO("  %-10s %s\n", method_name((enum pin_method_id)i), method_desc((enum pin_method_id)i));
         }
         LOG_INFO("  %-10s Run all methods\n", "all");
+        return 0;
+    }
+
+    if (list_units) {
+        LOG_INFO("Available display units:\n");
+        LOG_INFO("  auto   Auto-select based on magnitude (default)\n");
+        LOG_INFO("  MiB    Mebibytes (1024^2)\n");
+        LOG_INFO("  MB     Megabytes (1000^2)\n");
+        LOG_INFO("  GiB    Gibibytes (1024^3)\n");
+        LOG_INFO("  GB     Gigabytes (1000^3)\n");
         return 0;
     }
 
