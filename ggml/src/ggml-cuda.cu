@@ -5439,15 +5439,6 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                     is_good = false;
                 }
             }
-            else if (parsed[0] == "pinemb") {
-                is_good = read_value(parsed[1], params.pinmem);
-                if (!is_good || params.pinmem < 0 || params.pinmem > 2) {
-                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...2] (pinemb is deprecated, use pinmem instead)\n", __func__, parsed[0].c_str(), params.pinmem);
-                    is_good = false;
-                } else {
-                    GGML_CUDA_LOG_INFO("pinemb is deprecated, please use pinmem instead\n");
-                }
-            }
         }
         if (!is_good) {
             GGML_CUDA_LOG_WARN("%s: invalid parameter %s (%d) -> ignored\n", __func__, value.c_str(), (int)parsed.size());
