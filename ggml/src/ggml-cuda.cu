@@ -1563,6 +1563,13 @@ static void * ggml_cuda_host_malloc(size_t size) {
     if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
         return nullptr;
     }
+
+    {
+        int cur_dev;
+        cudaGetDevice(&cur_dev);
+        GGML_CUDA_LOG_INFO("%s: current CUDA device = %d\n", __func__, cur_dev);
+    }
+
     constexpr double k_warn_limit = 8.0;
 
     void * ptr = nullptr;
