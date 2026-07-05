@@ -236,21 +236,28 @@ static TestResult test_device_pinned_max_method(int cuda_ordinal, size_t max_tes
         LOG_INFO(" free\n");
     }
 
-    LOG_INFO("  [4] Pinning test [method=%s]: sequence 1/1 -> 3/4 -> 1/2 -> ... down to 1 MiB\n",
-             method_name(method));
+    LOG_INFO("  [4] Pinning test (ascending, method=%s)\n", method_name(method));
 
-    const size_t min_chunk = 1ULL << 20;
-    size_t try_size = max_test_size;
+    // Predefined sizes in GiB, ascending, from small to workstation-scale
+    static const size_t test_gb[] = {
+        1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536
+    };
+    static const int num_gb = (int)(sizeof(test_gb) / sizeof(test_gb[0]));
+
+    int64_t t_start_total = ggml_time_us();
     int iteration = 0;
-    int stage = 0; // 0 = full, 1 = 3/4, 2+ = halving
 
-    while (try_size >= min_chunk) {
+    for (int si = 0; si < num_gb; si++) {
+        size_t try_size = (size_t)test_gb[si] * 1024ULL * 1024ULL * 1024ULL;
+
+        // Only try sizes that fit within the user's RAM or limit
+        if (try_size > max_test_size) {
+            continue;
+        }
+
         iteration++;
         auto t0 = ggml_time_us();
-
         LOG_INFO("  [%d] Trying ", iteration);
-        if (stage == 0) LOG_INFO("1/1 ");
-        else if (stage == 1) LOG_INFO("3/4 ");
         print_size("", try_size, false);
         LOG_INFO("... ");
 
@@ -258,23 +265,22 @@ static TestResult test_device_pinned_max_method(int cuda_ordinal, size_t max_tes
         void * ptr = nullptr;
         double alloc_ms = 0.0, register_ms = 0.0;
 
-        auto t1 = ggml_time_us();
-
         if (method == PIN_METHOD_CHOST) {
-            // Combined alloc+pin (cudaHostAlloc)
+            auto t1 = ggml_time_us();
             err = allocpin_chost(&ptr, try_size);
             alloc_ms = (ggml_time_us() - t1) / 1000.0;
 
             if (err == cudaSuccess) {
                 alloc_ok = true;
                 register_ms = 0.0;
+                LOG_INFO("cudaHostAlloc OK (%.1f ms)\n", alloc_ms);
             } else {
                 LOG_INFO("cudaHostAlloc FAILED: %s (%.1f ms)\n",
                          cudaGetErrorString(err), alloc_ms);
                 cudaGetLastError();
             }
         } else {
-            // Separate alloc + pin
+            auto t1 = ggml_time_us();
             switch (method) {
                 case PIN_METHOD_VA:        ptr = alloc_va(try_size);        break;
                 case PIN_METHOD_MALLOC_P:
@@ -285,13 +291,11 @@ static TestResult test_device_pinned_max_method(int cuda_ordinal, size_t max_tes
             alloc_ms = (ggml_time_us() - t1) / 1000.0;
 
             if (ptr == nullptr) {
-                const char * aname = method_name(method);
-                LOG_INFO("%s alloc FAILED (%.1f ms)\n", aname, alloc_ms);
-                goto advance;
+                LOG_INFO("alloc FAILED (%.1f ms)\n", alloc_ms);
+                goto done;
             }
 
             auto t2 = ggml_time_us();
-
             if (method == PIN_METHOD_MALLOC_NP) {
                 err = pin_nonportable(ptr, try_size);
             } else {
@@ -307,7 +311,6 @@ static TestResult test_device_pinned_max_method(int cuda_ordinal, size_t max_tes
                          alloc_ms, cudaGetErrorString(err), register_ms);
                 cudaGetLastError();
 
-                // Free the alloc'ed memory on register failure
                 switch (method) {
                     case PIN_METHOD_VA:        free_va(ptr);        break;
                     case PIN_METHOD_MALLOC_P:
@@ -315,22 +318,17 @@ static TestResult test_device_pinned_max_method(int cuda_ordinal, size_t max_tes
                     case PIN_METHOD_AMALLOC_P: free_amalloc(ptr);   break;
                     default: break;
                 }
-                goto advance;
+                goto done;
             }
         }
 
         if (alloc_ok) {
             result.bytes = try_size;
             result.iterations = iteration;
-            result.total_ms = (ggml_time_us() - t0) / 1000.0;
+            result.total_ms = (ggml_time_us() - t_start_total) / 1000.0;
             result.alloc_ms = alloc_ms;
             result.register_ms = register_ms;
 
-            LOG_INFO("  [OK]  Pinned ");
-            print_size("", try_size, false);
-            LOG_INFO(" on %s\n", label);
-
-            // Cleanup
             if (method == PIN_METHOD_CHOST) {
                 free_chost(ptr);
             } else {
@@ -343,18 +341,23 @@ static TestResult test_device_pinned_max_method(int cuda_ordinal, size_t max_tes
                     default: break;
                 }
             }
-            break;
         }
-
-advance:
-        // advance size: 1/1 -> 3/4 -> 1/2 -> 1/4 -> ...
-        if (stage == 0)      { stage = 1; try_size = max_test_size * 3 / 4; }
-        else if (stage == 1) { stage = 2; try_size = max_test_size / 2; }
-        else                 { try_size /= 2; }
     }
 
-    if (result.bytes == 0) {
-        LOG_INFO("  [FAIL] Could not pin any memory on %s after %d iterations\n",
+done:
+    // Determine the status:
+    // If no sizes were eligible (all > max_test_size), max_test_size is the cap
+    if (iteration == 0) {
+        LOG_INFO("  [SKIP] All test sizes exceed the %.2f GiB limit\n",
+                 max_test_size / (1024.0 * 1024.0 * 1024.0));
+    }
+
+    if (result.bytes > 0) {
+        LOG_INFO("  [OK]  Max pinned ");
+        print_size("", result.bytes, false);
+        LOG_INFO(" on %s\n", label);
+    } else if (iteration > 0) {
+        LOG_INFO("  [FAIL] Could not pin any memory on %s after %d attempts\n",
                  label, iteration);
     }
 
