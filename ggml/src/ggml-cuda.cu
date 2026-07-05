@@ -336,6 +336,25 @@ static ggml_cuda_device_info ggml_cuda_init() {
         }
     }
 #endif
+
+    // Establish the first TCC device's primary context here, before any
+    // WDDM backend init runs.  On Windows the order of primary context
+    // creation matters: a WDDM device that gets its context first can
+    // lock in a per-process pinned memory quota (~32-48 GiB), after
+    // which even a TCC device's cudaHostRegister calls are subject to
+    // that limit.  By initialising a TCC context first, cudaHostRegister
+    // goes through the TCC driver path which has no WDDM quota.
+    for (int id = 0; id < info.device_count; ++id) {
+        if (info.devices[id].is_tcc) {
+            int cuda_id = info.cuda_device_id[id];
+            cudaSetDevice(cuda_id);
+            cudaFree(0);
+            GGML_CUDA_LOG_INFO("%s: initialised TCC device %d (raw %d) context first for pinmem\n",
+                              __func__, id, cuda_id);
+            break;
+        }
+    }
+
     return info;
 }
 
@@ -1641,22 +1660,28 @@ static void * ggml_cuda_host_malloc(size_t size) {
     // are limited to ~32-48 GiB per process.  The TCC device's primary
     // context is initialised first so that cudaHostRegister does not
     // consume WDDM quota unnecessarily.
+    // NOTE: pin_dev stores the raw CUDA ordinal, so we use cudaSetDevice
+    //       directly (NOT ggml_cuda_set_device which treats its argument
+    //       as a logical device index and remaps it).
     int pin_dev = -1;
     {
         const auto & info = ggml_cuda_info();
         for (int i = 0; i < info.device_count; i++) {
             if (info.devices[i].is_tcc) {
                 pin_dev = info.cuda_device_id[i];
-                GGML_CUDA_LOG_INFO("%s: found TCC device %d (logical %d), using for pinning\n", __func__, pin_dev, i);
+                GGML_CUDA_LOG_INFO("%s: found TCC device raw %d (logical %d), using for pinning\n", __func__, pin_dev, i);
                 break;
             }
         }
     }
     int cur_dev = -1;
     cudaError_t err_dev = cudaGetDevice(&cur_dev);
-    ggml_cuda_set_device(pin_dev >= 0 ? pin_dev : cur_dev);
-    GGML_CUDA_LOG_INFO("%s: current CUDA device = %d (err=%d), pinning on device = %d\n", __func__, cur_dev, (int)err_dev, pin_dev >= 0 ? pin_dev : cur_dev);
-    if (pin_dev >= 0 || cur_dev >= 0) {
+    int choose_dev = pin_dev >= 0 ? pin_dev : cur_dev;
+    if (choose_dev >= 0 && choose_dev != cur_dev) {
+        cudaSetDevice(choose_dev);
+    }
+    GGML_CUDA_LOG_INFO("%s: current CUDA device = %d, pinning on raw device = %d\n", __func__, cur_dev, choose_dev);
+    if (choose_dev >= 0) {
         cudaFree(0);  // touch/init primary context for the chosen device
     }
 
