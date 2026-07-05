@@ -1660,6 +1660,19 @@ static void * ggml_cuda_host_malloc(size_t size) {
             ms.ullAvailPhys / (1024.*1024.*1024.), ms.ullTotalPhys / (1024.*1024.*1024.));
     }
 
+    // Diagnostic: test cudaMallocHost (original approach) for this size
+    {
+        void * mh_ptr = nullptr;
+        cudaError_t mh_err = cudaMallocHost(&mh_ptr, size);
+        if (mh_err == cudaSuccess) {
+            GGML_CUDA_LOG_INFO("%s: cudaMallocHost %.2f GiB SUCCEEDED\n", __func__, size_GiB);
+            cudaFreeHost(mh_ptr);
+        } else {
+            GGML_CUDA_LOG_WARN("%s: cudaMallocHost %.2f GiB FAILED: %s\n", __func__, size_GiB, cudaGetErrorString(mh_err));
+            cudaGetLastError();
+        }
+    }
+
     cudaError_t err;
 
     if (ggml_cuda_pinmem == 2) {
