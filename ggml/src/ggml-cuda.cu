@@ -1598,25 +1598,6 @@ static void * ggml_cuda_host_malloc(size_t size) {
         }
     }
     cudaError_t err = cudaMallocHost((void **) &ptr, size);
-    if (is_large) {
-        auto tim2 = ggml_time_us();
-        if (ggml_cuda_pinmem == 1) {
-            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB (token_embd only) in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
-        } else if (ggml_cuda_pinmem == 2) {
-            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB (pinmem=2) in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
-        } else {
-            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
-        }
-    } else {
-        auto tim2 = ggml_time_us();
-        if (ggml_cuda_pinmem == 1) {
-            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB (token_embd only) in %.1f ms\n\n", size_MiB, 1e-3*(tim2-tim1));
-        } else if (ggml_cuda_pinmem == 2) {
-            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB (pinmem=2) in %.1f ms\n\n", size_MiB, 1e-3*(tim2-tim1));
-        } else {
-            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB in %.1f ms\n\n", size_MiB, 1e-3*(tim2-tim1));
-        }
-    }
     if (err != cudaSuccess) {
         cudaGetLastError();
         GGML_CUDA_LOG_WARN("%s: failed to allocate %.2f MiB of pinned memory: %s\n", __func__,
@@ -1636,6 +1617,26 @@ static void * ggml_cuda_host_malloc(size_t size) {
             ggml_backend_cuda_set_pinmem(0);
         }
         return nullptr;
+    }
+
+    if (is_large) {
+        auto tim2 = ggml_time_us();
+        if (ggml_cuda_pinmem == 1) {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB (token_embd only) in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
+        } else if (ggml_cuda_pinmem == 2) {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB (pinmem=2) in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
+        } else {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
+        }
+    } else {
+        auto tim2 = ggml_time_us();
+        if (ggml_cuda_pinmem == 1) {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB (token_embd only) in %.1f ms\n\n", size_MiB, 1e-3*(tim2-tim1));
+        } else if (ggml_cuda_pinmem == 2) {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB (pinmem=2) in %.1f ms\n\n", size_MiB, 1e-3*(tim2-tim1));
+        } else {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB in %.1f ms\n\n", size_MiB, 1e-3*(tim2-tim1));
+        }
     }
 
     return ptr;
