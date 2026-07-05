@@ -1623,6 +1623,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
                            size / 1024.0 / 1024.0, g_cuda_pinned_count,
                            g_cuda_pinned_bytes/(1024.*1024.*1024.));
     }
+
     return ptr;
 }
 
