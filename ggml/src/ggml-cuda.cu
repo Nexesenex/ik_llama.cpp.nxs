@@ -1780,6 +1780,39 @@ static void * ggml_cuda_host_malloc(size_t size) {
                 GGML_CUDA_LOG_INFO("    done allocating %.2f MiB in %.1f ms\n\n", size_MiB, 1e-3*(tim2 - tim1));
             }
         }
+    } else if (ggml_cuda_pinmem == 4) {
+        // pinmem=4: cap pinned memory to 1/4 of total system RAM.
+        // This gives a predictable pinned amount regardless of model size.
+        MEMORYSTATUSEX ms = { sizeof(MEMORYSTATUSEX) };
+        GlobalMemoryStatusEx(&ms);
+        size_t quarter = (size_t)(ms.ullTotalPhys / 4);
+        size_t pin_size = (size < quarter) ? size : quarter;
+
+        GGML_CUDA_LOG_INFO("%s: pinmem=4 pinning %.2f GiB out of %.2f GiB (cap: 1/4 of %.2f GiB RAM)\n",
+            __func__, pin_size / (1024.*1024.*1024.), size / (1024.*1024.*1024.),
+            ms.ullTotalPhys / (1024.*1024.*1024.));
+        err = cudaHostRegister(ptr, pin_size, cudaHostRegisterPortable);
+        if (err != cudaSuccess) {
+            cudaGetLastError();
+            GGML_CUDA_LOG_WARN("%s: pinmem=4 cudaHostRegister of %.2f GiB failed: %s\n", __func__,
+                               pin_size / (1024.0 * 1024.0 * 1024.0), cudaGetErrorString(err));
+            free(ptr);
+            GGML_CUDA_LOG_WARN("%s: pinmem=4 falling back to pinmem=1 (token_embd only)\n", __func__);
+            ggml_backend_cuda_set_pinmem(1);
+            return ggml_cuda_host_malloc(size);
+        }
+        if (pin_size < size) {
+            GGML_CUDA_LOG_INFO("    pinned %.2f GiB out of %.2f GiB (pinmem=4) in %.1f ms\n\n",
+                               pin_size / (1024.*1024.*1024.), size / (1024.*1024.*1024.),
+                               1e-3*(double)(ggml_time_us() - tim1));
+        } else {
+            auto tim2 = ggml_time_us();
+            if (is_large) {
+                GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n\n", size_GiB, 1e-3*(tim2 - tim1));
+            } else {
+                GGML_CUDA_LOG_INFO("    done allocating %.2f MiB in %.1f ms\n\n", size_MiB, 1e-3*(tim2 - tim1));
+            }
+        }
     } else {
         err = cudaHostRegister(ptr, size, cudaHostRegisterPortable);
         if (err != cudaSuccess) {
@@ -5916,6 +5949,8 @@ GGML_CALL void ggml_backend_cuda_set_pinmem(int val) {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=1 - token_embd only, CPU tensor overrides use non-pinned allocation\n");
     } else if (val == 2) {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=2 - try all host buffers, stop on first failure\n");
+    } else if (val == 4) {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=4 - pinned to 1/4 of total RAM\n");
     } else {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=3 - all host buffers use pinned memory (default)\n");
     }

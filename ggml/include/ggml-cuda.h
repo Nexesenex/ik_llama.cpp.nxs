@@ -48,9 +48,10 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_cslq(const char * cslq);
 // pinmem=1: Only pin token_embd, CPU tensor overrides use non-pinned allocation
 // pinmem=2: Try to pin all host buffers, stop on first failure, rest unpinned
 // pinmem=3: Pin all host buffers (default behavior)
+// pinmem=4: Cap pinned memory to 1/4 of total system RAM (user mode)
 GGML_API GGML_CALL void ggml_backend_cuda_set_pinmem(int val);
 
-// Get current pinmem setting (0=disabled, 1=token_embd only, 2=stop on fail, 3=all)
+// Get current pinmem setting (0=disabled, 1=token_embd only, 2=stop on fail, 3=all, 4=quarter)
 GGML_API GGML_CALL int ggml_backend_cuda_get_pinmem(void);
 
 // Set pindev mode — specify which raw CUDA ordinal to charge for pinned memory.
