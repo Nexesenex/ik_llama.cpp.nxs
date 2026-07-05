@@ -1636,6 +1636,12 @@ static void * ggml_cuda_host_malloc(size_t size) {
     cudaError_t err_dev = cudaGetDevice(&cur_dev);
     GGML_CUDA_LOG_INFO("%s: current CUDA device = %d (err=%d)\n", __func__, cur_dev, (int)err_dev);
 
+    // Diagnostic: ensure primary context is initialized (like standalone test),
+    // then test if a known-good size (48 GiB) can be pinned on this device
+    cudaSetDevice(cur_dev);
+    cudaFree(0); // triggers primary context creation
+    cudaGetLastError();
+
     cudaError_t err;
 
     if (ggml_cuda_pinmem == 2) {
