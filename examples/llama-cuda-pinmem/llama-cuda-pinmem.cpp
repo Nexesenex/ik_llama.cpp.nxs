@@ -24,14 +24,36 @@ static bool g_bare_mode = false;
 #define LOG_WARN(...)  fprintf(stdout, "warning: " __VA_ARGS__)
 #define LOG_DBG(...)   do { if (g_verbose) fprintf(stdout, "  [debug] " __VA_ARGS__); } while (0)
 
-enum display_unit {
-    DISPUNIT_AUTO,
-    DISPUNIT_MIB,
-    DISPUNIT_MB,
-    DISPUNIT_GIB,
-    DISPUNIT_GB,
+// Unit for the default ascending test list (--unit parameter)
+// Default is GiB (1024^3).  The same list of numbers {1,2,3,4,6,8, ...}
+// is multiplied by this unit's byte multiplier.
+enum test_unit {
+    TESTUNIT_MIB,
+    TESTUNIT_MB,
+    TESTUNIT_GIB,
+    TESTUNIT_GB,
 };
-static enum display_unit g_disp_unit = DISPUNIT_AUTO;
+static enum test_unit g_test_unit = TESTUNIT_GIB;
+
+static size_t unit_mult(enum test_unit u) {
+    switch (u) {
+        case TESTUNIT_MIB: return 1024ULL * 1024ULL;
+        case TESTUNIT_MB:  return 1000ULL * 1000ULL;
+        case TESTUNIT_GIB: return 1024ULL * 1024ULL * 1024ULL;
+        case TESTUNIT_GB:  return 1000ULL * 1000ULL * 1000ULL;
+    }
+    return 1024ULL * 1024ULL * 1024ULL;
+}
+static const char * unit_name(enum test_unit u) {
+    switch (u) {
+        case TESTUNIT_MIB: return "MiB";
+        case TESTUNIT_MB:  return "MB";
+        case TESTUNIT_GIB: return "GiB";
+        case TESTUNIT_GB:  return "GB";
+    }
+    return "GiB";
+}
+
 static std::vector<size_t> g_seq_sizes; // custom --seq size list, empty = use default
 
 // -----------------------------------------------------------------------
@@ -132,8 +154,8 @@ static void print_usage(const char * prog) {
     LOG_INFO("  -M, --method M   Allocation method: va | malloc_p | malloc_np | amalloc_p | chost | all\n");
     LOG_INFO("                   (default: va = VirtualAlloc + cudaHostRegister)\n");
     LOG_INFO("  --list-methods   List available allocation methods and exit\n");
-    LOG_INFO("  --unit, --units U Display unit: auto, MiB, MB, GiB, GB (default: auto)\n");
-    LOG_INFO("  --list-units     List available display units and exit\n");
+    LOG_INFO("  --unit U         Unit for the default ascending sequence: MiB, MB, GiB, GB (default: GiB)\n");
+    LOG_INFO("  --list-units     List available test units and exit\n");
     LOG_INFO("  --seq ARG        Custom size sequence: \"start unit,end unit,step unit\"\n");
     LOG_INFO("                   e.g. --seq \"1 GiB,192 GiB,8 GiB\"\n");
     LOG_INFO("                   Units: B, KiB, MiB, GiB (binary), KB, MB, GB (decimal)\n");
@@ -249,30 +271,14 @@ static size_t get_free_physical_ram() {
 }
 
 static void print_size(const char * label, size_t bytes, bool newline = true) {
-    switch (g_disp_unit) {
-        case DISPUNIT_MIB:
-            LOG_INFO("%s%.2f MiB", label, bytes / (1024.0 * 1024.0));
-            break;
-        case DISPUNIT_MB:
-            LOG_INFO("%s%.2f MB", label, bytes / (1000.0 * 1000.0));
-            break;
-        case DISPUNIT_GIB:
-            LOG_INFO("%s%.2f GiB", label, bytes / (1024.0 * 1024.0 * 1024.0));
-            break;
-        case DISPUNIT_GB:
-            LOG_INFO("%s%.2f GB", label, bytes / (1000.0 * 1000.0 * 1000.0));
-            break;
-        default:
-            if (bytes >= (1024LL * 1024LL * 1024LL)) {
-                LOG_INFO("%s%.2f GiB", label, bytes / (1024.0 * 1024.0 * 1024.0));
-            } else if (bytes >= (1024LL * 1024LL)) {
-                LOG_INFO("%s%.2f MiB", label, bytes / (1024.0 * 1024.0));
-            } else if (bytes >= 1024LL) {
-                LOG_INFO("%s%.2f KiB", label, bytes / 1024.0);
-            } else {
-                LOG_INFO("%s%zu B", label, bytes);
-            }
-            break;
+    if (bytes >= (1024LL * 1024LL * 1024LL)) {
+        LOG_INFO("%s%.2f GiB", label, bytes / (1024.0 * 1024.0 * 1024.0));
+    } else if (bytes >= (1024LL * 1024LL)) {
+        LOG_INFO("%s%.2f MiB", label, bytes / (1024.0 * 1024.0));
+    } else if (bytes >= 1024LL) {
+        LOG_INFO("%s%.2f KiB", label, bytes / 1024.0);
+    } else {
+        LOG_INFO("%s%zu B", label, bytes);
     }
     if (newline) {
         LOG_INFO("\n");
@@ -330,12 +336,14 @@ static TestResult test_device_pinned_max_method(int cuda_ordinal, size_t max_tes
         sizes = g_seq_sizes;
         LOG_INFO("       custom sequence: %zu sizes\n", sizes.size());
     } else {
-        // Predefined sizes in GiB, ascending
-        static const size_t test_gb[] = {
+        // Predefined ascending size sequence (unit controlled by --unit)
+        static const size_t test_nums[] = {
             1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536
         };
-        for (size_t gb : test_gb) {
-            sizes.push_back(gb * 1024ULL * 1024ULL * 1024ULL);
+        size_t mult = unit_mult(g_test_unit);
+        LOG_INFO("       unit=%s, %zu sizes\n", unit_name(g_test_unit), sizeof(test_nums)/sizeof(test_nums[0]));
+        for (size_t n : test_nums) {
+            sizes.push_back(n * mult);
         }
     }
 
@@ -496,21 +504,19 @@ int main(int argc, char ** argv) {
             test_method = m;
         } else if (strcmp(argv[i], "--list-methods") == 0) {
             list_methods = true;
-        } else if (strcmp(argv[i], "-units") == 0 || strcmp(argv[i], "--units") == 0 || strcmp(argv[i], "--unit") == 0) {
-            if (i + 1 >= argc) { LOG_ERR("-units requires an argument (MiB, MB, GiB, GB, auto)\n"); return 1; }
+        } else if (strcmp(argv[i], "--unit") == 0 || strcmp(argv[i], "--units") == 0) {
+            if (i + 1 >= argc) { LOG_ERR("--unit requires an argument (MiB, MB, GiB, GB)\n"); return 1; }
             i++;
             if (strcmp(argv[i], "MiB") == 0 || strcmp(argv[i], "mib") == 0) {
-                g_disp_unit = DISPUNIT_MIB;
+                g_test_unit = TESTUNIT_MIB;
             } else if (strcmp(argv[i], "MB") == 0 || strcmp(argv[i], "mb") == 0) {
-                g_disp_unit = DISPUNIT_MB;
+                g_test_unit = TESTUNIT_MB;
             } else if (strcmp(argv[i], "GiB") == 0 || strcmp(argv[i], "gib") == 0) {
-                g_disp_unit = DISPUNIT_GIB;
+                g_test_unit = TESTUNIT_GIB;
             } else if (strcmp(argv[i], "GB") == 0 || strcmp(argv[i], "gb") == 0) {
-                g_disp_unit = DISPUNIT_GB;
-            } else if (strcmp(argv[i], "auto") == 0) {
-                g_disp_unit = DISPUNIT_AUTO;
+                g_test_unit = TESTUNIT_GB;
             } else {
-                LOG_ERR("unknown unit '%s' (try: MiB, MB, GiB, GB, auto)\n", argv[i]);
+                LOG_ERR("unknown unit '%s' (try: MiB, MB, GiB, GB)\n", argv[i]);
                 return 1;
             }
         } else if (strcmp(argv[i], "--list-units") == 0) {
@@ -545,12 +551,12 @@ int main(int argc, char ** argv) {
     }
 
     if (list_units) {
-        LOG_INFO("Available display units:\n");
-        LOG_INFO("  auto   Auto-select based on magnitude (default)\n");
+        LOG_INFO("Available test units for the default ascending sequence (--unit):\n");
         LOG_INFO("  MiB    Mebibytes (1024^2)\n");
         LOG_INFO("  MB     Megabytes (1000^2)\n");
-        LOG_INFO("  GiB    Gibibytes (1024^3)\n");
+        LOG_INFO("  GiB    Gibibytes (1024^3, default)\n");
         LOG_INFO("  GB     Gigabytes (1000^3)\n");
+        LOG_INFO("The same numeric sequence {1,2,3,4,6,...} is multiplied by this unit.\n");
         return 0;
     }
 
@@ -562,8 +568,7 @@ int main(int argc, char ** argv) {
                 LOG_ERR("invalid --seq format, expected \"start unit,end unit,step unit\"\n");
                 return 1;
             }
-            LOG_INFO("Custom test sequence: %zu sizes (first=%zu, last=%zu)\n",
-                     g_seq_sizes.size(), g_seq_sizes.front(), g_seq_sizes.back());
+            LOG_INFO("Custom test sequence: %zu sizes\n", g_seq_sizes.size());
             break;
         }
     }
