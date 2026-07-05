@@ -1631,6 +1631,11 @@ static void * ggml_cuda_host_malloc(size_t size) {
         return nullptr;
     }
 
+    // Debug: log the CUDA device that will be used for pinning
+    int cur_dev = -1;
+    cudaError_t err_dev = cudaGetDevice(&cur_dev);
+    GGML_CUDA_LOG_INFO("%s: current CUDA device = %d (err=%d)\n", __func__, cur_dev, (int)err_dev);
+
     cudaError_t err;
 
     if (ggml_cuda_pinmem == 2) {
