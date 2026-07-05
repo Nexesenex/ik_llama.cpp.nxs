@@ -489,9 +489,12 @@ int main(int argc, char ** argv) {
         int  id;
         int  cuda_ordinal;
         char name[256];
+        char pci_bus_id[16];
+        const char * attach; // "CPU" or "PCH"
         int  compute_major;
         int  compute_minor;
         bool is_tcc;
+        bool vmm;
         size_t free_vram;
         size_t total_vram;
     };
@@ -523,21 +526,25 @@ int main(int argc, char ** argv) {
                 info.compute_major = prop.major;
                 info.compute_minor = prop.minor;
                 info.is_tcc = !prop.kernelExecTimeoutEnabled;
+                info.attach = (prop.pciBusID < 0x80) ? "CPU" : "PCH";
             } else {
                 snprintf(info.name, sizeof(info.name), "cudaGetDeviceProperties failed");
                 info.compute_major = 0;
                 info.compute_minor = 0;
                 info.is_tcc = false;
+                info.attach = "?";
             }
+            cudaDeviceGetPCIBusId(info.pci_bus_id, sizeof(info.pci_bus_id), i);
 
-            // cudaMemGetInfo without an active context
+            // cudaMemGetInfo without an active context — cannot check VMM here
+            info.vmm = false;
             info.total_vram = 0;
             info.free_vram = 0;
 
             devices.push_back(info);
 
-            LOG_INFO("  Raw CUDA %d: %s (compute %d.%d, %s)\n",
-                     i, info.name,
+            LOG_INFO("  Raw CUDA %d: %s (PCIE %s, %s), compute %d.%d, %s\n",
+                     i, info.name, info.pci_bus_id, info.attach,
                      info.compute_major, info.compute_minor,
                      info.is_tcc ? "TCC" : "WDDM");
         }
@@ -565,16 +572,32 @@ int main(int argc, char ** argv) {
             info.is_tcc = false;
             info.compute_major = 0;
             info.compute_minor = 0;
+            info.vmm = false;
+            info.attach = "?";
             if (cudaGetDeviceProperties(&prop, info.cuda_ordinal) == cudaSuccess) {
                 info.is_tcc = !prop.kernelExecTimeoutEnabled;
                 info.compute_major = prop.major;
                 info.compute_minor = prop.minor;
+                info.attach = (prop.pciBusID < 0x80) ? "CPU" : "PCH";
             }
+            cudaDeviceGetPCIBusId(info.pci_bus_id, sizeof(info.pci_bus_id), info.cuda_ordinal);
+#if !defined(GGML_USE_HIPBLAS) && !defined(GGML_CUDA_NO_VMM) && !defined(GGML_USE_MUSA)
+            {
+                int device_vmm = 0;
+                CUdevice cu_dev;
+                if (cuDeviceGet(&cu_dev, info.cuda_ordinal) == CUDA_SUCCESS) {
+                    cuDeviceGetAttribute(&device_vmm, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, cu_dev);
+                }
+                info.vmm = !!device_vmm;
+            }
+#endif
 
             devices.push_back(info);
 
-            LOG_INFO("  CUDA%d (raw ordinal %d): %s", i, info.cuda_ordinal, info.name);
-            LOG_INFO(" (compute %d.%d, %s)\n", info.compute_major, info.compute_minor,
+            LOG_INFO("  CUDA%d (raw %d): %s (PCIE %s, %s), compute %d.%d, VMM: %s, %s\n",
+                     i, info.cuda_ordinal, info.name, info.pci_bus_id, info.attach,
+                     info.compute_major, info.compute_minor,
+                     info.vmm ? "yes" : "no",
                      info.is_tcc ? "TCC" : "WDDM");
             print_size("    Total VRAM: ", info.total_vram);
             print_size("    Free VRAM:  ", info.free_vram);
