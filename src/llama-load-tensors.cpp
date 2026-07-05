@@ -261,14 +261,18 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
 #if defined(GGML_USE_CUDA)
     const int pinmem = ggml_backend_cuda_get_pinmem();
     LLAMA_LOG_INFO("%s: ggml_backend_cuda_get_pinmem() = %d\n", __func__, pinmem);
-    if (pinmem == 1) {
-        LLAMA_LOG_INFO("%s: pinmem=1 mode enabled - CPU tensor overrides will use non-pinned allocation\n", __func__);
+    if (pinmem < 2) {
+        if (pinmem == 0) {
+            LLAMA_LOG_INFO("%s: pinmem=0 mode enabled - all pinned memory disabled\n", __func__);
+        } else {
+            LLAMA_LOG_INFO("%s: pinmem=1 mode enabled - CPU tensor overrides will use non-pinned allocation\n", __func__);
+        }
         // Ensure non-pinned CPU buffer type has a context for tensor overrides
         buft_layer_count[ggml_backend_cpu_buffer_type()]++;
-    } else if (pinmem == 0) {
-        LLAMA_LOG_INFO("%s: pinmem=0 mode enabled - all pinned memory disabled\n", __func__);
-        // Ensure non-pinned CPU buffer type has a context for tensor overrides
-        buft_layer_count[ggml_backend_cpu_buffer_type()]++;
+    } else if (pinmem == 2) {
+        LLAMA_LOG_INFO("%s: pinmem=2 mode enabled - CPU tensor overrides will use pinned allocation (stop on fail)\n", __func__);
+    } else {
+        LLAMA_LOG_INFO("%s: pinmem=3 mode enabled - all host buffers use pinned memory\n", __func__);
     }
 #else
     const int pinmem = 0;
@@ -283,7 +287,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
             auto buft = o->buft;
 #if defined(GGML_USE_CUDA)
             if (ggml_backend_buft_is_host(buft)) {
-                if (pinmem != 2) {
+                if (pinmem < 2) {
                     buft = ggml_backend_cpu_buffer_type();
                     LLAMA_LOG_DEBUG("%s: override '%s' -> using non-pinned CPU buffer\n", __func__, o->pattern);
                 } else {

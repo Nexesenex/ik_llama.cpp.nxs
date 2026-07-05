@@ -359,9 +359,10 @@ ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer) {
 
 #if defined(GGML_USE_CUDA)
     // host buffers should only be used when data is expected to be copied to/from the GPU
-    // when pinmem=0 (default), no pinned memory is used
+    // when pinmem=0, no pinned memory is used
     // when pinmem=1, only token_embd uses pinned memory
-    // when pinmem=2, all host buffers use pinned memory
+    // when pinmem=2, try all host buffers (stop on first failure)
+    // when pinmem=3 (default), all host buffers use pinned memory
     if (host_buffer && ggml_backend_cuda_get_pinmem() != 0) {
         buft = ggml_backend_cuda_host_buffer_type();
     }
