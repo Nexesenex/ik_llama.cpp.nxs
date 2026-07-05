@@ -1640,10 +1640,13 @@ static void * ggml_cuda_host_malloc(size_t size) {
         constexpr size_t min_chunk = 1ULL << 30; // 1 GiB minimum
         size_t try_size = size;
         do {
+            GGML_CUDA_LOG_INFO("%s: pinmem=2 trying cudaHostRegister(ptr, %.2f GiB)\n", __func__, try_size / (1024.*1024.*1024.));
             err = cudaHostRegister(ptr, try_size, cudaHostRegisterPortable);
             if (err == cudaSuccess) {
                 break;
             }
+            const char * err_str = cudaGetErrorString(err);
+            GGML_CUDA_LOG_WARN("%s: pinmem=2 try_size=%.2f GiB failed: %s\n", __func__, try_size / (1024.*1024.*1024.), err_str);
             cudaGetLastError();
             try_size /= 2;
         } while (try_size >= min_chunk);
