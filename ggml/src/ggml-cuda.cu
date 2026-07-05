@@ -9,6 +9,10 @@
 #include "ggml.h"
 #include "ggml-backend-impl.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/arange.cuh"
@@ -1636,7 +1640,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
     cudaError_t err_dev = cudaGetDevice(&cur_dev);
     GGML_CUDA_LOG_INFO("%s: current CUDA device = %d (err=%d)\n", __func__, cur_dev, (int)err_dev);
 
-    // Diagnostic: identify the physical card and test pinning
+    // Diagnostic: check system/CUDA memory state
     {
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, cur_dev);
@@ -1646,6 +1650,14 @@ static void * ggml_cuda_host_malloc(size_t size) {
             log_id = info.device_id[cur_dev];
         }
         GGML_CUDA_LOG_INFO("%s: CUDA ordinal %d = %s (logical device %d)\n", __func__, cur_dev, prop.name, log_id);
+        size_t free_mem = 0, total_mem = 0;
+        cudaMemGetInfo(&free_mem, &total_mem);
+        GGML_CUDA_LOG_INFO("%s: GPU mem free=%.2f GiB / total=%.2f GiB\n", __func__,
+            free_mem / (1024.*1024.*1024.), total_mem / (1024.*1024.*1024.));
+        MEMORYSTATUSEX ms = { sizeof(MEMORYSTATUSEX) };
+        GlobalMemoryStatusEx(&ms);
+        GGML_CUDA_LOG_INFO("%s: system RAM free=%.2f GiB / total=%.2f GiB\n", __func__,
+            ms.ullAvailPhys / (1024.*1024.*1024.), ms.ullTotalPhys / (1024.*1024.*1024.));
     }
 
     cudaError_t err;
