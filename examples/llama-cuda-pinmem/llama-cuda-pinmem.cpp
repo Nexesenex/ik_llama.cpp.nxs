@@ -76,7 +76,7 @@ static size_t get_free_physical_ram() {
     GlobalMemoryStatusEx(&status);
     return (size_t)status.ullAvailPhys;
 #else
-    return get_total_physical_ram(); // fallback
+    return get_total_physical_ram();
 #endif
 }
 
@@ -103,16 +103,17 @@ struct TestResult {
     double register_ms;
 };
 
-static TestResult test_device_pinned_max(int device_id, size_t max_test_size) {
+static TestResult test_device_pinned_max(int logical_device, int cuda_ordinal, size_t max_test_size) {
     TestResult result = { 0, 0, 0.0, 0.0, 0.0 };
 
-    LOG_INFO("  [1] Setting CUDA device %d...\n", device_id);
-    cudaError_t err = cudaSetDevice(device_id);
+    LOG_INFO("  [1] Setting CUDA device %d (logical CUDA%d, raw ordinal %d)...\n",
+             logical_device, logical_device, cuda_ordinal);
+    cudaError_t err = cudaSetDevice(cuda_ordinal);
     if (err != cudaSuccess) {
-        LOG_INFO("  [FAIL] cudaSetDevice(%d): %s\n", device_id, cudaGetErrorString(err));
+        LOG_INFO("  [FAIL] cudaSetDevice(raw %d): %s\n", cuda_ordinal, cudaGetErrorString(err));
         return result;
     }
-    LOG_INFO("  [OK]  Device %d set\n", device_id);
+    LOG_INFO("  [OK]  Device set\n");
 
     LOG_INFO("  [2] Initialising primary context (cudaFree(0))...\n");
     cudaFree(0);
@@ -121,7 +122,7 @@ static TestResult test_device_pinned_max(int device_id, size_t max_test_size) {
     size_t free_mem = 0, total_mem = 0;
     err = cudaMemGetInfo(&free_mem, &total_mem);
     if (err == cudaSuccess) {
-        LOG_INFO("  [3] Device memory: ");
+        LOG_INFO("  [3] Raw cudaMemGetInfo: ");
         print_size("", total_mem, false);
         LOG_INFO(" total, ");
         print_size("", free_mem, false);
@@ -172,7 +173,8 @@ static TestResult test_device_pinned_max(int device_id, size_t max_test_size) {
             LOG_INFO(" SUCCESS (%.1f ms)\n", register_ms);
             LOG_INFO("  [OK]  Pinned ");
             print_size("", try_size, false);
-            LOG_INFO(" on device %d\n", device_id);
+            LOG_INFO(" on raw CUDA ordinal %d (logical CUDA%d)\n",
+                     cuda_ordinal, logical_device);
 
             cudaHostUnregister(ptr);
             VirtualFree(ptr, 0, MEM_RELEASE);
@@ -188,7 +190,7 @@ static TestResult test_device_pinned_max(int device_id, size_t max_test_size) {
 
     if (result.bytes == 0) {
         LOG_INFO("  [FAIL] Could not pin any host memory on device %d after %d iterations\n",
-                 device_id, iteration);
+                 logical_device, iteration);
     }
 
     return result;
@@ -264,21 +266,23 @@ int main(int argc, char ** argv) {
     struct DeviceInfo {
         int id;
         char name[256];
+        int  cuda_ordinal;
         size_t free_vram;
         size_t total_vram;
     };
     std::vector<DeviceInfo> devices;
     std::vector<TestResult> results;
 
-    LOG_INFO("=== Device enumeration ===\n");
+    LOG_INFO("=== Device enumeration (ggml logical order = nvidia-smi order) ===\n");
     for (int i = 0; i < device_count; i++) {
         DeviceInfo info;
         info.id = i;
+        info.cuda_ordinal = ggml_backend_cuda_get_device_ordinal(i);
         ggml_backend_cuda_get_device_description(i, info.name, sizeof(info.name));
         ggml_backend_cuda_get_device_memory(i, &info.free_vram, &info.total_vram);
         devices.push_back(info);
 
-        LOG_INFO("  GPU %d: %s\n", i, info.name);
+        LOG_INFO("  CUDA%d (raw ordinal %d): %s\n", i, info.cuda_ordinal, info.name);
         LOG_INFO("    Total VRAM: ");
         print_size("", info.total_vram);
         LOG_INFO("    Free VRAM:  ");
@@ -311,28 +315,31 @@ int main(int argc, char ** argv) {
     LOG_INFO("  Devices under test: ");
     for (size_t i = 0; i < to_test.size(); i++) {
         if (i > 0) LOG_INFO(", ");
-        LOG_INFO("%d", to_test[i]);
+        LOG_INFO("CUDA%d (ordinal %d)", to_test[i], devices[to_test[i]].cuda_ordinal);
     }
     LOG_INFO("\n\n");
 
     int64_t t_start = ggml_time_us();
     for (size_t idx = 0; idx < to_test.size(); idx++) {
         int dev_id = to_test[idx];
+        int cuda_ord = devices[dev_id].cuda_ordinal;
 
         LOG_INFO("+%.*s+\n", 60, "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-        LOG_INFO("| Device %d/%d: GPU %d - %-41s |\n",
-                 (int)(idx + 1), (int)to_test.size(), dev_id, devices[dev_id].name);
+        LOG_INFO("| Device %d/%d: CUDA%d (raw ordinal %d) - %-27s |\n",
+                 (int)(idx + 1), (int)to_test.size(),
+                 dev_id, cuda_ord, devices[dev_id].name);
         LOG_INFO("+%.*s+\n", 60, "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
 
-        TestResult r = test_device_pinned_max(dev_id, max_size);
+        TestResult r = test_device_pinned_max(dev_id, cuda_ord, max_size);
 
         if (r.bytes > 0) {
-            LOG_INFO("\n  >>> Device %d: max pinned host memory = ", dev_id);
+            LOG_INFO("\n  >>> CUDA%d (raw %d): max pinned host memory = ", dev_id, cuda_ord);
             print_size("", r.bytes, false);
             LOG_INFO(" (found in %d iterations, %.1f ms total)\n",
                      r.iterations, r.total_ms);
         } else {
-            LOG_INFO("\n  >>> Device %d: COULD NOT PIN any host memory\n", dev_id);
+            LOG_INFO("\n  >>> CUDA%d (raw %d): COULD NOT PIN any host memory\n",
+                     dev_id, cuda_ord);
         }
         LOG_INFO("\n");
 
@@ -343,10 +350,10 @@ int main(int argc, char ** argv) {
     LOG_INFO("=== Summary ===\n");
     LOG_INFO("Total test time: %.1f s\n\n", (t_end - t_start) / 1e6);
 
-    LOG_INFO("%-8s %-40s  %-14s  %-22s  %s\n",
-             "Device", "Name", "Total VRAM", "Max Pinned Host", "Time");
-    LOG_INFO("%-8s %-40s  %-14s  %-22s  %s\n",
-             "------", "----", "-----------", "----------------", "----");
+    LOG_INFO("%-8s %-6s %-40s  %-14s  %-22s  %s\n",
+             "Device", "Ordinal", "Name", "Total VRAM", "Max Pinned Host", "Time");
+    LOG_INFO("%-8s %-6s %-40s  %-14s  %-22s  %s\n",
+             "------", "-------", "----", "-----------", "----------------", "----");
 
     for (size_t idx = 0; idx < to_test.size(); idx++) {
         int dev_id = to_test[idx];
@@ -376,8 +383,8 @@ int main(int argc, char ** argv) {
             snprintf(time_str, sizeof(time_str), "-");
         }
 
-        LOG_INFO("%-8d %-40s  %-14s  %-22s  %s\n",
-                 dev_id, dev.name, vram_str, pinmem_str, time_str);
+        LOG_INFO("CUDA%-5d %-6d %-40s  %-14s  %-22s  %s\n",
+                 dev_id, dev.cuda_ordinal, dev.name, vram_str, pinmem_str, time_str);
     }
 
     LOG_INFO("\n");
