@@ -32,6 +32,7 @@ enum display_unit {
     DISPUNIT_GB,
 };
 static enum display_unit g_disp_unit = DISPUNIT_AUTO;
+static std::vector<size_t> g_seq_sizes; // custom --seq size list, empty = use default
 
 // -----------------------------------------------------------------------
 // Pin method specification
@@ -131,8 +132,11 @@ static void print_usage(const char * prog) {
     LOG_INFO("  -M, --method M   Allocation method: va | malloc_p | malloc_np | amalloc_p | chost | all\n");
     LOG_INFO("                   (default: va = VirtualAlloc + cudaHostRegister)\n");
     LOG_INFO("  --list-methods   List available allocation methods and exit\n");
-    LOG_INFO("  -units, --units U Display unit: auto, MiB, MB, GiB, GB (default: auto)\n");
+    LOG_INFO("  --unit, --units U Display unit: auto, MiB, MB, GiB, GB (default: auto)\n");
     LOG_INFO("  --list-units     List available display units and exit\n");
+    LOG_INFO("  --seq ARG        Custom size sequence: \"start unit,end unit,step unit\"\n");
+    LOG_INFO("                   e.g. --seq \"1 GiB,192 GiB,8 GiB\"\n");
+    LOG_INFO("                   Units: B, KiB, MiB, GiB (binary), KB, MB, GB (decimal)\n");
     LOG_INFO("  --bare           Minimal init: llama_backend_init() only, then raw CUDA API.\n");
     LOG_INFO("                   Avoids ggml backend context state on all devices.\n");
     LOG_INFO("\n");
@@ -163,6 +167,61 @@ static bool parse_size(const char * str, size_t & size) {
         default: return false;
     }
     return true;
+}
+
+// Parse a size with explicit unit suffix: "1 GiB", "192 MB", "8 MiB", etc.
+// Accepted units: B, KiB, MiB, GiB (binary), KB, MB, GB (decimal).
+static bool parse_explicit_size(const char * str, size_t & bytes) {
+    char * end = nullptr;
+    double val = std::strtod(str, &end);
+    if (end == str) return false;
+    // skip spaces before unit
+    while (*end == ' ') end++;
+    if (strcmp(end, "GiB") == 0 || strcmp(end, "G") == 0 || strcmp(end, "g") == 0) {
+        bytes = (size_t)(val * 1024LL * 1024LL * 1024LL);
+    } else if (strcmp(end, "GB") == 0) {
+        bytes = (size_t)(val * 1000LL * 1000LL * 1000LL);
+    } else if (strcmp(end, "MiB") == 0 || strcmp(end, "M") == 0 || strcmp(end, "m") == 0) {
+        bytes = (size_t)(val * 1024LL * 1024LL);
+    } else if (strcmp(end, "MB") == 0) {
+        bytes = (size_t)(val * 1000LL * 1000LL);
+    } else if (strcmp(end, "KiB") == 0 || strcmp(end, "K") == 0 || strcmp(end, "k") == 0) {
+        bytes = (size_t)(val * 1024LL);
+    } else if (strcmp(end, "KB") == 0) {
+        bytes = (size_t)(val * 1000LL);
+    } else if (strcmp(end, "B") == 0 || *end == '\0') {
+        bytes = (size_t)val;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// Parse --seq argument: "start unit,end unit,step unit"
+// e.g. "--seq 1 GiB,192 GiB,8 GiB"
+static bool parse_seq_arg(const char * arg) {
+    g_seq_sizes.clear();
+    std::string s(arg);
+    // Split on commas
+    size_t c1 = s.find(',');
+    if (c1 == std::string::npos) return false;
+    size_t c2 = s.find(',', c1 + 1);
+    if (c2 == std::string::npos) return false;
+
+    std::string start_str = s.substr(0, c1);
+    std::string end_str   = s.substr(c1 + 1, c2 - c1 - 1);
+    std::string step_str  = s.substr(c2 + 1);
+
+    size_t start = 0, end = 0, step = 0;
+    if (!parse_explicit_size(start_str.c_str(), start)) return false;
+    if (!parse_explicit_size(end_str.c_str(),   end))   return false;
+    if (!parse_explicit_size(step_str.c_str(),  step))  return false;
+    if (step == 0 || start > end) return false;
+
+    for (size_t sz = start; sz <= end; sz += step) {
+        g_seq_sizes.push_back(sz);
+    }
+    return !g_seq_sizes.empty();
 }
 
 static size_t get_total_physical_ram() {
@@ -263,19 +322,28 @@ static TestResult test_device_pinned_max_method(int cuda_ordinal, size_t max_tes
         LOG_INFO(" free\n");
     }
 
-    LOG_INFO("  [4] Pinning test (ascending, method=%s)\n", method_name(method));
+    LOG_INFO("  [4] Pinning test (method=%s)\n", method_name(method));
 
-    // Predefined sizes in GiB, ascending, from small to workstation-scale
-    static const size_t test_gb[] = {
-        1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536
-    };
-    static const int num_gb = (int)(sizeof(test_gb) / sizeof(test_gb[0]));
+    // Build the list of sizes to test
+    std::vector<size_t> sizes;
+    if (!g_seq_sizes.empty()) {
+        sizes = g_seq_sizes;
+        LOG_INFO("       custom sequence: %zu sizes\n", sizes.size());
+    } else {
+        // Predefined sizes in GiB, ascending
+        static const size_t test_gb[] = {
+            1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536
+        };
+        for (size_t gb : test_gb) {
+            sizes.push_back(gb * 1024ULL * 1024ULL * 1024ULL);
+        }
+    }
 
     int64_t t_start_total = ggml_time_us();
     int iteration = 0;
 
-    for (int si = 0; si < num_gb; si++) {
-        size_t try_size = (size_t)test_gb[si] * 1024ULL * 1024ULL * 1024ULL;
+    for (size_t si = 0; si < sizes.size(); si++) {
+        size_t try_size = sizes[si];
 
         // Only try sizes that fit within the user's RAM or limit
         if (try_size > max_test_size) {
@@ -428,7 +496,7 @@ int main(int argc, char ** argv) {
             test_method = m;
         } else if (strcmp(argv[i], "--list-methods") == 0) {
             list_methods = true;
-        } else if (strcmp(argv[i], "-units") == 0 || strcmp(argv[i], "--units") == 0) {
+        } else if (strcmp(argv[i], "-units") == 0 || strcmp(argv[i], "--units") == 0 || strcmp(argv[i], "--unit") == 0) {
             if (i + 1 >= argc) { LOG_ERR("-units requires an argument (MiB, MB, GiB, GB, auto)\n"); return 1; }
             i++;
             if (strcmp(argv[i], "MiB") == 0 || strcmp(argv[i], "mib") == 0) {
@@ -447,6 +515,10 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[i], "--list-units") == 0) {
             list_units = true;
+        } else if (strcmp(argv[i], "--seq") == 0) {
+            // parsed separately after the loop (needs g_seq_sizes populated)
+            if (i + 1 >= argc) { LOG_ERR("--seq requires an argument\n"); return 1; }
+            i++; // skip the value
         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--all") == 0) {
             test_all = true;
             test_devices.clear();
@@ -480,6 +552,20 @@ int main(int argc, char ** argv) {
         LOG_INFO("  GiB    Gibibytes (1024^3)\n");
         LOG_INFO("  GB     Gigabytes (1000^3)\n");
         return 0;
+    }
+
+    // Find --seq in args (must parse before max_size auto-fallback)
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--seq") == 0) {
+            if (i + 1 >= argc) { LOG_ERR("--seq requires an argument\n"); return 1; }
+            if (!parse_seq_arg(argv[i + 1])) {
+                LOG_ERR("invalid --seq format, expected \"start unit,end unit,step unit\"\n");
+                return 1;
+            }
+            LOG_INFO("Custom test sequence: %zu sizes (first=%zu, last=%zu)\n",
+                     g_seq_sizes.size(), g_seq_sizes.front(), g_seq_sizes.back());
+            break;
+        }
     }
 
     if (max_size == 0) {
