@@ -17,7 +17,7 @@
 #include <cuda_runtime.h>
 
 static bool g_verbose = false;
-static bool g_raw_mode = false;
+static bool g_bare_mode = false;
 
 #define LOG_INFO(...)  fprintf(stdout, __VA_ARGS__)
 #define LOG_ERR(...)   fprintf(stderr, "error: " __VA_ARGS__)
@@ -31,10 +31,11 @@ static void print_usage(const char * prog) {
     LOG_INFO("  -v, --verbose    Enable verbose logging\n");
     LOG_INFO("  -m, --max SIZE   Maximum amount to test per device (e.g. 128G, 64G, default: total physical RAM)\n");
     LOG_INFO("  -p, --pinmem N   Set pinmem mode (0-3, default: current setting)\n");
-    LOG_INFO("  -a, --all        Test all NVIDIA ordinal devices (default)\n");
-    LOG_INFO("  -d, --dev N      Test a specific device by raw CUDA ordinal (repeatable)\n");
-    LOG_INFO("  --raw            Use raw CUDA API (no llama backend init).\n");
-    LOG_INFO("                   Avoids opening WDDM contexts on other GPUs.\n");
+    LOG_INFO("  -a, --all        Test all logical CUDA devices (default)\n");
+    LOG_INFO("  -d, --dev N      Test a specific device only\n");
+    LOG_INFO("  -r, --raw-ord    Interpret -d N as raw CUDA ordinal\n");
+    LOG_INFO("  --bare           Minimal init: llama_backend_init() only, then raw CUDA API.\n");
+    LOG_INFO("                   Avoids ggml backend context state on all devices.\n");
     LOG_INFO("\n");
     LOG_INFO("Pinmem modes:\n");
     LOG_INFO("  0 = No pinned memory\n");
@@ -106,10 +107,10 @@ struct TestResult {
     double register_ms;
 };
 
-static TestResult test_device_pinned_max(int cuda_ordinal, size_t max_test_size) {
+static TestResult test_device_pinned_max(int cuda_ordinal, size_t max_test_size, const char * label) {
     TestResult result = { 0, 0, 0.0, 0.0, 0.0 };
 
-    LOG_INFO("  [1] Setting CUDA device %d (raw ordinal)...\n", cuda_ordinal);
+    LOG_INFO("  [1] cudaSetDevice(%d) (%s)...\n", cuda_ordinal, label);
     cudaError_t err = cudaSetDevice(cuda_ordinal);
     if (err != cudaSuccess) {
         LOG_INFO("  [FAIL] cudaSetDevice(%d): %s\n", cuda_ordinal, cudaGetErrorString(err));
@@ -117,19 +118,17 @@ static TestResult test_device_pinned_max(int cuda_ordinal, size_t max_test_size)
     }
     int cur = -1;
     cudaGetDevice(&cur);
-    LOG_INFO("  [OK]  Device set, cudaGetDevice() = %d\n", cur);
+    LOG_INFO("  [OK]  cudaGetDevice() = %d\n", cur);
 
-    // Determine if TCC or WDDM via driver version query
     cudaDeviceProp prop;
     err = cudaGetDeviceProperties(&prop, cur);
     if (err == cudaSuccess) {
-        LOG_INFO("  [OK]  %s, compute %d.%d, %s\n",
-                 prop.name,
-                 prop.major, prop.minor,
-                 prop.kernelExecTimeoutEnabled ? "WDDM (TCC disabled)" : "TCC (no timeout)");
+        LOG_INFO("  [OK]  %s, compute %d.%d, driver mode: %s\n",
+                 prop.name, prop.major, prop.minor,
+                 prop.kernelExecTimeoutEnabled ? "WDDM" : "TCC");
     }
 
-    LOG_INFO("  [2] Initialising primary context (cudaFree(0))...\n");
+    LOG_INFO("  [2] cudaFree(0) to init primary context...\n");
     cudaFree(0);
     LOG_INFO("  [OK]  Context initialised\n");
 
@@ -141,37 +140,38 @@ static TestResult test_device_pinned_max(int cuda_ordinal, size_t max_test_size)
         LOG_INFO(" total, ");
         print_size("", free_mem, false);
         LOG_INFO(" free\n");
-    } else {
-        LOG_INFO("  [3] cudaMemGetInfo: %s\n", cudaGetErrorString(err));
     }
 
-    LOG_INFO("  [4] Starting pinning test (halving from ");
-    print_size("", max_test_size, false);
-    LOG_INFO(" down to 1 MiB)\n");
+    LOG_INFO("  [4] Pinning test: sequence 1/1 -> 3/4 -> 1/2 -> 1/4 -> ... down to 1 MiB\n");
 
     const size_t min_chunk = 1ULL << 20;
     size_t try_size = max_test_size;
     int iteration = 0;
+    int stage = 0; // 0 = full, 1 = 3/4, 2+ = halving
 
     while (try_size >= min_chunk) {
         iteration++;
         auto t0 = ggml_time_us();
 
         LOG_INFO("  [%d] Trying ", iteration);
+        if (stage == 0) LOG_INFO("1/1 ");
+        else if (stage == 1) LOG_INFO("3/4 ");
         print_size("", try_size, false);
-        LOG_INFO("...");
+        LOG_INFO("... ");
 
         void * ptr = VirtualAlloc(NULL, try_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
         auto t1 = ggml_time_us();
 
         if (ptr == nullptr) {
-            auto dt = (t1 - t0) / 1000.0;
-            LOG_INFO(" VirtualAlloc FAILED (%.1f ms)\n", dt);
-            try_size /= 2;
+            LOG_INFO("VirtualAlloc FAILED (%.1f ms)\n", (t1 - t0) / 1000.0);
+            // advance size
+            if (stage == 0) { stage = 1; try_size = max_test_size * 3 / 4; }
+            else if (stage == 1) { stage = 2; try_size = max_test_size / 2; }
+            else { try_size /= 2; }
             continue;
         }
 
-        LOG_INFO(" alloc'd (%.1f ms), registering...", (t1 - t0) / 1000.0);
+        LOG_INFO("VirtualAlloc OK (%.1f ms), cudaHostRegister... ", (t1 - t0) / 1000.0);
 
         err = cudaHostRegister(ptr, try_size, cudaHostRegisterPortable);
         auto t2 = ggml_time_us();
@@ -184,26 +184,29 @@ static TestResult test_device_pinned_max(int cuda_ordinal, size_t max_test_size)
             result.alloc_ms = (t1 - t0) / 1000.0;
             result.register_ms = register_ms;
 
-            LOG_INFO(" SUCCESS (%.1f ms)\n", register_ms);
+            LOG_INFO("SUCCESS (%.1f ms)\n", register_ms);
             LOG_INFO("  [OK]  Pinned ");
             print_size("", try_size, false);
-            LOG_INFO(" on raw CUDA ordinal %d\n", cuda_ordinal);
+            LOG_INFO(" on %s\n", label);
 
             cudaHostUnregister(ptr);
             VirtualFree(ptr, 0, MEM_RELEASE);
             break;
         }
 
-        LOG_INFO(" FAILED: %s (%.1f ms)\n", cudaGetErrorString(err), register_ms);
+        LOG_INFO("FAILED: %s (%.1f ms)\n", cudaGetErrorString(err), register_ms);
         cudaGetLastError();
 
         VirtualFree(ptr, 0, MEM_RELEASE);
-        try_size /= 2;
+        // advance size
+        if (stage == 0) { stage = 1; try_size = max_test_size * 3 / 4; }
+        else if (stage == 1) { stage = 2; try_size = max_test_size / 2; }
+        else { try_size /= 2; }
     }
 
     if (result.bytes == 0) {
-        LOG_INFO("  [FAIL] Could not pin any host memory on raw CUDA %d after %d iterations\n",
-                 cuda_ordinal, iteration);
+        LOG_INFO("  [FAIL] Could not pin any memory on %s after %d iterations\n",
+                 label, iteration);
     }
 
     return result;
@@ -213,6 +216,7 @@ int main(int argc, char ** argv) {
     size_t max_size = 0;
     int set_pinmem = -1;
     bool test_all = true;
+    bool raw_ordinal = false;
     std::vector<int> test_devices;
 
     for (int i = 1; i < argc; i++) {
@@ -221,8 +225,8 @@ int main(int argc, char ** argv) {
             return 0;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             g_verbose = true;
-        } else if (strcmp(argv[i], "--raw") == 0) {
-            g_raw_mode = true;
+        } else if (strcmp(argv[i], "--bare") == 0) {
+            g_bare_mode = true;
         } else if (strcmp(argv[i], "-m") == 0 || strcmp(argv[i], "--max") == 0) {
             if (i + 1 >= argc) { LOG_ERR("-m requires an argument\n"); return 1; }
             if (!parse_size(argv[++i], max_size)) { LOG_ERR("invalid size '%s'\n", argv[i]); return 1; }
@@ -237,6 +241,8 @@ int main(int argc, char ** argv) {
             if (i + 1 >= argc) { LOG_ERR("-d requires a device number\n"); return 1; }
             test_all = false;
             test_devices.push_back(atoi(argv[++i]));
+        } else if (strcmp(argv[i], "-r") == 0 || strcmp(argv[i], "--raw-ord") == 0) {
+            raw_ordinal = true;
         } else {
             LOG_ERR("unknown option '%s'\n", argv[i]);
             LOG_INFO("try '%s --help' for more info\n", argv[0]);
@@ -253,74 +259,30 @@ int main(int argc, char ** argv) {
     LOG_INFO("System:\n");
     print_size("  Physical RAM total: ", get_total_physical_ram());
     print_size("  Physical RAM free:  ", get_free_physical_ram());
-    LOG_INFO("  Mode:               %s\n", g_raw_mode ? "raw CUDA API (no llama backend init)" : "normal (via llama backend)");
+    LOG_INFO("  Mode:               %s\n",
+             g_bare_mode ? "bare (llama init + raw CUDA API)" : "normal (via ggml backend)");
     LOG_INFO("\n");
 
     // -------------------------------------------------------------------
-    // Gather device list
+    // Init phase
     // -------------------------------------------------------------------
-    struct DeviceInfo {
-        int  raw_ordinal;
-        char name[256];
-        int  compute_major;
-        int  compute_minor;
-        bool is_tcc;  // true = kernelExecTimeoutEnabled == false
-        size_t free_vram;
-        size_t total_vram;
-    };
-    std::vector<DeviceInfo> devices;
-    std::vector<TestResult> results;
+    if (g_bare_mode) {
+        LOG_INFO("Initialising llama backend for CUDA runtime loading only...\n");
+        LOG_INFO("  (bare mode: enumeration and testing use raw CUDA API only)\n");
+        llama_backend_init();
+        LOG_INFO("  OK\n\n");
 
-    int device_count = 0;
-
-    if (g_raw_mode) {
-        // --- RAW MODE: use CUDA API directly, no llama_backend_init ---
-        LOG_INFO("Mode: raw CUDA API -- no llama backend contexts opened\n\n");
-
-        cudaError_t err = cudaGetDeviceCount(&device_count);
-        if (err != cudaSuccess) {
-            LOG_ERR("cudaGetDeviceCount: %s\n", cudaGetErrorString(err));
-            return 1;
+        if (set_pinmem >= 0) {
+            ggml_backend_cuda_set_pinmem(set_pinmem);
         }
-
-        LOG_INFO("=== Device enumeration (raw CUDA ordinal order) ===\n");
-        for (int i = 0; i < device_count; i++) {
-            DeviceInfo info;
-            info.raw_ordinal = i;
-
-            cudaDeviceProp prop;
-            err = cudaGetDeviceProperties(&prop, i);
-            if (err == cudaSuccess) {
-                strncpy(info.name, prop.name, sizeof(info.name) - 1);
-                info.name[sizeof(info.name) - 1] = '\0';
-                info.compute_major = prop.major;
-                info.compute_minor = prop.minor;
-                info.is_tcc = !prop.kernelExecTimeoutEnabled;
-            } else {
-                snprintf(info.name, sizeof(info.name), "Unknown (cudaGetDeviceProperties failed)");
-                info.compute_major = 0;
-                info.compute_minor = 0;
-                info.is_tcc = false;
-            }
-
-            // Don't call cudaSetDevice/cudaFree(0) here to avoid opening unwanted WDDM contexts
-            // cudaMemGetInfo needs an active context; skip it in raw mode until the test
-            info.total_vram = 0;
-            info.free_vram = 0;
-
-            devices.push_back(info);
-
-            LOG_INFO("  Raw CUDA %d: %s", i, info.name);
-            if (err == cudaSuccess) {
-                LOG_INFO(" (compute %d.%d, %s)", info.compute_major, info.compute_minor,
-                         info.is_tcc ? "TCC" : "WDDM");
-            }
-            LOG_INFO("\n");
-        }
-        LOG_INFO("\n");
-
+        int pinmem = ggml_backend_cuda_get_pinmem();
+        LOG_INFO("  Pinmem mode:   %d", pinmem);
+        if (pinmem == 0)      LOG_INFO(" (disabled)");
+        else if (pinmem == 1) LOG_INFO(" (token_embd only)");
+        else if (pinmem == 2) LOG_INFO(" (try all, stop on fail)");
+        else if (pinmem == 3) LOG_INFO(" (pin all - default)");
+        LOG_INFO("\n\n");
     } else {
-        // --- NORMAL MODE: via llama backend ---
         LOG_INFO("Initialising llama backend...\n");
         llama_backend_init();
 
@@ -328,7 +290,7 @@ int main(int argc, char ** argv) {
             ggml_backend_cuda_set_pinmem(set_pinmem);
         }
         int pinmem = ggml_backend_cuda_get_pinmem();
-        device_count = ggml_backend_cuda_get_device_count();
+        int device_count = ggml_backend_cuda_get_device_count();
 
         if (device_count == 0) {
             LOG_ERR("no CUDA devices found\n");
@@ -343,20 +305,92 @@ int main(int argc, char ** argv) {
         else if (pinmem == 2) LOG_INFO(" (try all, stop on fail)");
         else if (pinmem == 3) LOG_INFO(" (pin all - default)");
         LOG_INFO("\n\n");
+    }
 
-        LOG_INFO("=== Device enumeration (ggml logical order = nvidia-smi order) ===\n");
+    // -------------------------------------------------------------------
+    // Device enumeration
+    // -------------------------------------------------------------------
+    struct DeviceInfo {
+        int  id;
+        int  cuda_ordinal;
+        char name[256];
+        int  compute_major;
+        int  compute_minor;
+        bool is_tcc;
+        size_t free_vram;
+        size_t total_vram;
+    };
+    std::vector<DeviceInfo> devices;
+    std::vector<TestResult> results;
+
+    int device_count = 0;
+
+    if (g_bare_mode) {
+        // --- BARE MODE: use raw CUDA API for enumeration ---
+        cudaError_t err = cudaGetDeviceCount(&device_count);
+        if (err != cudaSuccess) {
+            LOG_ERR("cudaGetDeviceCount: %s\n", cudaGetErrorString(err));
+            llama_backend_free();
+            return 1;
+        }
+
+        LOG_INFO("=== Device enumeration (raw CUDA ordinal order) ===\n");
         for (int i = 0; i < device_count; i++) {
             DeviceInfo info;
-            info.raw_ordinal = ggml_backend_cuda_get_device_ordinal(i);
+            info.id = i;
+            info.cuda_ordinal = i;
+
+            cudaDeviceProp prop;
+            err = cudaGetDeviceProperties(&prop, i);
+            if (err == cudaSuccess) {
+                strncpy(info.name, prop.name, sizeof(info.name) - 1);
+                info.name[sizeof(info.name) - 1] = '\0';
+                info.compute_major = prop.major;
+                info.compute_minor = prop.minor;
+                info.is_tcc = !prop.kernelExecTimeoutEnabled;
+            } else {
+                snprintf(info.name, sizeof(info.name), "cudaGetDeviceProperties failed");
+                info.compute_major = 0;
+                info.compute_minor = 0;
+                info.is_tcc = false;
+            }
+
+            // cudaMemGetInfo without an active context
+            info.total_vram = 0;
+            info.free_vram = 0;
+
+            devices.push_back(info);
+
+            LOG_INFO("  Raw CUDA %d: %s (compute %d.%d, %s)\n",
+                     i, info.name,
+                     info.compute_major, info.compute_minor,
+                     info.is_tcc ? "TCC" : "WDDM");
+        }
+        LOG_INFO("\n");
+
+    } else {
+        // --- NORMAL MODE: via ggml backend ---
+        device_count = ggml_backend_cuda_get_device_count();
+
+        if (device_count == 0) {
+            LOG_ERR("no CUDA devices found\n");
+            llama_backend_free();
+            return 1;
+        }
+
+        LOG_INFO("=== Device enumeration (ggml logical order = PCIe bus order) ===\n");
+        for (int i = 0; i < device_count; i++) {
+            DeviceInfo info;
+            info.id = i;
+            info.cuda_ordinal = ggml_backend_cuda_get_device_ordinal(i);
             ggml_backend_cuda_get_device_description(i, info.name, sizeof(info.name));
             ggml_backend_cuda_get_device_memory(i, &info.free_vram, &info.total_vram);
 
-            // Query TCC/WDDM via raw CUDA
             cudaDeviceProp prop;
             info.is_tcc = false;
             info.compute_major = 0;
             info.compute_minor = 0;
-            if (cudaGetDeviceProperties(&prop, info.raw_ordinal) == cudaSuccess) {
+            if (cudaGetDeviceProperties(&prop, info.cuda_ordinal) == cudaSuccess) {
                 info.is_tcc = !prop.kernelExecTimeoutEnabled;
                 info.compute_major = prop.major;
                 info.compute_minor = prop.minor;
@@ -364,13 +398,11 @@ int main(int argc, char ** argv) {
 
             devices.push_back(info);
 
-            LOG_INFO("  CUDA%d (raw ordinal %d): %s", i, info.raw_ordinal, info.name);
-            if (info.is_tcc) LOG_INFO(" [TCC]");
-            LOG_INFO("\n");
-            LOG_INFO("    Total VRAM: ");
-            print_size("", info.total_vram);
-            LOG_INFO("    Free VRAM:  ");
-            print_size("", info.free_vram);
+            LOG_INFO("  CUDA%d (raw ordinal %d): %s", i, info.cuda_ordinal, info.name);
+            LOG_INFO(" (compute %d.%d, %s)\n", info.compute_major, info.compute_minor,
+                     info.is_tcc ? "TCC" : "WDDM");
+            print_size("    Total VRAM: ", info.total_vram);
+            print_size("    Free VRAM:  ", info.free_vram);
         }
         LOG_INFO("\n");
     }
@@ -379,74 +411,80 @@ int main(int argc, char ** argv) {
     // Resolve test device list
     // -------------------------------------------------------------------
     std::vector<int> to_test;
-    int effective_count = g_raw_mode ? device_count : device_count;
 
     if (test_all) {
-        if (effective_count == 0) {
+        if (device_count == 0) {
             LOG_ERR("no CUDA devices found\n");
-            if (!g_raw_mode) llama_backend_free();
+            if (!g_bare_mode) llama_backend_free();
             return 1;
         }
-        for (int i = 0; i < effective_count; i++) {
+        for (int i = 0; i < device_count; i++) {
             to_test.push_back(i);
         }
     } else {
         for (int d : test_devices) {
-            if (d < 0 || d >= effective_count) {
-                LOG_WARN("device %d out of range (0-%d), skipping\n", d, effective_count - 1);
-                continue;
+            if (raw_ordinal) {
+                bool found = false;
+                for (int i = 0; i < device_count; i++) {
+                    if (devices[i].cuda_ordinal == d) {
+                        to_test.push_back(i);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    LOG_WARN("raw CUDA ordinal %d not found, skipping\n", d);
+                }
+            } else {
+                if (d < 0 || d >= device_count) {
+                    LOG_WARN("device %d out of range (0-%d), skipping\n", d, device_count - 1);
+                    continue;
+                }
+                to_test.push_back(d);
             }
-            to_test.push_back(d);
         }
         if (to_test.empty()) {
             LOG_ERR("no valid devices specified\n");
-            if (!g_raw_mode) llama_backend_free();
+            if (!g_bare_mode) llama_backend_free();
             return 1;
         }
     }
 
+    // -------------------------------------------------------------------
+    // Run tests
+    // -------------------------------------------------------------------
     LOG_INFO("=== Pinned memory testing ===\n");
     print_size("  Max test size per device: ", max_size);
     LOG_INFO("  Devices under test: ");
     for (size_t i = 0; i < to_test.size(); i++) {
         if (i > 0) LOG_INFO(", ");
         int idx = to_test[i];
-        if (g_raw_mode) {
-            LOG_INFO("raw CUDA %d", devices[idx].raw_ordinal);
-        } else {
-            LOG_INFO("CUDA%d (ordinal %d)", idx, devices[idx].raw_ordinal);
-        }
+        LOG_INFO("raw CUDA %d", devices[idx].cuda_ordinal);
     }
     LOG_INFO("\n\n");
 
-    // -------------------------------------------------------------------
-    // Run tests
-    // -------------------------------------------------------------------
     int64_t t_start = ggml_time_us();
     for (size_t idx = 0; idx < to_test.size(); idx++) {
         int list_idx = to_test[idx];
-        int raw_ord = devices[list_idx].raw_ordinal;
+        int raw_ord = devices[list_idx].cuda_ordinal;
+
+        char label[64];
+        snprintf(label, sizeof(label), "raw %d (%s)",
+                 raw_ord, devices[list_idx].is_tcc ? "TCC" : "WDDM");
 
         LOG_INFO("+%.*s+\n", 60, "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-        if (g_raw_mode) {
-            LOG_INFO("| Device %d/%d: raw CUDA %d - %-40s |\n",
-                     (int)(idx + 1), (int)to_test.size(), raw_ord, devices[list_idx].name);
-        } else {
-            LOG_INFO("| Device %d/%d: CUDA%d (raw ordinal %d) - %-27s |\n",
-                     (int)(idx + 1), (int)to_test.size(),
-                     list_idx, raw_ord, devices[list_idx].name);
-        }
+        LOG_INFO("| Device %d/%d: raw CUDA %d - %-36s |\n",
+                 (int)(idx + 1), (int)to_test.size(), raw_ord, devices[list_idx].name);
         LOG_INFO("+%.*s+\n", 60, "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
 
-        TestResult r = test_device_pinned_max(raw_ord, max_size);
+        TestResult r = test_device_pinned_max(raw_ord, max_size, label);
 
         if (r.bytes > 0) {
-            LOG_INFO("\n  >>> raw CUDA %d: max pinned host memory = ", raw_ord);
+            LOG_INFO("\n  >>> raw CUDA %d: max pinned = ", raw_ord);
             print_size("", r.bytes, false);
-            LOG_INFO(" (found in %d iterations, %.1f ms total)\n",
-                     r.iterations, r.total_ms);
+            LOG_INFO(" (%d iterations, %.1f ms)\n", r.iterations, r.total_ms);
         } else {
-            LOG_INFO("\n  >>> raw CUDA %d: COULD NOT PIN any host memory\n", raw_ord);
+            LOG_INFO("\n  >>> raw CUDA %d: COULD NOT PIN\n", raw_ord);
         }
         LOG_INFO("\n");
 
@@ -460,25 +498,15 @@ int main(int argc, char ** argv) {
     LOG_INFO("=== Summary ===\n");
     LOG_INFO("Total test time: %.1f s\n\n", (t_end - t_start) / 1e6);
 
-    LOG_INFO("%-7s %-8s %-5s %-40s  %-22s  %s\n",
-             "Test#", "Device", "Mode", "Name", "Max Pinned Host", "Time");
-    LOG_INFO("%-7s %-8s %-5s %-40s  %-22s  %s\n",
-             "-----", "------", "----", "----", "----------------", "----");
+    LOG_INFO("%-5s %-5s %-40s  %-22s  %s\n",
+             "Raw", "Mode", "Name", "Max Pinned Host", "Time");
+    LOG_INFO("%-5s %-5s %-40s  %-22s  %s\n",
+             "---", "----", "----", "----------------", "----");
 
     for (size_t idx = 0; idx < to_test.size(); idx++) {
         int list_idx = to_test[idx];
         const auto & dev = devices[list_idx];
         const auto & r = results[idx];
-
-        char dev_str[16];
-        if (g_raw_mode) {
-            snprintf(dev_str, sizeof(dev_str), "raw %d", dev.raw_ordinal);
-        } else {
-            snprintf(dev_str, sizeof(dev_str), "CUDA%d", list_idx);
-        }
-
-        char mode_str[8];
-        snprintf(mode_str, sizeof(mode_str), "%s", dev.is_tcc ? "TCC" : "WDDM");
 
         char pinmem_str[24];
         if (r.bytes >= (1024LL * 1024LL * 1024LL)) {
@@ -496,8 +524,10 @@ int main(int argc, char ** argv) {
             snprintf(time_str, sizeof(time_str), "-");
         }
 
-        LOG_INFO("%-7zu %-8s %-5s %-40s  %-22s  %s\n",
-                 idx + 1, dev_str, mode_str, dev.name, pinmem_str, time_str);
+        LOG_INFO("%-5d %-5s %-40s  %-22s  %s\n",
+                 dev.cuda_ordinal,
+                 dev.is_tcc ? "TCC" : "WDDM",
+                 dev.name, pinmem_str, time_str);
     }
 
     LOG_INFO("\n");
@@ -505,6 +535,7 @@ int main(int argc, char ** argv) {
     for (const auto & r : results) {
         if (r.bytes > 0) { any_success = true; break; }
     }
+
     if (!any_success) {
         LOG_INFO("NOTE: No device could pin host memory.\n");
         LOG_INFO("  - Try pinmem=2 for the backend halving approach.\n");
@@ -513,7 +544,7 @@ int main(int argc, char ** argv) {
         LOG_INFO("  - A TCC driver bypasses this limit.\n");
     }
 
-    if (!g_raw_mode) {
+    if (!g_bare_mode) {
         llama_backend_free();
     }
     return any_success ? 0 : 1;
