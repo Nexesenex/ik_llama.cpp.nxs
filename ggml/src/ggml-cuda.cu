@@ -286,6 +286,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
         info.devices[id].integrated = prop.integrated;
         info.devices[id].nsm        = prop.multiProcessorCount;
+        info.devices[id].is_tcc     = !prop.kernelExecTimeoutEnabled;
         info.devices[id].smpb       = prop.sharedMemPerBlock;
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
@@ -1597,10 +1598,29 @@ static void * ggml_cuda_host_malloc(size_t size) {
         return nullptr;
     }
 
-    // Debug: log the CUDA device that will be used for pinning
+    // Prefer a TCC device for pinning (bypasses WDDM per-process quota).
+    // TCC devices can pin up to available system RAM, while WDDM devices
+    // are limited to ~32-48 GiB per process.  The TCC device's primary
+    // context is initialised first so that cudaHostRegister does not
+    // consume WDDM quota unnecessarily.
+    int pin_dev = -1;
+    {
+        const auto & info = ggml_cuda_info();
+        for (int i = 0; i < info.device_count; i++) {
+            if (info.devices[i].is_tcc) {
+                pin_dev = info.cuda_device_id[i];
+                GGML_CUDA_LOG_INFO("%s: found TCC device %d (logical %d), using for pinning\n", __func__, pin_dev, i);
+                break;
+            }
+        }
+    }
     int cur_dev = -1;
     cudaError_t err_dev = cudaGetDevice(&cur_dev);
-    GGML_CUDA_LOG_INFO("%s: current CUDA device = %d (err=%d)\n", __func__, cur_dev, (int)err_dev);
+    ggml_cuda_set_device(pin_dev >= 0 ? pin_dev : cur_dev);
+    GGML_CUDA_LOG_INFO("%s: current CUDA device = %d (err=%d), pinning on device = %d\n", __func__, cur_dev, (int)err_dev, pin_dev >= 0 ? pin_dev : cur_dev);
+    if (pin_dev >= 0 || cur_dev >= 0) {
+        cudaFree(0);  // touch/init primary context for the chosen device
+    }
 
     // Diagnostic: identify the physical card and test pinning
     {
