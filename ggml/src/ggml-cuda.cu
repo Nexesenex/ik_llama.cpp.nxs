@@ -266,9 +266,12 @@ static ggml_cuda_device_info ggml_cuda_init() {
 #endif // !defined(GGML_USE_HIPBLAS) && !defined(GGML_CUDA_NO_VMM) && !defined(GGML_USE_MUSA)
         info.devices[id].vmm = !!device_vmm;
 
+        char pci_bus_id[16] = {0};
+        cudaDeviceGetPCIBusId(pci_bus_id, 16, cuda_id);
         cudaDeviceProp prop;
         CUDA_CHECK(cudaGetDeviceProperties(&prop, cuda_id));
-        GGML_CUDA_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n", id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
+        const char * attach = (prop.pciBusID < 0x80) ? "CPU" : "PCH";
+        GGML_CUDA_LOG_INFO("  Device %d: %s (PCIE %s, %s), compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n", id, prop.name, pci_bus_id, attach, prop.major, prop.minor, device_vmm ? "yes" : "no",
                 prop.totalGlobalMem/(1024*1024));
 
         info.default_tensor_split[id] = total_vram;
