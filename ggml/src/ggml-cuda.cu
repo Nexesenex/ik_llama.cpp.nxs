@@ -1660,8 +1660,9 @@ static void * ggml_cuda_host_malloc(size_t size) {
             ms.ullAvailPhys / (1024.*1024.*1024.), ms.ullTotalPhys / (1024.*1024.*1024.));
     }
 
-    // Diagnostic: test cudaMallocHost (original approach) for this size
+    // Diagnostic: test various pinning methods for this size
     {
+        // 1) cudaMallocHost (default, current-device only)
         void * mh_ptr = nullptr;
         cudaError_t mh_err = cudaMallocHost(&mh_ptr, size);
         if (mh_err == cudaSuccess) {
@@ -1670,6 +1671,17 @@ static void * ggml_cuda_host_malloc(size_t size) {
         } else {
             GGML_CUDA_LOG_WARN("%s: cudaMallocHost %.2f GiB FAILED: %s\n", __func__, size_GiB, cudaGetErrorString(mh_err));
             cudaGetLastError();
+        }
+        // 2) cudaHostRegister NON-portable (current device only)
+        if (ptr) {
+            cudaError_t np_err = cudaHostRegister(ptr, size, 0);
+            if (np_err == cudaSuccess) {
+                GGML_CUDA_LOG_INFO("%s: cudaHostRegister(portable=0) %.2f GiB SUCCEEDED\n", __func__, size_GiB);
+                cudaHostUnregister(ptr);
+            } else {
+                GGML_CUDA_LOG_WARN("%s: cudaHostRegister(portable=0) %.2f GiB FAILED: %s\n", __func__, size_GiB, cudaGetErrorString(np_err));
+                cudaGetLastError();
+            }
         }
     }
 
