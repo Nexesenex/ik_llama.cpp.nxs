@@ -24,6 +24,91 @@ static bool g_bare_mode = false;
 #define LOG_WARN(...)  fprintf(stdout, "warning: " __VA_ARGS__)
 #define LOG_DBG(...)   do { if (g_verbose) fprintf(stdout, "  [debug] " __VA_ARGS__); } while (0)
 
+// -----------------------------------------------------------------------
+// Pin method specification
+// -----------------------------------------------------------------------
+enum pin_method_id {
+    PIN_METHOD_VA,           // VirtualAlloc + cudaHostRegister(portable)
+    PIN_METHOD_MALLOC_P,     // malloc + cudaHostRegister(portable)
+    PIN_METHOD_MALLOC_NP,    // malloc + cudaHostRegister(non-portable)
+    PIN_METHOD_AMALLOC_P,    // _aligned_malloc(size,32) + cudaHostRegister(portable)
+    PIN_METHOD_CHOST,        // cudaHostAlloc (direct pinned)
+    PIN_METHOD_COUNT,
+    PIN_METHOD_ALL = PIN_METHOD_COUNT,
+};
+
+static const char * method_name(enum pin_method_id m) {
+    switch (m) {
+        case PIN_METHOD_VA:        return "va";
+        case PIN_METHOD_MALLOC_P:  return "malloc_p";
+        case PIN_METHOD_MALLOC_NP: return "malloc_np";
+        case PIN_METHOD_AMALLOC_P: return "amalloc_p";
+        case PIN_METHOD_CHOST:     return "chost";
+        default:                   return "?";
+    }
+}
+static const char * method_desc(enum pin_method_id m) {
+    switch (m) {
+        case PIN_METHOD_VA:        return "VirtualAlloc + cudaHostRegister(portable)";
+        case PIN_METHOD_MALLOC_P:  return "malloc + cudaHostRegister(portable)";
+        case PIN_METHOD_MALLOC_NP: return "malloc + cudaHostRegister(non-portable)";
+        case PIN_METHOD_AMALLOC_P: return "_aligned_malloc + cudaHostRegister(portable)";
+        case PIN_METHOD_CHOST:     return "cudaHostAlloc (direct pinned)";
+        default:                   return "unknown";
+    }
+}
+static enum pin_method_id parse_method(const char * s) {
+    if (strcmp(s, "va")        == 0) return PIN_METHOD_VA;
+    if (strcmp(s, "malloc_p")  == 0) return PIN_METHOD_MALLOC_P;
+    if (strcmp(s, "malloc_np") == 0) return PIN_METHOD_MALLOC_NP;
+    if (strcmp(s, "amalloc_p") == 0) return PIN_METHOD_AMALLOC_P;
+    if (strcmp(s, "chost")     == 0) return PIN_METHOD_CHOST;
+    if (strcmp(s, "all")       == 0) return PIN_METHOD_ALL;
+    return (enum pin_method_id)-1;
+}
+
+// -----------------------------------------------------------------------
+// Method-specific alloc / pin / free helpers
+// -----------------------------------------------------------------------
+static void * alloc_va(size_t size) {
+#ifdef _WIN32
+    return VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+    (void)size; return nullptr;
+#endif
+}
+static void free_va(void * ptr) {
+#ifdef _WIN32
+    VirtualFree(ptr, 0, MEM_RELEASE);
+#else
+    (void)ptr;
+#endif
+}
+
+static void * alloc_malloc_m(size_t size) { return malloc(size); }
+static void free_malloc_m(void * ptr) { free(ptr); }
+
+#ifdef _WIN32
+static void * alloc_amalloc(size_t size) { return _aligned_malloc(size, 32); }
+static void free_amalloc(void * ptr) { _aligned_free(ptr); }
+#else
+static void * alloc_amalloc(size_t size) { (void)size; return nullptr; }
+static void free_amalloc(void * ptr) { (void)ptr; }
+#endif
+
+static cudaError_t pin_portable(void * ptr, size_t size) {
+    return cudaHostRegister(ptr, size, cudaHostRegisterPortable);
+}
+static cudaError_t pin_nonportable(void * ptr, size_t size) {
+    return cudaHostRegister(ptr, size, cudaHostRegisterDefault);
+}
+static void unpin_std(void * ptr) { cudaHostUnregister(ptr); }
+
+static cudaError_t allocpin_chost(void ** ptr, size_t size) {
+    return cudaHostAlloc(ptr, size, cudaHostAllocDefault);
+}
+static void free_chost(void * ptr) { cudaFreeHost(ptr); }
+
 static void print_usage(const char * prog) {
     LOG_INFO("Usage: %s [options]\n\n", prog);
     LOG_INFO("Options:\n");
@@ -34,6 +119,9 @@ static void print_usage(const char * prog) {
     LOG_INFO("  -a, --all        Test all logical CUDA devices (default)\n");
     LOG_INFO("  -d, --dev N      Test a specific device only\n");
     LOG_INFO("  -r, --raw-ord    Interpret -d N as raw CUDA ordinal\n");
+    LOG_INFO("  -M, --method M   Allocation method: va | malloc_p | malloc_np | amalloc_p | chost | all\n");
+    LOG_INFO("                   (default: va = VirtualAlloc + cudaHostRegister)\n");
+    LOG_INFO("  --list-methods   List available allocation methods and exit\n");
     LOG_INFO("  --bare           Minimal init: llama_backend_init() only, then raw CUDA API.\n");
     LOG_INFO("                   Avoids ggml backend context state on all devices.\n");
     LOG_INFO("\n");
@@ -42,6 +130,12 @@ static void print_usage(const char * prog) {
     LOG_INFO("  1 = token_embd only\n");
     LOG_INFO("  2 = Try all, stop on fail (halving approach)\n");
     LOG_INFO("  3 = Pin all (default)\n");
+    LOG_INFO("\n");
+    LOG_INFO("Allocation methods:\n");
+    for (int i = 0; i < PIN_METHOD_COUNT; i++) {
+        LOG_INFO("  %-10s %s\n", method_name((enum pin_method_id)i), method_desc((enum pin_method_id)i));
+    }
+    LOG_INFO("  %-10s Run all methods on each device (comparison table)\n", "all");
 }
 
 static bool parse_size(const char * str, size_t & size) {
@@ -107,7 +201,7 @@ struct TestResult {
     double register_ms;
 };
 
-static TestResult test_device_pinned_max(int cuda_ordinal, size_t max_test_size, const char * label) {
+static TestResult test_device_pinned_max_method(int cuda_ordinal, size_t max_test_size, const char * label, enum pin_method_id method) {
     TestResult result = { 0, 0, 0.0, 0.0, 0.0 };
 
     LOG_INFO("  [1] cudaSetDevice(%d) (%s)...\n", cuda_ordinal, label);
@@ -142,7 +236,8 @@ static TestResult test_device_pinned_max(int cuda_ordinal, size_t max_test_size,
         LOG_INFO(" free\n");
     }
 
-    LOG_INFO("  [4] Pinning test: sequence 1/1 -> 3/4 -> 1/2 -> 1/4 -> ... down to 1 MiB\n");
+    LOG_INFO("  [4] Pinning test [method=%s]: sequence 1/1 -> 3/4 -> 1/2 -> ... down to 1 MiB\n",
+             method_name(method));
 
     const size_t min_chunk = 1ULL << 20;
     size_t try_size = max_test_size;
@@ -159,49 +254,103 @@ static TestResult test_device_pinned_max(int cuda_ordinal, size_t max_test_size,
         print_size("", try_size, false);
         LOG_INFO("... ");
 
-        void * ptr = VirtualAlloc(NULL, try_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        bool alloc_ok = false;
+        void * ptr = nullptr;
+        double alloc_ms = 0.0, register_ms = 0.0;
+
         auto t1 = ggml_time_us();
 
-        if (ptr == nullptr) {
-            LOG_INFO("VirtualAlloc FAILED (%.1f ms)\n", (t1 - t0) / 1000.0);
-            // advance size
-            if (stage == 0) { stage = 1; try_size = max_test_size * 3 / 4; }
-            else if (stage == 1) { stage = 2; try_size = max_test_size / 2; }
-            else { try_size /= 2; }
-            continue;
+        if (method == PIN_METHOD_CHOST) {
+            // Combined alloc+pin (cudaHostAlloc)
+            err = allocpin_chost(&ptr, try_size);
+            alloc_ms = (ggml_time_us() - t1) / 1000.0;
+
+            if (err == cudaSuccess) {
+                alloc_ok = true;
+                register_ms = 0.0;
+            } else {
+                LOG_INFO("cudaHostAlloc FAILED: %s (%.1f ms)\n",
+                         cudaGetErrorString(err), alloc_ms);
+                cudaGetLastError();
+            }
+        } else {
+            // Separate alloc + pin
+            switch (method) {
+                case PIN_METHOD_VA:        ptr = alloc_va(try_size);        break;
+                case PIN_METHOD_MALLOC_P:
+                case PIN_METHOD_MALLOC_NP: ptr = alloc_malloc_m(try_size);  break;
+                case PIN_METHOD_AMALLOC_P: ptr = alloc_amalloc(try_size);   break;
+                default: break;
+            }
+            alloc_ms = (ggml_time_us() - t1) / 1000.0;
+
+            if (ptr == nullptr) {
+                const char * aname = method_name(method);
+                LOG_INFO("%s alloc FAILED (%.1f ms)\n", aname, alloc_ms);
+                goto advance;
+            }
+
+            auto t2 = ggml_time_us();
+
+            if (method == PIN_METHOD_MALLOC_NP) {
+                err = pin_nonportable(ptr, try_size);
+            } else {
+                err = pin_portable(ptr, try_size);
+            }
+            register_ms = (ggml_time_us() - t2) / 1000.0;
+
+            if (err == cudaSuccess) {
+                alloc_ok = true;
+                LOG_INFO("alloc OK (%.1f ms), register OK (%.1f ms)\n", alloc_ms, register_ms);
+            } else {
+                LOG_INFO("alloc OK (%.1f ms), register FAILED: %s (%.1f ms)\n",
+                         alloc_ms, cudaGetErrorString(err), register_ms);
+                cudaGetLastError();
+
+                // Free the alloc'ed memory on register failure
+                switch (method) {
+                    case PIN_METHOD_VA:        free_va(ptr);        break;
+                    case PIN_METHOD_MALLOC_P:
+                    case PIN_METHOD_MALLOC_NP: free_malloc_m(ptr);  break;
+                    case PIN_METHOD_AMALLOC_P: free_amalloc(ptr);   break;
+                    default: break;
+                }
+                goto advance;
+            }
         }
 
-        LOG_INFO("VirtualAlloc OK (%.1f ms), cudaHostRegister... ", (t1 - t0) / 1000.0);
-
-        err = cudaHostRegister(ptr, try_size, cudaHostRegisterPortable);
-        auto t2 = ggml_time_us();
-        double register_ms = (t2 - t1) / 1000.0;
-
-        if (err == cudaSuccess) {
+        if (alloc_ok) {
             result.bytes = try_size;
             result.iterations = iteration;
-            result.total_ms = (t2 - t0) / 1000.0;
-            result.alloc_ms = (t1 - t0) / 1000.0;
+            result.total_ms = (ggml_time_us() - t0) / 1000.0;
+            result.alloc_ms = alloc_ms;
             result.register_ms = register_ms;
 
-            LOG_INFO("SUCCESS (%.1f ms)\n", register_ms);
             LOG_INFO("  [OK]  Pinned ");
             print_size("", try_size, false);
             LOG_INFO(" on %s\n", label);
 
-            cudaHostUnregister(ptr);
-            VirtualFree(ptr, 0, MEM_RELEASE);
+            // Cleanup
+            if (method == PIN_METHOD_CHOST) {
+                free_chost(ptr);
+            } else {
+                unpin_std(ptr);
+                switch (method) {
+                    case PIN_METHOD_VA:        free_va(ptr);        break;
+                    case PIN_METHOD_MALLOC_P:
+                    case PIN_METHOD_MALLOC_NP: free_malloc_m(ptr);  break;
+                    case PIN_METHOD_AMALLOC_P: free_amalloc(ptr);   break;
+                    default: break;
+                }
+            }
             break;
         }
 
-        LOG_INFO("FAILED: %s (%.1f ms)\n", cudaGetErrorString(err), register_ms);
-        cudaGetLastError();
-
-        VirtualFree(ptr, 0, MEM_RELEASE);
-        // advance size
-        if (stage == 0) { stage = 1; try_size = max_test_size * 3 / 4; }
+advance:
+        // advance size: 1/1 -> 3/4 -> 1/2 -> 1/4 -> ...
+        if (stage == 0)      { stage = 1; try_size = max_test_size * 3 / 4; }
         else if (stage == 1) { stage = 2; try_size = max_test_size / 2; }
-        else { try_size /= 2; }
+        else                 { try_size /= 2; }
     }
 
     if (result.bytes == 0) {
@@ -212,11 +361,17 @@ static TestResult test_device_pinned_max(int cuda_ordinal, size_t max_test_size,
     return result;
 }
 
+static TestResult test_device_pinned_max(int cuda_ordinal, size_t max_test_size, const char * label) {
+    return test_device_pinned_max_method(cuda_ordinal, max_test_size, label, PIN_METHOD_VA);
+}
+
 int main(int argc, char ** argv) {
     size_t max_size = 0;
     int set_pinmem = -1;
     bool test_all = true;
     bool raw_ordinal = false;
+    bool list_methods = false;
+    enum pin_method_id test_method = PIN_METHOD_VA;
     std::vector<int> test_devices;
 
     for (int i = 1; i < argc; i++) {
@@ -234,6 +389,14 @@ int main(int argc, char ** argv) {
             if (i + 1 >= argc) { LOG_ERR("-p requires an argument\n"); return 1; }
             set_pinmem = atoi(argv[++i]);
             if (set_pinmem < 0 || set_pinmem > 3) { LOG_ERR("pinmem must be 0-3\n"); return 1; }
+        } else if (strcmp(argv[i], "-M") == 0 || strcmp(argv[i], "--method") == 0) {
+            if (i + 1 >= argc) { LOG_ERR("-M requires an argument\n"); return 1; }
+            i++;
+            enum pin_method_id m = parse_method(argv[i]);
+            if ((int)m < 0) { LOG_ERR("unknown method '%s'\n", argv[i]); return 1; }
+            test_method = m;
+        } else if (strcmp(argv[i], "--list-methods") == 0) {
+            list_methods = true;
         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--all") == 0) {
             test_all = true;
             test_devices.clear();
@@ -248,6 +411,15 @@ int main(int argc, char ** argv) {
             LOG_INFO("try '%s --help' for more info\n", argv[0]);
             return 1;
         }
+    }
+
+    if (list_methods) {
+        LOG_INFO("Available allocation methods:\n");
+        for (int i = 0; i < PIN_METHOD_COUNT; i++) {
+            LOG_INFO("  %-10s %s\n", method_name((enum pin_method_id)i), method_desc((enum pin_method_id)i));
+        }
+        LOG_INFO("  %-10s Run all methods\n", "all");
+        return 0;
     }
 
     if (max_size == 0) {
@@ -455,6 +627,7 @@ int main(int argc, char ** argv) {
     // -------------------------------------------------------------------
     LOG_INFO("=== Pinned memory testing ===\n");
     print_size("  Max test size per device: ", max_size);
+    LOG_INFO("  Method:              %s\n", test_method == PIN_METHOD_ALL ? "all" : method_name(test_method));
     LOG_INFO("  Devices under test: ");
     for (size_t i = 0; i < to_test.size(); i++) {
         if (i > 0) LOG_INFO(", ");
@@ -464,31 +637,85 @@ int main(int argc, char ** argv) {
     LOG_INFO("\n\n");
 
     int64_t t_start = ggml_time_us();
-    for (size_t idx = 0; idx < to_test.size(); idx++) {
-        int list_idx = to_test[idx];
-        int raw_ord = devices[list_idx].cuda_ordinal;
 
-        char label[64];
-        snprintf(label, sizeof(label), "raw %d (%s)",
-                 raw_ord, devices[list_idx].is_tcc ? "TCC" : "WDDM");
+    if (test_method == PIN_METHOD_ALL) {
+        // Run all methods per device, show comparison per device
+        for (size_t idx = 0; idx < to_test.size(); idx++) {
+            int list_idx = to_test[idx];
+            int raw_ord = devices[list_idx].cuda_ordinal;
 
-        LOG_INFO("+%.*s+\n", 60, "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-        LOG_INFO("| Device %d/%d: raw CUDA %d - %-36s |\n",
-                 (int)(idx + 1), (int)to_test.size(), raw_ord, devices[list_idx].name);
-        LOG_INFO("+%.*s+\n", 60, "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+            char label[64];
+            snprintf(label, sizeof(label), "raw %d (%s)",
+                     raw_ord, devices[list_idx].is_tcc ? "TCC" : "WDDM");
 
-        TestResult r = test_device_pinned_max(raw_ord, max_size, label);
+            LOG_INFO("+%.*s+\n", 70, "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+            LOG_INFO("| Device %d/%d: raw CUDA %d - %-46s |\n",
+                     (int)(idx + 1), (int)to_test.size(), raw_ord, devices[list_idx].name);
+            LOG_INFO("+%.*s+\n", 70, "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
 
-        if (r.bytes > 0) {
-            LOG_INFO("\n  >>> raw CUDA %d: max pinned = ", raw_ord);
-            print_size("", r.bytes, false);
-            LOG_INFO(" (%d iterations, %.1f ms)\n", r.iterations, r.total_ms);
-        } else {
-            LOG_INFO("\n  >>> raw CUDA %d: COULD NOT PIN\n", raw_ord);
+            // Test each method
+            std::vector<TestResult> method_results;
+            for (int m = 0; m < PIN_METHOD_COUNT; m++) {
+                LOG_INFO("\n--- Method: %s (%s) ---\n", method_name((enum pin_method_id)m), method_desc((enum pin_method_id)m));
+                TestResult r = test_device_pinned_max_method(raw_ord, max_size, label, (enum pin_method_id)m);
+                method_results.push_back(r);
+                LOG_INFO("\n");
+            }
+
+            // Per-device comparison table
+            LOG_INFO("--- Comparison for raw CUDA %d ---\n", raw_ord);
+            LOG_INFO("%-12s %-22s %-10s %-12s\n", "Method", "Max Pinned", "Iter", "Time");
+            LOG_INFO("%-12s %-22s %-10s %-12s\n", "------", "----------", "----", "----");
+
+            for (int m = 0; m < PIN_METHOD_COUNT; m++) {
+                const auto & r = method_results[m];
+                char pinmem_str[24];
+                if (r.bytes >= (1024LL * 1024LL * 1024LL)) {
+                    snprintf(pinmem_str, sizeof(pinmem_str), "%.2f GiB", r.bytes / (1024.0 * 1024.0 * 1024.0));
+                } else if (r.bytes > 0) {
+                    snprintf(pinmem_str, sizeof(pinmem_str), "%.0f MiB", r.bytes / (1024.0 * 1024.0));
+                } else {
+                    snprintf(pinmem_str, sizeof(pinmem_str), "FAILED");
+                }
+                char time_str[16];
+                if (r.iterations > 0) {
+                    snprintf(time_str, sizeof(time_str), "%.1f s", r.total_ms / 1000.0);
+                } else {
+                    snprintf(time_str, sizeof(time_str), "-");
+                }
+                LOG_INFO("%-12s %-22s %-10d %-12s\n",
+                         method_name((enum pin_method_id)m), pinmem_str, r.iterations, time_str);
+            }
+            LOG_INFO("\n");
         }
-        LOG_INFO("\n");
+    } else {
+        // Single method test
+        for (size_t idx = 0; idx < to_test.size(); idx++) {
+            int list_idx = to_test[idx];
+            int raw_ord = devices[list_idx].cuda_ordinal;
 
-        results.push_back(r);
+            char label[64];
+            snprintf(label, sizeof(label), "raw %d (%s)",
+                     raw_ord, devices[list_idx].is_tcc ? "TCC" : "WDDM");
+
+            LOG_INFO("+%.*s+\n", 60, "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+            LOG_INFO("| Device %d/%d: raw CUDA %d - %-36s |\n",
+                     (int)(idx + 1), (int)to_test.size(), raw_ord, devices[list_idx].name);
+            LOG_INFO("+%.*s+\n", 60, "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+
+            TestResult r = test_device_pinned_max_method(raw_ord, max_size, label, test_method);
+
+            if (r.bytes > 0) {
+                LOG_INFO("\n  >>> raw CUDA %d: max pinned = ", raw_ord);
+                print_size("", r.bytes, false);
+                LOG_INFO(" (%d iterations, %.1f ms)\n", r.iterations, r.total_ms);
+            } else {
+                LOG_INFO("\n  >>> raw CUDA %d: COULD NOT PIN\n", raw_ord);
+            }
+            LOG_INFO("\n");
+
+            results.push_back(r);
+        }
     }
     int64_t t_end = ggml_time_us();
 
@@ -498,54 +725,67 @@ int main(int argc, char ** argv) {
     LOG_INFO("=== Summary ===\n");
     LOG_INFO("Total test time: %.1f s\n\n", (t_end - t_start) / 1e6);
 
-    LOG_INFO("%-5s %-5s %-40s  %-22s  %s\n",
-             "Raw", "Mode", "Name", "Max Pinned Host", "Time");
-    LOG_INFO("%-5s %-5s %-40s  %-22s  %s\n",
-             "---", "----", "----", "----------------", "----");
+    if (test_method == PIN_METHOD_ALL) {
+        LOG_INFO("See comparison tables per device above.\n");
+        LOG_INFO("Tip: run with a specific method (-M <method>) for detailed per-iteration logs.\n\n");
+    } else {
+        LOG_INFO("%-5s %-5s %-40s  %-22s  %s\n",
+                 "Raw", "Mode", "Name", "Max Pinned Host", "Time");
+        LOG_INFO("%-5s %-5s %-40s  %-22s  %s\n",
+                 "---", "----", "----", "----------------", "----");
 
-    for (size_t idx = 0; idx < to_test.size(); idx++) {
-        int list_idx = to_test[idx];
-        const auto & dev = devices[list_idx];
-        const auto & r = results[idx];
+        for (size_t idx = 0; idx < to_test.size(); idx++) {
+            int list_idx = to_test[idx];
+            const auto & dev = devices[list_idx];
+            const auto & r = results[idx];
 
-        char pinmem_str[24];
-        if (r.bytes >= (1024LL * 1024LL * 1024LL)) {
-            snprintf(pinmem_str, sizeof(pinmem_str), "%.2f GiB", r.bytes / (1024.0 * 1024.0 * 1024.0));
-        } else if (r.bytes > 0) {
-            snprintf(pinmem_str, sizeof(pinmem_str), "%.0f MiB", r.bytes / (1024.0 * 1024.0));
-        } else {
-            snprintf(pinmem_str, sizeof(pinmem_str), "FAILED");
+            char pinmem_str[24];
+            if (r.bytes >= (1024LL * 1024LL * 1024LL)) {
+                snprintf(pinmem_str, sizeof(pinmem_str), "%.2f GiB", r.bytes / (1024.0 * 1024.0 * 1024.0));
+            } else if (r.bytes > 0) {
+                snprintf(pinmem_str, sizeof(pinmem_str), "%.0f MiB", r.bytes / (1024.0 * 1024.0));
+            } else {
+                snprintf(pinmem_str, sizeof(pinmem_str), "FAILED");
+            }
+
+            char time_str[16];
+            if (r.iterations > 0) {
+                snprintf(time_str, sizeof(time_str), "%.1f s", r.total_ms / 1000.0);
+            } else {
+                snprintf(time_str, sizeof(time_str), "-");
+            }
+
+            LOG_INFO("%-5d %-5s %-40s  %-22s  %s\n",
+                     dev.cuda_ordinal,
+                     dev.is_tcc ? "TCC" : "WDDM",
+                     dev.name, pinmem_str, time_str);
         }
 
-        char time_str[16];
-        if (r.iterations > 0) {
-            snprintf(time_str, sizeof(time_str), "%.1f s", r.total_ms / 1000.0);
-        } else {
-            snprintf(time_str, sizeof(time_str), "-");
+        LOG_INFO("\n");
+        bool any_success = false;
+        for (const auto & r : results) {
+            if (r.bytes > 0) { any_success = true; break; }
         }
 
-        LOG_INFO("%-5d %-5s %-40s  %-22s  %s\n",
-                 dev.cuda_ordinal,
-                 dev.is_tcc ? "TCC" : "WDDM",
-                 dev.name, pinmem_str, time_str);
-    }
-
-    LOG_INFO("\n");
-    bool any_success = false;
-    for (const auto & r : results) {
-        if (r.bytes > 0) { any_success = true; break; }
-    }
-
-    if (!any_success) {
-        LOG_INFO("NOTE: No device could pin host memory.\n");
-        LOG_INFO("  - Try pinmem=2 for the backend halving approach.\n");
-        LOG_INFO("  - Check if GGML_CUDA_NO_PINNED env var is set.\n");
-        LOG_INFO("  - WDDM driver may limit to ~32 GiB per process.\n");
-        LOG_INFO("  - A TCC driver bypasses this limit.\n");
+        if (!any_success) {
+            LOG_INFO("NOTE: No device could pin host memory.\n");
+            LOG_INFO("  - Try pinmem=2 for the backend halving approach.\n");
+            LOG_INFO("  - Check if GGML_CUDA_NO_PINNED env var is set.\n");
+            LOG_INFO("  - WDDM driver may limit to ~32 GiB per process.\n");
+            LOG_INFO("  - A TCC driver bypasses this limit.\n");
+        }
     }
 
     if (!g_bare_mode) {
         llama_backend_free();
     }
-    return any_success ? 0 : 1;
+    // For single-method mode, return 1 if no device succeeded
+    if (test_method != PIN_METHOD_ALL) {
+        bool any_success = false;
+        for (const auto & r : results) {
+            if (r.bytes > 0) { any_success = true; break; }
+        }
+        return any_success ? 0 : 1;
+    }
+    return 0;
 }
