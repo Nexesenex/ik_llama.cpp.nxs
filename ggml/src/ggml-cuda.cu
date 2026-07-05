@@ -1546,6 +1546,9 @@ static void * ggml_cuda_host_malloc(size_t size) {
         static bool logged = false;
         if (!logged) {
             logged = true;
+            int cur_dev;
+            cudaGetDevice(&cur_dev);
+            GGML_CUDA_LOG_INFO("%s: current CUDA device = %d\n", __func__, cur_dev);
             GGML_CUDA_LOG_INFO("%s: pinned cap %zu GiB: %.2f MiB request refused with %.2f GiB pinned "
                                "in %d buffers; requests that do not fit stay pageable\n", __func__,
                                ggml_cuda_pinned_cap() >> 30, size / 1024.0 / 1024.0,
