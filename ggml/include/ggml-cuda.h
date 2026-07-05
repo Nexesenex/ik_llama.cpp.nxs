@@ -53,6 +53,12 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_pinmem(int val);
 // Get current pinmem setting (0=disabled, 1=token_embd only, 2=stop on fail, 3=all)
 GGML_API GGML_CALL int ggml_backend_cuda_get_pinmem(void);
 
+// Set pindev mode — specify which raw CUDA ordinal to charge for pinned memory.
+// pindev=-1: auto-detect TCC device (default)
+// pindev=N:  use raw CUDA ordinal N (e.g. pindev=0 for the first device)
+GGML_API GGML_CALL void ggml_backend_cuda_set_pindev(int val);
+GGML_API GGML_CALL int  ggml_backend_cuda_get_pindev(void);
+
 GGML_API GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_API GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 

@@ -596,6 +596,7 @@ static int ggml_cuda_lock_counter = 0;
 static std::string ggml_cuda_user_cslq; // User-provided CUDA_SCALE_LAUNCH_QUEUES from -cuda cslq=X
 static int ggml_cuda_pinmem = 3; // pinmem: 0=disabled, 1=token_embd only, 2=try all (stop on fail), 3=all (default)
 static bool ggml_cuda_pinmem2_stopped = false;
+static int ggml_cuda_pindev = -1; // pindev: raw CUDA ordinal for pinning (-1 = auto-detect TCC)
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * model) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)), model(model) {
@@ -1655,22 +1656,31 @@ static void * ggml_cuda_host_malloc(size_t size) {
         return nullptr;
     }
 
-    // Prefer a TCC device for pinning (bypasses WDDM per-process quota).
-    // TCC devices can pin up to available system RAM, while WDDM devices
-    // are limited to ~32-48 GiB per process.  The TCC device's primary
-    // context is initialised first so that cudaHostRegister does not
-    // consume WDDM quota unnecessarily.
-    // NOTE: pin_dev stores the raw CUDA ordinal, so we use cudaSetDevice
-    //       directly (NOT ggml_cuda_set_device which treats its argument
-    //       as a logical device index and remaps it).
+    // Select which CUDA device to charge for the pinned allocation.
+    // TCC devices bypass WDDM per-process quota and can pin up to
+    // available system RAM.  WDDM devices are limited to ~32-48 GiB.
+    //
+    // Priority:
+    //   1) ggml_cuda_pindev (user-set via pindev=N in -cuda param)
+    //   2) auto-detect first TCC device
+    //   3) fall back to the current device
+    //
+    // NOTE: pin_dev stores the raw CUDA ordinal, so we use
+    //       cudaSetDevice directly (NOT ggml_cuda_set_device which
+    //       treats its argument as a logical device index).
     int pin_dev = -1;
     {
-        const auto & info = ggml_cuda_info();
-        for (int i = 0; i < info.device_count; i++) {
-            if (info.devices[i].is_tcc) {
-                pin_dev = info.cuda_device_id[i];
-                GGML_CUDA_LOG_INFO("%s: found TCC device raw %d (logical %d), using for pinning\n", __func__, pin_dev, i);
-                break;
+        if (ggml_cuda_pindev >= 0) {
+            pin_dev = ggml_cuda_pindev;
+            GGML_CUDA_LOG_INFO("%s: using user-set pindev=%d for pinning\n", __func__, pin_dev);
+        } else {
+            const auto & info = ggml_cuda_info();
+            for (int i = 0; i < info.device_count; i++) {
+                if (info.devices[i].is_tcc) {
+                    pin_dev = info.cuda_device_id[i];
+                    GGML_CUDA_LOG_INFO("%s: found TCC device raw %d (logical %d), using for pinning\n", __func__, pin_dev, i);
+                    break;
+                }
             }
         }
     }
@@ -5913,4 +5923,17 @@ GGML_CALL void ggml_backend_cuda_set_pinmem(int val) {
 
 GGML_CALL int ggml_backend_cuda_get_pinmem(void) {
     return ggml_cuda_pinmem;
+}
+
+GGML_CALL void ggml_backend_cuda_set_pindev(int val) {
+    ggml_cuda_pindev = val;
+    if (val < 0) {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pindev: pindev=%d - auto-detect TCC device for pinning\n", val);
+    } else {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pindev: pindev=%d - pinning on raw CUDA ordinal %d\n", val, val);
+    }
+}
+
+GGML_CALL int ggml_backend_cuda_get_pindev(void) {
+    return ggml_cuda_pindev;
 }
