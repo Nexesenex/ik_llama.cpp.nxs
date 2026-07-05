@@ -5720,6 +5720,15 @@ GGML_CALL int ggml_backend_cuda_get_device_count() {
     return ggml_cuda_info().device_count;
 }
 
+GGML_CALL int ggml_backend_cuda_get_device_ordinal(int device) {
+    const auto & info = ggml_cuda_info();
+    if (device < 0 || device >= info.device_count) {
+        GGML_CUDA_LOG_WARN("%s: device %d out of range (max %d)\n", __func__, device, info.device_count - 1);
+        return -1;
+    }
+    return info.cuda_device_id[device];
+}
+
 GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size) {
     const auto & info = ggml_cuda_info();
     int cuda_device = (device >= 0 && device < info.device_count) ? info.cuda_device_id[device] : device;
