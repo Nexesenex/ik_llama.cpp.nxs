@@ -35,6 +35,7 @@ GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_split_buffer_typ
 GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type(void);
 
 GGML_API GGML_CALL int  ggml_backend_cuda_get_device_count(void);
+GGML_API GGML_CALL int  ggml_backend_cuda_get_device_ordinal(int device);
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size);
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total);
 
@@ -47,10 +48,27 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_cslq(const char * cslq);
 // pinmem=1: Only pin token_embd, CPU tensor overrides use non-pinned allocation
 // pinmem=2: Try to pin all host buffers, stop on first failure, rest unpinned
 // pinmem=3: Pin all host buffers (default behavior)
+// pinmem=4: Cap pinned memory to 1/4 of total system RAM (user mode)
+// pinmem=5: TCC full-size portable pinning (no cap, falls back to pinmem=3)
+// pinmem=6: TCC full-size non-portable pinning (no cap, bypasses WDDM quota, falls back to pinmem=3)
 GGML_API GGML_CALL void ggml_backend_cuda_set_pinmem(int val);
 
-// Get current pinmem setting (0=disabled, 1=token_embd only, 2=stop on fail, 3=all)
+// Get current pinmem setting (0=disabled, 1=token_embd only, 2=stop on fail, 3=all, 4=quarter, 5=TCC portable, 6=TCC non-portable)
 GGML_API GGML_CALL int ggml_backend_cuda_get_pinmem(void);
+
+// Set pindev mode — specify which raw CUDA ordinal to charge for pinned memory.
+// pindev=-1: auto-detect TCC device (default)
+// pindev=N:  use raw CUDA ordinal N (e.g. pindev=0 for the first device)
+GGML_API GGML_CALL void ggml_backend_cuda_set_pindev(int val);
+GGML_API GGML_CALL int  ggml_backend_cuda_get_pindev(void);
+
+// Set pinamount cap in GiB — limits how much of the host buffer is actually pinned.
+// pinamount=0 (default): no cap, use full pinmem mode behavior.
+// pinamount>0:  cap pinned memory at N GiB (e.g. pinamount=52.5 for 52.5 GiB).
+// Works with any pinmem mode: the full buffer is still allocated,
+// only the capped prefix is registered as pinned.
+GGML_API GGML_CALL void ggml_backend_cuda_set_pinamount(float gb);
+GGML_API GGML_CALL float ggml_backend_cuda_get_pinamount(void);
 
 GGML_API GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_API GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer);
