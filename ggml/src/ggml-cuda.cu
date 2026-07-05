@@ -1616,6 +1616,23 @@ static void * ggml_cuda_host_malloc(size_t size) {
         return nullptr;
     }
 
+    // Debug: log the CUDA device that will be used for pinning
+    int cur_dev = -1;
+    cudaError_t err_dev = cudaGetDevice(&cur_dev);
+    GGML_CUDA_LOG_INFO("%s: current CUDA device = %d (err=%d)\n", __func__, cur_dev, (int)err_dev);
+
+    // Diagnostic: identify the physical card and test pinning
+    {
+        cudaDeviceProp prop;
+        cudaGetDeviceProperties(&prop, cur_dev);
+        int log_id = -1;
+        const auto & info = ggml_cuda_info();
+        if (cur_dev >= 0 && cur_dev < GGML_CUDA_MAX_DEVICES) {
+            log_id = info.device_id[cur_dev];
+        }
+        GGML_CUDA_LOG_INFO("%s: CUDA ordinal %d = %s (logical device %d)\n", __func__, cur_dev, prop.name, log_id);
+    }
+
     g_cuda_pinned_bytes += size;
     g_cuda_pinned_count += 1;
     if (size >= ((size_t) 1 << 30)) {
