@@ -23,7 +23,7 @@ static __global__ void norm_f32(const T * x, float * dst, const int ncols, const
             s_sum[warp_id] = mean_var;
         }
         __syncthreads();
-        mean_var = s_sum[lane_id];
+        mean_var = lane_id < block_size/WARP_SIZE ? s_sum[lane_id] : make_float2(0.0f, 0.0f);
         mean_var = warp_reduce_sum(mean_var);
     }
 
@@ -69,7 +69,7 @@ static __global__ void fused_norm_f32(const T * x, const float * c, float * dst,
             s_sum[warp_id] = mean_var;
         }
         __syncthreads();
-        mean_var = s_sum[lane_id];
+        mean_var = lane_id < block_size/WARP_SIZE ? s_sum[lane_id] : make_float2(0.0f, 0.0f);
         mean_var = warp_reduce_sum(mean_var);
     }
 
@@ -118,7 +118,7 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
             s_sum[warp_id] = tmp;
         }
         __syncthreads();
-        tmp = s_sum[lane_id];
+        tmp = lane_id < block_size/WARP_SIZE ? s_sum[lane_id] : 0.0f;
         tmp = warp_reduce_sum(tmp);
     }
 
@@ -140,7 +140,7 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
             s_sum[warp_id] = tmp;
         }
         __syncthreads();
-        tmp = s_sum[lane_id];
+        tmp = lane_id < block_size/WARP_SIZE ? s_sum[lane_id] : 0.0f;
         tmp = warp_reduce_sum(tmp);
     }
 
