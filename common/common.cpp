@@ -4503,6 +4503,36 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
                 }
             }
         }
+        // Parse pindev from cuda_params
+        size_t pos_pindev = params.cuda_params.find("pindev=");
+        if (pos_pindev != std::string::npos) {
+            size_t start = pos_pindev + 7;
+            size_t end = params.cuda_params.find(",", start);
+            std::string pindev_str = params.cuda_params.substr(start, end - start);
+            if (!pindev_str.empty()) {
+                try {
+                    int pindev_val = std::stoi(pindev_str);
+                    ggml_backend_cuda_set_pindev(pindev_val);
+                } catch (...) {
+                    // Invalid value, keep default
+                }
+            }
+        }
+        // Parse pinamount from cuda_params (GiB float)
+        size_t pos_pinamount = params.cuda_params.find("pinamount=");
+        if (pos_pinamount != std::string::npos) {
+            size_t start = pos_pinamount + 10;
+            size_t end = params.cuda_params.find(",", start);
+            std::string pinamount_str = params.cuda_params.substr(start, end - start);
+            if (!pinamount_str.empty()) {
+                try {
+                    float pinamount_val = std::stof(pinamount_str);
+                    ggml_backend_cuda_set_pinamount(pinamount_val);
+                } catch (...) {
+                    // Invalid value, keep default
+                }
+            }
+        }
     }
 #endif
 
