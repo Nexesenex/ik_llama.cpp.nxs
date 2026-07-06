@@ -77,6 +77,9 @@ static __global__ void topk_f32(
                 if (lane_id < n_warps) {
                     maxval = s_maxval[lane_id];
                     argmax = s_argmax[lane_id];
+                } else {
+                    maxval = -FLT_MAX;
+                    argmax = -1;
                 }
                 for (int offset = 16; offset > 0; offset >>= 1) {
                     float v = __shfl_xor_sync(0xFFFFFFFF, maxval, offset, WARP_SIZE);
