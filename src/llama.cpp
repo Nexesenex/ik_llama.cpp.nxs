@@ -605,8 +605,10 @@ static void why_not_reuse_previous(const llama_batch & u_batch, const llama_cont
     if (ctx.n_outputs != the_prev->n_outputs) { printf("    n_outputs is not the same\n"); return; }
     if (u_batch.n_tokens != the_prev->n_tokens) { printf("    n_tokens is not the same\n"); return; }
     if (ctx.cparams.mtp_op_type != the_prev->mtp_op_type) { printf("    mtp_op_type is not the same\n"); return; }
-    if (ctx.mtp_step_idx != the_prev->mtp_step_idx) { printf("    mtp_step_idx is not the same\n"); return; }
-    if (ctx.mtp_n_heads != the_prev->mtp_n_heads) { printf("    mtp_n_heads is not the same\n"); return; }
+    if (ctx.model.arch == LLM_ARCH_OPENPANGU) {
+        if (ctx.mtp_step_idx != the_prev->mtp_step_idx) { printf("    mtp_step_idx is not the same\n"); return; }
+        if (ctx.mtp_n_heads != the_prev->mtp_n_heads) { printf("    mtp_n_heads is not the same\n"); return; }
+    }
     printf("    update_cache_copies() must have failed\n");
 }
 
@@ -625,8 +627,9 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
            n_outputs == the_prev->n_outputs &&
            u_batch.n_tokens == the_prev->n_tokens &&
            cparams.mtp_op_type == the_prev->mtp_op_type &&
-           mtp_step_idx == the_prev->mtp_step_idx &&
-           mtp_n_heads == the_prev->mtp_n_heads &&
+           (model.arch != LLM_ARCH_OPENPANGU || (
+               mtp_step_idx == the_prev->mtp_step_idx &&
+               mtp_n_heads == the_prev->mtp_n_heads)) &&
            update_cache_copies();
     if (false && !result) {
         printf("%s(%d):", __func__, cparams.mtp_op_type);
