@@ -1750,32 +1750,6 @@ static void * ggml_cuda_host_malloc(size_t size) {
             ms.ullAvailPhys / (1024.*1024.*1024.), ms.ullTotalPhys / (1024.*1024.*1024.));
     }
 
-    // Diagnostic: test various pinning methods for this size
-    {
-        // 1) cudaMallocHost (default, current-device only) — use pin_amount to avoid
-        //    allocating beyond the user-requested cap (which would crash WDDM init later)
-        void * mh_ptr = nullptr;
-        cudaError_t mh_err = cudaMallocHost(&mh_ptr, pin_amount);
-        if (mh_err == cudaSuccess) {
-            GGML_CUDA_LOG_INFO("%s: cudaMallocHost %.2f GiB SUCCEEDED\n", __func__, pin_amount / (1024.*1024.*1024.));
-            cudaFreeHost(mh_ptr);
-        } else {
-            GGML_CUDA_LOG_WARN("%s: cudaMallocHost %.2f GiB FAILED: %s\n", __func__, pin_amount / (1024.*1024.*1024.), cudaGetErrorString(mh_err));
-            cudaGetLastError();
-        }
-        // 2) cudaHostRegister NON-portable (current device only) — capped to pin_amount
-        if (ptr) {
-            cudaError_t np_err = cudaHostRegister(ptr, pin_amount, 0);
-            if (np_err == cudaSuccess) {
-                GGML_CUDA_LOG_INFO("%s: cudaHostRegister(portable=0) %.2f GiB SUCCEEDED\n", __func__, pin_amount / (1024.*1024.*1024.));
-                cudaHostUnregister(ptr);
-            } else {
-                GGML_CUDA_LOG_WARN("%s: cudaHostRegister(portable=0) %.2f GiB FAILED: %s\n", __func__, pin_amount / (1024.*1024.*1024.), cudaGetErrorString(np_err));
-                cudaGetLastError();
-            }
-        }
-    }
-
     cudaError_t err;
 
     if (ggml_cuda_pinmem == 2) {
