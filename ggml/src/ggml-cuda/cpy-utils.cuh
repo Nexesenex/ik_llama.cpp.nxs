@@ -221,22 +221,21 @@ static __device__ void quantize_f32_q8_1_block(const float * __restrict__ x, blo
     const float d = amax / ((1 << 7) - 1);
     const float id = d ? 1.0f/d : 0.0f;
 
-    int sum = 0;
-    float sumqx = 0, sumq2 = 0;
+    float sum_v = 0.0f;
+    float sumqx = 0.0f, sumq2 = 0.0f;
     for (int j = 0; j < QK8_1; ++j) {
         const float v = x[j];
         const float x0 = v*id;
         const int8_t xi = roundf(x0);
         y->qs[j] = xi;
-        sum += xi;
+        sum_v += v;
         float q = xi;
-        float w = v*v;
-        sumqx += w*q*v;
-        sumq2 += w*q*q;
+        sumqx += q*v;
+        sumq2 += q*q;
     }
 
     const float d_ols = sumq2 > 0.0f ? sumqx/sumq2 : d;
-    y->ds = make_half2(d_ols, sum*d_ols);
+    y->ds = make_half2(d_ols, sum_v);
 }
 
 static __device__ void quantize_f32_iq4_nl_block(const float * __restrict__ x, block_iq4_nl * __restrict__ y) {
