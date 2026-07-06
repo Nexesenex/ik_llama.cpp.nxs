@@ -234,10 +234,8 @@ static __device__ void quantize_f32_iq4_nl_block(const float * __restrict__ x, b
         y->qs[j] = xi0 | (xi1 << 4);
         const float v0 = kvalues_iq4nl[xi0];
         const float v1 = kvalues_iq4nl[xi1];
-        const float w0 = x[0        + j]*x[0        + j];
-        const float w1 = x[QK4_NL/2 + j]*x[QK4_NL/2 + j];
-        sumqx += w0*v0*x[j] + w1*v1*x[QK4_NL/2 + j];
-        sumq2 += w0*v0*v0 + w1*v1*v1;
+        sumqx += v0*x[j] + v1*x[QK4_NL/2 + j];
+        sumq2 += v0*v0 + v1*v1;
     }
 
     //y->d = d;
