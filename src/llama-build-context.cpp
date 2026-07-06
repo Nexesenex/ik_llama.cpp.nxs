@@ -106,6 +106,8 @@ void llm_build_context::init() {
         lctx.inp_out_ids     = nullptr;
         lctx.inp_KQ_mask     = nullptr;
         lctx.inp_KQ_mask_swa = nullptr;
+        lctx.inp_KQ_mask_swa_win = nullptr;
+        lctx.openpangu_swa_window_view = {};
         lctx.inp_K_shift     = nullptr;
         lctx.inp_mean        = nullptr;
         lctx.inp_cls         = nullptr;
@@ -117,6 +119,9 @@ void llm_build_context::init() {
         lctx.inp_embd_enc      = nullptr;
         lctx.inp_KQ_mask_cross = nullptr;
         lctx.inp_dsa_sink      = nullptr;
+        lctx.inp_openpangu_conv_hist  = nullptr;
+        lctx.inp_openpangu_conv_write = nullptr;
+        lctx.inp_mtp_carry     = nullptr;
         lctx.dflash.inputs.target_features = nullptr;
         lctx.dflash.inputs.pos_ctx = nullptr;
         lctx.dflash.inputs.kq_mask = nullptr;
@@ -457,6 +462,21 @@ ggml_tensor * llm_build_context::build_inp_pos() {
     return lctx.inp_pos;
 }
 
+ggml_tensor * llm_build_context::build_inp_openpangu_conv_hist() {
+    lctx.inp_openpangu_conv_hist = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 2);
+    cb(lctx.inp_openpangu_conv_hist, "opg_conv_hist_idx", -1);
+    ggml_set_input(lctx.inp_openpangu_conv_hist);
+    return lctx.inp_openpangu_conv_hist;
+}
+
+ggml_tensor * llm_build_context::build_inp_openpangu_conv_write(int64_t n_write) {
+    GGML_ASSERT(n_write > 0);
+    lctx.inp_openpangu_conv_write = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_write);
+    cb(lctx.inp_openpangu_conv_write, "opg_conv_write_idx", -1);
+    ggml_set_input(lctx.inp_openpangu_conv_write);
+    return lctx.inp_openpangu_conv_write;
+}
+
 ggml_tensor * llm_build_context::build_input_scale(int n_tokens) {
     int n_pos_per_token = 1;
     lctx.inp_scale = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, 1, n_tokens*n_pos_per_token);
@@ -519,6 +539,25 @@ ggml_tensor * llm_build_context::build_inp_KQ_mask_swa(bool causal) {
     ggml_set_input(lctx.inp_KQ_mask_swa);
 
     return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa;
+}
+
+ggml_tensor * llm_build_context::build_inp_KQ_mask_swa_win(int64_t n_kv_win, bool causal) {
+    GGML_ASSERT(hparams.n_swa > 0);
+    GGML_ASSERT(n_kv_win > 0);
+    if (causal && flash_attn) {
+        lctx.inp_KQ_mask_swa_win = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_kv_win, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        cb(lctx.inp_KQ_mask_swa_win, "KQ_mask_swa_win", -1);
+        ggml_set_input(lctx.inp_KQ_mask_swa_win);
+        return lctx.inp_KQ_mask_swa_win;
+    }
+
+    lctx.inp_KQ_mask_swa_win = causal
+        ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv_win,  GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
+        : ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+    cb(lctx.inp_KQ_mask_swa_win, "KQ_mask_swa_win", -1);
+    ggml_set_input(lctx.inp_KQ_mask_swa_win);
+
+    return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa_win, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa_win;
 }
 
 ggml_tensor * llm_build_context::build_inp_mean() {
@@ -2622,6 +2661,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_MISTRAL4:
             {
                 result = llm.build_deepseek2();
+            } break;
+        case LLM_ARCH_OPENPANGU:
+            {
+                result = llm.build_openpangu();
             } break;
         case LLM_ARCH_CHATGLM:
             {

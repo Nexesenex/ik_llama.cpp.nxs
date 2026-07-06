@@ -157,6 +157,9 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
     if (stage.has_p_min_override()) {
         result.p_min = stage.p_min;
     }
+    if (stage.has_mtp_heads_override()) {
+        result.mtp_heads = stage.mtp_heads;
+    }
     if (stage.has_dflash_cross_ctx_override()) {
         result.dflash_cross_ctx = stage.dflash_cross_ctx;
     }
@@ -182,6 +185,7 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
 
     result.n_max = std::max(result.n_max, 0);
     result.n_min = std::max(0, std::min(result.n_min, result.n_max));
+    result.mtp_heads = std::max(result.mtp_heads, 0);
     result.stages.clear();
 
     return result;
@@ -794,6 +798,14 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_PORT",             params.port);
     get_env("LLAMA_ARG_CACHE_TYPE_K",     params.cache_type_k);
     get_env("LLAMA_ARG_CACHE_TYPE_V",     params.cache_type_v);
+    if (std::getenv("LLAMA_ARG_CACHE_TYPE_K") != nullptr) {
+        get_env("LLAMA_ARG_CACHE_TYPE_K", params.cache_type_k);
+        params.cache_type_k_explicit = true;
+    }
+    if (std::getenv("LLAMA_ARG_CACHE_TYPE_V") != nullptr) {
+        get_env("LLAMA_ARG_CACHE_TYPE_V", params.cache_type_v);
+        params.cache_type_v_explicit = true;
+    }
     get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
     get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
     get_env("LLAMA_ARG_V_CACHE_HADAMARD", params.v_cache_hadamard);
@@ -923,6 +935,13 @@ static void common_speculative_stage_apply_kv(
         stage.p_min = std::stof(value_raw);
         if (stage.p_min < 0.0f) {
             throw std::invalid_argument("speculative stage p_min must be >= 0");
+        }
+        return;
+    }
+    if (key == "heads" || key == "mtp_heads") {
+        stage.mtp_heads = std::stoi(value_raw);
+        if (stage.mtp_heads < 0) {
+            throw std::invalid_argument("speculative stage mtp_heads must be >= 0");
         }
         return;
     }
@@ -1788,10 +1807,16 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-ctk" || arg == "--cache-type-k") {
         params.cache_type_k = argv[++i];
+        params.cache_type_k_explicit = true;
         return true;
     }
     if (arg == "-ctv" || arg == "--cache-type-v") {
         params.cache_type_v = argv[++i];
+        params.cache_type_v_explicit = true;
+        return true;
+    }
+    if (arg == "-ictk" || arg == "--indexer-cache-type-k") {
+        params.indexer_cache_type_k = argv[++i];
         return true;
     }
     if (arg == "-ictk" || arg == "--indexer-cache-type-k") {
@@ -4166,6 +4191,8 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.worst_graph_tokens = params.worst_graph_tokens;
     mparams.type_k          = kv_cache_type_from_str(params.cache_type_k);
     mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
+    mparams.type_k_explicit = params.cache_type_k_explicit;
+    mparams.type_v_explicit = params.cache_type_v_explicit;
     mparams.idx_type_k      = kv_cache_type_from_str(params.indexer_cache_type_k);
     mparams.type_k_first    = kv_cache_type_from_str(params.type_k_first);
     mparams.type_k_last     = kv_cache_type_from_str(params.type_k_last );
@@ -4289,6 +4316,8 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
+    cparams.type_k_explicit = params.cache_type_k_explicit;
+    cparams.type_v_explicit = params.cache_type_v_explicit;
     cparams.idx_type_k = kv_cache_type_from_str(params.indexer_cache_type_k);
     cparams.type_reduce = ggml_type_from_str(params.reduce_type);
     cparams.type_graph_attn = ggml_type_from_str(params.graph_attn_precision);
