@@ -34,6 +34,11 @@ GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_split_buffer_typ
 // pinned host buffer for use with the CPU backend for faster copies between CPU and GPU
 GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type(void);
 
+// Separate pinned host buffer type for the input tensor (token_embd).
+// Always a distinct buffer from the general host buffer type, so token_embd
+// pinning is never affected by failures in other pinned allocations.
+GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type_input(void);
+
 GGML_API GGML_CALL int  ggml_backend_cuda_get_device_count(void);
 GGML_API GGML_CALL int  ggml_backend_cuda_get_device_ordinal(int device);
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size);
@@ -49,6 +54,8 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_cslq(const char * cslq);
 // pinmem=2: Try to pin all host buffers, stop on first failure, rest unpinned
 // pinmem=3: Pin all host buffers (default behavior)
 // pinmem=4: Cap pinned memory to 1/4 of total system RAM (user mode)
+// pinmem=5: TCC full-size pinning (no cap, falls back to pinmem=3)
+// Note: token_embd always gets its own dedicated pinned buffer in all modes > 0
 GGML_API GGML_CALL void ggml_backend_cuda_set_pinmem(int val);
 
 // Get current pinmem setting (0=disabled, 1=token_embd only, 2=stop on fail, 3=all, 4=quarter)

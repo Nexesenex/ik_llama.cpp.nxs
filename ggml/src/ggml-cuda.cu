@@ -595,7 +595,7 @@ static std::condition_variable ggml_cuda_lock_cv;
 //static std::atomic<int> ggml_cuda_lock_counter;
 static int ggml_cuda_lock_counter = 0;
 static std::string ggml_cuda_user_cslq; // User-provided CUDA_SCALE_LAUNCH_QUEUES from -cuda cslq=X
-static int ggml_cuda_pinmem = 3; // pinmem: 0=disabled, 1=token_embd only, 2=try all (stop on fail), 3=all (default), 4=quarter RAM cap, 5=TCC full-size
+static int ggml_cuda_pinmem = 3; // pinmem: 0=disabled, 1=token_embd only (overrides non-pinned), 2=try all (stop on fail), 3=all (default), 4=quarter RAM cap, 5=TCC full-size.  token_embd always gets its own pinned buffer in all modes > 0.
 static bool ggml_cuda_pinmem2_stopped = false;
 static int ggml_cuda_pindev = -1; // pindev: raw CUDA ordinal for pinning (-1 = auto-detect TCC)
 
@@ -1896,6 +1896,20 @@ GGML_CALL static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_
     buffer->iface.free_buffer = ggml_backend_cuda_host_buffer_free_buffer;
 
     return buffer;
+}
+
+GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type_input() {
+    static struct ggml_backend_buffer_type ggml_backend_cuda_buffer_type_host_input = {
+        /* .iface = */ {
+            /* .get_name         = */ ggml_backend_cuda_host_buffer_type_name,
+            /* .alloc_buffer     = */ ggml_backend_cuda_host_buffer_type_alloc_buffer,
+            /* .get_alignment    = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
+            /* .get_max_size     = */ NULL,
+            /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
+            /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+        },
+    };
+    return &ggml_backend_cuda_buffer_type_host_input;
 }
 
 GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
