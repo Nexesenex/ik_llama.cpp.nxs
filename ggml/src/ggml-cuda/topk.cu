@@ -125,13 +125,13 @@ void ggml_cuda_topk(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     const int64_t num_blocks = nrows;
     const int64_t num_threads = std::min<int64_t>(1024, (ne00 + WARP_SIZE - 1) / WARP_SIZE * WARP_SIZE);
-    const dim3 blocks_dim(num_threads, 1, 1);
-    const dim3 blocks_num(num_blocks, 1, 1);
+    const dim3 block_dim(num_threads, 1, 1);
+    const dim3 grid_dim(num_blocks, 1, 1);
 
     const int bitmap_ints = ((int)ne00 + 31) / 32;
     const size_t shared_mem = (size_t)bitmap_ints * sizeof(int)   // bitmap
                             + 32 * sizeof(float)                   // s_maxval (max_warps = 32)
                             + 32 * sizeof(int);                    // s_argmax
 
-    topk_f32<<<blocks_num, blocks_dim, shared_mem, stream>>>(src0_d, dst_d, ne00, K, nrows);
+    topk_f32<<<grid_dim, block_dim, shared_mem, stream>>>(src0_d, dst_d, ne00, K, nrows);
 }
