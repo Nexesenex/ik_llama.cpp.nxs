@@ -473,6 +473,10 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
         if (is_moe) {
             inpL_moe = ggml_reduce(ctx0, ffn_out_moe.data(), n_device, GGML_OP_ADD);
             cb(inpL_moe, "ffn_moe_reduce", il);
+            if (inpL_moe->ne[1] > 32 && cparams.reduce_type_routed != cparams.reduce_type) {
+                inpL_moe = ggml_cast(ctx0, inpL_moe, cparams.reduce_type);
+                cb(inpL_moe, "ffn_moe_reduce_deq", il);
+            }
             ggml_build_forward_expand(gf, inpL_moe);
         }
 

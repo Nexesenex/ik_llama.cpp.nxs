@@ -1719,6 +1719,10 @@ llm_expert_gating_func_type   gating_op,
 
     auto cur = ggml_reduce(ctx, results.data(), n_device, GGML_OP_ADD);
     cb(cur, "moe_ffn_combined", il);
+    if (cur->ne[1] > 32 && lctx.cparams.reduce_type_routed != lctx.cparams.reduce_type) {
+        cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type);
+        cb(cur, "moe_ffn_combined_deq", il);
+    }
     ggml_build_forward_expand(graph, cur);
 
     return cur;
