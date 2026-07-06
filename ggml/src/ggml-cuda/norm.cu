@@ -51,6 +51,14 @@ static __global__ void fused_norm_f32(const T * x, const float * c, float * dst,
             mean_var.x += xi;
             mean_var.y += xi * xi;
         }
+    } else if constexpr (std::is_same_v<T, block_q8_1>) {
+        static_assert(block_size % QK8_1 == 0);
+        auto xr = x + (row*ncols)/QK8_1;
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = (float)xr[col / QK8_1].ds.x * xr[col / QK8_1].qs[col % QK8_1];
+            mean_var.x += xi;
+            mean_var.y += xi * xi;
+        }
     } else {
         for (int col = tid; col < ncols; col += block_size) {
             const float xi = (float)x[row*ncols + col];
@@ -82,6 +90,12 @@ static __global__ void fused_norm_f32(const T * x, const float * c, float * dst,
         auto xr = x + (row*ncols)/QK8_0;
         for (int col = tid; col < ncols; col += block_size) {
             dst[row*ncols + col] = ((float)xr[col/QK8_0].d*xr[col/QK8_0].qs[col%QK8_0] - mean) * inv_std * c[col];
+        }
+    } else if constexpr (std::is_same_v<T, block_q8_1>) {
+        static_assert(block_size % QK8_1 == 0);
+        auto xr = x + (row*ncols)/QK8_1;
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = ((float)xr[col/QK8_1].ds.x*xr[col/QK8_1].qs[col%QK8_1] - mean) * inv_std * c[col];
         }
     } else {
         for (int col = tid; col < ncols; col += block_size) {
@@ -319,6 +333,13 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
             const float xi = (float)xr[col / QK8_0].d * xr[col / QK8_0].qs[col % QK8_0];
             tmp += xi * xi;
         }
+    } else if constexpr (std::is_same_v<src_t, block_q8_1>) {
+        static_assert(block_size % QK8_1 == 0);
+        auto xr = x + (row*ncols)/QK8_1;
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = (float)xr[col / QK8_1].ds.x * xr[col / QK8_1].qs[col % QK8_1];
+            tmp += xi * xi;
+        }
     } else if constexpr (std::is_same_v<src_t, nv_bfloat16>) {
         for (int col = tid; col < ncols; col += block_size) {
             const float xi = __bfloat162float(x[row*ncols + col]);
@@ -352,6 +373,11 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
         auto xr = x + (row*ncols)/QK8_0;
         for (int col = tid; col < ncols; col += block_size) {
             dst[row*ncols + col] = scale * y[col] * (float)xr[col / QK8_0].d * xr[col / QK8_0].qs[col % QK8_0];
+        }
+    } else if constexpr (std::is_same_v<src_t, block_q8_1>) {
+        auto xr = x + (row*ncols)/QK8_1;
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = scale * y[col] * (float)xr[col / QK8_1].ds.x * xr[col / QK8_1].qs[col % QK8_1];
         }
     } else if constexpr (std::is_same_v<src_t, nv_bfloat16>) {
         for (int col = tid; col < ncols; col += block_size) {
@@ -657,7 +683,7 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 ||
-               (ggml_is_contiguous(src0) && src0->type == GGML_TYPE_Q8_0));
+               (ggml_is_contiguous(src0) && (src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q8_1)));
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     GGML_ASSERT(src0->ne[0] == src1->ne[0]);
@@ -676,6 +702,8 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
             fused_rms_norm_f32_cuda((const half *)src0_d, src1_d, dst_d, ne00, nrows, eps, is_norm, stream);
         } else if (src0->type == GGML_TYPE_Q8_0) {
             fused_rms_norm_f32_cuda((const block_q8_0 *)src0_d, src1_d, dst_d, ne00, nrows, eps, is_norm, stream);
+        } else if (src0->type == GGML_TYPE_Q8_1) {
+            fused_rms_norm_f32_cuda((const block_q8_1 *)src0_d, src1_d, dst_d, ne00, nrows, eps, is_norm, stream);
         } else {
             fused_rms_norm_f32_cuda((const nv_bfloat16 *)src0_d, src1_d, dst_d, ne00, nrows, eps, is_norm, stream);
         }
