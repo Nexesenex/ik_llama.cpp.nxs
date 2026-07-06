@@ -4806,70 +4806,87 @@ static inline ggml_cuda_graph * ggml_cuda_get_graph(ggml_backend_cuda_context & 
 static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph * graph, ggml_cgraph * cgraph,
     bool use_cuda_graph, cudaStream_t stream) {
 
-    // Loop over nodes in GGML graph to obtain info needed for CUDA graph
     graph->cpy_dest_ptrs.clear();
     graph->cpy_dest_ptrs.reserve(cgraph->n_nodes);
     graph->cpy_node_indices.clear();
+
+    // Once compatibility has been verified for a given n_nodes, the op-type
+    // validation (REDUCE, MUL_MAT_ID, SMTPS batch, MOE, CPY fn) is stable and
+    // only data pointers change between recaptures. Skip the validation loop
+    // when the topology count matches the last verified count.
+    bool needs_validation = (graph->last_compat_n_nodes != cgraph->n_nodes);
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
 
         if (ggml_is_noop(node)) continue;
 
-        if (node->op == GGML_OP_REDUCE) {
-            use_cuda_graph = false;
-            break;
-        }
+        if (needs_validation) {
 
-        if (node->op == GGML_OP_MUL_MAT_ID && (node->ne[2] != 1 || node->src[2]->ne[0] != 1)) {
-            use_cuda_graph = false; // This node type is not supported by CUDA graph capture
-#ifndef NDEBUG
-            GGML_CUDA_LOG_DEBUG("%s(%s): disabling CUDA graphs due to unsupported node type %ld %ld\n",
-                    __func__, node->src[0]->name, node->ne[2], node->src[2]->ne[0]);
-#endif
-            break;
-        }
-        if (node->op == GGML_OP_MOE_FUSED_UP_GATE) {
-            auto src0_1 = node->src[0];
-            auto src0_2 = node->src[1];
-            auto src1   = node->src[2];
-            if (src1->ne[1] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || src1->type != GGML_TYPE_F32 ||
-                !ggml_is_quantized(src0_1->type) || (src0_2 && !ggml_is_quantized(src0_2->type))) {
+            if (node->op == GGML_OP_REDUCE) {
                 use_cuda_graph = false;
                 break;
-            } else {
-                if (i < cgraph->n_nodes-1) {
-                    auto next = cgraph->nodes[i+1];
-                    if (next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type)) {
-                        ++i;
-                    }
+            }
+
+            if (node->op == GGML_OP_MUL_MAT_ID && (node->ne[2] != 1 || node->src[2]->ne[0] != 1)) {
+                use_cuda_graph = false;
+#ifndef NDEBUG
+                GGML_CUDA_LOG_DEBUG("%s(%s): disabling CUDA graphs due to unsupported node type %ld %ld\n",
+                        __func__, node->src[0]->name, node->ne[2], node->src[2]->ne[0]);
+#endif
+                break;
+            }
+
+            if (node->op == GGML_OP_MOE_FUSED_UP_GATE) {
+                auto src0_1 = node->src[0];
+                auto src0_2 = node->src[1];
+                auto src1   = node->src[2];
+                if (src1->ne[1] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || src1->type != GGML_TYPE_F32 ||
+                    !ggml_is_quantized(src0_1->type) || (src0_2 && !ggml_is_quantized(src0_2->type))) {
+                    use_cuda_graph = false;
+                    break;
+                }
+            }
+
+            if (node->op == GGML_OP_CPY) {
+                // store a pointer to each copy op CUDA kernel to identify it later
+                void * ptr = ggml_cuda_cpy_fn(node->src[0], node->src[1]);
+                if (!ptr) {
+                    use_cuda_graph = false;
+#ifndef NDEBUG
+                    GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported copy op\n", __func__);
+#endif
+                    break;
+                }
+            }
+        }
+
+        // The MUL_MAT_ID after MOE_FUSED_UP_GATE is part of the fused MoE
+        // computation. Skip it to keep the loop iteration count consistent
+        // regardless of whether op-type validation was needed.
+        if (node->op == GGML_OP_MOE_FUSED_UP_GATE) {
+            if (i < cgraph->n_nodes-1) {
+                auto next = cgraph->nodes[i+1];
+                if (next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type)) {
+                    ++i;
                 }
             }
         }
 
         if (node->op == GGML_OP_CPY) {
-
             // Cache the node index for fast CPY-only refresh on subsequent calls
             graph->cpy_node_indices.push_back(i);
-
             // Store the pointers which are updated for each token, such that these can be sent
             // to the device and accessed using indirection from CUDA graph
             graph->cpy_dest_ptrs.push_back((char *) node->src[1]->data);
-
-            // store a pointer to each copy op CUDA kernel to identify it later
-            void * ptr = ggml_cuda_cpy_fn(node->src[0], node->src[1]);
-            if (!ptr) {
-                use_cuda_graph = false;
-#ifndef NDEBUG
-                GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported copy op\n", __func__);
-#endif
-                break;
-            }
         }
     }
 
     if (use_cuda_graph) {
         graph->use_cpy_indirection = true;
+        if (needs_validation) {
+            graph->last_compat_n_nodes = cgraph->n_nodes;
+        }
         // copy pointers to GPU so they can be accessed via indirection within CUDA graph
         ggml_cuda_cpy_dest_ptrs_copy(graph, graph->cpy_dest_ptrs.data(), graph->cpy_dest_ptrs.size(), stream);
     }
@@ -4983,6 +5000,11 @@ static bool is_cuda_graph_update_required(ggml_cuda_graph * graph, ggml_cgraph *
         }
         if (!has_matching_properties) {
             cuda_graph_update_required = true;
+            // Force re-validation of op-type compatibility on the next call
+            // to check_node_graph_compatibility_and_refresh_copy_ops.
+            // This ensures checks like REDUCE/MOE/SMTPS batch>1 are not
+            // skipped when n_nodes is unchanged but an op type changed.
+            graph->last_compat_n_nodes = 0;
         }
         set_ggml_graph_node_properties(cgraph->nodes[i], &graph->ggml_graph_properties[i]);
     }
@@ -5038,48 +5060,46 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 #if IK_PRINT_TIMING
     printf("======================== %s: graph with %d nodes on device %d. time = %ld\n", __func__, cgraph->n_nodes, cuda_ctx->device, ggml_time_us());
 #endif
-    while (!graph_evaluated_or_captured) {
-        // Only perform the graph execution if CUDA graphs are not enabled, or we are capturing the graph.
-        // With the use of CUDA graphs, the execution will be performed by the graph launch.
-        if (!use_cuda_graph || cuda_graph_update_required) {
+    // Execute nodes directly when not replaying from a CUDA graph.
+    // During capture (cuda_graph_update_required == true) the execution writes
+    // into the captured graph; during replay the graph launch does the work.
+    if (!use_cuda_graph || cuda_graph_update_required) {
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            ggml_tensor * node = cgraph->nodes[i];
 
-            for (int i = 0; i < cgraph->n_nodes; i++) {
-                ggml_tensor * node = cgraph->nodes[i];
+            if (ggml_is_noop(node)) continue;
 
-                if (ggml_is_noop(node)) continue;
-
-                bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, cgraph, i);
-                if (!ok) {
-                    GGML_CUDA_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
-                }
-                GGML_ASSERT(ok);
+            bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, cgraph, i);
+            if (!ok) {
+                GGML_CUDA_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
             }
-        }
-#ifdef USE_CUDA_GRAPH
-        if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture
-            if (cuda_ctx->cur_graph->graph != nullptr) {
-                CUDA_CHECK(cudaGraphDestroy(cuda_ctx->cur_graph->graph));
-                cuda_ctx->cur_graph->graph = nullptr;
-            }
-
-            CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &cuda_ctx->cur_graph->graph));
-            graph_evaluated_or_captured = true; // CUDA graph has been captured
-
-            std::lock_guard<std::mutex> lock(ggml_cuda_lock);
-            if (--ggml_cuda_lock_counter == 0) {
-                ggml_cuda_lock_cv.notify_all();
-            }
-        }
-#endif
-        if (!graph_evaluated_or_captured) {
-            graph_evaluated_or_captured = true; // ggml graph has been directly evaluated
+            GGML_ASSERT(ok);
         }
     }
 
 #ifdef USE_CUDA_GRAPH
+    if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture
+        if (cuda_ctx->cur_graph->graph != nullptr) {
+            CUDA_CHECK(cudaGraphDestroy(cuda_ctx->cur_graph->graph));
+            cuda_ctx->cur_graph->graph = nullptr;
+        }
+
+        CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &cuda_ctx->cur_graph->graph));
+        graph_evaluated_or_captured = true; // CUDA graph has been captured
+
+        std::lock_guard<std::mutex> lock(ggml_cuda_lock);
+        if (--ggml_cuda_lock_counter == 0) {
+            ggml_cuda_lock_cv.notify_all();
+        }
+    } else {
+        graph_evaluated_or_captured = true; // ggml graph has been directly evaluated or replayed
+    }
+
     if (use_cuda_graph) {
         maintain_cuda_graph(cuda_ctx, cuda_graph_update_required);
     }
+#else
+    graph_evaluated_or_captured = true;
 #endif
 }
 
