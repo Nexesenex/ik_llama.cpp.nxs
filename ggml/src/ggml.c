@@ -14908,13 +14908,13 @@ static void ggml_compute_forward_topk_f32(
     const int64_t nrows = ggml_nrows(src0);
 
     GGML_ASSERT(dst->ne[2] == nrows);
-    GGML_ASSERT(K <= 256 && "topk CPU forward requires K <= 256 (stack-allocated heap)");
+    GGML_ASSERT(K <= 4096 && "topk CPU forward requires K <= 4096 (stack-allocated heap)");
 
     const int ith = params->ith;
     const int nth = params->nth;
 
-    float     heap_val[256];
-    int32_t   heap_idx[256];
+    float     heap_val[4096];
+    int32_t   heap_idx[4096];
 
     for (int64_t r = ith; r < nrows; r += nth) {
         const float * row = (const float *) src0->data + r * ne00;
