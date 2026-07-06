@@ -7189,7 +7189,7 @@ struct ggml_tensor * ggml_topk(
         int k) {
     GGML_ASSERT(ggml_is_matrix(a));
     GGML_ASSERT(k > 0 && k <= (int)a->ne[0]);
-    GGML_ASSERT(k <= 256 && "topk K must be <= 256 (CPU uses stack-allocated bitmap)");
+    GGML_ASSERT(k <= 4096 && "topk K must be <= 4096");
     bool is_node = false;
 
     if (a->grad) {
@@ -14908,11 +14908,11 @@ static void ggml_compute_forward_topk_f32(
     const int64_t nrows = ggml_nrows(src0);
 
     GGML_ASSERT(dst->ne[2] == nrows);
+    GGML_ASSERT(K <= 256 && "topk CPU forward requires K <= 256 (stack-allocated heap)");
 
     const int ith = params->ith;
     const int nth = params->nth;
 
-    // Per-row heap buffers (K <= 256, asserted at ggml_topk API entry)
     float     heap_val[256];
     int32_t   heap_idx[256];
 
