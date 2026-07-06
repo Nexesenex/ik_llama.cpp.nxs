@@ -86,6 +86,19 @@ static __device__ void cpy_blck_q_f16(const char * cxi, char * cdsti) {
     }
 }
 
+template<dequantize_kernel_t dequant, int qk>
+static __device__ void cpy_blck_q_bf16(const char * cxi, char * cdsti) {
+    nv_bfloat16 * dsth = (nv_bfloat16 *)(cdsti);
+
+#pragma unroll
+    for (int j = 0; j < qk/2; j++) {
+        dfloat2 dq;
+        dequant(cxi, 0, j, dq);
+        *(dsth + j + 0) = __float2bfloat16(dq.x);
+        *(dsth + j + qk/2) = __float2bfloat16(dq.y);
+    }
+}
+
 template <cpy_kernel_t cpy_blck, int qk>
 static __global__ void cpy_f32_q(const char * cx, char * cdst_direct, const int64_t ne,
                                  const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
@@ -209,6 +222,22 @@ static void ggml_cpy_q_f16_cuda(
     const int64_t num_blocks = (ne / qk + CUDA_CPY_BLOCK_SIZE - 1)/CUDA_CPY_BLOCK_SIZE;
     GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_q_f32<cpy_blck_q_f16<dequant, qk>, qk><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>(
+        cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+         ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
+}
+
+// Quantized -> BF16 copy template (dequantize using cpy_blck_q_bf16)
+template<dequantize_kernel_t dequant, int qk>
+static void ggml_cpy_q_bf16_cuda(
+    const char * cx, char * cdst, const int64_t ne,
+    const int64_t ne00, const int64_t ne01, const int64_t ne02,
+    const int64_t nb00, const int64_t nb01, const int64_t nb02,
+    const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12,
+    const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
+    cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+    const int64_t num_blocks = ne / qk;
+    GGML_ASSERT(num_blocks <= INT_MAX);
+    cpy_q_f32<cpy_blck_q_bf16<dequant, qk>, qk><<<num_blocks, 1, 0, stream>>>(
         cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
          ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
 }
