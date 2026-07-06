@@ -80,11 +80,17 @@ static __global__ void quantize_q8_1(const float * __restrict__ x, void * __rest
 
     y[ib].qs[iqs] = q;
 
+    float sumqx = xi * q;
+    float sumq2 = q * q;
+    sumqx = warp_reduce_sum(sumqx);
+    sumq2 = warp_reduce_sum(sumq2);
+
     if (iqs > 0) {
         return;
     }
 
-    reinterpret_cast<half&>(y[ib].ds.x) = d;
+    const float d_ols = sumq2 > 0.0f ? sumqx / sumq2 : 0.0f;
+    reinterpret_cast<half&>(y[ib].ds.x) = d_ols;
     reinterpret_cast<half&>(y[ib].ds.y) = sum;
 }
 
