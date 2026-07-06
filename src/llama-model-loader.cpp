@@ -408,8 +408,11 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         // sanity check
         {
             const int n_tensors_loaded = (int) weights.size();
-            if (n_tensors != n_tensors_loaded) {
+            if (n_tensors_loaded < n_tensors) {
                 throw std::runtime_error(format("corrupted model: %d tensors expected but %d found", n_tensors, n_tensors_loaded));
+            }
+            if (n_tensors_loaded > n_tensors) {
+                LLAMA_LOG_INFO("%s: %d tensors expected but %d found (extra tensors present)\n", __func__, n_tensors, n_tensors_loaded);
             }
         }
 

@@ -33,7 +33,7 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         delta_net delta(lctx, batch);
 
         ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
-        ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp) ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = (n_tokens > 1) ? build_inp_out_ids() : nullptr;
         ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
         lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
@@ -73,8 +73,9 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         }
 
         if (lctx.cparams.mtp) {
-            cb(inpL, "result_mtp_embd", -1);
-            ggml_set_output(inpL);
+            struct ggml_tensor * mtp_hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
+            cb(mtp_hidden, "result_mtp_embd", -1);
+            ggml_set_output(mtp_hidden);
         }
 
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
@@ -117,7 +118,7 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         delta_net delta(lctx, batch);
 
         ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
-        ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp) ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = (n_tokens > 1) ? build_inp_out_ids() : nullptr;
         ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
         lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
@@ -152,11 +153,9 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         }
 
         if (lctx.cparams.mtp) {
-            //struct ggml_tensor * embd_copy = ggml_dup(ctx0, inpL);
-            //cb(embd_copy, "result_mtp_embd", -1);
-            //ggml_set_output(embd_copy);
-            cb(inpL, "result_mtp_embd", -1);
-            ggml_set_output(inpL);
+            struct ggml_tensor * mtp_hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
+            cb(mtp_hidden, "result_mtp_embd", -1);
+            ggml_set_output(mtp_hidden);
         }
 
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
