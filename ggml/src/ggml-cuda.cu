@@ -1741,24 +1741,25 @@ static void * ggml_cuda_host_malloc(size_t size) {
 
     // Diagnostic: test various pinning methods for this size
     {
-        // 1) cudaMallocHost (default, current-device only)
+        // 1) cudaMallocHost (default, current-device only) — use pin_amount to avoid
+        //    allocating beyond the user-requested cap (which would crash WDDM init later)
         void * mh_ptr = nullptr;
-        cudaError_t mh_err = cudaMallocHost(&mh_ptr, size);
+        cudaError_t mh_err = cudaMallocHost(&mh_ptr, pin_amount);
         if (mh_err == cudaSuccess) {
-            GGML_CUDA_LOG_INFO("%s: cudaMallocHost %.2f GiB SUCCEEDED\n", __func__, size_GiB);
+            GGML_CUDA_LOG_INFO("%s: cudaMallocHost %.2f GiB SUCCEEDED\n", __func__, pin_amount / (1024.*1024.*1024.));
             cudaFreeHost(mh_ptr);
         } else {
-            GGML_CUDA_LOG_WARN("%s: cudaMallocHost %.2f GiB FAILED: %s\n", __func__, size_GiB, cudaGetErrorString(mh_err));
+            GGML_CUDA_LOG_WARN("%s: cudaMallocHost %.2f GiB FAILED: %s\n", __func__, pin_amount / (1024.*1024.*1024.), cudaGetErrorString(mh_err));
             cudaGetLastError();
         }
-        // 2) cudaHostRegister NON-portable (current device only)
+        // 2) cudaHostRegister NON-portable (current device only) — capped to pin_amount
         if (ptr) {
-            cudaError_t np_err = cudaHostRegister(ptr, size, 0);
+            cudaError_t np_err = cudaHostRegister(ptr, pin_amount, 0);
             if (np_err == cudaSuccess) {
-                GGML_CUDA_LOG_INFO("%s: cudaHostRegister(portable=0) %.2f GiB SUCCEEDED\n", __func__, size_GiB);
+                GGML_CUDA_LOG_INFO("%s: cudaHostRegister(portable=0) %.2f GiB SUCCEEDED\n", __func__, pin_amount / (1024.*1024.*1024.));
                 cudaHostUnregister(ptr);
             } else {
-                GGML_CUDA_LOG_WARN("%s: cudaHostRegister(portable=0) %.2f GiB FAILED: %s\n", __func__, size_GiB, cudaGetErrorString(np_err));
+                GGML_CUDA_LOG_WARN("%s: cudaHostRegister(portable=0) %.2f GiB FAILED: %s\n", __func__, pin_amount / (1024.*1024.*1024.), cudaGetErrorString(np_err));
                 cudaGetLastError();
             }
         }
@@ -1805,17 +1806,23 @@ static void * ggml_cuda_host_malloc(size_t size) {
             }
         }
     } else if (ggml_cuda_pinmem == 4) {
-        // pinmem=4: cap pinned memory to 1/4 of total system RAM (overridable by pinamount).
+        // pinmem=4: cap pinned memory to 1/4 of total system RAM.
+        // When pinamount is set, it replaces the 1/4 RAM cap entirely.
+        size_t amount;
         MEMORYSTATUSEX ms = { sizeof(MEMORYSTATUSEX) };
         GlobalMemoryStatusEx(&ms);
-        size_t quarter = (size_t)(ms.ullTotalPhys / 4);
-        size_t amount = (size < quarter) ? size : quarter;
-        if (amount > pin_amount) amount = pin_amount;
-
-        GGML_CUDA_LOG_INFO("%s: pinmem=4 pinning %.2f GiB out of %.2f GiB (cap: 1/4 of %.2f GiB RAM%s)\n",
-            __func__, amount / (1024.*1024.*1024.), size / (1024.*1024.*1024.),
-            ms.ullTotalPhys / (1024.*1024.*1024.),
-            (ggml_cuda_pinamount_gb > 0.0f && pin_amount < size) ? ", overridden by pinamount" : "");
+        if (ggml_cuda_pinamount_gb > 0.0f) {
+            amount = (size < pin_amount) ? size : pin_amount;
+            GGML_CUDA_LOG_INFO("%s: pinmem=4 pinning %.2f GiB out of %.2f GiB (cap: pinamount=%.2f GiB)\n",
+                __func__, amount / (1024.*1024.*1024.), size / (1024.*1024.*1024.),
+                ggml_cuda_pinamount_gb);
+        } else {
+            size_t quarter = (size_t)(ms.ullTotalPhys / 4);
+            amount = (size < quarter) ? size : quarter;
+            GGML_CUDA_LOG_INFO("%s: pinmem=4 pinning %.2f GiB out of %.2f GiB (cap: 1/4 of %.2f GiB RAM)\n",
+                __func__, amount / (1024.*1024.*1024.), size / (1024.*1024.*1024.),
+                ms.ullTotalPhys / (1024.*1024.*1024.));
+        }
         err = cudaHostRegister(ptr, amount, cudaHostRegisterPortable);
         if (err != cudaSuccess) {
             cudaGetLastError();
