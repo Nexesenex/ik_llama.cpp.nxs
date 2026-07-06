@@ -195,6 +195,9 @@ void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_Q8_0:
             get_rows_cuda<QK8_0, QR8_0, dequantize_q8_0>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
             break;
+        case GGML_TYPE_Q8_1:
+            get_rows_cuda<QK8_1, QR8_1, dequantize_q8_1>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
+            break;
         default:
             // TODO: k-quants
             GGML_ABORT("%s: unsupported type: %s\n", __func__, ggml_type_name(src0->type));
