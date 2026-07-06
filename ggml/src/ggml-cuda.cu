@@ -597,7 +597,7 @@ static std::condition_variable ggml_cuda_lock_cv;
 //static std::atomic<int> ggml_cuda_lock_counter;
 static int ggml_cuda_lock_counter = 0;
 static std::string ggml_cuda_user_cslq; // User-provided CUDA_SCALE_LAUNCH_QUEUES from -cuda cslq=X
-static int ggml_cuda_pinmem = 3; // pinmem: 0=disabled, 1=token_embd only (overrides non-pinned), 2=try all (stop on fail), 3=all (default), 4=quarter RAM cap, 5=TCC full-size.  token_embd always gets its own pinned buffer in all modes > 0.
+static int ggml_cuda_pinmem = 3; // pinmem: 0=disabled, 1=token_embd only (overrides non-pinned), 2=try all (stop on fail), 3=all (default), 4=quarter RAM cap, 5=TCC full-size (portable), 6=TCC full-size (non-portable).  token_embd always gets its own pinned buffer in all modes > 0.
 static bool ggml_cuda_pinmem2_stopped = false;
 static int ggml_cuda_pindev = -1; // pindev: raw CUDA ordinal for pinning (-1 = auto-detect TCC)
 static float ggml_cuda_pinamount_gb = 0.0f; // pinamount: cap pinned memory to N GiB (0 = no cap)
@@ -1591,19 +1591,21 @@ static void * ggml_cuda_host_malloc(size_t size) {
         }
     }
 
-    cudaError_t err = cudaHostRegister(ptr, pin_amount, cudaHostRegisterPortable);
+    unsigned int reg_flags = (ggml_cuda_pinmem == 6) ? 0 : cudaHostRegisterPortable;
+    const char * flag_tag = (ggml_cuda_pinmem == 6) ? "non-portable" : "portable";
+    cudaError_t err = cudaHostRegister(ptr, pin_amount, reg_flags);
     if (err != cudaSuccess) {
         cudaGetLastError(); // clear the error
-        GGML_CUDA_LOG_WARN("%s: cudaHostRegister of %.2f MiB failed: %s\n", __func__,
-                           size/1024.0/1024.0, cudaGetErrorString(err));
+        GGML_CUDA_LOG_WARN("%s: cudaHostRegister (%.2f MiB, %s) failed: %s\n", __func__,
+                           size/1024.0/1024.0, flag_tag, cudaGetErrorString(err));
         munmap(ptr, size);
         if (ggml_cuda_pinmem == 2) {
             GGML_CUDA_LOG_WARN("%s: pinmem=2 mode - stopping further pinning attempts\n", __func__);
             ggml_cuda_pinmem2_stopped = true;
             return nullptr;
         }
-        if (ggml_cuda_pinmem == 3 || ggml_cuda_pinmem == 5) {
-            const char * tag = (ggml_cuda_pinmem == 5) ? "pinmem=5" : "pinmem=3";
+        if (ggml_cuda_pinmem == 3 || ggml_cuda_pinmem == 5 || ggml_cuda_pinmem == 6) {
+            const char * tag = (ggml_cuda_pinmem == 5) ? "pinmem=5" : (ggml_cuda_pinmem == 6) ? "pinmem=6" : "pinmem=3";
             GGML_CUDA_LOG_WARN("%s: %s falling back to pinmem=1 (token_embd only)\n", __func__, tag);
             ggml_backend_cuda_set_pinmem(1);
             return ggml_cuda_host_malloc(size);
@@ -1834,7 +1836,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
         // pinmem=5: TCC full-size mode — pin full requested size using TCC device.
         // No capping, no halving.  If it fails, fall back to pinmem=3 (standard that
         // then falls back further as needed).
-        GGML_CUDA_LOG_INFO("%s: pinmem=5 trying cudaHostRegister(ptr, %.2f GiB) on pin device %d\n",
+        GGML_CUDA_LOG_INFO("%s: pinmem=5 trying cudaHostRegister(ptr, %.2f GiB, portable) on pin device %d\n",
             __func__, pin_amount / (1024.*1024.*1024.), choose_dev);
         err = cudaHostRegister(ptr, pin_amount, cudaHostRegisterPortable);
         if (err != cudaSuccess) {
@@ -1848,9 +1850,32 @@ static void * ggml_cuda_host_malloc(size_t size) {
         }
         auto tim2 = ggml_time_us();
         if (is_large) {
-            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB (pinmem=5) in %.1f ms\n\n", size_GiB, 1e-3*(tim2 - tim1));
+            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB (pinmem=5, portable) in %.1f ms\n\n", size_GiB, 1e-3*(tim2 - tim1));
         } else {
-            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB (pinmem=5) in %.1f ms\n\n", size_MiB, 1e-3*(tim2 - tim1));
+            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB (pinmem=5, portable) in %.1f ms\n\n", size_MiB, 1e-3*(tim2 - tim1));
+        }
+    } else if (ggml_cuda_pinmem == 6) {
+        // pinmem=6: TCC full-size non-portable mode — same as pinmem=5 but uses
+        // cudaHostRegister with flag=0 (non-portable). Memory is only mapped on the
+        // registering device (TCC), so WDDM devices never consume their per-process
+        // quota on this buffer.  Falls back to pinmem=3 if registration fails.
+        GGML_CUDA_LOG_INFO("%s: pinmem=6 trying cudaHostRegister(ptr, %.2f GiB, non-portable) on pin device %d\n",
+            __func__, pin_amount / (1024.*1024.*1024.), choose_dev);
+        err = cudaHostRegister(ptr, pin_amount, 0); // non-portable
+        if (err != cudaSuccess) {
+            cudaGetLastError();
+            GGML_CUDA_LOG_WARN("%s: pinmem=6 full-size cudaHostRegister of %.2f GiB failed: %s\n", __func__,
+                               size_GiB, cudaGetErrorString(err));
+            _aligned_free(ptr);
+            GGML_CUDA_LOG_WARN("%s: pinmem=6 falling back to pinmem=3 (portable full pin)\n", __func__);
+            ggml_backend_cuda_set_pinmem(3);
+            return ggml_cuda_host_malloc(size);
+        }
+        auto tim2 = ggml_time_us();
+        if (is_large) {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB (pinmem=6, non-portable) in %.1f ms\n\n", size_GiB, 1e-3*(tim2 - tim1));
+        } else {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB (pinmem=6, non-portable) in %.1f ms\n\n", size_MiB, 1e-3*(tim2 - tim1));
         }
     } else {
         err = cudaHostRegister(ptr, pin_amount, cudaHostRegisterPortable);
@@ -5792,8 +5817,8 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
             }
             else if (parsed[0] == "pinmem") {
                 is_good = read_value(parsed[1], params.pinmem);
-                if (!is_good || params.pinmem < 0 || params.pinmem > 5) {
-                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...5]\n", __func__, parsed[0].c_str(), params.pinmem);
+                if (!is_good || params.pinmem < 0 || params.pinmem > 6) {
+                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...6]\n", __func__, parsed[0].c_str(), params.pinmem);
                     is_good = false;
                 }
             }
@@ -6044,7 +6069,9 @@ GGML_CALL void ggml_backend_cuda_set_pinmem(int val) {
     } else if (val == 4) {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=4 - pinned to 1/4 of total RAM\n");
     } else if (val == 5) {
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=5 - TCC full-size pinning (no cap)\n");
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=5 - TCC full-size portable pinning (no cap)\n");
+    } else if (val == 6) {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=6 - TCC full-size non-portable pinning (bypasses WDDM quota)\n");
     } else {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=3 - all host buffers use pinned memory (default)\n");
     }

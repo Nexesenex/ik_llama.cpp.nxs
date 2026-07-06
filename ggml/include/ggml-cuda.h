@@ -54,11 +54,12 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_cslq(const char * cslq);
 // pinmem=2: Try to pin all host buffers, stop on first failure, rest unpinned
 // pinmem=3: Pin all host buffers (default behavior)
 // pinmem=4: Cap pinned memory to 1/4 of total system RAM (user mode)
-// pinmem=5: TCC full-size pinning (no cap, falls back to pinmem=3)
+// pinmem=5: TCC full-size portable pinning (no cap, falls back to pinmem=3)
+// pinmem=6: TCC full-size non-portable pinning (no cap, bypasses WDDM quota, falls back to pinmem=3)
 // Note: token_embd always gets its own dedicated pinned buffer in all modes > 0
 GGML_API GGML_CALL void ggml_backend_cuda_set_pinmem(int val);
 
-// Get current pinmem setting (0=disabled, 1=token_embd only, 2=stop on fail, 3=all, 4=quarter)
+// Get current pinmem setting (0=disabled, 1=token_embd only, 2=stop on fail, 3=all, 4=quarter, 5=TCC portable, 6=TCC non-portable)
 GGML_API GGML_CALL int ggml_backend_cuda_get_pinmem(void);
 
 // Set pindev mode — specify which raw CUDA ordinal to charge for pinned memory.
