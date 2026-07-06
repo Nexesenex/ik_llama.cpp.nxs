@@ -591,8 +591,10 @@ static void why_not_reuse_previous(const llama_batch & u_batch, const llama_cont
     if (ctx.n_outputs != the_prev->n_outputs) { printf("    n_outputs is not the same\n"); return; }
     if (u_batch.n_tokens != the_prev->n_tokens) { printf("    n_tokens is not the same\n"); return; }
     if (ctx.cparams.mtp_op_type != the_prev->mtp_op_type) { printf("    mtp_op_type is not the same\n"); return; }
-    if (ctx.mtp_step_idx != the_prev->mtp_step_idx) { printf("    mtp_step_idx is not the same\n"); return; }
-    if (ctx.mtp_n_heads != the_prev->mtp_n_heads) { printf("    mtp_n_heads is not the same\n"); return; }
+    if (ctx.model.arch == LLM_ARCH_OPENPANGU) {
+        if (ctx.mtp_step_idx != the_prev->mtp_step_idx) { printf("    mtp_step_idx is not the same\n"); return; }
+        if (ctx.mtp_n_heads != the_prev->mtp_n_heads) { printf("    mtp_n_heads is not the same\n"); return; }
+    }
     printf("    update_cache_copies() must have failed\n");
 }
 
@@ -611,8 +613,9 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
            n_outputs == the_prev->n_outputs &&
            u_batch.n_tokens == the_prev->n_tokens &&
            cparams.mtp_op_type == the_prev->mtp_op_type &&
-           mtp_step_idx == the_prev->mtp_step_idx &&
-           mtp_n_heads == the_prev->mtp_n_heads &&
+           (model.arch != LLM_ARCH_OPENPANGU || (
+               mtp_step_idx == the_prev->mtp_step_idx &&
+               mtp_n_heads == the_prev->mtp_n_heads)) &&
            update_cache_copies();
     if (false && !result) {
         printf("%s(%d):", __func__, cparams.mtp_op_type);
@@ -3853,6 +3856,15 @@ static bool llm_load_tensors(
         }
         if (tgt_model) {
             split_mode = tgt_model->split_mode;
+            if ((split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || split_mode == LLAMA_SPLIT_MODE_ATTN) &&
+                (int)model.devices.size() < 2) {
+                LLAMA_LOG_WARN("\n=========================================================\n");
+                LLAMA_LOG_WARN("Target model uses split mode '%s' but this model has only %d device(s)\n",
+                        split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ? "tenpar - graph" : "attn", (int)model.devices.size());
+                LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
+                LLAMA_LOG_WARN("===========================================================\n\n");
+                split_mode = LLAMA_SPLIT_MODE_LAYER;
+            }
         }
     }
 
@@ -6114,9 +6126,8 @@ static int llama_decode_internal(
         struct ggml_tensor * res  = gf->nodes[gf->n_nodes - 1];
         struct ggml_tensor * embd = nullptr;
 
-        // DFlash GPU argmax draft_argmax node
-        if (lctx.dflash.draft_tokens_tensor != nullptr &&
-            strcmp(res->name, "result_output") != 0) {
+        // The last node might not be result_output (e.g. DFlash draft_argmax or backend sampling result_argmax)
+        if (strcmp(res->name, "result_output") != 0) {
             for (int i = gf->n_nodes - 2; i >= 0; --i) {
                 if (strcmp(gf->nodes[i]->name, "result_output") == 0) {
                     res = gf->nodes[i];
@@ -6283,6 +6294,12 @@ static int llama_decode_internal(
                             GGML_ASSERT( n_outputs_prev_embd + n_outputs_new_embd <= n_outputs_embd);
                             GGML_ASSERT((n_outputs_prev_embd + n_outputs_new_embd)*n_embd_output <= (int64_t) lctx.embd_size);
                             ggml_backend_tensor_get_async(backend_embd, embd, embd_out, 0, n_outputs_new_embd*n_embd_output*sizeof(float));
+                            // Ensure embd data is ready before the MTP speculative capture
+                            // path reads it, removing the need for a separate llama_synchronize
+                            // in llama_spec_prepare_hidden_feature_view.
+                            if (cparams.mtp_op_type != MTP_OP_NONE) {
+                                ggml_backend_sched_synchronize(lctx.sched);
+                            }
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_MEAN:
