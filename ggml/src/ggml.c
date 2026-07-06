@@ -7189,6 +7189,7 @@ struct ggml_tensor * ggml_topk(
         int k) {
     GGML_ASSERT(ggml_is_matrix(a));
     GGML_ASSERT(k > 0 && k <= (int)a->ne[0]);
+    GGML_ASSERT(k <= 256 && "topk K must be <= 256 (CPU uses stack-allocated bitmap)");
     bool is_node = false;
 
     if (a->grad) {
