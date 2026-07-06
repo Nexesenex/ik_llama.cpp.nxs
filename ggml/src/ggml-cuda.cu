@@ -243,7 +243,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         }
     }
 
-    int64_t total_vram = 0;
+    int64_t total_vram_local = 0;
 #ifdef GGML_CUDA_FORCE_MMQ
     GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_MMQ (instead of CUBLAS):    yes\n", __func__);
 #endif // GGML_CUDA_FORCE_MMQ
@@ -278,8 +278,9 @@ static ggml_cuda_device_info ggml_cuda_init() {
         GGML_CUDA_LOG_INFO("  Device %d: %s (PCIE %s, %s), compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n", id, prop.name, pci_bus_id, attach, prop.major, prop.minor, device_vmm ? "yes" : "no",
                 prop.totalGlobalMem/(1024*1024));
 
-        info.default_tensor_split[id] = total_vram;
-        total_vram += prop.totalGlobalMem;
+        info.devices[id].total_vram   = prop.totalGlobalMem;
+        info.default_tensor_split[id] = total_vram_local;
+        total_vram_local += prop.totalGlobalMem;
 
         info.devices[id].integrated = prop.integrated;
         info.devices[id].nsm        = prop.multiProcessorCount;
@@ -295,7 +296,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
     }
 
     for (int id = 0; id < info.device_count; ++id) {
-        info.default_tensor_split[id] /= total_vram;
+        info.default_tensor_split[id] /= total_vram_local;
     }
 
     // configure logging to stdout
@@ -594,7 +595,7 @@ static std::condition_variable ggml_cuda_lock_cv;
 //static std::atomic<int> ggml_cuda_lock_counter;
 static int ggml_cuda_lock_counter = 0;
 static std::string ggml_cuda_user_cslq; // User-provided CUDA_SCALE_LAUNCH_QUEUES from -cuda cslq=X
-static int ggml_cuda_pinmem = 3; // pinmem: 0=disabled, 1=token_embd only, 2=try all (stop on fail), 3=all (default)
+static int ggml_cuda_pinmem = 3; // pinmem: 0=disabled, 1=token_embd only, 2=try all (stop on fail), 3=all (default), 4=quarter RAM cap, 5=TCC full-size
 static bool ggml_cuda_pinmem2_stopped = false;
 static int ggml_cuda_pindev = -1; // pindev: raw CUDA ordinal for pinning (-1 = auto-detect TCC)
 
@@ -1584,8 +1585,9 @@ static void * ggml_cuda_host_malloc(size_t size) {
             ggml_cuda_pinmem2_stopped = true;
             return nullptr;
         }
-        if (ggml_cuda_pinmem == 3) {
-            GGML_CUDA_LOG_WARN("%s: falling back to pinmem=1 (token_embd only)\n", __func__);
+        if (ggml_cuda_pinmem == 3 || ggml_cuda_pinmem == 5) {
+            const char * tag = (ggml_cuda_pinmem == 5) ? "pinmem=5" : "pinmem=3";
+            GGML_CUDA_LOG_WARN("%s: %s falling back to pinmem=1 (token_embd only)\n", __func__, tag);
             ggml_backend_cuda_set_pinmem(1);
             return ggml_cuda_host_malloc(size);
         }
@@ -1812,6 +1814,28 @@ static void * ggml_cuda_host_malloc(size_t size) {
             } else {
                 GGML_CUDA_LOG_INFO("    done allocating %.2f MiB in %.1f ms\n\n", size_MiB, 1e-3*(tim2 - tim1));
             }
+        }
+    } else if (ggml_cuda_pinmem == 5) {
+        // pinmem=5: TCC full-size mode — pin full requested size using TCC device.
+        // No capping, no halving.  If it fails, fall back to pinmem=3 (standard that
+        // then falls back further as needed).
+        GGML_CUDA_LOG_INFO("%s: pinmem=5 trying full-size cudaHostRegister(ptr, %.2f GiB) on pin device %d\n",
+            __func__, size_GiB, choose_dev);
+        err = cudaHostRegister(ptr, size, cudaHostRegisterPortable);
+        if (err != cudaSuccess) {
+            cudaGetLastError();
+            GGML_CUDA_LOG_WARN("%s: pinmem=5 full-size cudaHostRegister of %.2f GiB failed: %s\n", __func__,
+                               size_GiB, cudaGetErrorString(err));
+            _aligned_free(ptr);
+            GGML_CUDA_LOG_WARN("%s: pinmem=5 falling back to pinmem=3 (standard full pin)\n", __func__);
+            ggml_backend_cuda_set_pinmem(3);
+            return ggml_cuda_host_malloc(size);
+        }
+        auto tim2 = ggml_time_us();
+        if (is_large) {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f GiB (pinmem=5) in %.1f ms\n\n", size_GiB, 1e-3*(tim2 - tim1));
+        } else {
+            GGML_CUDA_LOG_INFO("    done allocating %.2f MiB (pinmem=5) in %.1f ms\n\n", size_MiB, 1e-3*(tim2 - tim1));
         }
     } else {
         err = cudaHostRegister(ptr, size, cudaHostRegisterPortable);
@@ -5657,7 +5681,7 @@ struct cuda_params {
 #endif
     bool enable_p2p = true;
     std::string cslq; // CUDA_SCALE_LAUNCH_QUEUES: "1x", "2x", "4x"
-    int pinmem = 3; // pinmem: 0=disabled, 1=token_embd only, 2=try all (stop on fail), 3=all
+    int pinmem = 3; // pinmem: 0=disabled, 1=token_embd only, 2=try all (stop on fail), 3=all, 4=quarter RAM cap, 5=TCC full-size
 };
 
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
@@ -5736,8 +5760,8 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
             }
             else if (parsed[0] == "pinmem") {
                 is_good = read_value(parsed[1], params.pinmem);
-                if (!is_good || params.pinmem < 0 || params.pinmem > 3) {
-                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...3]\n", __func__, parsed[0].c_str(), params.pinmem);
+                if (!is_good || params.pinmem < 0 || params.pinmem > 5) {
+                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...5]\n", __func__, parsed[0].c_str(), params.pinmem);
                     is_good = false;
                 }
             }
@@ -5848,9 +5872,31 @@ GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * descr
 }
 
 GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total) {
-    ggml_cuda_set_device(device);
+    const auto & info = ggml_cuda_info();
+    if (device < 0 || device >= info.device_count) {
+        *free = 0;
+        *total = 0;
+        return;
+    }
+    *total = info.devices[device].total_vram;
 
-    CUDA_CHECK(cudaMemGetInfo(free, total));
+    // When a TCC device exists, querying WDDM device memory via cudaMemGetInfo
+    // creates a WDDM primary context, locking in a per-process pinned memory quota
+    // (~48 GiB on Windows/WDDM).  Skip the query to preserve TCC pinmem capacity.
+    // Subtract a 1 GiB margin for display driver reservation on WDDM devices
+    // to avoid cudaMalloc failures during tensor allocation.
+    bool has_tcc = false;
+    for (int i = 0; i < info.device_count; i++) {
+        if (info.devices[i].is_tcc) { has_tcc = true; break; }
+    }
+
+    if (has_tcc && !info.devices[device].is_tcc) {
+        *free = info.devices[device].total_vram - 1024ULL * 1024 * 1024;
+    } else {
+        ggml_cuda_set_device(device);
+        CUDA_CHECK(cudaMemGetInfo(free, total));
+        *total = info.devices[device].total_vram;
+    }
 }
 
 GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
@@ -5951,6 +5997,8 @@ GGML_CALL void ggml_backend_cuda_set_pinmem(int val) {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=2 - try all host buffers, stop on first failure\n");
     } else if (val == 4) {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=4 - pinned to 1/4 of total RAM\n");
+    } else if (val == 5) {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=5 - TCC full-size pinning (no cap)\n");
     } else {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=3 - all host buffers use pinned memory (default)\n");
     }
