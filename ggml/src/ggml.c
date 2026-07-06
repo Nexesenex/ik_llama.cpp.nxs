@@ -14873,6 +14873,23 @@ static void ggml_compute_forward_mean(
 
 // ggml_compute_forward_topk
 
+// Min-heap sift-down helper for top-K: moves element at position p down
+// while it is larger than either child. The heap stores (val, idx) pairs
+// with ordering by val (smallest at root).
+static inline void heap_sift_down_f32(float * val, int32_t * idx, int hsize, int p) {
+    while (1) {
+        int smallest = p;
+        int left = 2*p + 1;
+        int right = 2*p + 2;
+        if (left < hsize && val[left] < val[smallest]) smallest = left;
+        if (right < hsize && val[right] < val[smallest]) smallest = right;
+        if (smallest == p) break;
+        float   tmpf = val[p]; val[p] = val[smallest]; val[smallest] = tmpf;
+        int32_t tmpi = idx[p]; idx[p] = idx[smallest]; idx[smallest] = tmpi;
+        p = smallest;
+    }
+}
+
 static void ggml_compute_forward_topk_f32(
         const struct ggml_compute_params * params,
         const struct ggml_tensor * dst) {
@@ -14895,11 +14912,15 @@ static void ggml_compute_forward_topk_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
+    // Per-row heap buffers (K <= 256, asserted at ggml_topk API entry)
+    float     heap_val[256];
+    int32_t   heap_idx[256];
+
     for (int64_t r = ith; r < nrows; r += nth) {
         const float * row = (const float *) src0->data + r * ne00;
         float * out = (float *) dst->data;
 
-        // Fast path for K=1: single argmax pass, no bitmap needed
+        // Fast path for K=1: single argmax pass
         if (K == 1) {
             float max_val = -FLT_MAX;
             int32_t max_idx = -1;
@@ -14914,32 +14935,39 @@ static void ggml_compute_forward_topk_f32(
             continue;
         }
 
-        // General path: bitmap for O(1) skip checks
-        const size_t bitmap_ints = ((size_t)ne00 + 31) / 32;
-        GGML_ASSERT(bitmap_ints <= (size_t)(1 << 30));
-
-        uint32_t * bitmap = (uint32_t *)calloc(bitmap_ints, sizeof(uint32_t));
-        GGML_ASSERT(bitmap != NULL);
-
-        int n_selected = 0;
-
-        while (n_selected < K) {
-            float max_val = -FLT_MAX;
-            int32_t max_idx = -1;
-            for (int64_t c = 0; c < ne00; ++c) {
-                if (bitmap[c >> 5] & (1u << (c & 31))) continue;
-                if (row[c] > max_val) {
-                    max_val = row[c];
-                    max_idx = (int32_t)c;
-                }
-            }
-            bitmap[max_idx >> 5] |= (1u << (max_idx & 31));
-            out[n_selected * nrows + r] = max_val;
-            out[(K + n_selected) * nrows + r] = (float)max_idx;
-            ++n_selected;
+        // Build initial min-heap from the first K elements
+        for (int i = 0; i < K; ++i) {
+            heap_val[i] = row[i];
+            heap_idx[i] = i;
+        }
+        for (int i = K/2 - 1; i >= 0; --i) {
+            heap_sift_down_f32(heap_val, heap_idx, K, i);
         }
 
-        free(bitmap);
+        // Scan remaining elements: insert into heap if larger than root (current minimum)
+        for (int64_t c = K; c < ne00; ++c) {
+            float val = row[c];
+            if (val > heap_val[0]) {
+                heap_val[0] = val;
+                heap_idx[0] = (int32_t)c;
+                heap_sift_down_f32(heap_val, heap_idx, K, 0);
+            }
+        }
+
+        // Extract from min-heap in descending order
+        // heap_val[0] is the smallest of the top-K; we pop it and write to the
+        // highest unfilled output slot so that out[0] = largest, out[K-1] = smallest.
+        int hsize = K;
+        while (hsize > 0) {
+            --hsize;
+            out[hsize * nrows + r] = heap_val[0];
+            out[(K + hsize) * nrows + r] = (float)heap_idx[0];
+            if (hsize > 0) {
+                heap_val[0] = heap_val[hsize];
+                heap_idx[0] = heap_idx[hsize];
+                heap_sift_down_f32(heap_val, heap_idx, hsize, 0);
+            }
+        }
     }
 }
 
