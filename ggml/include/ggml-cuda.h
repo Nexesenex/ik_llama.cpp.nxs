@@ -67,6 +67,14 @@ GGML_API GGML_CALL int ggml_backend_cuda_get_pinmem(void);
 GGML_API GGML_CALL void ggml_backend_cuda_set_pindev(int val);
 GGML_API GGML_CALL int  ggml_backend_cuda_get_pindev(void);
 
+// Set pinamount cap in GiB — limits how much of the host buffer is actually pinned.
+// pinamount=0 (default): no cap, use full pinmem mode behavior.
+// pinamount>0:  cap pinned memory at N GiB (e.g. pinamount=52.5 for 52.5 GiB).
+// Works with any pinmem mode: the full buffer is still allocated,
+// only the capped prefix is registered as pinned.
+GGML_API GGML_CALL void ggml_backend_cuda_set_pinamount(float gb);
+GGML_API GGML_CALL float ggml_backend_cuda_get_pinamount(void);
+
 GGML_API GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_API GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
