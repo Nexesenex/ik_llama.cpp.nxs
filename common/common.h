@@ -247,7 +247,7 @@ struct common_params_speculative {
     std::string lookup_cache_static;  // path of static ngram cache file for lookup decoding           // NOLINT
     std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding          // NOLINT
 
-    bool backend_sampling = false; // offload draft sampling to the backend (default: on)
+    bool backend_sampling = true; // offload draft sampling to the backend (default: on)
     int  spec_max_candidates  = 0; // top-K for backend sampling (0 = argmax)
 
     // draft-model speculative decoding
