@@ -201,9 +201,8 @@ static __device__ void quantize_f32_q8_0_block(const float * __restrict__ x, blo
         const float x0 = v*id;
         const int8_t xi = roundf(x0);
         float q = xi;
-        float w = v*v;
-        sumqx += w*q*v;
-        sumq2 += w*q*q;
+        sumqx += q*v;
+        sumq2 += q*q;
         y->qs[j] = xi;
     }
     if (sumq2 > 0) {
