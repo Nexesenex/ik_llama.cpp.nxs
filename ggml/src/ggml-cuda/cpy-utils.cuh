@@ -50,10 +50,8 @@ static __device__ void quantize_f32_q4_0_block(const float * __restrict__ x, blo
         const uint8_t xi1 = min(15, (int8_t)(x1 + 8.5f));
         float q0 = xi0 - 8;
         float q1 = xi1 - 8;
-        float w0 = v0*v0;
-        float w1 = v1*v1;
-        sumqx += w0*q0*v0 + w1*q1*v1;
-        sumq2 += w0*q0*q0 + w1*q1*q1;
+        sumqx += q0*v0 + q1*v1;
+        sumq2 += q0*q0 + q1*q1;
 
         y->qs[j]  = xi0;
         y->qs[j] |= xi1 << 4;
