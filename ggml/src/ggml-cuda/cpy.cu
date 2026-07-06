@@ -198,11 +198,60 @@ static __global__ void k_transpose_q8_0(const char * cx, char * cdst,
     }
 }
 
+static __global__ void k_transpose_q8_1(const char * cx, char * cdst,
+                                   const int64_t ne10, const int64_t ne11, const int64_t ne12,
+                                   const int64_t nb01, const int64_t nb02, const int64_t nb03,
+                                   const int64_t nb11, const int64_t nb12, const int64_t nb13) {
+    const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    const int64_t i13 = i/(ne10 * ne11 * ne12);
+    const int64_t i12 = (i - i13*ne10*ne11*ne12) / (ne10*ne11);
+    const int64_t i11 = (i - i13*ne10*ne11*ne12 - i12*ne10*ne11) / ne10;
+    const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
+
+    const int64_t i03 = i13;
+    const int64_t i02 = i12;
+    const int64_t i01 = i10;
+    const int64_t i00 = i11;
+
+    const block_q8_1 * q8 = (const block_q8_1 *)(cx + i01*nb01 + i02*nb02 + i03*nb03);
+    const int ib0 = i00/QK8_1;
+    const int iq0 = i00%QK8_1;
+
+    float xi = __half2float(q8[ib0].ds.x)*q8[ib0].qs[iq0];
+    float amax = fabsf(xi);
+    amax = warp_reduce_max(amax);
+
+    float d = amax/127;
+    int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+
+    block_q8_1 * dst = (block_q8_1 *)(cdst + i11*nb11 + i12*nb12 + i13*nb13);
+    dst[i10 / QK8_1].qs[i10 % QK8_1] = q;
+
+    float total = xi;
+    total = warp_reduce_sum(total);
+
+    if (threadIdx.x == 0) {
+        dst[i10 / QK8_1].ds.x = __float2half(d);
+        dst[i10 / QK8_1].ds.y = __float2half(total);
+    }
+}
+
 static void transpose_q8_0(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
     auto stream = ctx.stream();
     const int64_t num_blocks = ggml_nelements(dst)/QK8_0;
     GGML_ASSERT(num_blocks <= INT_MAX);
     k_transpose_q8_0<<<num_blocks, QK8_0, 0, stream>>>(
+            (const char *)src->data, (char *)dst->data,
+            dst->ne[0], dst->ne[1], dst->ne[2], src->nb[0], src->nb[2], src->nb[3],
+            dst->nb[1], dst->nb[2], dst->nb[3]);
+}
+
+static void transpose_q8_1(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
+    auto stream = ctx.stream();
+    const int64_t num_blocks = ggml_nelements(dst)/QK8_1;
+    GGML_ASSERT(num_blocks <= INT_MAX);
+    k_transpose_q8_1<<<num_blocks, QK8_1, 0, stream>>>(
             (const char *)src->data, (char *)dst->data,
             dst->ne[0], dst->ne[1], dst->ne[2], src->nb[0], src->nb[2], src->nb[3],
             dst->nb[1], dst->nb[2], dst->nb[3]);
@@ -407,6 +456,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
         ggml_cpy_flt_cuda<int32_t, int32_t> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
     } else if (ggml_are_same_shape(src0, src1) && src0->type == GGML_TYPE_Q8_0 && src1->type == GGML_TYPE_Q8_0) {
         transpose_q8_0(ctx, src0, src1);
+    } else if (ggml_are_same_shape(src0, src1) && src0->type == GGML_TYPE_Q8_1 && src1->type == GGML_TYPE_Q8_1) {
+        transpose_q8_1(ctx, src0, src1);
     } else {
         GGML_ABORT("%s: unsupported type combination (%s to %s)\n", __func__,
                 ggml_type_name(src0->type), ggml_type_name(src1->type));
@@ -523,6 +574,8 @@ void* ggml_cuda_cpy_fn(const ggml_tensor * src0, ggml_tensor * src1) {
         return (void*) cpy_flt<cpy_1_flt<int32_t, float>>;
     } else if (ggml_are_same_shape(src0, src1) && src0->type == GGML_TYPE_Q8_0 && src1->type == GGML_TYPE_Q8_0) {
         return (void *)transpose_q8_0;
+    } else if (ggml_are_same_shape(src0, src1) && src0->type == GGML_TYPE_Q8_1 && src1->type == GGML_TYPE_Q8_1) {
+        return (void *)transpose_q8_1;
     } else {
         GGML_ABORT("%s: unsupported type combination (%s to %s)\n", __func__,
                 ggml_type_name(src0->type), ggml_type_name(src1->type));
