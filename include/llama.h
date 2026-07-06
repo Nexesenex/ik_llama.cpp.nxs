@@ -378,6 +378,8 @@ extern "C" {
 
         enum ggml_type type_k;
         enum ggml_type type_v;
+        bool type_k_explicit; // true when caller explicitly requested type_k
+        bool type_v_explicit; // true when caller explicitly requested type_v
         enum ggml_type idx_type_k;
         uint32_t max_ctx_size;
         int32_t  n_seq_max;
@@ -466,6 +468,8 @@ extern "C" {
 
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
+        bool type_k_explicit; // true when caller explicitly requested type_k
+        bool type_v_explicit; // true when caller explicitly requested type_v
         enum ggml_type idx_type_k; // data type for indexer K cache [EXPERIMENTAL]
         enum ggml_type type_reduce; // data type for reduce operations
         enum ggml_type type_graph_attn; // flash-attn precision under -sm graph
@@ -701,6 +705,19 @@ extern "C" {
     LLAMA_API bool llama_is_gemma4_mtp_file(const char * path);
 
     LLAMA_API bool llama_model_is_split_mode_graph(const struct llama_model * model);
+
+    // Returns false for models whose KV cache cannot be re-positioned after the fact
+    // (K-shift / context shift / self-extend), e.g. openPangu's latent cache.
+    LLAMA_API bool llama_model_supports_ctx_shift(const struct llama_model * model);
+
+    // Returns false for models that can only reuse a cached sequence as a pure extension:
+    // rewinding into the middle of a decoded sequence loses per-position side state
+    // (e.g. openPangu's conv ring keeps only the most recent 16 positions).
+    LLAMA_API bool llama_model_supports_partial_kv_reuse(const struct llama_model * model);
+
+    // Upper bound on speculative draft length imposed by the model's cache design
+    // (0 = no model-imposed limit).
+    LLAMA_API int32_t llama_model_max_draft_tokens(const struct llama_model * model);
 
     LLAMA_API const char * llama_model_arch_string(const struct llama_model * model);
 
