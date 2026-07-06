@@ -766,6 +766,9 @@ llama_context::~llama_context() {
         ggml_backend_sched_free(dflash.kv.cache_sched);
     }
     free_dflash_kv_cache_tensors();
+    if (sampling_topk_ctx) {
+        ggml_free(sampling_topk_ctx);
+    }
     ggml_backend_sched_free(sched);
 
     for (ggml_backend_t backend : backends) {
@@ -5620,6 +5623,8 @@ static int llama_decode_internal(
             tim1 = ggml_time_us();
 #endif
             // Add TOPK node to the MTP draft graph for backend sampling
+            // Uses a persistent context so the tensor address stays stable across
+            // decodes, which avoids forcing a CUDA graph re-capture on every call.
             if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && cparams.backend_sampling) {
                 struct ggml_tensor * result_output = nullptr;
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
@@ -5629,18 +5634,34 @@ static int llama_decode_internal(
                     }
                 }
                 if (result_output) {
-                    struct ggml_init_params argmax_params = {
-                        /*.mem_size   =*/ ggml_tensor_overhead() * 2 + ggml_graph_overhead(),
-                        /*.mem_buffer =*/ nullptr,
-                        /*.no_alloc   =*/ true,
-                    };
-                    struct ggml_context * argmax_ctx = ggml_init(argmax_params);
-                    {
-                        int topk_k = cparams.spec_max_candidates > 0 ? cparams.spec_max_candidates : 1;
-                        struct ggml_tensor * topk = ggml_topk(argmax_ctx, result_output, topk_k);
-                        ggml_set_name(topk, "result_argmax");
-                        ggml_build_forward_expand(gf, topk);
+                    const int topk_k = cparams.spec_max_candidates > 0 ? cparams.spec_max_candidates : 1;
+                    const int64_t nrows = ggml_nrows(result_output);
+                    if (!lctx.sampling_topk_ctx) {
+                        struct ggml_init_params params = {
+                            /*.mem_size   =*/ ggml_tensor_overhead() * 2 + ggml_graph_overhead(),
+                            /*.mem_buffer =*/ nullptr,
+                            /*.no_alloc   =*/ true,
+                        };
+                        lctx.sampling_topk_ctx = ggml_init(params);
+                        lctx.sampling_topk_tensor = ggml_topk(lctx.sampling_topk_ctx, result_output, topk_k);
+                        ggml_set_name(lctx.sampling_topk_tensor, "result_argmax");
+                    } else if (lctx.sampling_topk_tensor->op_params[0] != topk_k ||
+                               lctx.sampling_topk_tensor->ne[2] != nrows) {
+                        // K or nrows changed — reallocate
+                        ggml_free(lctx.sampling_topk_ctx);
+                        struct ggml_init_params params = {
+                            /*.mem_size   =*/ ggml_tensor_overhead() * 2 + ggml_graph_overhead(),
+                            /*.mem_buffer =*/ nullptr,
+                            /*.no_alloc   =*/ true,
+                        };
+                        lctx.sampling_topk_ctx = ggml_init(params);
+                        lctx.sampling_topk_tensor = ggml_topk(lctx.sampling_topk_ctx, result_output, topk_k);
+                        ggml_set_name(lctx.sampling_topk_tensor, "result_argmax");
+                    } else {
+                        // Reuse existing tensor — update src[0] to current result_output
+                        lctx.sampling_topk_tensor->src[0] = result_output;
                     }
+                    ggml_build_forward_expand(gf, lctx.sampling_topk_tensor);
                 }
             }
             ggml_backend_sched_alloc_graph(lctx.sched, gf);
