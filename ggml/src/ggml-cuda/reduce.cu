@@ -42,6 +42,26 @@ static __global__ void k_add(int nelem, const block_q8_0 * __restrict__ src, blo
     }
 }
 
+template <int block_size>
+static __global__ void k_add(int nelem, const block_q8_1 * __restrict__ src, block_q8_1 * __restrict__ dst) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK8_1;
+    int iq = i % QK8_1;
+    float x = (float)src[ib].ds.x * src[ib].qs[iq] + (float)dst[ib].ds.x * dst[ib].qs[iq];
+    float ax = fabsf(x);
+    float max = warp_reduce_max(ax);
+    float d = max / 127;
+    float id = d > 0 ? 1/d : 0;
+    dst[ib].qs[iq] = roundf(x * id);
+    float total = x;
+    total = warp_reduce_sum(total);
+    if (threadIdx.x % WARP_SIZE == 0) {
+        dst[ib].ds.x = (half)d;
+        dst[ib].ds.y = (half)total;
+    }
+}
+
 template <typename T, int block_size>
 static __global__ void k_add_sym(int nelem, T * src, T * dst) {
     int i = blockIdx.x*block_size + threadIdx.x;
@@ -129,7 +149,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     int nreduce = dst->op_params[1];
     int nhave   = dst->op_params[2];
     GGML_ASSERT(dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32 ||
-                dst->type == GGML_TYPE_Q8_0 || dst->type == GGML_TYPE_BF16);
+                dst->type == GGML_TYPE_Q8_0 || dst->type == GGML_TYPE_Q8_1 || dst->type == GGML_TYPE_BF16);
     GGML_ASSERT(ggml_is_contiguous(dst));
     GGML_ASSERT(nhave >= 2 && nhave <= nreduce);
     if (dst->op_params[3] == 1) {
@@ -153,7 +173,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
 #else
     constexpr bool bf16_supported = false;
 #endif
-    if (info.have_nccl && dst->type != GGML_TYPE_Q8_0 && nhave == nreduce && (nhave == 2 || dst->ne[1] < 32) &&
+    if (info.have_nccl && dst->type != GGML_TYPE_Q8_0 && dst->type != GGML_TYPE_Q8_1 && nhave == nreduce && (nhave == 2 || dst->ne[1] < 32) &&
        (dst->type != GGML_TYPE_BF16 || bf16_supported)) {
         GGML_ASSERT(info.have_nccl);
         GGML_ASSERT(info.device_count == nreduce);
@@ -334,6 +354,9 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 } else if (dst->type == GGML_TYPE_Q8_0) {
                     k_add<CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(this_nelem,
                             (const block_q8_0 *)all_ctx[i]->copy_buffer, (block_q8_0 *)dst->src[i]->data + ichunk*nelem_per_device/tt.blck_size);
+                } else if (dst->type == GGML_TYPE_Q8_1) {
+                    k_add<CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(this_nelem,
+                            (const block_q8_1 *)all_ctx[i]->copy_buffer, (block_q8_1 *)dst->src[i]->data + ichunk*nelem_per_device/tt.blck_size);
                 } else if (dst->type == GGML_TYPE_BF16) {
                     k_add<nv_bfloat16, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(
                             this_nelem, (const nv_bfloat16 *)all_ctx[i]->copy_buffer,
@@ -446,7 +469,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         return;
     }
     if (dst->ne[1] < 32 && ctx.p2p_enabled) {
-        GGML_ASSERT(dst->type != GGML_TYPE_Q8_0);
+        GGML_ASSERT(dst->type != GGML_TYPE_Q8_0 && dst->type != GGML_TYPE_Q8_1);
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
             GGML_ASSERT(dst->src[i]->type == dst->type);
@@ -569,6 +592,9 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         } else if (dst->type == GGML_TYPE_Q8_0) {
             k_add<CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, ctx.stream()>>>(nelem, (const block_q8_0 *)ptr,
                     (block_q8_0 *)dst->data);
+        } else if (dst->type == GGML_TYPE_Q8_1) {
+            k_add<CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, ctx.stream()>>>(nelem, (const block_q8_1 *)ptr,
+                    (block_q8_1 *)dst->data);
         } else {
             k_add<float, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, ctx.stream()>>>(nelem, (const float *)ptr, (float *)dst->data);
         }
