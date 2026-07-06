@@ -13,6 +13,8 @@
 #include <windows.h>
 #endif
 
+#include <ctime>
+
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/arange.cuh"
@@ -1532,7 +1534,9 @@ static void * ggml_cuda_host_malloc(size_t size) {
     constexpr double k_warn_limit = 8.0;
     double size_GiB = size/(1024.*1024.*1024.);
     auto tim1 = ggml_time_us();
+    std::time_t t_now = std::time(nullptr);
     if (size_GiB > k_warn_limit) {
+        GGML_CUDA_LOG_INFO("%s: epoch=%lld allocating %.2f GiB\n", __func__, (long long)t_now, size_GiB);
         if (ggml_cuda_pinmem == 1) {
             GGML_CUDA_LOG_INFO("\n\nAllocating %.2f GiB of pinned host memory (token_embd only, pinmem=1), this may take a while.\n", size_GiB);
         } else if (ggml_cuda_pinmem == 2) {
@@ -1543,6 +1547,8 @@ static void * ggml_cuda_host_malloc(size_t size) {
             GGML_CUDA_LOG_INFO("But if it takes too long for your model and amount of patience, kill the process and run using\n\n");
             GGML_CUDA_LOG_INFO("GGML_CUDA_NO_PINNED=1 your_command_goes_here\n");
         }
+    } else {
+        GGML_CUDA_LOG_INFO("%s: epoch=%lld allocating %.2f MiB\n", __func__, (long long)t_now, size_GiB * 1024.0);
     }
 
     void * ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -1611,7 +1617,8 @@ static void * ggml_cuda_host_malloc(size_t size) {
 
     if (size_GiB > k_warn_limit) {
         auto tim2 = ggml_time_us();
-        GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
+        std::time_t t_done = std::time(nullptr);
+        GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms (epoch=%lld)\n\n", size_GiB, 1e-3*(tim2-tim1), (long long)t_done);
     }
     return ptr;
 }
@@ -1641,6 +1648,8 @@ static void * ggml_cuda_host_malloc(size_t size) {
     auto tim1 = ggml_time_us();
     bool is_large = (size_GiB > k_warn_limit);
     if (is_large) {
+        std::time_t t_now = std::time(nullptr);
+        GGML_CUDA_LOG_INFO("%s: epoch=%lld allocating %.2f GiB\n", __func__, (long long)t_now, size_GiB);
         if (ggml_cuda_pinmem == 1) {
             GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory (token_embd only, pinmem=1), this can take a while...\n", size_GiB);
         } else if (ggml_cuda_pinmem == 2) {
@@ -1652,6 +1661,8 @@ static void * ggml_cuda_host_malloc(size_t size) {
             GGML_CUDA_LOG_INFO("GGML_CUDA_NO_PINNED=1 your_command_goes_here\n");
         }
     } else {
+        std::time_t t_now = std::time(nullptr);
+        GGML_CUDA_LOG_INFO("%s: epoch=%lld allocating %.2f MiB\n", __func__, (long long)t_now, size_MiB);
         if (ggml_cuda_pinmem == 1) {
             GGML_CUDA_LOG_INFO("Allocating %.2f MiB of pinned host memory (token_embd only, pinmem=1)...\n", size_MiB);
         } else if (ggml_cuda_pinmem == 2) {
@@ -1902,6 +1913,8 @@ static void * ggml_cuda_host_malloc(size_t size) {
         }
     }
 
+    std::time_t t_done = std::time(nullptr);
+    GGML_CUDA_LOG_INFO("%s: epoch=%lld done\n", __func__, (long long)t_done);
     return ptr;
 }
 
