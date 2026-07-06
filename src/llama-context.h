@@ -13,6 +13,28 @@ struct llama_model;
 #include <set>
 #include <memory>
 
+struct llama_openpangu_swa_window_view {
+    int64_t w_view  = 0;
+    int64_t win_off = 0;
+    bool engaged    = false;
+};
+
+static inline llama_openpangu_swa_window_view llama_openpangu_calc_swa_window_view(
+        int64_t n_kv, int64_t n_tokens, int64_t window, int64_t pad) {
+    llama_openpangu_swa_window_view result;
+    if (window <= 0 || n_kv <= 0) {
+        result.w_view = n_kv;
+        return result;
+    }
+
+    const int64_t unpadded = window + pad + n_tokens;
+    const int64_t overcovered = pad > 1 ? ((unpadded + pad - 1) / pad) * pad : unpadded;
+    result.w_view  = overcovered < n_kv ? overcovered : n_kv;
+    result.win_off = n_kv - result.w_view;
+    result.engaged = result.w_view < n_kv;
+    return result;
+}
+
 struct llama_kv_cell {
     llama_pos pos   = -1;
     llama_pos delta = 0;
@@ -42,6 +64,11 @@ struct llama_kv_cache {
     bool hybrid    = false;
     bool v_trans   = true;  // the value tensor is transposed
 
+    // s_l holds a position-indexed ring (openPangu MoME conv state), not per-sequence
+    // recurrent slots; all Qwen3Next-style s_l handling (seq ops, state serialization,
+    // s_copy) must skip it
+    bool s_l_position_ring = false;
+
     // Note: The value of head isn't only used to optimize searching
     // for a free KV slot. llama_decode_internal also uses it, so it
     // cannot be freely changed after a slot has been allocated.
@@ -60,6 +87,7 @@ struct llama_kv_cache {
     std::vector<struct ggml_tensor *> k_l; // per layer
     std::vector<struct ggml_tensor *> v_l;
     std::vector<struct ggml_tensor *> s_l; // per layer recurrent state storage (Qwen3Next)
+    std::vector<struct ggml_tensor *> idx_l; // per layer DSA indexer-key cache (OpenPangu; null elsewhere)
 
     // DSA lightning-indexer key cache (GLM-5.2 / DeepSeek-V3.2). One per layer, MQA single
     // head: [indexer_head_size, kv_size]. Mirrors k_l but stores the (Hadamard-rotated)
@@ -372,6 +400,7 @@ struct llama_context {
     struct ggml_tensor * inp_out_ids;     // I32 [n_outputs]
     struct ggml_tensor * inp_KQ_mask;     // F32 [kv_size, n_batch]
     struct ggml_tensor * inp_KQ_mask_swa; // F32 [kv_size, n_batch]
+    struct ggml_tensor * inp_KQ_mask_swa_win = nullptr; // F32 [openPangu SWA W_view, n_batch]
     struct ggml_tensor * inp_K_shift;     // I32 [kv_size]
     struct ggml_tensor * inp_mean;        // F32 [n_batch, n_batch]
     struct ggml_tensor * inp_cls;         // I32 [n_batch]
@@ -384,14 +413,39 @@ struct llama_context {
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
     struct ggml_tensor * inp_mtp_states = nullptr;
+    struct ggml_tensor * inp_mtp_carry = nullptr; // F32 [n_embd, nextn-1] per-head hidden at the last committed position
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k
     struct ggml_tensor * inp_mask_inf = nullptr;
+    struct ggml_tensor * inp_openpangu_conv_hist = nullptr;  // I32 [2], rows in [zero | ring] for t-2/t-1
+    struct ggml_tensor * inp_openpangu_conv_write = nullptr; // I32 [min(n_tokens, 16)], ring rows to update
+
+    struct openpangu_swa_window_view_state {
+        bool active       = false;
+        int64_t n_kv      = 0;
+        int64_t n_tokens  = 0;
+        int64_t window    = 0;
+        int64_t pad       = 0;
+        int64_t w_view    = 0;
+        int64_t win_off   = 0;
+    } openpangu_swa_window_view;
+
+    // multi-head MTP chaining state: head k's output row at the last committed position,
+    // written back after each warmup/update decode and fed into the next MTP graph through
+    // inp_mtp_carry (zeroed when a prompt warmup restarts from position 0). The readback is
+    // issued async after compute; mtp_carry_pending marks a copy that must be synchronized
+    // before the host buffer is read or resized.
+    std::vector<float> mtp_carry;
+    bool mtp_carry_pending = false;
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 
     struct Prev;
     std::unique_ptr<Prev> prev;
     std::unique_ptr<Prev> prev_mtp;
+    uint64_t graph_reuse_hits = 0;
+    uint64_t graph_reuse_misses = 0;
+    int32_t mtp_step_idx = 0;
+    int32_t mtp_n_heads = 0;
 
     void reset_scheduler();
     bool can_reuse_graph(const llama_batch & u_batch);
@@ -399,6 +453,7 @@ struct llama_context {
     struct CacheCopy {
         ggml_tensor * cpy = nullptr;
         size_t        step = 0;
+        size_t        base_offset = 0;
     };
     std::vector<CacheCopy> cache_copies;
     // GLM-DSA lightning indexer: the indexer-key cache (kr_l) write is a separate ggml_cpy that
@@ -409,6 +464,8 @@ struct llama_context {
     // uninitialized -> wrong block-max-pool/top-k -> degraded/NaN sparse-FA decode). Register the
     // kr_l cpy per layer here and patch its offset in update_cache_copies(), exactly like K/V.
     std::vector<CacheCopy> dsa_cache_copies;
+    std::vector<CacheCopy> openpangu_cache_copies;
+    std::vector<CacheCopy> openpangu_cache_copies_mtp;
 
     bool update_cache_copies();
 
@@ -418,6 +475,8 @@ struct llama_context {
     bool prepare_mtp_graph_inputs(
         struct llama_context & lctx);
     void set_mtp_op_type(llama_mtp_op_type value);
+    void set_mtp_step_idx(int32_t value);
+    void set_mtp_n_heads(int32_t value);
 
     int max_nodes(int n_tokens, int n_kv) const;
 };
