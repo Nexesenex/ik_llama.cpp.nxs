@@ -1698,8 +1698,8 @@ llm_expert_gating_func_type   gating_op,
             cur = ggml_add(ctx, cur, add_extra->src[id]);
             cb(cur, "ffn_with_extra", il_cb);
         }
-        if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
-            cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type);
+        if (cur->ne[1] > 32 && lctx.cparams.reduce_type_routed != GGML_TYPE_F32) {
+            cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type_routed);
             cb(cur, "ffn_out_f16", il_cb);
         }
         ggml_build_forward_expand(graph, cur);

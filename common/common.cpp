@@ -3183,7 +3183,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-vhad,  --v-cache-hadamard,",     "Use Hadamard transform for V-cache (default: %d)", params.v_cache_hadamard});
     options.push_back({ "*",         "-smf16, --split-mode-f16,",       "Use f16 for data exchange between GPUs (default: %d)", true});
     options.push_back({ "*",         "-smf32, --split-mode-f32,",       "Use f32 for data exchange between GPUs (default: %d)", false});
-    options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f32"});
+    options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s, hybrid=bf16+routed_q8_0)", "f32"});
     options.push_back({ "*",         "-gap, --graph-attn-precision",    "Flash-attn precision under -sm graph (default: %s)", "f16"});
     options.push_back({ "*",         "-smtps, -smgs, --split-mode-tensor-parallel-scheduling, --split-mode-graph-scheduling,", "Force Split Mode Tensor Parallel (Graph) Scheduling (default: %d)", params.split_mode_tensor_parallel_scheduling});
     options.push_back({ "*",         "-sot, --split-output-tensor,",    "Force split of the Output Tensor in Split Mode Graph (default: %d)", params.split_output_tensor});
@@ -4557,7 +4557,13 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.type_k_explicit = params.cache_type_k_explicit;
     cparams.type_v_explicit = params.cache_type_v_explicit;
     cparams.idx_type_k = kv_cache_type_from_str(params.indexer_cache_type_k);
-    cparams.type_reduce = ggml_type_from_str(params.reduce_type);
+    if (params.reduce_type == "hybrid") {
+        cparams.type_reduce        = GGML_TYPE_BF16;
+        cparams.type_reduce_routed = GGML_TYPE_Q8_0;
+    } else {
+        cparams.type_reduce        = ggml_type_from_str(params.reduce_type);
+        cparams.type_reduce_routed = cparams.type_reduce;
+    }
     cparams.type_graph_attn = ggml_type_from_str(params.graph_attn_precision);
     if (!cparams.flash_attn && ggml_is_quantized(cparams.type_v)) {
         throw std::runtime_error("Quantized V cache cannot be used without flash attention");
@@ -5605,6 +5611,9 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "split_output_tensor: %s # default: false\n", params.split_output_tensor ? "true" : "false");
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
+    if (params.reduce_type == "hybrid") {
+        fprintf(stream, "  reduce_type_routed: q8_0\n");
+    }
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");
     fprintf(stream, "pipeline: %s # default: off (experimental)\n", params.pipeline == 1 ? "lookahead" : params.pipeline == 2 ? "selfcopy" : "off");
     fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);

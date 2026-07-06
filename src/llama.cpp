@@ -7133,6 +7133,7 @@ struct llama_context_params llama_context_default_params() {
         /*.type_v_explicit             =*/ false,
         /*.idx_type_k                  =*/ GGML_TYPE_F16,
         /*.type_reduce                 =*/ GGML_TYPE_F16,
+        /*.type_reduce_routed          =*/ GGML_TYPE_F16,
         /*.type_graph_attn             =*/ GGML_TYPE_F16,
         /*.type_first_k                =*/ GGML_TYPE_F16,
         /*.type_last_k                 =*/ GGML_TYPE_F16,
@@ -7674,6 +7675,7 @@ struct llama_context * llama_init_from_model(
     cparams.worst_graph_tokens = params.worst_case_tokens;
 
     cparams.reduce_type      = params.type_reduce;
+    cparams.reduce_type_routed = params.type_reduce_routed != GGML_TYPE_F16 ? params.type_reduce_routed : params.type_reduce;
     cparams.graph_attn_precision = params.type_graph_attn;
     if (cparams.graph_attn_precision != GGML_TYPE_F16 && cparams.graph_attn_precision != GGML_TYPE_F32) {
         throw std::runtime_error(format("--graph-attn-precision must be f16 or f32, got %s",
@@ -7801,6 +7803,9 @@ struct llama_context * llama_init_from_model(
     LLAMA_LOG_INFO("%s: split_mode_tensor_parallel_scheduling = %d\n",   __func__, cparams.split_mode_tensor_parallel_scheduling);
     //LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
     LLAMA_LOG_INFO("%s: reduce_type   = %s\n",     __func__, ggml_type_name(cparams.reduce_type));
+    if (cparams.reduce_type_routed != cparams.reduce_type) {
+        LLAMA_LOG_INFO("%s: reduce_type_routed = %s\n", __func__, ggml_type_name(cparams.reduce_type_routed));
+    }
     LLAMA_LOG_INFO("%s: sched_async   = %d\n",     __func__, cparams.scheduler_async);
     const char * pipe_str = cparams.pipeline == 1 ? "lookahead" : cparams.pipeline == 2 ? "selfcopy" : "off";
     LLAMA_LOG_INFO("%s: pipeline      = %s\n",     __func__, pipe_str);

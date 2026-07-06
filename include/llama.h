@@ -474,6 +474,7 @@ extern "C" {
         bool type_v_explicit; // true when caller explicitly requested type_v
         enum ggml_type idx_type_k; // data type for indexer K cache [EXPERIMENTAL]
         enum ggml_type type_reduce; // data type for reduce operations
+        enum ggml_type type_reduce_routed; // data type for routed expert reduce (hybrid mode)
         enum ggml_type type_graph_attn; // flash-attn precision under -sm graph
         enum ggml_type type_k_first;
         enum ggml_type type_k_last;

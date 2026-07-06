@@ -58,6 +58,7 @@ struct llama_cparams {
     int  spec_max_candidates = 0; // top-k for backend sampling (0 = use argmax / full logits)
 
     enum ggml_type reduce_type;
+    enum ggml_type reduce_type_routed;
     enum ggml_type graph_attn_precision;
     enum llama_pooling_type pooling_type;
     enum llama_mtp_op_type mtp_op_type;

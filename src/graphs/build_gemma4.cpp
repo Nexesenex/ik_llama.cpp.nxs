@@ -456,8 +456,8 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
                         cb, il, gf, false,
                         ((const ggml_split_tensor_t *)model.layers[il].ffn_up_gate_exps->extra)->splits[id],
                         nullptr, logits, ((const ggml_split_tensor_t *)model.layers[il].ffn_down_exps_s->extra)->splits[id]);
-                if (moe->ne[1] > 32 && cparams.reduce_type != GGML_TYPE_F32) {
-                    moe = ggml_cast(ctx0, moe, cparams.reduce_type);
+                if (moe->ne[1] > 32 && cparams.reduce_type_routed != GGML_TYPE_F32) {
+                    moe = ggml_cast(ctx0, moe, cparams.reduce_type_routed);
                     cb(moe, "ffn_moe_cast", il_cb);
                 }
                 ggml_build_forward_expand(gf, moe);
