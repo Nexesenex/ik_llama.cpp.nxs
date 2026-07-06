@@ -91,8 +91,8 @@ static __global__ void topk_f32(
 
         if (warp_id == 0 && lane_id == 0) {
             // Plane 0: values, Plane 1: indices
-            dst[k * nrows + row] = maxval;
-            dst[(K + k) * nrows + row] = (float)argmax;
+            dst[2 * k + 2 * K * row] = maxval;
+            dst[2 * k + 2 * K * row + 1] = (float)argmax;
             if (K > 1) {
                 bitmap[argmax >> 5] |= (1u << (argmax & 31));
             }

@@ -14930,8 +14930,8 @@ static void ggml_compute_forward_topk_f32(
                     max_idx = (int32_t)c;
                 }
             }
-            out[r] = max_val;
-            out[1 * nrows + r] = (float)max_idx;
+            out[2 * r] = max_val;
+            out[2 * r + 1] = (float)max_idx;
             continue;
         }
 
@@ -14960,8 +14960,8 @@ static void ggml_compute_forward_topk_f32(
         int hsize = K;
         while (hsize > 0) {
             --hsize;
-            out[hsize * nrows + r] = heap_val[0];
-            out[(K + hsize) * nrows + r] = (float)heap_idx[0];
+            out[2 * hsize + 2 * K * r] = heap_val[0];
+            out[2 * hsize + 2 * K * r + 1] = (float)heap_idx[0];
             if (hsize > 0) {
                 heap_val[0] = heap_val[hsize];
                 heap_idx[0] = heap_idx[hsize];
