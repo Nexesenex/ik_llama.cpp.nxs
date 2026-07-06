@@ -5806,9 +5806,9 @@ static int llama_decode_internal(
                         lctx.logits_argmax_values.resize((size_t)n_total);
                         for (int64_t r = 0; r < nrows; ++r) {
                             for (int64_t k = 0; k < K_val; ++k) {
-                                const int64_t off = k * nrows + r;
+                                const int64_t off = 2 * (k + K_val * r);
                                 lctx.logits_argmax_values[(size_t)(r * K_val + k)] = buf[(size_t)off];
-                                lctx.logits_argmax[(size_t)(r * K_val + k)] = (int32_t)buf[(size_t)((K_val + k) * nrows + r)];
+                                lctx.logits_argmax[(size_t)(r * K_val + k)] = (int32_t)buf[(size_t)(off + 1)];
                             }
                         }
                         have_argmax = true;
