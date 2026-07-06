@@ -13,11 +13,14 @@
 #include "fattn-mma-f16-interface.cuh"
 #include "fattn-new-mma.cuh"
 #include "fattn.cuh"
-#include "convert.cuh"
+#include "fattn-common.cuh"
 
 #include <cstdint>
 
 #define FATTN_KQ_STRIDE 256
+
+extern ggml_log_callback ggml_cuda_log_callback;
+extern void * ggml_cuda_log_user_data;
 
 static inline bool mma_better_than_turing(const int cc) {
     return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) > CC_TURING;
@@ -29,6 +32,34 @@ static inline bool mma_better_than_turing(const int cc) {
 // is_supported check cannot drift.
 static inline bool is_pascal_mla_absorbed_decode(const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V) {
     return Q->ne[1] <= 8 && K->ne[0] == 576 && V->ne[0] == 512;
+}
+
+size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
+    GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
+
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+
+    GGML_ASSERT(K != nullptr);
+    GGML_ASSERT(V != nullptr);
+
+    const bool need_f16_K = K->type != GGML_TYPE_F16;
+    const bool need_f16_V = V->type != GGML_TYPE_F16;
+
+    const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
+        ggml_cuda_flash_attn_ext_get_f16_extra_data(dst, need_f16_K, need_f16_V);
+
+    const size_t total_size = f16_extra.end - (uintptr_t) dst->data;
+    const size_t extra_size = total_size - ggml_nbytes(dst);
+
+    // if (extra_size > 0) {
+        // char buf[256];
+        // snprintf(buf, sizeof(buf), "%s: device %d: reserving %.2f MiB extra for flash-attn f16 K/V dequant scratch\n",
+            // __func__, device, extra_size / 1024.0 / 1024.0);
+        // ggml_cuda_log_callback(GGML_LOG_LEVEL_INFO, buf, ggml_cuda_log_user_data);
+    // }
+
+    return total_size;
 }
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
