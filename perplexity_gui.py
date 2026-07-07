@@ -529,6 +529,7 @@ class PerplexityGUI:
             return
         path = str(PROJECT_ROOT / "benchs" / name)
         ext = Path(name).suffix.lower()
+        base = Path(name).stem.lower()
         # Reset benchmark mode flags
         self._set_param_value("multiple_choice", False)
         self._set_param_value("winogrande", False)
@@ -543,6 +544,11 @@ class PerplexityGUI:
             self._set_param_value("prompt_file", path)
             self._set_param_value("binary_file", "")
             self._set_param_value("winogrande", True)
+        elif "hellaswag" in base:
+            # HellaSwag text file
+            self._set_param_value("prompt_file", path)
+            self._set_param_value("binary_file", "")
+            self._set_param_value("hellaswag", True)
         else:
             # Raw text file
             self._set_param_value("prompt_file", path)
