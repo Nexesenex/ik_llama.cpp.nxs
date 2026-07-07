@@ -48,7 +48,7 @@ DEFAULT_EXEC = "llama-perplexity.exe"
 # type is one of: bool, int, float, str, file, dir, combo
 # ---------------------------------------------------------------------------
 
-CACHE_TYPES = "f32|f16|bf16|q8_0|q8_1|q4_0|q4_1|iq4_nl|q5_0|q5_1|q6_0|q8_KV"
+CACHE_TYPES = "f32|f16|bf16|q8_0|q8_1|q4_0|q4_1|iq4_nl|q5_0|q5_1|q6_0|q6_1|q8_KV"
 
 PARAM_GROUPS = [
     ("Model & Paths", [
