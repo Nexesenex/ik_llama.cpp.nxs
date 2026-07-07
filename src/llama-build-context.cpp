@@ -3110,7 +3110,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                                   || model.arch == LLM_ARCH_MIMO2;
                                // || (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8);
 
-    if (!model.layers[il].wqkv && !model.layers[il].wqk && cparams.flash_attn &&
+    if (cparams.flash_attn &&
          model.layers[il].wq->extra && model.layers[il].wk->extra && model.layers[il].wv->extra && model.layers[il].wo->extra) {
         if (kv_self.k_l[il]->extra && kv_self.v_l[il]->extra) {
             auto wq = (ggml_split_tensor_t *)model.layers[il].wq->extra;
@@ -3165,16 +3165,75 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                             the_q_norm, the_k_norm, il);
                     Qcur = Q; Kcur = K; Vcur = V; gate = G;
                 } else {
-                    auto [Q, K, V] = llm_build_mul_mat_qkv(gf, cur, nullptr, nullptr, nullptr, nullptr,
-                            split_wq, bq ? bq->splits[id] : nullptr,
-                            split_wk, bk ? bk->splits[id] : nullptr,
-                            split_wv, bv ? bv->splits[id] : nullptr,
-                            nullptr, nullptr,
-                            the_q_norm, the_k_norm, f_attn_scale, il, add_graph_split);
-                    Qcur = Q; Kcur = K; Vcur = V;
+                    const int64_t q_size = split_wq->ne[1];
+                    const int64_t k_size = split_wk->ne[1];
+                    const int64_t v_size = split_wv->ne[1];
+                    // Fuse matmuls where types match: QKV, QK, or KV
+                    ggml_tensor *Qcur_raw, *Kcur_raw;
+                    if (split_wq->type == split_wk->type && split_wq->type == split_wv->type) {
+                        auto merged_w = ggml_concat(ctx0, split_wq, split_wk, 1);
+                        merged_w = ggml_concat(ctx0, merged_w, split_wv, 1);
+                        auto qkv = llm_build_lora_mm(lctx, ctx0, merged_w, cur);
+                        cb(qkv, "qkv", il_cb);
+                        Qcur_raw = ggml_view_2d(ctx0, qkv, q_size, n_tokens, qkv->nb[1], 0);
+                        Kcur_raw = ggml_view_2d(ctx0, qkv, k_size, n_tokens, qkv->nb[1], q_size * sizeof(float));
+                        Vcur = ggml_view_2d(ctx0, qkv, v_size, n_tokens, qkv->nb[1], (q_size + k_size) * sizeof(float));
+                    } else if (split_wq->type == split_wk->type) {
+                        auto merged_qk = ggml_concat(ctx0, split_wq, split_wk, 1);
+                        auto qk = llm_build_lora_mm(lctx, ctx0, merged_qk, cur);
+                        cb(qk, "qk", il_cb);
+                        Qcur_raw = ggml_view_2d(ctx0, qk, q_size, n_tokens, qk->nb[1], 0);
+                        Kcur_raw = ggml_view_2d(ctx0, qk, k_size, n_tokens, qk->nb[1], q_size * sizeof(float));
+                        Vcur = llm_build_lora_mm(lctx, ctx0, split_wv, cur);
+                    } else if (split_wk->type == split_wv->type) {
+                        auto merged_kv = ggml_concat(ctx0, split_wk, split_wv, 1);
+                        auto kv = llm_build_lora_mm(lctx, ctx0, merged_kv, cur);
+                        cb(kv, "kv", il_cb);
+                        Qcur_raw = llm_build_lora_mm(lctx, ctx0, split_wq, cur);
+                        Kcur_raw = ggml_view_2d(ctx0, kv, k_size, n_tokens, kv->nb[1], 0);
+                        Vcur = ggml_view_2d(ctx0, kv, v_size, n_tokens, kv->nb[1], k_size * sizeof(float));
+                    } else {
+                        Qcur_raw = llm_build_lora_mm(lctx, ctx0, split_wq, cur);
+                        Kcur_raw = llm_build_lora_mm(lctx, ctx0, split_wk, cur);
+                        Vcur = llm_build_lora_mm(lctx, ctx0, split_wv, cur);
+                    }
+                    cb(Qcur_raw, "Qcur", il_cb);
+                    cb(Kcur_raw, "Kcur", il_cb);
+                    cb(Vcur, "Vcur", il_cb);
+                    if (f_attn_scale != 0.0f) {
+                        Qcur_raw = ggml_scale(ctx0, Qcur_raw, f_attn_scale);
+                        cb(Qcur_raw, "Qcur_scaled", il_cb);
+                    }
+                    if (bq) {
+                        Qcur_raw = ggml_add(ctx0, Qcur_raw, bq->splits[id]);
+                        cb(Qcur_raw, "Qcur", il_cb);
+                    }
+                    if (bk) {
+                        Kcur_raw = ggml_add(ctx0, Kcur_raw, bk->splits[id]);
+                        cb(Kcur_raw, "Kcur", il_cb);
+                    }
+                    if (bv) {
+                        Vcur = ggml_add(ctx0, Vcur, bv->splits[id]);
+                        cb(Vcur, "Vcur", il_cb);
+                    }
+                    Qcur = ggml_reshape_3d(ctx0, Qcur_raw, n_embd_head_k, q_size / n_embd_head_k, n_tokens);
+                    Kcur = ggml_reshape_3d(ctx0, Kcur_raw, n_embd_head_k, k_size / n_embd_head_k, n_tokens);
                     if (model.arch == LLM_ARCH_MIMO2 && std::abs(model.hparams.f_attn_v_scale - 1) > 1e-4f) {
                         Vcur = ggml_scale(ctx0, Vcur, model.hparams.f_attn_v_scale);
                         cb(Vcur, "Vcur_scales", il_cb);
+                    }
+                    ggml_build_forward_expand(gf, Qcur);
+                    ggml_build_forward_expand(gf, Kcur);
+                    ggml_build_forward_expand(gf, Vcur);
+                    if (the_q_norm) {
+                        Qcur = llm_build_norm(ctx0, Qcur, hparams, the_q_norm, NULL, LLM_NORM_RMS, cb, il_cb);
+                        cb(Qcur, "Qcur_normed", il_cb);
+                        ggml_build_forward_expand(gf, Qcur);
+                    }
+                    if (the_k_norm) {
+                        Kcur = llm_build_norm(ctx0, Kcur, hparams, the_k_norm, NULL, LLM_NORM_RMS, cb, il_cb);
+                        cb(Kcur, "Kcur_normed", il_cb);
+                        ggml_build_forward_expand(gf, Kcur);
                     }
                 }
                 auto rope_factors = rope_factors_in;
