@@ -388,9 +388,7 @@ ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer) {
 
 ggml_backend_buffer_type_t llama_default_buffer_type_cpu_pinned(void) {
 #if defined(GGML_USE_CUDA)
-    // Use a separate buffer type instance for the input tensor so token_embd
-    // always gets its own pinned buffer, independent of other pinned allocations.
-    return ggml_backend_cuda_host_buffer_type_input();
+    return ggml_backend_cuda_host_buffer_type();
 #elif defined(GGML_USE_SYCL)
     return ggml_backend_sycl_host_buffer_type();
 #elif defined(GGML_USE_CPU_HBM)
