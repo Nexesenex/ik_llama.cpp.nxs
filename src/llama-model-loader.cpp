@@ -1206,10 +1206,11 @@ bool llama_model_loader::load_all_data(
             return n_size;
         }
 
-        // --split-mode graph. Parallel
-        const char * buffer_name = ggml_backend_buffer_name(cur->buffer);
-        const bool   is_probably_split_mode_graph = std::strncmp(buffer_name, GGML_CUDA_NAME, strlen(GGML_CUDA_NAME)) == 0;
-        if (is_probably_split_mode_graph) {
+        // CUDA device buffer (regular or split). Parallel.
+        const bool is_cuda_buffer =
+            std::strncmp(ggml_backend_buft_name(ggml_backend_buffer_get_type(cur->buffer)),
+                         GGML_CUDA_NAME, strlen(GGML_CUDA_NAME)) == 0;
+        if (is_cuda_buffer) {
             auto & read_buf = read_bufs[thread_idx];
             if (read_buf.capacity() > n_size) {
                 read_buf = std::vector<no_init<uint8_t>>();
@@ -1224,19 +1225,19 @@ bool llama_model_loader::load_all_data(
             return n_size;
         }
 #endif
-        // rest. Serialized.
+        // rest. Serialized (backend ops only).
+        auto & read_buf = read_bufs[thread_idx];
+        read_buf.resize(n_size);
+        file->seek(weight->offs, SEEK_SET);
+        file->read_raw(read_buf.data(), n_size);
         {
             std::lock_guard<std::mutex> lock(load_mutex);
-            auto & read_buf = read_bufs[thread_idx];
-            read_buf.resize(n_size);
-            file->seek(weight->offs, SEEK_SET);
-            file->read_raw(read_buf.data(), n_size);
             ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
             if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
                 throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
             }
-            return n_size;
         }
+        return n_size;
     };
 
     // An iterator that the threadpool shares to get the next tensor for loading.
