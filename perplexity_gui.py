@@ -53,7 +53,8 @@ CACHE_TYPES = "f32|f16|bf16|q8_0|q8_1|q4_0|q4_1|iq4_nl|q5_0|q5_1|q6_0|q8_KV"
 PARAM_GROUPS = [
     ("Model & Paths", [
         ("model",          "Model path",            "file",  "",             "(.gguf)"),
-        ("prompt_file",    "Prompt data file",       "file",  "",             "(-f)"),
+        ("prompt_file",    "Prompt data file",       "file",  "",             "(-f, text/CSV)"),
+        ("binary_file",    "Binary data file",       "file",  "",             "(-bf, .dat for MC)"),
         ("logdir",         "Log directory",          "dir",   "",             "(--logdir)"),
         ("logits_file",    "Logits file (KL base)",  "file",  "",             "(--save-all-logits)"),
         ("model_alias",    "Model alias",            "str",   "unknown",      "(--alias)"),
@@ -261,6 +262,16 @@ class PerplexityGUI:
         ttk.Button(profile_frame, text="Save As...", command=self._save_profile_as).pack(side="left", padx=2)
         ttk.Button(profile_frame, text="Delete", command=self._delete_profile).pack(side="left", padx=2)
         ttk.Button(profile_frame, text="Reset", command=self._reset_params).pack(side="left", padx=2)
+
+        # --- Benchmarks quick-select ---
+        bench_frame = ttk.LabelFrame(self.root, text="Benchmarks", padding=5)
+        bench_frame.pack(fill="x", padx=8, pady=2)
+        self._bench_var = tk.StringVar()
+        self._bench_combo = ttk.Combobox(bench_frame, textvariable=self._bench_var, width=60, state="readonly")
+        self._bench_combo.pack(side="left", padx=2)
+        ttk.Button(bench_frame, text="Apply", command=self._apply_benchmark).pack(side="left", padx=2)
+        ttk.Button(bench_frame, text="Refresh", command=self._refresh_benchs).pack(side="left", padx=2)
+        self._refresh_benchs()
 
         # --- Two-column scrollable parameter area ---
         outer_frame = ttk.Frame(self.root)
@@ -502,6 +513,42 @@ class PerplexityGUI:
         elif names:
             self._build_dir_var.set(names[0])
 
+    def _refresh_benchs(self):
+        """Populate the benchmarks combo from benchs/ directory."""
+        bench_root = PROJECT_ROOT / "benchs"
+        files = []
+        if bench_root.is_dir():
+            for f in sorted(bench_root.iterdir()):
+                if f.is_file():
+                    files.append(f.name)
+        self._bench_combo["values"] = files
+
+    def _apply_benchmark(self):
+        name = self._bench_var.get()
+        if not name:
+            return
+        path = str(PROJECT_ROOT / "benchs" / name)
+        ext = Path(name).suffix.lower()
+        # Reset benchmark mode flags
+        self._set_param_value("multiple_choice", False)
+        self._set_param_value("winogrande", False)
+        self._set_param_value("hellaswag", False)
+        if ext == ".dat":
+            # Binary multiple-choice file
+            self._set_param_value("binary_file", path)
+            self._set_param_value("prompt_file", "")
+            self._set_param_value("multiple_choice", True)
+        elif ext == ".csv":
+            # Winogrande CSV
+            self._set_param_value("prompt_file", path)
+            self._set_param_value("binary_file", "")
+            self._set_param_value("winogrande", True)
+        else:
+            # Raw text file
+            self._set_param_value("prompt_file", path)
+            self._set_param_value("binary_file", "")
+        self._log(f"Benchmark loaded: {name}\n", "info")
+
     # ------------------------------------------------------------------
     # Profile system
     # ------------------------------------------------------------------
@@ -730,6 +777,7 @@ class PerplexityGUI:
         mapping = {
             "model":             ["-m", str(val)],
             "prompt_file":       ["-f", str(val)],
+            "binary_file":       ["-bf", str(val)],
             "prompt":            ["-p", str(val)],
             "seed":              ["-s", str(val)],
             "n_threads":         ["-t", str(val)],
