@@ -1172,14 +1172,16 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             auto * ref_tensor = ref_weight->tensor;
 
             // Allocate a persistent buffer for the BF16 data and copy
-            vmap_data.emplace_back(nbytes);
-            std::memcpy(vmap_data.back().data(), src_tensor->data, nbytes);
+            const size_t cur_size = vmap_data.size();
+            vmap_data.resize(cur_size + nbytes);
+            uint8_t * buf = (uint8_t *)vmap_data.data() + cur_size;
+            std::memcpy(buf, src_tensor->data, nbytes);
 
             // Replace the reference tensor's type and data with the source BF16 data
             LLAMA_LOG_INFO("%s: virtual-map: patching '%s' (%s -> %s)\n",
                     __func__, name.c_str(), ggml_type_name(ref_tensor->type), ggml_type_name(src_tensor->type));
             ref_tensor->type = src_tensor->type;
-            ref_tensor->data = vmap_data.back().data();
+            ref_tensor->data = buf;
 
             virtual_map_targets.insert(name);
         }
