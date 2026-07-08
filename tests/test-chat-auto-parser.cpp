@@ -2125,7 +2125,10 @@ static void test_minimax_m3_partial_reasoning_parser(testing & t) {
     streamed_as_content.role    = "assistant";
     streamed_as_content.content = migrated_prefix;
     auto migrated_diffs = common_chat_msg_diff::compute_diffs(streamed_as_content, migrated_reasoning_msg);
-    t.assert_equal("migrated prefix emits no duplicate diff", 0u, migrated_diffs.size());
+    t.assert_equal("migrated prefix produces reasoning + empty content diffs", 2u, migrated_diffs.size());
+    if (migrated_diffs.size() > 0) {
+        t.assert_equal("migrated diff is reasoning", migrated_prefix, migrated_diffs[0].reasoning_content_delta);
+    }
 }
 
 // End-to-end coverage for the dedicated Cohere2MoE (North Code) parser:

@@ -162,23 +162,12 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
 
     // TODO: these can become expensive for long messages - how to optimize?
     if (msg_prv.reasoning_content != msg_new.reasoning_content) {
-        std::string reasoning_content_delta = string_diff(msg_prv.reasoning_content, msg_new.reasoning_content);
-        if (!msg_prv.content.empty() &&
-            string_starts_with(reasoning_content_delta, msg_prv.content) &&
-            string_starts_with(msg_prv.content, msg_new.content)) {
-            reasoning_content_delta = reasoning_content_delta.substr(msg_prv.content.size());
-        }
-        if (!reasoning_content_delta.empty()) {
-            auto & diff                  = diffs.emplace_back();
-            diff.reasoning_content_delta = std::move(reasoning_content_delta);
-        }
+        auto & diff                  = diffs.emplace_back();
+        diff.reasoning_content_delta = string_diff(msg_prv.reasoning_content, msg_new.reasoning_content);
     }
     if (msg_prv.content != msg_new.content) {
-        std::string content_delta = string_diff(msg_prv.content, msg_new.content);
-        if (!content_delta.empty()) {
-            auto & diff        = diffs.emplace_back();
-            diff.content_delta = std::move(content_delta);
-        }
+        auto & diff        = diffs.emplace_back();
+        diff.content_delta = string_diff(msg_prv.content, msg_new.content);
     }
 
     if (msg_new.tool_calls.size() < msg_prv.tool_calls.size()) {
