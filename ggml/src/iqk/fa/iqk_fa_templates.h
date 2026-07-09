@@ -676,68 +676,6 @@ struct HelperIQ4nl final : public BaseHelper {
 #endif
 };
 
-struct HelperQ60 final : public BaseHelper {
-    constexpr static ggml_type type = GGML_TYPE_Q6_0;
-#ifdef __aarch64__
-    using block_q8 = block_q8_0;
-    constexpr static int block_size_q = QK8_0;
-#else
-    using block_q8 = block_q8_2;
-    constexpr static int block_size_q = QK8_2;
-#endif
-    using Base = BaseHelper;
-    HelperQ60(const char * data, int stride) : Base(data, stride) {}
-
-    // Needed for v * softmax(k * q)
-    inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
-        int j = F16::block_size*i;
-        auto dl = (const block_q6_0 *)Base::lblock(l1) + j/QK6_0;
-#ifdef __aarch64__
-        // TODO
-        const float16_t * d16 = (const float16_t *)&dl->d;
-        auto vd = F16::set1(d16[0]);
-        //auto vd = F16::set1(*(const float16_t *)&dl->d);
-        auto qh8 = vld1_u8(dl->qh);
-        auto qh  = vcombine_u8(vshl_n_u8(qh8, 4), qh8);
-        auto qs  = vld1q_u8(dl->qs);
-        qs = j%QK4_0 ? vshrq_n_u8(qs, 4) : vandq_u8(qs, mask_l);
-        qs = vorrq_u8(qs, vandq_u8(mask_h, j%QK4_0 ? vshrq_n_u8(qh, 2) : qh));
-        qs = vaddq_s8(qs, m32);
-        v1 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_low_s8(qs))));
-        v2 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_high_s8(qs))));
-#else
-        auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
-        auto bl = _mm_loadu_si128((const __m128i *)dl->qs);
-        uint64_t aux64; std::memcpy(&aux64, dl->qh, 8);
-        auto bh = _mm_set_epi64x(aux64, aux64 << 4);
-#ifdef __AVX512F__
-        auto ql = _mm_add_epi8(_mm_or_si128(_mm_and_si128(bl, mask_l), _mm_and_si128(bh, mask_h)), m32);
-        auto qh = _mm_add_epi8(_mm_or_si128(_mm_and_si128(_mm_srli_epi16(bl, 4), mask_l), _mm_and_si128(_mm_srli_epi16(bh, 2), mask_h)), m32);
-        v1 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(ql)));
-        v2 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(qh)));
-#else
-        if (j%QK4_0) {
-            bl = _mm_srli_epi16(bl, 4);
-            bh = _mm_srli_epi16(bh, 2);
-        }
-        auto q16 = _mm256_cvtepi8_epi16(_mm_add_epi8(_mm_or_si128(_mm_and_si128(bl, mask_l), _mm_and_si128(bh, mask_h)), m32));
-        v1 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(q16))));
-        v2 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q16, 1))));
-#endif
-#endif
-    }
-
-#ifdef __AVX2__
-    const __m128i mask_l = _mm_set1_epi8(0x0f);
-    const __m128i mask_h = _mm_set1_epi8(0x30);
-    const __m128i m32    = _mm_set1_epi8(-32);
-#else
-    const uint8x16_t mask_l = vdupq_n_u8(0x0f);
-    const uint8x16_t mask_h = vdupq_n_u8(0x30);
-    const  int8x16_t m32    = vdupq_n_s8(-32);
-#endif
-};
-
 struct HelperQ50 final : public BaseHelper {
     constexpr static ggml_type type = GGML_TYPE_Q5_0;
 #ifdef __aarch64__
@@ -873,6 +811,68 @@ struct HelperQ51 final : public BaseHelper {
     const  uint8x16_t mask_l = vdupq_n_u8(0x0f);
     const  uint8x16_t mh     = vdupq_n_u8(0x10);
     HighBit5Legacy hbits;
+#endif
+};
+
+struct HelperQ60 final : public BaseHelper {
+    constexpr static ggml_type type = GGML_TYPE_Q6_0;
+#ifdef __aarch64__
+    using block_q8 = block_q8_0;
+    constexpr static int block_size_q = QK8_0;
+#else
+    using block_q8 = block_q8_2;
+    constexpr static int block_size_q = QK8_2;
+#endif
+    using Base = BaseHelper;
+    HelperQ60(const char * data, int stride) : Base(data, stride) {}
+
+    // Needed for v * softmax(k * q)
+    inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
+        int j = F16::block_size*i;
+        auto dl = (const block_q6_0 *)Base::lblock(l1) + j/QK6_0;
+#ifdef __aarch64__
+        // TODO
+        const float16_t * d16 = (const float16_t *)&dl->d;
+        auto vd = F16::set1(d16[0]);
+        //auto vd = F16::set1(*(const float16_t *)&dl->d);
+        auto qh8 = vld1_u8(dl->qh);
+        auto qh  = vcombine_u8(vshl_n_u8(qh8, 4), qh8);
+        auto qs  = vld1q_u8(dl->qs);
+        qs = j%QK4_0 ? vshrq_n_u8(qs, 4) : vandq_u8(qs, mask_l);
+        qs = vorrq_u8(qs, vandq_u8(mask_h, j%QK4_0 ? vshrq_n_u8(qh, 2) : qh));
+        qs = vaddq_s8(qs, m32);
+        v1 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_low_s8(qs))));
+        v2 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_high_s8(qs))));
+#else
+        auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
+        auto bl = _mm_loadu_si128((const __m128i *)dl->qs);
+        uint64_t aux64; std::memcpy(&aux64, dl->qh, 8);
+        auto bh = _mm_set_epi64x(aux64, aux64 << 4);
+#ifdef __AVX512F__
+        auto ql = _mm_add_epi8(_mm_or_si128(_mm_and_si128(bl, mask_l), _mm_and_si128(bh, mask_h)), m32);
+        auto qh = _mm_add_epi8(_mm_or_si128(_mm_and_si128(_mm_srli_epi16(bl, 4), mask_l), _mm_and_si128(_mm_srli_epi16(bh, 2), mask_h)), m32);
+        v1 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(ql)));
+        v2 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(qh)));
+#else
+        if (j%QK4_0) {
+            bl = _mm_srli_epi16(bl, 4);
+            bh = _mm_srli_epi16(bh, 2);
+        }
+        auto q16 = _mm256_cvtepi8_epi16(_mm_add_epi8(_mm_or_si128(_mm_and_si128(bl, mask_l), _mm_and_si128(bh, mask_h)), m32));
+        v1 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(q16))));
+        v2 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q16, 1))));
+#endif
+#endif
+    }
+
+#ifdef __AVX2__
+    const __m128i mask_l = _mm_set1_epi8(0x0f);
+    const __m128i mask_h = _mm_set1_epi8(0x30);
+    const __m128i m32    = _mm_set1_epi8(-32);
+#else
+    const uint8x16_t mask_l = vdupq_n_u8(0x0f);
+    const uint8x16_t mask_h = vdupq_n_u8(0x30);
+    const  int8x16_t m32    = vdupq_n_s8(-32);
 #endif
 };
 
