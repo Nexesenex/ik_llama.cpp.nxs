@@ -24,6 +24,10 @@
 #include <alloca.h>
 #endif
 
+#if !defined(_MSC_VER)
+#include <cpuid.h>
+#endif
+
 #include <assert.h>
 #include <errno.h>
 #include <time.h>
@@ -30212,7 +30216,26 @@ int ggml_cpu_has_avx(void) {
 
 int ggml_cpu_has_avx_vnni(void) {
 #if defined(__AVXVNNI__)
+    // Runtime CPUID + XCR0 check to verify the host CPU actually supports AVX-VNNI
+#if defined(_MSC_VER)
+    int info[4];
+    __cpuid(info, 1);
+    if (!(info[2] & (1 << 28))) return 0;          // no AVX
+    if ((_xgetbv(0) & 0x6) != 0x6) return 0;       // OS did not enable YMM state
+    __cpuidex(info, 7, 0);
+    return (info[3] & (1 << 4)) != 0;               // AVX-VNNI: CPUID.7.0:EDX[4]
+#elif defined(__GNUC__) || defined(__clang__)
+    // Use explicit CPUID / XCR0 via cpuid.h so __builtin_cpu_init() is not required
+    unsigned int eax, ebx, ecx, edx;
+    __cpuid(1, eax, ebx, ecx, edx);
+    if (!(ecx & (1 << 28))) return 0;               // no AVX
+    __asm__ volatile("xgetbv" : "=a"(eax), "=d"(edx) : "c"(0));
+    if ((eax & 0x6) != 0x6) return 0;               // OS did not enable YMM state
+    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+    return (edx & (1 << 4)) != 0;                   // AVX-VNNI: CPUID.7.0:EDX[4]
+#else
     return 1;
+#endif
 #else
     return 0;
 #endif
