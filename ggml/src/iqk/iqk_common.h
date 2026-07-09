@@ -390,17 +390,19 @@ static IQK_ALWAYS_INLINE void multiply_add(const Bits& bits, const __m256i * sca
     if (j == 0) {
 #ifdef HAVE_FANCY_SIMD
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
-            sumi[iy] = _mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 0)));
-            sumi[iy] = _mm256_dpwssd_epi32(sumi[iy], scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 1)));
-            sumi[iy] = _mm256_dpwssd_epi32(sumi[iy], scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 2)));
-            sumi[iy] = _mm256_dpwssd_epi32(sumi[iy], scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 3)));
+            auto t0 = _mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 0)));
+            auto t1 = _mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 2)));
+            t0 = _mm256_dpwssd_epi32(t0, scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 1)));
+            t1 = _mm256_dpwssd_epi32(t1, scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 3)));
+            sumi[iy] = _mm256_add_epi32(t0, t1);
         }
 #elif defined(__AVXVNNI__)
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
-            sumi[iy] = ggml_mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 0)));
-            sumi[iy] = ggml_mm256_dpwssd_epi32(sumi[iy], scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 1)));
-            sumi[iy] = ggml_mm256_dpwssd_epi32(sumi[iy], scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 2)));
-            sumi[iy] = ggml_mm256_dpwssd_epi32(sumi[iy], scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 3)));
+            auto t0 = ggml_mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 0)));
+            auto t1 = ggml_mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 2)));
+            t0 = ggml_mm256_dpwssd_epi32(t0, scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 1)));
+            t1 = ggml_mm256_dpwssd_epi32(t1, scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 3)));
+            sumi[iy] = _mm256_add_epi32(t0, t1);
         }
 #else
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
@@ -414,17 +416,19 @@ static IQK_ALWAYS_INLINE void multiply_add(const Bits& bits, const __m256i * sca
     } else {
 #ifdef HAVE_FANCY_SIMD
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
-            sumi[iy] = _mm256_dpwssd_epi32(sumi[iy], scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 4)));
-            sumi[iy] = _mm256_dpwssd_epi32(sumi[iy], scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 5)));
-            sumi[iy] = _mm256_dpwssd_epi32(sumi[iy], scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 6)));
-            sumi[iy] = _mm256_dpwssd_epi32(sumi[iy], scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 7)));
+            auto t0 = _mm256_dpwssd_epi32(sumi[iy], scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 4)));
+            auto t1 = _mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 6)));
+            t0 = _mm256_dpwssd_epi32(t0, scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 5)));
+            t1 = _mm256_dpwssd_epi32(t1, scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 7)));
+            sumi[iy] = _mm256_add_epi32(t0, t1);
         }
 #elif defined(__AVXVNNI__)
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
-            sumi[iy] = ggml_mm256_dpwssd_epi32(sumi[iy], scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 4)));
-            sumi[iy] = ggml_mm256_dpwssd_epi32(sumi[iy], scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 5)));
-            sumi[iy] = ggml_mm256_dpwssd_epi32(sumi[iy], scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 6)));
-            sumi[iy] = ggml_mm256_dpwssd_epi32(sumi[iy], scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 7)));
+            auto t0 = ggml_mm256_dpwssd_epi32(sumi[iy], scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 4)));
+            auto t1 = ggml_mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 6)));
+            t0 = ggml_mm256_dpwssd_epi32(t0, scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 5)));
+            t1 = ggml_mm256_dpwssd_epi32(t1, scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 7)));
+            sumi[iy] = _mm256_add_epi32(t0, t1);
         }
 #else
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
