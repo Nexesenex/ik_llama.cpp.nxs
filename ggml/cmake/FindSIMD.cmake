@@ -98,3 +98,22 @@ if (NOT ${AVX512_FOUND})
 else()
     set(GGML_AVX512 ON)
 endif()
+
+set(AVXVNNI_CODE "
+    #include <immintrin.h>
+    int main()
+    {
+        __m256i a = _mm256_setzero_si256();
+        __m256i b = _mm256_set1_epi8(2);
+        __m256i c = _mm256_set1_epi8(3);
+        __m256i r = _mm256_dpbusd_avx_epi32(a, b, c);
+        return 0;
+    }
+")
+
+# /arch:AVX2 is sufficient for native MSVC (intrinsic is extern).
+# clang-cl needs -mavxvnni for the always_inline intrinsic to compile.
+check_sse("AVXVNNI" " ;/arch:AVX2;/arch:AVX2 -mavxvnni")
+if (${AVXVNNI_FOUND})
+    set(GGML_AVXVNNI ON)
+endif()
