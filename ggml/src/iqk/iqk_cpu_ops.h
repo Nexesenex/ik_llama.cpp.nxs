@@ -14,7 +14,7 @@ extern "C" {
 
 struct ggml_tensor;
 
-bool iqk_has_fancy_simd(void);
+IQK_API bool iqk_has_fancy_simd(void);
 
 void iqk_sumrows_div(struct ggml_tensor * div, int ith, int nth);
 
@@ -32,7 +32,7 @@ void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth);
 
 void iqk_hadamard(struct ggml_tensor * dst, int ith, int nth);
 
-float iqk_exp_with_thresh(int n, float * logits, float max, float min);
+IQK_API float iqk_exp_with_thresh(int n, float * logits, float max, float min);
 
 bool iqk_ssm_conv4(int nr, int nc, int nt,
         uint64_t nb01, uint64_t nb10, uint64_t nb11, uint64_t nb21,
