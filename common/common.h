@@ -312,10 +312,12 @@ struct gpt_params {
     // >=32			| OpenMP			| OpenMP				| Custom
     // >=1			| Custom			| Custom				| Custom
 
-#ifdef __clang__
-    std::string ggml_batch_thread_thresh = ">=1"; // Clang: always use custom barrier
+#if defined(__clang__)
+    std::string ggml_batch_thread_thresh = ">32"; // Clang: Use IK's switch.
+#elif defined(_MSC_VER)
+    std::string ggml_batch_thread_thresh = "<1";  // MSVC: Uses always OpenMP barrier
 #else
-    std::string ggml_batch_thread_thresh = "<1";  // MSVC: always use OpenMP barrier
+    std::string ggml_batch_thread_thresh = ">32";  // IK's switch: use OpenMP barrier for TG, custom barrier for PP
 #endif
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
