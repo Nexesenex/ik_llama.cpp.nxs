@@ -398,11 +398,12 @@ static IQK_ALWAYS_INLINE void multiply_add(const Bits& bits, const __m256i * sca
         }
 #elif defined(__AVXVNNI__)
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
-            auto t0 = ggml_mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 0)));
-            auto t1 = ggml_mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 2)));
-            t0 = ggml_mm256_dpwssd_epi32(t0, scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 1)));
-            t1 = ggml_mm256_dpwssd_epi32(t1, scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 3)));
-            sumi[iy] = _mm256_add_epi32(t0, t1);
+            const __m256i zero = _mm256_setzero_si256();
+            auto d0 = ggml_mm256_dpwssd_epi32(zero, scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 0)));
+            auto d1 = ggml_mm256_dpwssd_epi32(zero, scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 1)));
+            auto d2 = ggml_mm256_dpwssd_epi32(zero, scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 2)));
+            auto d3 = ggml_mm256_dpwssd_epi32(zero, scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 3)));
+            sumi[iy] = _mm256_add_epi32(_mm256_add_epi32(d0, d1), _mm256_add_epi32(d2, d3));
         }
 #else
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
@@ -424,11 +425,12 @@ static IQK_ALWAYS_INLINE void multiply_add(const Bits& bits, const __m256i * sca
         }
 #elif defined(__AVXVNNI__)
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
-            auto t0 = ggml_mm256_dpwssd_epi32(sumi[iy], scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 4)));
-            auto t1 = ggml_mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 6)));
-            t0 = ggml_mm256_dpwssd_epi32(t0, scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 5)));
-            t1 = ggml_mm256_dpwssd_epi32(t1, scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 7)));
-            sumi[iy] = _mm256_add_epi32(t0, t1);
+            const __m256i zero = _mm256_setzero_si256();
+            auto d0 = ggml_mm256_dpwssd_epi32(zero, scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 4)));
+            auto d1 = ggml_mm256_dpwssd_epi32(zero, scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 5)));
+            auto d2 = ggml_mm256_dpwssd_epi32(zero, scales[2], _mm256_maddubs_epi16(bits.values[2], q8.load_quants(iy, i, 6)));
+            auto d3 = ggml_mm256_dpwssd_epi32(zero, scales[3], _mm256_maddubs_epi16(bits.values[3], q8.load_quants(iy, i, 7)));
+            sumi[iy] = _mm256_add_epi32(sumi[iy], _mm256_add_epi32(_mm256_add_epi32(d0, d1), _mm256_add_epi32(d2, d3)));
         }
 #else
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
