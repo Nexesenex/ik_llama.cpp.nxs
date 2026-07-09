@@ -116,4 +116,5 @@ set(AVXVNNI_CODE "
 check_sse("AVXVNNI" " ;/arch:AVX2;/arch:AVX2 -mavxvnni")
 if (${AVXVNNI_FOUND})
     set(GGML_AVXVNNI ON)
+    add_compile_definitions(__AVXVNNI__)
 endif()
