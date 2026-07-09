@@ -386,7 +386,7 @@ struct BaseDequantizer {
 };
 
 template <typename Q8, typename Bits>
-static inline void multiply_add(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
+static IQK_ALWAYS_INLINE void multiply_add(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
     if (j == 0) {
 #ifdef HAVE_FANCY_SIMD
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
@@ -440,7 +440,7 @@ static inline void multiply_add(const Bits& bits, const __m256i * scales, int j,
 }
 
 template <typename Q8, typename Bits>
-static inline void multiply_add_avx2(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
+static IQK_ALWAYS_INLINE void multiply_add_avx2(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
     __m256i p[4];
     if (j == 0) {
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
