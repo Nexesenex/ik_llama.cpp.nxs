@@ -1171,6 +1171,14 @@ elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LW
             list(APPEND ARCH_FLAGS -mavx512bf16)
         endif()
     endif()
+    # GGML_ARCH_FLAGS smart handling: if the user passed __AVXVNNI__ via the old
+    # manual escape hatch (-DGGML_ARCH_FLAGS="-D__AVXVNNI__"), bridge it into
+    # GGML_AVXVNNI so the block below adds the proper flags per compiler.
+    if (GGML_ARCH_FLAGS AND GGML_ARCH_FLAGS MATCHES "__AVXVNNI__")
+        if (NOT GGML_AVXVNNI)
+            set(GGML_AVXVNNI ON CACHE BOOL "Enabled via GGML_ARCH_FLAGS" FORCE)
+        endif()
+    endif()
     # AVX-VNNI (256-bit) is independent of AVX2/AVX512 — handle it separately
     if (GGML_AVXVNNI)
         if (MSVC)
