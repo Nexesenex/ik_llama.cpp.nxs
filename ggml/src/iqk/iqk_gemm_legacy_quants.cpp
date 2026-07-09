@@ -48,19 +48,25 @@ template <typename Q8, typename Q8x4, typename Dot, bool can_pack = true> struct
     Dot dot;
     inline __m256i compute(const __m256i * qx, const Q8 * y) const {
         const Q8x4 * y4 = (const Q8x4 *)y;
-        const __m256i p0 = dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0)); // 8x block 0
-        const __m256i p1 = dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1)); // 8x block 1
-        const __m256i p2 = dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2)); // 8x block 2
-        const __m256i p3 = dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3)); // 8x block 3
         if constexpr (can_pack) {
-            const __m256i p01 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p0, p1));    // 0,0, 1,1, 0,0, 1,1
-            const __m256i p23 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p2, p3));    // 2,2, 3,3, 2,2, 3,3
-            return _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p01, p23)); // 0,1,2,3, 0,1,2,3
+            const __m256i p01 = _mm256_madd_epi16(dot.helper.m1,
+                _mm256_packs_epi32(
+                    dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0)),
+                    dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1))));
+            const __m256i p23 = _mm256_madd_epi16(dot.helper.m1,
+                _mm256_packs_epi32(
+                    dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2)),
+                    dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3))));
+            return _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p01, p23));
         } else {
+            const __m256i p0 = dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0));
+            const __m256i p1 = dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1));
+            const __m256i p2 = dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2));
+            const __m256i p3 = dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3));
             // Note to myself: this is much faster than using _mm256_hadd_epi32()
-            auto p01 = _mm256_add_epi32(_mm256_unpacklo_epi32(p0, p1), _mm256_unpackhi_epi32(p0, p1)); // 0,1, 0,1, 0,1, 0,1
-            auto p23 = _mm256_add_epi32(_mm256_unpacklo_epi32(p2, p3), _mm256_unpackhi_epi32(p2, p3)); // 2,3, 2,3, 2,3, 2,3
-            return _mm256_add_epi32(_mm256_unpacklo_epi64(p01, p23), _mm256_unpackhi_epi64(p01, p23)); // 0,1,2,3, 0,1,2,3
+            auto p01 = _mm256_add_epi32(_mm256_unpacklo_epi32(p0, p1), _mm256_unpackhi_epi32(p0, p1));
+            auto p23 = _mm256_add_epi32(_mm256_unpacklo_epi32(p2, p3), _mm256_unpackhi_epi32(p2, p3));
+            return _mm256_add_epi32(_mm256_unpacklo_epi64(p01, p23), _mm256_unpackhi_epi64(p01, p23));
         }
     }
     inline __m256i compute(__m256i x, __m256i y) const { return dot.compute(x, y); }
