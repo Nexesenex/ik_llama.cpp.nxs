@@ -50,9 +50,13 @@
 #if defined HAVE_VNNI256
     #undef HAVE_VNNI256
 #endif
+// AVX-VNNI (256-bit) gate — controls the VNNI256 kernel paths
 #if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
     #define HAVE_VNNI256
 #endif
+// Intrinsic selection — the _avx_ variants are required for native MSVC
+// (MSVC's _mm256_dpbusd_epi32 emits EVEX encoding even under /arch:AVX2).
+// For non-MSVC, the plain intrinsic inlines correctly without the prefix.
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__)
     #define ggml_mm256_dpbusd_epi32 _mm256_dpbusd_epi32
     #define ggml_mm256_dpwssd_epi32 _mm256_dpwssd_epi32
