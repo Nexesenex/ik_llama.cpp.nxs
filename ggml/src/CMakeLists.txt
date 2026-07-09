@@ -1286,12 +1286,8 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 
     if (BUILD_SHARED_LIBS)
-        if (NOT GGML_MSVC_PGO STREQUAL "OFF")
-            message(STATUS "MSVC PGO: auto-export disabled (relying on explicit dllexport)")
-        else()
-            # TODO: should not use this
-            set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
-        endif()
+        # TODO: should not use this
+        set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
     endif()
 endif()
 
@@ -1348,41 +1344,6 @@ if (MATH_LIBRARY)
     if (NOT WIN32 OR NOT GGML_SYCL)
         target_link_libraries(ggml PRIVATE ${MATH_LIBRARY})
     endif()
-endif()
-
-#
-# MSVC Profile-Guided Optimization
-#
-if (MSVC AND NOT GGML_MSVC_PGO STREQUAL "OFF")
-    message(STATUS "MSVC PGO: ${GGML_MSVC_PGO}")
-    target_compile_options(ggml PRIVATE /GL)
-    if (GGML_MSVC_PGO STREQUAL "INSTRUMENT")
-        target_link_options(ggml PRIVATE /LTCG:PGINSTRUMENT)
-    elseif (GGML_MSVC_PGO STREQUAL "OPTIMIZE")
-        target_link_options(ggml PRIVATE /LTCG:PGOPTIMIZE)
-    endif()
-    # pgort140.dll is needed at runtime by instrumented binaries and during
-    # the OPTIMIZE link step to merge .pgc profiles.
-    # Derive the path from the MSVC compiler location (same bin directory).
-    get_filename_component(_MSVC_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
-    find_file(_PGORT140_DLL
-        NAMES pgort140.dll
-        HINTS "${_MSVC_BIN_DIR}"
-        NO_DEFAULT_PATH
-    )
-    if (_PGORT140_DLL)
-        message(STATUS "MSVC PGO: pgort140.dll -> ${_PGORT140_DLL}")
-        add_custom_command(TARGET ggml POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_PGORT140_DLL}"
-                "$<TARGET_FILE_DIR:ggml>"
-            COMMENT "Copy pgort140.dll for PGO"
-        )
-    else()
-        message(WARNING "MSVC PGO: pgort140.dll not found in ${_MSVC_BIN_DIR}")
-    endif()
-    unset(_MSVC_BIN_DIR)
-    unset(_PGORT140_DLL)
 endif()
 
 if (BUILD_SHARED_LIBS)

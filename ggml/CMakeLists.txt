@@ -95,7 +95,6 @@ option(GGML_LASX        "ggml: enable lasx"             ON)
 option(GGML_LSX         "ggml: enable lsx"              ON)
 option(GGML_SVE         "ggml: enable SVE"              OFF)
 option(GGML_NCCL        "ggml: enable NCCL"             ON)
-set(GGML_MSVC_PGO "OFF" CACHE STRING "ggml: MSVC PGO mode (OFF, INSTRUMENT, OPTIMIZE)")
 
 if (WIN32)
     # Default to Windows 10 (0x0A00). Windows 8 / 8.1 reached end of support in
