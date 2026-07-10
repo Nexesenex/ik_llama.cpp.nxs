@@ -1904,6 +1904,8 @@ inline __m512i qx_r8_q8_dot_product(const __m512i * qx, const int8_t * y) {
     s1 = _mm512_dpbusd_epi32(s1, qx[7], _mm512_set1_epi32(*(const int32_t *)(y + 28)));
     return _mm512_add_epi32(s0, s1);
 }
+#endif
+#if defined(HAVE_VNNI256)
 inline __m256i qx_r8_q8_dot_product(const __m256i * qx, const int8_t * y) {
     auto y4l = _mm_loadu_si128((const __m128i*)y+0);
     auto y4h = _mm_loadu_si128((const __m128i*)y+1);
@@ -1926,6 +1928,8 @@ inline __m256i q8_0_r8_dot_product(const uint8_t * x, const int8_t * y, __m256i 
     }
     return qx_r8_q8_dot_product(qx, y);
 }
+#endif
+#ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
 static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     if (nrc_x%16 != 0) {
