@@ -1568,7 +1568,7 @@ static void mul_mat_q6_0_r4_q8_2(int n, const void * vx, size_t bx, const DataIn
 }
 #endif
 
-#ifdef HAVE_FANCY_SIMD
+#if defined(HAVE_FANCY_SIMD)
 inline __m512i qx_r8_q8_dot_product(const __m512i * qx, const int8_t * y) {
     auto y4l = _mm_loadu_si128((const __m128i*)y+0);
     auto y4h = _mm_loadu_si128((const __m128i*)y+1);
@@ -1587,6 +1587,8 @@ inline __m512i qx_r8_q8_dot_product(const __m512i * qx, const int8_t * y) {
     sumi = _mm512_dpbusd_epi32(sumi, qx[7], _mm512_shuffle_epi32(yh, _MM_PERM_ENUM(0xff)));
     return sumi;
 }
+#endif
+#if defined(HAVE_VNNI256)
 inline __m256i qx_r8_q8_dot_product(const __m256i * qx, const int8_t * y) {
     auto y4l = _mm_loadu_si128((const __m128i*)y+0);
     auto y4h = _mm_loadu_si128((const __m128i*)y+1);
@@ -1609,6 +1611,8 @@ inline __m256i q8_0_r8_dot_product(const uint8_t * x, const int8_t * y, __m256i 
     }
     return qx_r8_q8_dot_product(qx, y);
 }
+#endif
+#ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
 static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%16 == 0);
@@ -2139,7 +2143,7 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             set_functions<Q6_0_1_Unpacker>(kernels);
             break;
         case GGML_TYPE_Q8_0:
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             set_functions<Q8_0_1_Unpacker>(kernels);
 #else
             set_functions<Q8_0_Unpacker>(kernels);
