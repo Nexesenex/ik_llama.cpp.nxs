@@ -32,12 +32,16 @@ struct DotHelper {
 };
 
 struct SignedDot {
+    // dpbusd takes (unsigned, signed): qx signs must move onto y (see below)
+    static constexpr bool needs_sign = true;
     DotHelper helper;
     inline __m256i compute(__m256i x, __m256i y) const {
         return helper.dot(_mm256_sign_epi8(x, x), _mm256_sign_epi8(y, x));
     }
 };
 struct UnsignedDot {
+    // qx already non-negative: dpbusd can consume it directly
+    static constexpr bool needs_sign = false;
     DotHelper helper;
     inline __m256i compute(__m256i x, __m256i y) const {
         return helper.dot(x, y);
@@ -48,19 +52,66 @@ template <typename Q8, typename Q8x4, typename Dot, bool can_pack = true> struct
     Dot dot;
     inline __m256i compute(const __m256i * qx, const Q8 * y) const {
         const Q8x4 * y4 = (const Q8x4 *)y;
-        const __m256i p0 = dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0)); // 8x block 0
-        const __m256i p1 = dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1)); // 8x block 1
-        const __m256i p2 = dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2)); // 8x block 2
-        const __m256i p3 = dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3)); // 8x block 3
         if constexpr (can_pack) {
-            const __m256i p01 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p0, p1));    // 0,0, 1,1, 0,0, 1,1
-            const __m256i p23 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p2, p3));    // 2,2, 3,3, 2,2, 3,3
-            return _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p01, p23)); // 0,1,2,3, 0,1,2,3
+#ifdef HAVE_VNNI256
+            const __m256i m1 = _mm256_set1_epi16(1);
+            const __m256i zero = _mm256_setzero_si256();
+            const __m256i y0 = _mm256_loadu_si256((const __m256i *)y4->qs + 0);
+            const __m256i y1 = _mm256_loadu_si256((const __m256i *)y4->qs + 1);
+            const __m256i y2 = _mm256_loadu_si256((const __m256i *)y4->qs + 2);
+            const __m256i y3 = _mm256_loadu_si256((const __m256i *)y4->qs + 3);
+            // SignedDot (Q4_0/Q5_0/Q8_0/IQ4_NL-S): qx holds signed bytes, so the
+            // sign_epi8 adaptation from SignedDot::compute must stay (dpbusd's
+            // first operand is unsigned; raw qx would count -8 as 248).
+            // UnsignedDot (biased/unbiased non-negative qx): direct is exact.
+            const __m256i t0 = Dot::needs_sign ? ggml_mm256_dpbusd_epi32(zero, _mm256_sign_epi8(qx[0], qx[0]), _mm256_sign_epi8(y0, qx[0]))
+                                               : ggml_mm256_dpbusd_epi32(zero, qx[0], y0);
+            const __m256i t1 = Dot::needs_sign ? ggml_mm256_dpbusd_epi32(zero, _mm256_sign_epi8(qx[1], qx[1]), _mm256_sign_epi8(y1, qx[1]))
+                                               : ggml_mm256_dpbusd_epi32(zero, qx[1], y1);
+            const __m256i t2 = Dot::needs_sign ? ggml_mm256_dpbusd_epi32(zero, _mm256_sign_epi8(qx[2], qx[2]), _mm256_sign_epi8(y2, qx[2]))
+                                               : ggml_mm256_dpbusd_epi32(zero, qx[2], y2);
+            const __m256i t3 = Dot::needs_sign ? ggml_mm256_dpbusd_epi32(zero, _mm256_sign_epi8(qx[3], qx[3]), _mm256_sign_epi8(y3, qx[3]))
+                                               : ggml_mm256_dpbusd_epi32(zero, qx[3], y3);
+            const __m256i p01 = _mm256_madd_epi16(m1, _mm256_packs_epi32(t0, t1));
+            const __m256i p23 = _mm256_madd_epi16(m1, _mm256_packs_epi32(t2, t3));
+            return _mm256_madd_epi16(m1, _mm256_packs_epi32(p01, p23));
+#else
+            const __m256i p01 = _mm256_madd_epi16(dot.helper.m1,
+                _mm256_packs_epi32(
+                    dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0)),
+                    dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1))));
+            const __m256i p23 = _mm256_madd_epi16(dot.helper.m1,
+                _mm256_packs_epi32(
+                    dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2)),
+                    dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3))));
+            return _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p01, p23));
+#endif
         } else {
-            // Note to myself: this is much faster than using _mm256_hadd_epi32()
-            auto p01 = _mm256_add_epi32(_mm256_unpacklo_epi32(p0, p1), _mm256_unpackhi_epi32(p0, p1)); // 0,1, 0,1, 0,1, 0,1
-            auto p23 = _mm256_add_epi32(_mm256_unpacklo_epi32(p2, p3), _mm256_unpackhi_epi32(p2, p3)); // 2,3, 2,3, 2,3, 2,3
-            return _mm256_add_epi32(_mm256_unpacklo_epi64(p01, p23), _mm256_unpackhi_epi64(p01, p23)); // 0,1,2,3, 0,1,2,3
+#ifdef HAVE_VNNI256
+            const __m256i zero = _mm256_setzero_si256();
+            const __m256i y0 = _mm256_loadu_si256((const __m256i *)y4->qs + 0);
+            const __m256i y1 = _mm256_loadu_si256((const __m256i *)y4->qs + 1);
+            const __m256i y2 = _mm256_loadu_si256((const __m256i *)y4->qs + 2);
+            const __m256i y3 = _mm256_loadu_si256((const __m256i *)y4->qs + 3);
+            // Same SignedDot sign requirement as above (all live Sum4
+            // instantiations use can_pack=false, incl. Q4_0/Q5_0/Q8_0/IQ4_NL-S).
+            const __m256i p0 = Dot::needs_sign ? ggml_mm256_dpbusd_epi32(zero, _mm256_sign_epi8(qx[0], qx[0]), _mm256_sign_epi8(y0, qx[0]))
+                                               : ggml_mm256_dpbusd_epi32(zero, qx[0], y0);
+            const __m256i p1 = Dot::needs_sign ? ggml_mm256_dpbusd_epi32(zero, _mm256_sign_epi8(qx[1], qx[1]), _mm256_sign_epi8(y1, qx[1]))
+                                               : ggml_mm256_dpbusd_epi32(zero, qx[1], y1);
+            const __m256i p2 = Dot::needs_sign ? ggml_mm256_dpbusd_epi32(zero, _mm256_sign_epi8(qx[2], qx[2]), _mm256_sign_epi8(y2, qx[2]))
+                                               : ggml_mm256_dpbusd_epi32(zero, qx[2], y2);
+            const __m256i p3 = Dot::needs_sign ? ggml_mm256_dpbusd_epi32(zero, _mm256_sign_epi8(qx[3], qx[3]), _mm256_sign_epi8(y3, qx[3]))
+                                               : ggml_mm256_dpbusd_epi32(zero, qx[3], y3);
+#else
+            const __m256i p0 = dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0));
+            const __m256i p1 = dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1));
+            const __m256i p2 = dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2));
+            const __m256i p3 = dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3));
+#endif
+            auto p01 = _mm256_add_epi32(_mm256_unpacklo_epi32(p0, p1), _mm256_unpackhi_epi32(p0, p1));
+            auto p23 = _mm256_add_epi32(_mm256_unpacklo_epi32(p2, p3), _mm256_unpackhi_epi32(p2, p3));
+            return _mm256_add_epi32(_mm256_unpacklo_epi64(p01, p23), _mm256_unpackhi_epi64(p01, p23));
         }
     }
     inline __m256i compute(__m256i x, __m256i y) const { return dot.compute(x, y); }
