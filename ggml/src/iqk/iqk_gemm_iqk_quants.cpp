@@ -1777,7 +1777,7 @@ static void mul_mat_iq3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataI
 #endif
                 auto lb = _mm256_loadu_si256((const __m256i *)iq3[ibl].qs+ib);
                 auto hbits = _mm_loadu_si128((const __m128i *)iq3[ibl].qh+ib);
-                auto hb = MM256_SET_M128I(hbits, _mm_slli_epi16(hbits, 4));
+                auto hb = _mm256_blend_epi32(_mm256_slli_epi16(_mm256_broadcastsi128_si256(hbits), 4), _mm256_broadcastsi128_si256(hbits), 0xF0);
                 auto shift = _mm256_and_si256(ms, _mm256_slli_epi16(extra, 3)); extra = _mm256_srli_epi16(extra, 1);
                 shift = _mm256_shuffle_epi8(shift, shift_shuffle);
                 qx[0] = _mm256_or_si256(_mm256_and_si256(lb, m03),                       _mm256_and_si256(m04, _mm256_srli_epi16(hb, 2)));
