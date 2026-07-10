@@ -1029,6 +1029,20 @@ if (GGML_LTO)
     endif()
 endif()
 
+# PGO (Profile-Guided Optimization) for clang-cl.
+# GGML_PGO_INSTRUMENT=ON  builds with -fprofile-generate (training run).
+# GGML_PGO_USE=<path>     builds with -fprofile-use=<path> (optimized build).
+if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    if (GGML_PGO_INSTRUMENT)
+        add_compile_options(-fprofile-generate)
+        add_link_options(-fprofile-generate)
+    endif()
+    if (GGML_PGO_USE)
+        add_compile_options(-fprofile-use=${GGML_PGO_USE})
+        add_link_options(-fprofile-use=${GGML_PGO_USE})
+    endif()
+endif()
+
 if (GGML_CCACHE)
     find_program(GGML_CCACHE_FOUND ccache)
 
