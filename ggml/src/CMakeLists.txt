@@ -32,6 +32,13 @@ if (NOT MSVC)
     endif()
 endif()
 
+# clang-cl is detected as MSVC by CMake, which applies /O2 (Release) and
+# keeps frame pointers. Override with Clang-native flags for better codegen
+# on our hand-tuned AVX-VNNI kernels.
+if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(-O3 -fomit-frame-pointer)
+endif()
+
 if (APPLE AND GGML_ACCELERATE)
     find_library(ACCELERATE_FRAMEWORK Accelerate)
     if (ACCELERATE_FRAMEWORK)
@@ -983,6 +990,7 @@ if (GGML_CUDA)
 endif()
 
 if (GGML_LTO)
+    cmake_policy(SET CMP0069 NEW)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT result OUTPUT output)
     if (result)
