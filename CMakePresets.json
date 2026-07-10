@@ -131,6 +131,30 @@
         "reldbg"
       ],
       "binaryDir": "${sourceDir}/build_cuda_reldbg"
+    },
+    {
+      "name": "cpu-avx2-pgo-instr",
+      "inherits": [
+        "cpu-avx2-base",
+        "release"
+      ],
+      "binaryDir": "${sourceDir}/build_pgo_instr",
+      "cacheVariables": {
+        "GGML_PGO_INSTRUMENT": "ON",
+        "GGML_LTO": "OFF"
+      }
+    },
+    {
+      "name": "cpu-avx2-pgo-opt",
+      "inherits": [
+        "cpu-avx2-base",
+        "release"
+      ],
+      "binaryDir": "${sourceDir}/build_pgo_opt",
+      "cacheVariables": {
+        "GGML_PGO_USE": "${sourceDir}/pgo/train.profdata",
+        "GGML_LTO": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -172,6 +196,16 @@
     {
       "name": "cuda-reldbg",
       "configurePreset": "cuda-reldbg",
+      "inherits": "parallel-build"
+    },
+    {
+      "name": "cpu-avx2-pgo-instr",
+      "configurePreset": "cpu-avx2-pgo-instr",
+      "inherits": "parallel-build"
+    },
+    {
+      "name": "cpu-avx2-pgo-opt",
+      "configurePreset": "cpu-avx2-pgo-opt",
       "inherits": "parallel-build"
     }
   ]
