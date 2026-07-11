@@ -197,7 +197,7 @@ void common_sampler_free(struct common_sampler * ctx) {
     delete ctx;
 }
 
-static void llama_grammar_reset(common_sampler * ctx) {
+[[maybe_unused]] static void llama_grammar_reset(common_sampler * ctx) {
     if (!ctx->grammar) {
         return;
     }
@@ -518,7 +518,7 @@ static llama_token llama_sampling_sample_impl(
     auto & rbudget = ctx_sampling->rbudget;
 
     llama_token id = 0;
-    float * logits = llama_get_logits_ith(ctx_main, idx);
+    [[maybe_unused]] float * logits = llama_get_logits_ith(ctx_main, idx);
     // apply reasoning budget first
     common_reasoning_budget_apply(rbudget, &cur_p);
     // Sample grammar first for resampling
