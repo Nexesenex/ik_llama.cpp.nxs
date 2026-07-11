@@ -2662,7 +2662,7 @@ void iqk_convert_q6_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int 
     }
 }
 
-[[maybe_unused]] void iqk_convert_q3_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+void iqk_convert_q3_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     GGML_ASSERT(nrc_x%8 == 0);
 

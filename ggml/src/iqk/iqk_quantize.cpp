@@ -436,7 +436,7 @@ void dequantize_row_iq2_bn(const block_iq2_bn * x, float * y, int64_t k) {
 }
 
 namespace {
-[[maybe_unused]] inline int8_t iq1bn_dequant(uint8_t q, int i) {
+inline int8_t iq1bn_dequant(uint8_t q, int i) {
     uint8_t v = IQ1BNQuantizer::k_mult[i]*q;
     //int8_t vs = (v + (v << 1)) >> 8;
     int8_t vs = 3*v >> 8;
@@ -3561,7 +3561,7 @@ void vec_dot_iq6_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx,
 
 namespace {
 
-[[maybe_unused]] inline int best_index(int n, const float * val, float x) {
+inline int best_index(int n, const float * val, float x) {
     if (x <= val[0]) return 0;
     if (x >= val[n-1]) return n-1;
     int ml = 0, mu = n-1;
@@ -7382,7 +7382,7 @@ inline ggml_bf16_t to_bf16(const float& x) {
     helper.f = x;
     return ggml_bf16_t{(uint16_t)(helper.u >> 16)};
 }
-[[maybe_unused]] inline ggml_bf16_t to_bf16(const ggml_half& x) { return to_bf16(GGML_FP16_TO_FP32(x)); }
+inline ggml_bf16_t to_bf16(const ggml_half& x) { return to_bf16(GGML_FP16_TO_FP32(x)); }
 inline ggml_bf16_t to_bf16(const ggml_bf16_t& x) { return x; }
 template <typename T>
 void repack_bf16(int nrows, int n_per_row, const T * x, ggml_bf16_t * y, [[maybe_unused]] bool online) {
