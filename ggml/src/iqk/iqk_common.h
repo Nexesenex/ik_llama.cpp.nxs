@@ -116,7 +116,7 @@ struct DataInfo {
         _mm256_storeu_ps(dst_row(iy) + ix, result);
     }
 #endif
-#ifdef __AVX512F__
+#ifdef HAVE_FANCY_SIMD
     inline void store(int ix, int iy, __m512 result) const {
         _mm512_storeu_ps(dst_row(iy) + ix, result);
     }

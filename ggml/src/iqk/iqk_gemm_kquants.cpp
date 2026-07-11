@@ -79,6 +79,7 @@ struct ScaleQ3 {
     const __m128i m32 = _mm_set1_epi8(-32);
 };
 
+#ifdef HAVE_FANCY_SIMD
 struct Scale16 {
     inline void make_scales(const __m128i& scales8, __m512i * scales) const {
         auto all_scales8 = MM256_SET1_M128I(scales8);
@@ -98,6 +99,7 @@ struct Scale16 {
     const __m256i shuffle2 = _mm256_set_epi32(0x0f0f0f0f, 0x0b0b0b0b, 0x0e0e0e0e, 0x0a0a0a0a,
                                               0x0d0d0d0d, 0x09090909, 0x0c0c0c0c, 0x08080808);
 };
+#endif
 
 template <typename Q8>
 inline void process_mins_and_scales_16(const __m128i& scales128, const Q8& q8, int i, float d,
@@ -496,17 +498,6 @@ struct HighBit3 {
     const __m256i mh = _mm256_set1_epi8(0x04);
     __m256i hbits;
 };
-
-template <typename Q8>
-inline void compute_block(int iy, int i, float d, const Q8& q8, const __m512i * values, const __m512i * scales, __m512 * accd) {
-    const __m512i p1 = _mm512_dpbusd_epi32(_mm512_setzero_si512(), values[0], q8.load_quants64(iy, i, 0));
-    const __m512i p2 = _mm512_dpbusd_epi32(_mm512_setzero_si512(), values[1], q8.load_quants64(iy, i, 1));
-    const __m512i p3 = _mm512_dpbusd_epi32(_mm512_setzero_si512(), values[2], q8.load_quants64(iy, i, 2));
-    const __m512i p4 = _mm512_dpbusd_epi32(_mm512_setzero_si512(), values[3], q8.load_quants64(iy, i, 3));
-    auto sumi = _mm512_dpwssd_epi32(_mm512_setzero_si512(), scales[0], _mm512_packs_epi32(p1, p2));
-    sumi = _mm512_dpwssd_epi32(sumi, scales[1], _mm512_packs_epi32(p3, p4));
-    accd[iy] = _mm512_fmadd_ps(_mm512_set1_ps(d*q8.scale(iy, i)), _mm512_cvtepi32_ps(sumi), accd[iy]);
-}
 
 struct DequantizerQ2K final : public BaseDequantizer<block_q2_K> {
     DequantizerQ2K(const void * vx, size_t bx) : BaseDequantizer(vx, bx) {}
