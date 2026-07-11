@@ -1186,8 +1186,8 @@ static void mul_mat_iq4_xs_r8_q8_k(int n, const void * vx, size_t bx, const Data
             auto slbits_h = _mm_set_epi64x(aux64[0] >> 2, aux64[0]);
             aux64 = (const uint64_t *)iq4h[ibl].scales_h;
             auto shbits_h = _mm_set_epi64x(aux64[0] >> 2, aux64[0]);
-            auto sl_h = MM256_SET_M128I(slbits_h, _mm_slli_epi16(slbits_h, 4));
-            auto sh_h = MM256_SET_M128I(shbits_h, _mm_slli_epi16(shbits_h, 4));
+            auto sl_h = MM256_SLLI128_M128I(slbits_h, 4);
+            auto sh_h = MM256_SLLI128_M128I(shbits_h, 4);
             auto shb = _mm512_and_si512(_mm512_inserti32x8(_mm512_castsi256_si512(sl_h), sh_h, 1), _mm512_set1_epi8(0x30));
             h.vec = _mm512_sub_epi8(_mm512_or_si512(slb, shb), _mm512_set1_epi8(32));
             for (int ib = 0; ib < QK_K/32; ++ib) {
@@ -1445,7 +1445,7 @@ static void mul_mat_q3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
 #endif
                 auto lb = _mm256_loadu_si256((const __m256i *)iq3[ibl].qs+ib);
                 auto hbits = _mm_loadu_si128((const __m128i *)iq3[ibl].qh+ib);
-                auto hb = MM256_SET_M128I(hbits, _mm_slli_epi16(hbits, 4));
+                auto hb = MM256_SLLI128_M128I(hbits, 4);
                 qx[0] = _mm256_or_si256(_mm256_and_si256(lb, m03),                       _mm256_and_si256(m04, _mm256_srli_epi16(hb, 2)));
                 qx[1] = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(lb, 2), m03), _mm256_and_si256(m04, _mm256_srli_epi16(hb, 3)));
                 qx[2] = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(lb, 4), m03), _mm256_and_si256(m04, _mm256_srli_epi16(hb, 4)));
@@ -1552,7 +1552,7 @@ static void mul_mat_q4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             auto m4 = _mm256_mul_ps(_mm256_set1_ps(-1.0f), _mm256_set_m128(_mm256_extractf128_ps(dl, 1), _mm256_extractf128_ps(dl, 1)));
             auto lbits = _mm256_loadu_si256((const __m256i *)iq4[ibl].scales_l);
             auto hbits128 = _mm_loadu_si128((const __m128i *)iq4[ibl].scales_h);
-            auto hbits = MM256_SET_M128I(hbits128, _mm_slli_epi16(hbits128, 4));
+            auto hbits = MM256_SLLI128_M128I(hbits128, 4);
             hd.vec = _mm256_or_si256(_mm256_and_si256(lbits, mf), _mm256_and_si256(hbits, m3));
             auto mins = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(lbits, 4), mf), _mm256_and_si256(_mm256_srli_epi16(hbits, 2), m3));
             process_min_r4_b32(ibl, m4, mins, q8, acc);
@@ -1621,7 +1621,7 @@ static void mul_mat_q5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             auto m4 = _mm256_mul_ps(_mm256_set1_ps(-1.0f), _mm256_set_m128(_mm256_extractf128_ps(dl, 1), _mm256_extractf128_ps(dl, 1)));
             auto lbits = _mm256_loadu_si256((const __m256i *)iq5[ibl].scales_l);
             auto hbits128 = _mm_loadu_si128((const __m128i *)iq5[ibl].scales_h);
-            auto hbits = MM256_SET_M128I(hbits128, _mm_slli_epi16(hbits128, 4));
+            auto hbits = MM256_SLLI128_M128I(hbits128, 4);
             hd.vec = _mm256_or_si256(_mm256_and_si256(lbits, mf), _mm256_and_si256(hbits, m30));
             auto mins = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(lbits, 4), mf), _mm256_and_si256(_mm256_srli_epi16(hbits, 2), m30));
             process_min_r4_b32(ibl, m4, mins, q8, acc);
@@ -1636,7 +1636,7 @@ static void mul_mat_q5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 auto lbits1 = _mm256_loadu_si256((const __m256i *)iq5[ibl].qs+2*ib+0);
                 auto lbits2 = _mm256_loadu_si256((const __m256i *)iq5[ibl].qs+2*ib+1);
                 auto hbits128 = _mm_loadu_si128((const __m128i*)iq5[ibl].qh + ib);
-                auto hbits = MM256_SET_M128I(hbits128, _mm_slli_epi16(hbits128, 4));
+                auto hbits = MM256_SLLI128_M128I(hbits128, 4);
                 qx[0] = _mm256_or_si256(_mm256_and_si256(lbits1, mf), _mm256_and_si256(m10, hbits));
                 qx[1] = _mm256_or_si256(_mm256_and_si256(lbits2, mf), _mm256_and_si256(m10, _mm256_srli_epi16(hbits, 2)));
                 qx[2] = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(lbits1, 4), mf), _mm256_and_si256(m10, _mm256_srli_epi16(hbits, 1)));
