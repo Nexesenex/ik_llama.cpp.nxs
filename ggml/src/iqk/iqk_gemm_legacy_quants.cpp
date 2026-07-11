@@ -564,7 +564,7 @@ struct Dequantizer4bit {
     const __m256i m4 = _mm256_set1_epi8(0xf);
     inline __m256i dequant(const uint8_t * qs) const {
         const __m128i aux128 = _mm_loadu_si128((const __m128i *)qs);
-        return _mm256_and_si256(MM256_SET_M128I(_mm_srli_epi16(aux128, 4), aux128), m4);
+        return _mm256_and_si256(MM256_SRLI128_M128I(aux128, 4), m4);
     }
 };
 
@@ -1458,7 +1458,7 @@ static void mul_mat_q5_0_r4_q8_2_avx2(int n, const void * vx, size_t bx, const D
         auto bits1 = _mm256_loadu_si256((const __m256i *)iq5.qs+0);
         auto bits2 = _mm256_loadu_si256((const __m256i *)iq5.qs+1);
         auto hbits = _mm_loadu_si128((const __m128i *)iq5.qh);
-        auto hb = MM256_SET_M128I(_mm_srli_epi16(hbits, 1), hbits);
+        auto hb = MM256_SRLI128_M128I(hbits, 1);
         qx[0] = _mm256_or_si256(_mm256_and_si256(bits1, m4), _mm256_and_si256(_mm256_slli_epi16(hb, 4), m5));
         qx[1] = _mm256_or_si256(_mm256_and_si256(bits2, m4), _mm256_and_si256(_mm256_slli_epi16(hb, 2), m5));
         qx[2] = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(bits1, 4), m4), _mm256_and_si256(hb, m5));
@@ -1546,8 +1546,8 @@ static void mul_mat_q5_0_r4_q8_2(int n, const void * vx, size_t bx, const DataIn
                 _mm256_loadu_si256((const __m256i *)iq5h.qs+1), 1);
         auto hbits1 = _mm_loadu_si128((const __m128i *)iq5l.qh);
         auto hbits2 = _mm_loadu_si128((const __m128i *)iq5h.qh);
-        auto hb1 = MM256_SET_M128I(_mm_srli_epi16(hbits1, 1), hbits1);
-        auto hb2 = MM256_SET_M128I(_mm_srli_epi16(hbits2, 1), hbits2);
+        auto hb1 = MM256_SRLI128_M128I(hbits1, 1);
+        auto hb2 = MM256_SRLI128_M128I(hbits2, 1);
         auto hb = _mm512_inserti32x8(_mm512_castsi256_si512(hb1), hb2, 1);
         qx[0] = _mm512_or_si512(_mm512_and_si512(bits1, m4), _mm512_and_si512(_mm512_slli_epi16(hb, 4), m5));
         qx[1] = _mm512_or_si512(_mm512_and_si512(bits2, m4), _mm512_and_si512(_mm512_slli_epi16(hb, 2), m5));
