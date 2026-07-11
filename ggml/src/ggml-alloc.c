@@ -464,7 +464,7 @@ static bool ggml_gallocr_is_own(ggml_gallocr_t galloc, struct ggml_tensor * t) {
     return ggml_gallocr_hash_get(galloc, t)->allocated;
 }
 
-static GGML_UNUSED_FUNCTION void ggml_gallocr_set_node_offset(ggml_gallocr_t galloc, struct ggml_tensor * node, int buffer_id, size_t offset) {
+static void ggml_gallocr_set_node_offset(ggml_gallocr_t galloc, struct ggml_tensor * node, int buffer_id, size_t offset) {
     struct hash_node * hn = ggml_gallocr_hash_get(galloc, node);
     hn->buffer_id = buffer_id;
     hn->offset = offset;

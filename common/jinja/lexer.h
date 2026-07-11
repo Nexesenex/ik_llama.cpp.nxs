@@ -46,7 +46,7 @@ struct token {
     size_t pos;
 };
 
-[[maybe_unused]] static std::string type_to_string(token::type t) {
+static std::string type_to_string(token::type t) {
     switch (t) {
         case token::eof: return "eof";
         case token::text: return "text";

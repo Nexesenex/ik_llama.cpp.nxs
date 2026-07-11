@@ -43,7 +43,7 @@
 
 #if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__SSSE3__)
 // multiply int8_t, add results pairwise twice
-static GGML_UNUSED_FUNCTION inline __m128i mul_sum_i8_pairs(const __m128i x, const __m128i y) {
+static inline __m128i mul_sum_i8_pairs(const __m128i x, const __m128i y) {
     // Get absolute values of x vectors
     const __m128i ax = _mm_sign_epi8(x, x);
     // Sign the values of the y vectors
@@ -74,7 +74,7 @@ static inline int hsum_i32_8(const __m256i a) {
 }
 
 // horizontally add 4 int32_t
-static GGML_UNUSED_FUNCTION inline int hsum_i32_4(const __m128i a) {
+static inline int hsum_i32_4(const __m128i a) {
     const __m128i hi64 = _mm_unpackhi_epi64(a, a);
     const __m128i sum64 = _mm_add_epi32(hi64, a);
     const __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));
@@ -106,7 +106,7 @@ static inline __m256i bytes_from_nibbles_32(const uint8_t * rsi)
 }
 
 // add int16_t pairwise and return as float vector
-static GGML_UNUSED_FUNCTION inline __m256 sum_i16_pairs_float(const __m256i x) {
+static inline __m256 sum_i16_pairs_float(const __m256i x) {
     const __m256i ones = _mm256_set1_epi16(1);
     const __m256i summed_pairs = _mm256_madd_epi16(ones, x);
     return _mm256_cvtepi32_ps(summed_pairs);
@@ -139,7 +139,7 @@ static inline __m256 mul_sum_i8_pairs_float(const __m256i x, const __m256i y) {
 #endif
 }
 
-static GGML_UNUSED_FUNCTION inline __m128i packNibbles( __m256i bytes )
+static inline __m128i packNibbles( __m256i bytes )
 {
     // Move bits within 16-bit lanes from 0000_abcd_0000_efgh into 0000_0000_abcd_efgh
 #if __AVX512F__
@@ -2045,7 +2045,7 @@ static float make_q3_quants(int n, int nmax, const float * restrict x, int8_t * 
     return 1/iscale;
 }
 
-static GGML_UNUSED_FUNCTION float make_qkx1_quants(int n, int nmax, const float * restrict x, uint8_t * restrict L, float * restrict the_min,
+static float make_qkx1_quants(int n, int nmax, const float * restrict x, uint8_t * restrict L, float * restrict the_min,
         int ntry, float alpha) {
     float min = x[0];
     float max = x[0];
@@ -11704,7 +11704,7 @@ void ggml_vec_dot_iq3_s_q8_K (int n, float * restrict s, size_t bs, const void *
 
 
 #if defined(__AVX__)
-static GGML_UNUSED_FUNCTION inline __m128i mul_add_epi8_sse(const __m128i x, const __m128i y) {
+static inline __m128i mul_add_epi8_sse(const __m128i x, const __m128i y) {
     const __m128i ax = _mm_sign_epi8(x, x);
     const __m128i sy = _mm_sign_epi8(y, x);
     return _mm_maddubs_epi16(ax, sy);
@@ -14478,7 +14478,7 @@ void quantize_row_iq3_s_ref(const float * restrict x, block_iq3_s * restrict y, 
 
 // =================================== 1.5 bpw ===================================================
 
-static GGML_UNUSED_FUNCTION int iq1_find_best_neighbour(const uint16_t * restrict neighbours, const uint64_t * restrict grid,
+static int iq1_find_best_neighbour(const uint16_t * restrict neighbours, const uint64_t * restrict grid,
         const float * restrict xval, const float * restrict weight, float * scale, int8_t * restrict L, int ngrid) {
     int num_neighbors = neighbours[0];
     GGML_ASSERT(num_neighbors > 0);
