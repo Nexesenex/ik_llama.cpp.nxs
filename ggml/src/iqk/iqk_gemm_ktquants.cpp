@@ -22,7 +22,7 @@ inline uint32_t trellis_next(uint32_t& val) {
     return (val & kmask) ^ km32;
 }
 
-[[maybe_unused]] inline float trellis_gen(uint32_t& val, uint32_t* s) {
+inline float trellis_gen(uint32_t& val, uint32_t* s) {
     const ggml_fp16_t * h = (const ggml_fp16_t *)s;
     s[0] = trellis_next(val);
     return GGML_FP16_TO_FP32(h[0]) + GGML_FP16_TO_FP32(h[1]);
@@ -387,7 +387,7 @@ struct Trellis3 {
     }
 };
 
-[[maybe_unused]] void iqk_dequantize_iq2_kt(int n, const void * vx, size_t bx, float * y, size_t stride_y, int nrc_x) {
+void iqk_dequantize_iq2_kt(int n, const void * vx, size_t bx, float * y, size_t stride_y, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     const int nb = n/QK_K;
 
@@ -928,7 +928,7 @@ inline __m256 abs_ps(__m256 vals) {
     return _mm256_andnot_ps(sign_bit, vals);
 }
 
-[[maybe_unused]] void iqk_dequantize_iq3_kt(int n, const void * vx, size_t bx, float * y, size_t stride_y, int nrc_x) {
+void iqk_dequantize_iq3_kt(int n, const void * vx, size_t bx, float * y, size_t stride_y, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     const int nb = n/QK_K;
 
@@ -1087,7 +1087,7 @@ void iqk_dequantize_iq4_kt_q80_r8(int n, const void * vx, size_t bx, void * vy, 
     }
 }
 
-[[maybe_unused]] void iqk_dequantize_iq4_kt(int n, const void * vx, size_t bx, float * y, size_t stride_y, int nrc_x) {
+void iqk_dequantize_iq4_kt(int n, const void * vx, size_t bx, float * y, size_t stride_y, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     const int nb = n/QK_K;
     constexpr int kNumGroups = 64;
