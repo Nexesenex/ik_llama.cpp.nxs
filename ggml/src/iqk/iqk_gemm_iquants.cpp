@@ -41,7 +41,7 @@ inline void set_scales_16(const __m256i& all_scales, __m256i * scales) {
 
 // TODO: find the bug that causes this to be called without HAVE_FANCY_SIMD, which triggers
 //       writing 4 vvalues into scales, which is of size 2.
-inline void set_scales_8_iq(int j, const __m256i& all_scales, __m256i * scales) {
+[[maybe_unused]] inline void set_scales_8_iq(int j, const __m256i& all_scales, __m256i * scales) {
 //#ifdef HAVE_FANCY_SIMD
     auto shuffle = j == 0 ? _mm256_set_epi64x(0x0302030203020302, 0x0100010001000100, 0x0302030203020302, 0x0100010001000100)
                           : _mm256_set_epi64x(0x0b0a0b0a0b0a0b0a, 0x0908090809080908, 0x0b0a0b0a0b0a0b0a, 0x0908090809080908);
@@ -52,7 +52,7 @@ inline void set_scales_8_iq(int j, const __m256i& all_scales, __m256i * scales) 
 //#endif
 }
 
-inline void set_scales_16_iq(const __m256i& all_scales, __m256i * scales) {
+[[maybe_unused]] inline void set_scales_16_iq(const __m256i& all_scales, __m256i * scales) {
 #ifdef HAVE_FANCY_SIMD
     auto shuffle = _mm256_set_epi64x(0x0706070607060706, 0x0302030203020302, 0x0504050405040504, 0x0100010001000100);
     scales[0] = _mm256_shuffle_epi8(all_scales, shuffle);
@@ -1860,7 +1860,7 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
     }
 }
 
-void iqk_convert_iq2_xxs_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+[[maybe_unused]] void iqk_convert_iq2_xxs_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     GGML_ASSERT(nrc_x%8 == 0);
 
@@ -2019,7 +2019,7 @@ void iqk_convert_iq2_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
     }
 }
 
-void iqk_convert_iq2_xs_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+[[maybe_unused]] void iqk_convert_iq2_xs_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     GGML_ASSERT(nrc_x%8 == 0);
 
@@ -2224,7 +2224,7 @@ static void mul_mat_iq2_xs_q8_2_X4(int n, const void * vx, size_t bx, const Data
     }
 }
 
-void iqk_convert_iq2_s_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+[[maybe_unused]] void iqk_convert_iq2_s_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     GGML_ASSERT(nrc_x%8 == 0);
 
@@ -2518,7 +2518,7 @@ void iqk_convert_iq3_xxs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, i
     }
 }
 
-void iqk_convert_iq3_xxs_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+[[maybe_unused]] void iqk_convert_iq3_xxs_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     GGML_ASSERT(nrc_x%8 == 0);
 
@@ -2626,7 +2626,7 @@ void iqk_convert_iq3_s_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
     }
 }
 
-void iqk_convert_iq3_s_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+[[maybe_unused]] void iqk_convert_iq3_s_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     GGML_ASSERT(nrc_x%8 == 0);
 
