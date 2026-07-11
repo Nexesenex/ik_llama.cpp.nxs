@@ -26,6 +26,10 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <chrono>
 
 #if defined(GGML_USE_HIPBLAS)
 #include "vendors/hip.h"
@@ -956,6 +960,17 @@ struct ggml_backend_cuda_context {
     const void * model;
     void * copy_buffer = nullptr;
     size_t copy_size   = 0;
+
+    // CUDA watchdog: monitors GPU progress and detects hangs
+    struct cuda_watchdog {
+        std::thread thread;
+        std::mutex mtx;
+        std::condition_variable cv;
+        cudaEvent_t event = nullptr;
+        bool armed = false;
+        bool stop = false;
+        bool hung = false;
+    } watchdog;
 
     explicit ggml_backend_cuda_context(int device, const void * model);
 

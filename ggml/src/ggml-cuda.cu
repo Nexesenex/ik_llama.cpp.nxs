@@ -599,6 +599,34 @@ static std::condition_variable ggml_cuda_lock_cv;
 static int ggml_cuda_lock_counter = 0;
 static std::string ggml_cuda_user_cslq; // User-provided CUDA_SCALE_LAUNCH_QUEUES from -cuda cslq=X
 
+static void ggml_cuda_watchdog_thread_proc(ggml_backend_cuda_context * ctx) {
+    auto & wd = ctx->watchdog;
+    ggml_cuda_set_device(ctx->device);
+
+    while (true) {
+        std::unique_lock<std::mutex> lock(wd.mtx);
+        wd.cv.wait(lock, [&wd]() { return wd.armed || wd.stop; });
+        if (wd.stop) break;
+        wd.armed = false;
+        lock.unlock();
+
+        auto start = ggml_time_us();
+        const int64_t timeout_us = 16000000;
+        while (true) {
+            cudaError_t err = cudaEventQuery(wd.event);
+            if (err == cudaSuccess) break;
+            if (err != cudaErrorNotReady) break;
+            auto elapsed = ggml_time_us() - start;
+            if (elapsed > timeout_us) {
+                wd.hung = true;
+                GGML_CUDA_LOG_ERROR("CUDA watchdog: CUDA%d (Device %d) appears hung (kernel did not complete within 16s)\n", ctx->device, ggml_backend_cuda_get_device_ordinal(ctx->device));
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+}
+
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * model) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)), model(model) {
     auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
@@ -608,9 +636,26 @@ ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * mo
     } else{
         all_ctx[device] = this;
     }
+
+    ggml_cuda_set_device(device);
+    CUDA_CHECK(cudaEventCreate(&watchdog.event));
+    watchdog.thread = std::thread(ggml_cuda_watchdog_thread_proc, this);
 }
 
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
+
+    // Stop watchdog thread first
+    {
+        std::lock_guard<std::mutex> lk(watchdog.mtx);
+        watchdog.stop = true;
+    }
+    watchdog.cv.notify_one();
+    if (watchdog.thread.joinable()) {
+        watchdog.thread.join();
+    }
+    if (watchdog.event) {
+        CUDA_CHECK(cudaEventDestroy(watchdog.event));
+    }
 
 #ifdef USE_CUDA_GRAPH
     // Let's leave this debug log in for now, so we have a trace in case
@@ -5030,9 +5075,23 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     bool cuda_graph_update_required = false;
 #endif // USE_CUDA_GRAPH
 
+    if (cuda_ctx->watchdog.hung) {
+        GGML_CUDA_LOG_ERROR("%s: CUDA%d (Device %d) is marked as hung by watchdog, returning error\n", __func__, cuda_ctx->device, ggml_backend_cuda_get_device_ordinal(cuda_ctx->device));
+        return GGML_STATUS_FAILED;
+    }
+
     bool graph_evaluated_or_captured = false;
 
     evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required);
+
+    // Arm the watchdog: record event on the compute stream
+    // The watchdog thread will poll this event and detect hangs
+    CUDA_CHECK(cudaEventRecord(cuda_ctx->watchdog.event, cuda_ctx->stream()));
+    {
+        std::lock_guard<std::mutex> lk(cuda_ctx->watchdog.mtx);
+        cuda_ctx->watchdog.armed = true;
+    }
+    cuda_ctx->watchdog.cv.notify_one();
 
     return GGML_STATUS_SUCCESS;
 }
