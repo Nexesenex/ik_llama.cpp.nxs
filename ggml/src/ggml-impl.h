@@ -29,12 +29,6 @@
 
 #endif
 
-#if defined(__GNUC__) || defined(__clang__)
-#define GGML_UNUSED_FUNCTION __attribute__((unused))
-#else
-#define GGML_UNUSED_FUNCTION
-#endif
-
 // Does not handle NaN
 static inline float ggml_e8m0_to_fp32(uint8_t x) {
     union { float f; uint32_t u; } helper;
@@ -662,7 +656,7 @@ static_assert(sizeof(ggml_bitset_t) == 4, "bitset_t constants must be updated");
 #define BITSET_SHR 5 // log2(sizeof(ggml_bitset_t)*8)
 #define BITSET_MASK (sizeof(ggml_bitset_t)*8 - 1)
 
-static GGML_UNUSED_FUNCTION size_t ggml_bitset_size(size_t n) {
+static size_t ggml_bitset_size(size_t n) {
     return (n + BITSET_MASK) >> BITSET_SHR;
 }
 
@@ -725,12 +719,12 @@ static size_t ggml_hash_find(const struct ggml_hash_set * hash_set, struct ggml_
     return i;
 }
 
-static GGML_UNUSED_FUNCTION bool ggml_hash_contains(const struct ggml_hash_set * hash_set, struct ggml_tensor * key) {
+static bool ggml_hash_contains(const struct ggml_hash_set * hash_set, struct ggml_tensor * key) {
     size_t i = ggml_hash_find(hash_set, key);
     return i != GGML_HASHSET_FULL && ggml_bitset_get(hash_set->used, i);
 }
 
-static GGML_UNUSED_FUNCTION size_t ggml_hash_insert(struct ggml_hash_set * hash_set, struct ggml_tensor * key) {
+static size_t ggml_hash_insert(struct ggml_hash_set * hash_set, struct ggml_tensor * key) {
     size_t h = ggml_hash(key) % hash_set->size;
 
     // linear probing
@@ -751,7 +745,7 @@ static GGML_UNUSED_FUNCTION size_t ggml_hash_insert(struct ggml_hash_set * hash_
     GGML_ABORT("fatal error");
 }
 
-static GGML_UNUSED_FUNCTION size_t ggml_hash_find_or_insert(struct ggml_hash_set * hash_set, struct ggml_tensor * key) {
+static size_t ggml_hash_find_or_insert(struct ggml_hash_set * hash_set, struct ggml_tensor * key) {
     size_t h = ggml_hash(key) % hash_set->size;
 
     // linear probing
@@ -776,12 +770,12 @@ static GGML_UNUSED_FUNCTION size_t ggml_hash_find_or_insert(struct ggml_hash_set
 // state back into the slot it was read from. Its index in cgraph, or -1 if there is none.
 int ggml_delta_net_find_state_cpy(const struct ggml_cgraph * cgraph, int i);
 
-static GGML_UNUSED_FUNCTION int32_t ggml_get_op_params_i32(const struct ggml_tensor * tensor, uint32_t i) {
+static int32_t ggml_get_op_params_i32(const struct ggml_tensor * tensor, uint32_t i) {
     assert(i < GGML_MAX_OP_PARAMS / sizeof(int32_t));
     return ((const int32_t *)(tensor->op_params))[i];
 }
 
-static GGML_UNUSED_FUNCTION float ggml_get_op_params_f32(const struct ggml_tensor * tensor, uint32_t i) {
+static float ggml_get_op_params_f32(const struct ggml_tensor * tensor, uint32_t i) {
     assert(i < GGML_MAX_OP_PARAMS / sizeof(float));
     return ((const float *)(tensor->op_params))[i];
 }
