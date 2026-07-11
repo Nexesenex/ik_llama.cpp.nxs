@@ -1584,7 +1584,7 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
 #endif
 }
 
-[[maybe_unused]] char * get_q_storage(size_t size) {
+char * get_q_storage(size_t size) {
     thread_local std::vector<char> q_storage;
     if (q_storage.size() < size) q_storage.resize(size);
     return q_storage.data();
