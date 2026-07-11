@@ -69,7 +69,7 @@ enum server_state {
 };
 
 
-static inline std::string stop_type_to_str(stop_type type) {
+[[maybe_unused]] static inline std::string stop_type_to_str(stop_type type) {
     switch (type) {
     case STOP_TYPE_EOS:   return "eos";
     case STOP_TYPE_WORD:  return "word";
@@ -86,7 +86,7 @@ inline std::string get_model_name(std::string path)
 };
 
 
-static json format_final_response_oaicompat(const json& request, json result, const std::string& completion_id, bool streaming = false) {
+[[maybe_unused]] static json format_final_response_oaicompat(const json& request, json result, const std::string& completion_id, bool streaming = false) {
     bool stopped_word = result.count("stopped_word") != 0;
     bool stopped_eos = json_value(result, "stopped_eos", false);
     int num_tokens_predicted = json_value(result, "tokens_predicted", 0);
@@ -135,7 +135,7 @@ static json format_final_response_oaicompat(const json& request, json result, co
 }
 
 // return value is vector as there is one case where we might need to generate two responses
-static std::vector<json> format_partial_response_oaicompat(server_task_result task_result, const std::string& completion_id) {
+[[maybe_unused]] static std::vector<json> format_partial_response_oaicompat(server_task_result task_result, const std::string& completion_id) {
     json result = task_result.data;
     std::cout << result.dump(4) << std::endl;
     if (!result.contains("model") || !result.contains("oaicompat_token_ctr")) {

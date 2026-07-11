@@ -92,7 +92,7 @@ static LONG atomic_load(atomic_int * ptr) {
 static LONG atomic_fetch_add(atomic_int * ptr, LONG inc) {
     return InterlockedExchangeAdd(ptr, inc);
 }
-static LONG atomic_fetch_sub(atomic_int * ptr, LONG dec) {
+static GGML_UNUSED_FUNCTION LONG atomic_fetch_sub(atomic_int * ptr, LONG dec) {
     return atomic_fetch_add(ptr, -(dec));
 }
 static atomic_bool atomic_flag_test_and_set(atomic_flag * ptr) {
@@ -105,7 +105,7 @@ static void atomic_flag_clear(atomic_flag * ptr) {
 typedef HANDLE pthread_t;
 
 typedef DWORD thread_ret_t;
-static int pthread_create(pthread_t * out, void * unused, thread_ret_t(*func)(void *), void * arg) {
+static GGML_UNUSED_FUNCTION int pthread_create(pthread_t * out, void * unused, thread_ret_t(*func)(void *), void * arg) {
     (void) unused;
     HANDLE handle = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE) func, arg, 0, NULL);
     if (handle == NULL)
@@ -117,7 +117,7 @@ static int pthread_create(pthread_t * out, void * unused, thread_ret_t(*func)(vo
     return 0;
 }
 
-static int pthread_join(pthread_t thread, void * unused) {
+static GGML_UNUSED_FUNCTION int pthread_join(pthread_t thread, void * unused) {
     (void) unused;
     int ret = (int) WaitForSingleObject(thread, INFINITE);
     CloseHandle(thread);
@@ -3041,7 +3041,7 @@ static void ggml_vec_dot_f16(int n, float * restrict s, size_t bs, ggml_fp16_t *
 
 // compute GGML_VEC_DOT_UNROLL dot products at once
 // xs - x row stride in bytes
-inline static void ggml_vec_dot_f16_unroll(const int n, const int xs, float * restrict s, void * restrict xv, ggml_fp16_t * restrict y) {
+inline static GGML_UNUSED_FUNCTION void ggml_vec_dot_f16_unroll(const int n, const int xs, float * restrict s, void * restrict xv, ggml_fp16_t * restrict y) {
     ggml_float sumf[GGML_VEC_DOT_UNROLL] = { 0.0 };
 
     ggml_fp16_t * restrict x[GGML_VEC_DOT_UNROLL];
@@ -3873,7 +3873,7 @@ static void ggml_vec_softcap_f32(const int n, float * x, float s_before, float s
     }
 }
 
-static float ggml_vec_softcap_max_f32(const int n, float * x, float s_before, float s_after) {
+static GGML_UNUSED_FUNCTION float ggml_vec_softcap_max_f32(const int n, float * x, float s_before, float s_after) {
     int i = 0;
     float max = -INFINITY;
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
@@ -3908,7 +3908,7 @@ static float ggml_vec_softcap_max_f32(const int n, float * x, float s_before, fl
     return max;
 }
 
-inline static void ggml_vec_gelu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
+inline static GGML_UNUSED_FUNCTION void ggml_vec_gelu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
     const uint16_t * i16 = (const uint16_t *) x;
     for (int i = 0; i < n; ++i) {
         y[i] = ggml_table_gelu_f16[i16[i]];
@@ -3978,7 +3978,7 @@ inline static void ggml_vec_gelu_erf_f32(const int n, float * y, const float * x
     }
 }
 
-inline static void ggml_vec_mul_gelu_f32(const int n, float * z, const float * x, const float * y) {
+inline static GGML_UNUSED_FUNCTION void ggml_vec_mul_gelu_f32(const int n, float * z, const float * x, const float * y) {
     int i = 0;
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
     __m512 c1 = _mm512_set1_ps(GELU_COEF_A);
@@ -4785,7 +4785,7 @@ static cpu_set_t ggml_get_numa_affinity(void) {
     return cpuset;
 }
 #else
-static uint32_t ggml_get_numa_affinity(void) {
+static GGML_UNUSED_FUNCTION uint32_t ggml_get_numa_affinity(void) {
     return 0; // no NUMA support
 }
 #endif
@@ -5279,7 +5279,7 @@ static inline bool ggml_can_repeat_rows(const struct ggml_tensor * t0, const str
     return (t0->ne[0] == t1->ne[0]) && ggml_can_repeat(t0, t1);
 }
 
-static inline int ggml_up32(int n) {
+static GGML_UNUSED_FUNCTION inline int ggml_up32(int n) {
     return (n + 31) & ~31;
 }
 
@@ -6460,7 +6460,7 @@ struct ggml_tensor * ggml_hadamard(
 
     GGML_ASSERT(n > 1);                    // no point in Hadamard transforms with less than 2 elements
     if (a->ne[0] % n != 0) {
-        fprintf(stderr, "%s: head size %ld is not a multiple of block size %d for tensor %s\n", __func__, a->ne[0], n, a->name);
+        fprintf(stderr, "%s: head size %lld is not a multiple of block size %d for tensor %s\n", __func__, a->ne[0], n, a->name);
         GGML_ABORT("Fatal error");
     }
     if ((n & ~(n-1)) != n) {
@@ -17924,7 +17924,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
-static inline uint32_t simple_gcd(uint32_t a, uint32_t b) {
+static GGML_UNUSED_FUNCTION inline uint32_t simple_gcd(uint32_t a, uint32_t b) {
     while (a != b) {
         if (a > b) a -= b;
         else b -= a;
@@ -22635,7 +22635,7 @@ static void ggml_compute_forward_timestep_embedding(
 
 // ggml_compute_forward_argsort
 
-static void ggml_compute_forward_argsort_f32(
+static GGML_UNUSED_FUNCTION void ggml_compute_forward_argsort_f32(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
 
@@ -29348,7 +29348,7 @@ static void ggml_opt_get_params(int np, struct ggml_tensor * const ps[], float *
     }
 }
 
-static void ggml_opt_get_grad(int np, struct ggml_tensor * const ps[], float * g) {
+static GGML_UNUSED_FUNCTION void ggml_opt_get_grad(int np, struct ggml_tensor * const ps[], float * g) {
     int64_t i = 0;
     for (int p = 0; p < np; ++p) {
         const int64_t ne = ggml_nelements(ps[p]) ;
