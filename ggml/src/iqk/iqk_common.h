@@ -79,8 +79,8 @@ struct Perf {
 #endif
 
 #ifdef __AVX2__
-#define MM256_SET_M128I(a, b) _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
-#define MM256_SET1_M128I(x)     _mm256_broadcastsi128_si256(x)
+#define MM256_SET_M128I(a, b)    _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
+#define MM256_SET1_M128I(x)      _mm256_broadcastsi128_si256(x)
 #define MM256_SRLI128_M128I(x,n) _mm256_blend_epi32(MM256_SET1_M128I(x), _mm256_srli_epi16(MM256_SET1_M128I(x), n), 0xF0)
 #endif
 
