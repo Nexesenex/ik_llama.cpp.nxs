@@ -79,8 +79,9 @@ struct Perf {
 #endif
 
 #ifdef __AVX2__
-#define MM256_SET_M128I(a, b) _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
-#define MM256_SET1_M128I(x)   _mm256_broadcastsi128_si256(x)
+#define MM256_SET_M128I(a, b)    _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
+#define MM256_SET1_M128I(x)      _mm256_broadcastsi128_si256(x)
+#define MM256_SRLI128_M128I(x,n) _mm256_blend_epi32(MM256_SET1_M128I(x), _mm256_srli_epi16(MM256_SET1_M128I(x), n), 0xF0)
 #endif
 
 typedef struct {
@@ -546,7 +547,7 @@ struct Q4Bits {
     }
     inline __m256i dequant16(const uint8_t * qs) const {
         const __m128i aux128 = _mm_loadu_si128((const __m128i *)qs);
-        const __m256i aux256 = MM256_SET_M128I(_mm_srli_epi16(aux128, 4), aux128);
+        const __m256i aux256 = MM256_SRLI128_M128I(aux128, 4);
         return _mm256_and_si256(ml, aux256);
     }
     __m256i values[4];

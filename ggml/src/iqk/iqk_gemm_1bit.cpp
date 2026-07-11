@@ -1355,7 +1355,7 @@ struct DequantizeIQ2BN final : public BaseDequantizer<block_iq2_bn, true> {
     }
     IQK_ALWAYS_INLINE void prepare2(int i, __m256i * val) const {
         auto q2bits_1 = _mm_loadu_si128((const __m128i *)x[i].qs);
-        make2(MM256_SET_M128I(_mm_srli_epi16(q2bits_1, 2), q2bits_1), val);
+        make2(MM256_SRLI128_M128I(q2bits_1, 2), val);
     }
     const __m256i m1_8   = _mm256_set1_epi8(1);
     const __m256i mf_8   = _mm256_set1_epi8(16);
