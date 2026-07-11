@@ -42,7 +42,7 @@ static std::string format_time(const std::chrono::system_clock::time_point & now
     return res;
 }
 
-static json safe_args_parse(const std::string & to_parse) {
+[[maybe_unused]] static json safe_args_parse(const std::string & to_parse) {
     std::string stripped = to_parse;
     if (to_parse.at(0) == '"' && to_parse.at(to_parse.length() - 1) == '"') {
         stripped = to_parse.substr(1, to_parse.length() - 1);
@@ -69,7 +69,7 @@ static std::string string_diff(const std::string & last, const std::string & cur
     return current.substr(last.size());
 }
 
-static bool has_content_or_tool_calls(const common_chat_msg & msg) {
+[[maybe_unused]] static bool has_content_or_tool_calls(const common_chat_msg & msg) {
     return !msg.content.empty() || !msg.tool_calls.empty();
 }
 
@@ -749,7 +749,7 @@ static void foreach_function(const json & tools, const std::function<void(const 
     }
 }
 
-static void foreach_parameter(const json &                                                         function,
+[[maybe_unused]] static void foreach_parameter(const json &                                                         function,
                               const std::function<void(const std::string &, const json &, bool)> & fn) {
     if (!function.contains("parameters") || !function.at("parameters").is_object()) {
         return;
