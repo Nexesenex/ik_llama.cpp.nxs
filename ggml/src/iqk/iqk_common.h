@@ -546,7 +546,7 @@ struct Q4Bits {
     }
     inline __m256i dequant16(const uint8_t * qs) const {
         const __m128i aux128 = _mm_loadu_si128((const __m128i *)qs);
-        const __m256i aux256 = _mm256_blend_epi32(_mm256_broadcastsi128_si256(aux128), _mm256_srli_epi16(_mm256_broadcastsi128_si256(aux128), 4), 0xF0);
+        const __m256i aux256 = MM256_SET_M128I(_mm_srli_epi16(aux128, 4), aux128);
         return _mm256_and_si256(ml, aux256);
     }
     __m256i values[4];

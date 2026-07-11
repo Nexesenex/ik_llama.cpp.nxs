@@ -1784,7 +1784,7 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
             auto qs = iq3[ibl].qs;
             auto qh = iq3[ibl].qh;
             auto scale_bits = _mm_loadu_si128((const __m128i *)iq3[ibl].scales);
-            auto scales8 = _mm256_blend_epi32(_mm256_broadcastsi128_si256(scale_bits), _mm256_srli_epi16(_mm256_broadcastsi128_si256(scale_bits), 4), 0xF0);
+            auto scales8 = MM256_SET_M128I(_mm_srli_epi16(scale_bits, 4), scale_bits);
             helper.vec = _mm256_or_si256(_mm256_slli_epi16(_mm256_and_si256(scales8, _mm256_set1_epi8(0xf)), 1), _mm256_set1_epi8(1));
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto qh32 = (const uint32_t *)qh;
@@ -1797,7 +1797,7 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
                 }
                 qs += 32; qh += 4;
                 auto signs128 = _mm_loadu_si128((const __m128i*)iq3[ibl].signs + ib);
-                auto signs = _mm256_blend_epi32(_mm256_broadcastsi128_si256(signs128), _mm256_srli_epi16(_mm256_broadcastsi128_si256(signs128), 4), 0xF0);
+                auto signs = MM256_SET_M128I(_mm_srli_epi16(signs128, 4), signs128);
 #ifdef HAVE_FANCY_SIMD
                 auto scales = _mm256_cvtepi8_epi32(_mm_set1_epi32(helper.val[ib]));
                 mask[0] = _mm256_cmpeq_epi8_mask(_mm256_and_si256(signs, smask), smask); signs = _mm256_srli_epi16(signs, 1);
