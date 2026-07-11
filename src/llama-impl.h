@@ -50,7 +50,7 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
 // helpers
 //
 
-static void replace_all(std::string & s, const std::string & search, const std::string & replace) {
+[[maybe_unused]] static void replace_all(std::string & s, const std::string & search, const std::string & replace) {
     if (search.empty()) {
         return;
     }
@@ -180,7 +180,7 @@ struct ring_buffer {
 };
 
 LLAMA_ATTRIBUTE_FORMAT(1, 2)
-static std::string format(const char * fmt, ...) {
+[[maybe_unused]] static std::string format(const char * fmt, ...) {
     va_list ap;
     va_list ap2;
     va_start(ap, fmt);
@@ -195,7 +195,7 @@ static std::string format(const char * fmt, ...) {
     return std::string(buf.data(), size);
 }
 
-static std::string llama_format_tensor_shape(const std::vector<int64_t> & ne) {
+[[maybe_unused]] static std::string llama_format_tensor_shape(const std::vector<int64_t> & ne) {
     char buf[256];
     snprintf(buf, sizeof(buf), "%5" PRId64, ne.at(0));
     for (size_t i = 1; i < ne.size(); i++) {
@@ -204,7 +204,7 @@ static std::string llama_format_tensor_shape(const std::vector<int64_t> & ne) {
     return buf;
 }
 
-static std::string llama_format_tensor_shape(const struct ggml_tensor * t) {
+[[maybe_unused]] static std::string llama_format_tensor_shape(const struct ggml_tensor * t) {
     char buf[256];
     snprintf(buf, sizeof(buf), "%5" PRId64, t->ne[0]);
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
