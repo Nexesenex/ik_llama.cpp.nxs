@@ -52,11 +52,11 @@ struct common_reasoning_budget_ctx {
     size_t force_pos;         // next position in forced_tokens to force
 };
 
-static const char * common_reasoning_budget_name(const common_reasoning_budget_ctx * /*smpl*/) {
+[[maybe_unused]] static const char * common_reasoning_budget_name(const common_reasoning_budget_ctx * /*smpl*/) {
     return "reasoning-budget";
 }
 
-static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, llama_token token) {
+[[maybe_unused]] static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, llama_token token) {
     auto * ctx = (common_reasoning_budget_ctx *)smpl;
 
     switch (ctx->state) {
@@ -140,7 +140,7 @@ static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, l
     }
 }
 
-static void common_reasoning_budget_apply(struct common_reasoning_budget_ctx * smpl, llama_token_data_array * cur_p) {
+[[maybe_unused]] static void common_reasoning_budget_apply(struct common_reasoning_budget_ctx * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (common_reasoning_budget_ctx *)smpl;
     if (!ctx) {
         return;
@@ -164,7 +164,7 @@ static void common_reasoning_budget_apply(struct common_reasoning_budget_ctx * s
     }
 }
 
-static void common_reasoning_budget_reset(common_reasoning_budget_ctx * smpl) {
+[[maybe_unused]] static void common_reasoning_budget_reset(common_reasoning_budget_ctx * smpl) {
     auto * ctx = (common_reasoning_budget_ctx *)smpl;
     ctx->state = REASONING_BUDGET_IDLE;
     ctx->remaining = ctx->budget;
@@ -179,12 +179,12 @@ static struct common_reasoning_budget_ctx * common_reasoning_budget_init_state(
     const std::vector<llama_token> & end_tokens, const std::vector<llama_token> & forced_tokens,
     int32_t budget, common_reasoning_budget_state initial_state);
 
-static struct common_reasoning_budget_ctx * common_reasoning_budget_clone(const struct common_reasoning_budget_ctx * smpl) {
+[[maybe_unused]] static struct common_reasoning_budget_ctx * common_reasoning_budget_clone(const struct common_reasoning_budget_ctx * smpl) {
     const auto * ctx = (const common_reasoning_budget_ctx *)smpl;
     return new common_reasoning_budget_ctx(*ctx);
 }
 
-static void common_reasoning_budget_free(struct common_reasoning_budget_ctx * smpl) {
+[[maybe_unused]] static void common_reasoning_budget_free(struct common_reasoning_budget_ctx * smpl) {
     delete (common_reasoning_budget_ctx *)smpl;
 }
 

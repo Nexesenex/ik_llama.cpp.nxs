@@ -31,10 +31,10 @@ static void test_until_common_prefix(testing & t);
 static void test_after_common_suffix_basic(testing & t);
 static void test_after_common_suffix(testing & t);
 
-static void test_analyze_tool_call_pure_json(testing & t);
-static void test_analyze_tool_call_function_name_markers(testing & t);
-static void test_analyze_tool_call_full_markers(testing & t);
-static void test_analyze_tool_call_edge_cases(testing & t);
+[[maybe_unused]] static void test_analyze_tool_call_pure_json(testing & t);
+[[maybe_unused]] static void test_analyze_tool_call_function_name_markers(testing & t);
+[[maybe_unused]] static void test_analyze_tool_call_full_markers(testing & t);
+[[maybe_unused]] static void test_analyze_tool_call_edge_cases(testing & t);
 
 static void test_compare_variants_basic(testing & t);
 static void test_compare_variants_messages_modifier(testing & t);
@@ -1415,7 +1415,7 @@ static void test_cohere_reasoning_detection(testing & t) {
     t.assert_equal("content should be ALWAYS_WRAPPED", content_mode::ALWAYS_WRAPPED, analysis.content.mode);
 }
 
-static void test_tool_format_cohere(testing & t) {
+[[maybe_unused]] static void test_tool_format_cohere(testing & t) {
     common_chat_template tmpl = load_cohere_template(t);
 
     // Run differential analysis

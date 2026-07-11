@@ -65,7 +65,7 @@ static common_http_url common_http_parse_url(const std::string & url) {
     return parts;
 }
 
-static std::pair<httplib::Client, common_http_url> common_http_client(const std::string & url) {
+[[maybe_unused]] static std::pair<httplib::Client, common_http_url> common_http_client(const std::string & url) {
     common_http_url parts = common_http_parse_url(url);
 
     if (parts.host.empty()) {
@@ -94,6 +94,6 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
     return { std::move(cli), std::move(parts) };
 }
 
-static std::string common_http_show_masked_url(const common_http_url & parts) {
+[[maybe_unused]] static std::string common_http_show_masked_url(const common_http_url & parts) {
     return parts.scheme + "://" + (parts.user.empty() ? "" : "****:****@") + parts.host + parts.path;
 }
