@@ -84,7 +84,7 @@ template <typename Q8, typename Q8x4> struct Sum4q4 {
 inline __m256 convert_scales(const uint16_t * scales) {
     auto aux_d = _mm_castsi128_ps(_mm_slli_epi32(_mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)scales)), 16));
     auto aux_m = _mm_cvtepi32_ps(_mm_cvtepi16_epi32(_mm_loadl_epi64((const __m128i *)(scales+4))));
-    return _mm256_set_m128(_mm_mul_ps(aux_d, aux_m), aux_d);
+    return MM256_MULH_M128(aux_d, aux_m);
 }
 
 inline __m128 convert_scales_s(const uint16_t * scales) {
@@ -154,7 +154,7 @@ struct ScaleHelperQ_0_1 {
     inline __m256 prepare4(const Q * y) {
         for (int j = 0; j < 4; ++j) scales8[j] = y[j].d;
         auto s4 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)scales8));
-        return _mm256_set_m128(_mm_mul_ps(s4, min), s4);
+        return MM256_MULH_M128(s4, min);
     }
     template <typename Q>
     inline __m256 prepare4(__m256 other_scales, const Q * y) {
@@ -182,7 +182,7 @@ struct ScaleHelperQ_0_1_MXFP4 {
         r = _mm_blendv_epi8(r, _mm_set1_epi32(0x00200000), _mm_cmpeq_epi32(e32, _mm_setzero_si128()));
         r = _mm_blendv_epi8(r, _mm_set1_epi32(0x00400000), _mm_cmpeq_epi32(e32, ones));
         const auto s4 = _mm_castsi128_ps(r);
-        return _mm256_set_m128(_mm_mul_ps(s4, min), s4);
+        return MM256_MULH_M128(s4, min);
     }
     template <typename Q>
     inline __m256 prepare4(__m256 other_scales, const Q * y) {
