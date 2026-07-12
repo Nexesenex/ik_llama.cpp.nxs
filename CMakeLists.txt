@@ -154,6 +154,65 @@ if (NOT TARGET ggml)
 endif()
 
 #
+# LTO / IPO (top-level: covers the ggml lib AND all standalone targets such
+# as examples/unit_test, which compiles the IQK TUs itself instead of linking
+# the ggml lib). NOTE: add_compile_options / CMAKE_INTERPROCEDURAL_OPTIMIZATION
+# are directory-scoped — ggml/src-scoped wiring never reaches examples/, so a
+# scoped-only setup builds the bench binary silently without LTO.
+#
+
+if (GGML_LTO)
+    # clang-cl is detected as MSVC by CMake, which applies /O2 (Release) and
+    # keeps frame pointers. Override with Clang-native flags for better codegen
+    # on hand-tuned AVX-VNNI kernels (last flag wins: placed after defaults).
+    if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        add_compile_options(-O3 -fomit-frame-pointer)
+    endif()
+    if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        # clang-cl + lld-link: MSVC-style LTCG via explicit /GL (compile) +
+        # /LTCG (link). Deliberately NOT CMake IPO / CheckIPOSupported: its
+        # Clang branch emits -flto=thin at compile time but links WITHOUT the
+        # LTO plugin, dying in lld-link with "error: Invalid record", and raw
+        # -flto=thin at both ends additionally fails MSVC STL internals at
+        # link. The INTERPROCEDURAL_OPTIMIZATION property is avoided for the
+        # same reason (it draws from the same per-ID flag table). /GL objects
+        # stay COFF-consumable and /LTCG links through lld-link with correct
+        # MSVC runtime linkage.
+        # HARD REQUIREMENT: a homogeneous LLVM toolset (clang-cl, llvm-lib,
+        # lld-link all from the SAME VS LLVM set). A VS18 clang-cl with VS2022
+        # lld-link fails on bitcode version skew no matter the flags: configure
+        # clang-cl build dirs from the matching VS Native Tools prompt.
+        message(STATUS "GGML_LTO: /GL + /LTCG (clang-cl MSVC-style LTCG)")
+        add_compile_options(/GL)
+        add_link_options(/LTCG)
+        # The ggml lib predates this point: stamp it explicitly (targets added
+        # later inherit both directory defaults above).
+        if (TARGET ggml)
+            if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+                target_compile_options(ggml PRIVATE -O3 -fomit-frame-pointer)
+            endif()
+            target_compile_options(ggml PRIVATE /GL)
+            target_link_options(ggml PRIVATE /LTCG)
+        endif()
+    else()
+        cmake_policy(SET CMP0069 NEW)
+        include(CheckIPOSupported)
+        check_ipo_supported(RESULT NXS_IPO_OK OUTPUT NXS_IPO_MSG)
+        if (NXS_IPO_OK)
+            message(STATUS "GGML_LTO: IPO enabled (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+            set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+            # The ggml lib predates this point: stamp it explicitly (targets added
+            # later, including unit_test, inherit the directory default above).
+            if (TARGET ggml)
+                set_property(TARGET ggml PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+            endif()
+        else()
+            message(FATAL_ERROR "GGML_LTO=ON but IPO is not supported by this toolchain: ${NXS_IPO_MSG} (disable with -DGGML_LTO=OFF)")
+        endif()
+    endif()
+endif()
+
+#
 # build the library
 #
 

@@ -39,6 +39,12 @@ target_compile_definitions(unit_test PRIVATE
     TEST_DISPATCH
 )
 
+# NOTE: no per-target LTO here on purpose. The top-level GGML_LTO block
+# applies /GL + /LTCG via directory defaults, which this target inherits.
+# An INTERPROCEDURAL_OPTIMIZATION property must NOT be set for clang-cl: it
+# draws from CMake's per-ID flag table, whose Clang branch emits the broken
+# -flto=thin (see root CMakeLists.txt).
+
 if (MSVC)
     target_compile_options(unit_test PRIVATE /arch:AVX2)
     target_compile_definitions(unit_test PRIVATE __AVXVNNI__ __AVXVNNIINT8__)
