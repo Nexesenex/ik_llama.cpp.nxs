@@ -58,6 +58,15 @@ option(GGML_NATIVE "ggml: enable -march=native flag"     ${GGML_NATIVE_DEFAULT})
 option(GGML_LTO    "ggml: enable link time optimization" OFF)
 option(GGML_CCACHE "ggml: use ccache if available"       ON)
 
+# When building with clang-cl (MSVC SimulateId), CMake applies MSVC defaults:
+# /O2 for Release instead of -O3, and frame-pointer heuristics differ from
+# native clang. Tune for this hand-tuned kernel-heavy codebase.
+if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    # clang-cl defaults GGML_LTO to ON. LLD (the default linker for clang-cl)
+    # supports LTO via CMake's IPO layer (/GL + /LTCG).
+    set(GGML_LTO ON CACHE BOOL "ggml: enable link time optimization" FORCE)
+endif()
+
 # debug
 option(GGML_ALL_WARNINGS           "ggml: enable all compiler warnings"                   ON)
 option(GGML_ALL_WARNINGS_3RD_PARTY "ggml: enable all compiler warnings in 3rd party libs" OFF)
