@@ -282,7 +282,13 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].nsm   = prop.multiProcessorCount;
         info.devices[id].smpb  = prop.sharedMemPerBlock;
         info.devices[id].integrated = prop.integrated;
-        info.devices[id].is_tcc = !prop.kernelExecTimeoutEnabled;
+#if CUDART_VERSION >= 12000
+        int kernel_exec_timeout = 1;
+        cudaDeviceGetAttribute(&kernel_exec_timeout, cudaDevAttrKernelExecTimeout, id);
+        info.devices[id].is_tcc = !kernel_exec_timeout;
+#else
+        info.devices[id].is_tcc     = !prop.kernelExecTimeoutEnabled;
+#endif
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
         info.devices[id].cc = 100*prop.major + 10*prop.minor + CC_OFFSET_AMD;
