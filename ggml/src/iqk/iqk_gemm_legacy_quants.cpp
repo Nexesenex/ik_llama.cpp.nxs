@@ -2351,14 +2351,14 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             set_functions<Q6_0_1_Unpacker>(kernels);
             break;
         case GGML_TYPE_Q8_0:
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             set_functions<Q8_0_1_Unpacker>(kernels);
 #else
             set_functions<Q8_0_Unpacker>(kernels);
 #endif
             break;
         case GGML_TYPE_IQ4_NL:
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             set_functions<IQ4_NL_UnpackerU>(kernels);
 #else
             set_functions<IQ4_NL_UnpackerS>(kernels);
@@ -2369,7 +2369,7 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             break;
         case GGML_TYPE_Q4_0_R8:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q4_0_r8_q8_2, kernels)
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             func16 = mul_mat_q4_0_r8_q8_2<16>;
 #endif
             break;
@@ -3672,7 +3672,7 @@ inline std::pair<mul_mat_t, int> mul_mat_kernel(int int_typeA, int nq) {
 #ifdef __aarch64__
         MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerQ80, nq);
 #else
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         if (nq == 1) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q8_0_1_Unpacker, 1, k_step>, 1);
         if (nq == 2) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q8_0_1_Unpacker, 2, k_step>, 2);
         if (nq == 4) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q8_0_1_Unpacker, 4, k_step>, 4);
@@ -3731,7 +3731,7 @@ inline std::pair<mul_mat_t, int> mul_mat_kernel(int int_typeA, int nq) {
 #ifdef __aarch64__
        MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerIQ4NL, nq);
 #else
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
        MAKE_FUNCS(mul_mat_qX_1_q8_2_T<IQ4_NL_UnpackerU, nq);
 #else
        MAKE_FUNCS2(mul_mat_qX_0_q8_0_T<IQ4_NL_UnpackerS, block_q8_2, nq);
