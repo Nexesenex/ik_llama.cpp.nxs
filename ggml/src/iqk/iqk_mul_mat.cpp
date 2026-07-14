@@ -696,6 +696,14 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
             }
             return true;
         }
+        // R4/R8/R16 kernels require nrc_x multiples of num_rows (4/8/16).
+        // Tiling below uses min_step 16/32 with a remainder tile that can
+        // break that (e.g. Nx=20 -> 16+4 for R8). Bail out early so the
+        // caller uses a safe fallback instead of hitting GGML_ASSERT
+        // inside the kernel (kquants.cpp:1067) and destabilizing the server.
+        if (Nx % MulMat::num_rows(ggml_type(typeA)) != 0) {
+            return false;
+        }
         if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
             return false;
         }
