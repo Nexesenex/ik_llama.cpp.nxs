@@ -838,10 +838,10 @@ void mul_mat_iq1_s_q8_K(int n, const void * vx, size_t bx, const DataInfo& info,
                 for (int ib64 = 0; ib64 < QK_K/64; ++ib64) {
                     auto qy1 = q8.load_quants(iy, ibl, 2*ib64+0);
                     auto qy2 = q8.load_quants(iy, ibl, 2*ib64+1);
-#ifdef HAVE_FANCY_SIMD
-                    auto dot1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[2*ib64+0], qy1);
-                    auto dot2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[2*ib64+1], qy2);
-                    sumi = _mm256_dpwssd_epi32(sumi, scales[ib64], _mm256_packs_epi32(dot1, dot2));
+#ifdef HAVE_VNNI256
+                    auto dot1 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[2*ib64+0], qy1);
+                    auto dot2 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[2*ib64+1], qy2);
+                    sumi = ggml_mm256_dpwssd_epi32(sumi, scales[ib64], _mm256_packs_epi32(dot1, dot2));
 #else
                     auto dot1 = _mm256_maddubs_epi16(qx[2*ib64+0], qy1);
                     auto dot2 = _mm256_maddubs_epi16(qx[2*ib64+1], qy2);
@@ -849,8 +849,8 @@ void mul_mat_iq1_s_q8_K(int n, const void * vx, size_t bx, const DataInfo& info,
                     sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(scales[ib64], dot));
 #endif
                 }
-#ifdef HAVE_FANCY_SIMD
-                sumi = _mm256_dpwssd_epi32(sumi, bsums, deltas);
+#ifdef HAVE_VNNI256
+                sumi = ggml_mm256_dpwssd_epi32(sumi, bsums, deltas);
 #else
                 sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(bsums, deltas));
 #endif
@@ -1051,12 +1051,12 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
                                           iq1s_grid_us[helper.val[ 7]], iq1s_grid_us[helper.val[ 6]]);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + k);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     // 0,0, 1,1, 0,0, 1,1 as int32_t
-                    auto sumi1 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
+                    auto sumi1 = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(),
                                 qx[0], _mm256_shuffle_epi32(y, 0x44)), qx[1], _mm256_shuffle_epi32(y, 0xee));
                     // 2,2, 3,3, 2,2, 3,3 as int32_t
-                    auto sumi2 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
+                    auto sumi2 = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(),
                                 qx[2], _mm256_shuffle_epi32(y, 0x44)), qx[3], _mm256_shuffle_epi32(y, 0xee));
                     auto sumi = _mm256_packs_epi32(sumi1, sumi2);
 #else
@@ -1095,7 +1095,7 @@ static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataI
     GGML_ASSERT(nb%4 == 0);
     auto shuffle0 = _mm256_set_epi64x(0x0909090909090909, 0x0808080808080808, 0x0101010101010101, 0x0000000000000000);
     auto step = _mm256_set1_epi8(2);
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
     auto m1 = _mm256_set1_epi16(1);
 #endif
     __m256i qx[4];
@@ -1145,12 +1145,12 @@ static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataI
                     auto y = _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + k);
                     auto y1 = _mm256_shuffle_epi32(y, 0x44);
                     auto y2 = _mm256_shuffle_epi32(y, 0xee);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     // 0,0, 1,1, 0,0, 1,1 as int32_t
-                    auto sumi1 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
+                    auto sumi1 = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(),
                                 s0, _mm256_sign_epi8(y1, qx[0])), s1, _mm256_sign_epi8(y2, qx[1]));
                     // 2,2, 3,3, 2,2, 3,3 as int32_t
-                    auto sumi2 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
+                    auto sumi2 = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(),
                                 s2, _mm256_sign_epi8(y1, qx[2])), s3, _mm256_sign_epi8(y2, qx[3]));
                     auto sumi = _mm256_packs_epi32(sumi1, sumi2);
 #else
@@ -1252,7 +1252,7 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
     __m256i accd[nrc_y];
     __m256i val[4];
 
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
     const auto m1_16  = _mm256_set1_epi16(1);
 #endif
 
@@ -1274,9 +1274,9 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
             for (int i = 0; i < nb/2; ++i) {
                 deq.prepare_iq1bn_quants(x + 2*i + 0, val[0], val[1]);
                 deq.prepare_iq1bn_quants(x + 2*i + 1, val[2], val[3]);
-#ifdef HAVE_FANCY_SIMD
-                acc1 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(acc1, val[0], q8.load_quants(0, i, 0)), val[1], q8.load_quants(0, i, 1));
-                acc2 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(acc2, val[2], q8.load_quants(0, i, 2)), val[3], q8.load_quants(0, i, 3));
+#ifdef HAVE_VNNI256
+                acc1 = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(acc1, val[0], q8.load_quants(0, i, 0)), val[1], q8.load_quants(0, i, 1));
+                acc2 = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(acc2, val[2], q8.load_quants(0, i, 2)), val[3], q8.load_quants(0, i, 3));
 #else
                 auto dot1 = _mm256_add_epi16(_mm256_maddubs_epi16(val[0], q8.load_quants(0, i, 0)),
                                              _mm256_maddubs_epi16(val[1], q8.load_quants(0, i, 1)));
@@ -1298,8 +1298,8 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
                 deq.prepare_iq1bn_quants(x + 2*i + 1, val[2], val[3]);
 
                 for (int iy = 0; iy < nrc_y; ++iy) {
-#ifdef HAVE_FANCY_SIMD
-                    accd[iy]  = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_dpbusd_epi32(accd[iy],
+#ifdef HAVE_VNNI256
+                    accd[iy]  = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(accd[iy],
                                         val[0], q8.load_quants(iy, i, 0)),
                                         val[1], q8.load_quants(iy, i, 1)),
                                         val[2], q8.load_quants(iy, i, 2)),
@@ -1319,8 +1319,8 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
         if (i < nb) {
             deq.prepare_iq1bn_quants(x + i, val[0], val[1]);
             for (int iy = 0; iy < nrc_y; ++iy) {
-#ifdef HAVE_FANCY_SIMD
-                accd[iy] = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(accd[iy],
+#ifdef HAVE_VNNI256
+                accd[iy] = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(accd[iy],
                             val[0], q8.load_quants(iy, i/2, 0)), val[1], q8.load_quants(iy, i/2, 1));
 #else
                 auto dot = _mm256_madd_epi16(m1_16, _mm256_add_epi16(_mm256_maddubs_epi16(val[0], q8.load_quants(iy, i/2, 0)),
@@ -1371,7 +1371,7 @@ IQK_NOINLINE void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const 
     __m256i  accd[nrc_y];
     __m256i  val[4];
 
-#ifndef HAVE_FANCY_SIMD
+#ifndef HAVE_VNNI256
     const auto m1_16  = _mm256_set1_epi16(1);
 #endif
 
@@ -1383,10 +1383,10 @@ IQK_NOINLINE void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const 
             __m256i acc[2] = {};
             for (int i = 0; i < nb/2; ++i) {
                 deq.prepare4(i, val);
-#ifdef HAVE_FANCY_SIMD
-                acc[0] = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(acc[0], val[0], q8.load_quants(0, i, 0)),
+#ifdef HAVE_VNNI256
+                acc[0] = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(acc[0], val[0], q8.load_quants(0, i, 0)),
                                                                          val[1], q8.load_quants(0, i, 1));
-                acc[1] = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(acc[1], val[2], q8.load_quants(0, i, 2)),
+                acc[1] = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(acc[1], val[2], q8.load_quants(0, i, 2)),
                                                                          val[3], q8.load_quants(0, i, 3));
 #else
                 auto dot1 = _mm256_add_epi16(_mm256_maddubs_epi16(val[0], q8.load_quants(0, i, 0)),
@@ -1406,8 +1406,8 @@ IQK_NOINLINE void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const 
             for (int i = 0; i < nb/2; ++i) {
                 deq.prepare4(i, val);
                 for (int iy = 0; iy < nrc_y; ++iy) {
-#ifdef HAVE_FANCY_SIMD
-                    accd[iy] = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_dpbusd_epi32(accd[iy],
+#ifdef HAVE_VNNI256
+                    accd[iy] = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(accd[iy],
                                         val[0], q8.load_quants(iy, i, 0)), val[1], q8.load_quants(iy, i, 1)),
                                         val[2], q8.load_quants(iy, i, 2)), val[3], q8.load_quants(iy, i, 3));
 #else
@@ -1425,8 +1425,8 @@ IQK_NOINLINE void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const 
         if (i < nb) {
             deq.prepare2(i, val);
             for (int iy = 0; iy < nrc_y; ++iy) {
-#ifdef HAVE_FANCY_SIMD
-                accd[iy] = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(accd[iy], val[0], q8.load_quants(iy, i/2, 0)),
+#ifdef HAVE_VNNI256
+                accd[iy] = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(accd[iy], val[0], q8.load_quants(iy, i/2, 0)),
                                                                              val[1], q8.load_quants(iy, i/2, 1));
 #else
                 auto dot = _mm256_madd_epi16(m1_16, _mm256_add_epi16(_mm256_maddubs_epi16(val[0], q8.load_quants(iy, i/2, 0)),
@@ -1517,14 +1517,14 @@ static void mul_mat_q1_0_g128_r8_q8_k_1(int n, const void * vx, size_t bx, const
     __m256i qx[8];
     __m256i sumi[2*nrc_y] = {};
     auto dot = [&qx] (const int8_t * y, __m256i & sumi1, __m256i & sumi2) {
-        sumi1 = _mm256_dpbusd_epi32(sumi1, qx[0], _mm256_set1_epi32(*((const int32_t *)(y +  0))));
-        sumi2 = _mm256_dpbusd_epi32(sumi2, qx[1], _mm256_set1_epi32(*((const int32_t *)(y +  4))));
-        sumi1 = _mm256_dpbusd_epi32(sumi1, qx[2], _mm256_set1_epi32(*((const int32_t *)(y +  8))));
-        sumi2 = _mm256_dpbusd_epi32(sumi2, qx[3], _mm256_set1_epi32(*((const int32_t *)(y + 12))));
-        sumi1 = _mm256_dpbusd_epi32(sumi1, qx[4], _mm256_set1_epi32(*((const int32_t *)(y + 16))));
-        sumi2 = _mm256_dpbusd_epi32(sumi2, qx[5], _mm256_set1_epi32(*((const int32_t *)(y + 20))));
-        sumi1 = _mm256_dpbusd_epi32(sumi1, qx[6], _mm256_set1_epi32(*((const int32_t *)(y + 24))));
-        sumi2 = _mm256_dpbusd_epi32(sumi2, qx[7], _mm256_set1_epi32(*((const int32_t *)(y + 28))));
+        sumi1 = ggml_mm256_dpbusd_epi32(sumi1, qx[0], _mm256_set1_epi32(*((const int32_t *)(y +  0))));
+        sumi2 = ggml_mm256_dpbusd_epi32(sumi2, qx[1], _mm256_set1_epi32(*((const int32_t *)(y +  4))));
+        sumi1 = ggml_mm256_dpbusd_epi32(sumi1, qx[2], _mm256_set1_epi32(*((const int32_t *)(y +  8))));
+        sumi2 = ggml_mm256_dpbusd_epi32(sumi2, qx[3], _mm256_set1_epi32(*((const int32_t *)(y + 12))));
+        sumi1 = ggml_mm256_dpbusd_epi32(sumi1, qx[4], _mm256_set1_epi32(*((const int32_t *)(y + 16))));
+        sumi2 = ggml_mm256_dpbusd_epi32(sumi2, qx[5], _mm256_set1_epi32(*((const int32_t *)(y + 20))));
+        sumi1 = ggml_mm256_dpbusd_epi32(sumi1, qx[6], _mm256_set1_epi32(*((const int32_t *)(y + 24))));
+        sumi2 = ggml_mm256_dpbusd_epi32(sumi2, qx[7], _mm256_set1_epi32(*((const int32_t *)(y + 28))));
     };
     __m256 acc[nrc_y] = {};
     for (int ix = 0; ix < nrc_x; ix += n_rows) {
@@ -1635,10 +1635,10 @@ static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const D
     __m256i qx[4];
     auto dot = [&qx] (const int8_t * y, __m256i & sumi) {
 #ifdef HAVE_VNNI256
-        sumi = _mm256_dpbusd_epi32(sumi, qx[0], _mm256_set1_epi32(*((const int32_t *)(y +  0))));
-        sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_set1_epi32(*((const int32_t *)(y +  4))));
-        sumi = _mm256_dpbusd_epi32(sumi, qx[2], _mm256_set1_epi32(*((const int32_t *)(y +  8))));
-        sumi = _mm256_dpbusd_epi32(sumi, qx[3], _mm256_set1_epi32(*((const int32_t *)(y + 12))));
+        sumi = ggml_mm256_dpbusd_epi32(sumi, qx[0], _mm256_set1_epi32(*((const int32_t *)(y +  0))));
+        sumi = ggml_mm256_dpbusd_epi32(sumi, qx[1], _mm256_set1_epi32(*((const int32_t *)(y +  4))));
+        sumi = ggml_mm256_dpbusd_epi32(sumi, qx[2], _mm256_set1_epi32(*((const int32_t *)(y +  8))));
+        sumi = ggml_mm256_dpbusd_epi32(sumi, qx[3], _mm256_set1_epi32(*((const int32_t *)(y + 12))));
 #else
         auto s0 = _mm256_maddubs_epi16(qx[0], _mm256_set1_epi32(*((const int32_t *)(y +  0))));
         auto s1 = _mm256_maddubs_epi16(qx[1], _mm256_set1_epi32(*((const int32_t *)(y +  4))));
@@ -1747,10 +1747,10 @@ static void mul_mat_T_q8_k128(int n, const void * vx, size_t bx, const DataInfo&
                     for (int iy = 0; iy < nrc_y; ++iy) {
                         auto yb = q8.y[iy][ib].qs + 32*k + 16*j;
 #ifdef HAVE_VNNI256
-                        sumi[iy] = _mm256_dpbusd_epi32(sumi[iy], qx[0], _mm256_set1_epi32(*(const int32_t *)(yb +  0)));
-                        sumi[iy] = _mm256_dpbusd_epi32(sumi[iy], qx[1], _mm256_set1_epi32(*(const int32_t *)(yb +  4)));
-                        sumi[iy] = _mm256_dpbusd_epi32(sumi[iy], qx[2], _mm256_set1_epi32(*(const int32_t *)(yb +  8)));
-                        sumi[iy] = _mm256_dpbusd_epi32(sumi[iy], qx[3], _mm256_set1_epi32(*(const int32_t *)(yb + 12)));
+                        sumi[iy] = ggml_mm256_dpbusd_epi32(sumi[iy], qx[0], _mm256_set1_epi32(*(const int32_t *)(yb +  0)));
+                        sumi[iy] = ggml_mm256_dpbusd_epi32(sumi[iy], qx[1], _mm256_set1_epi32(*(const int32_t *)(yb +  4)));
+                        sumi[iy] = ggml_mm256_dpbusd_epi32(sumi[iy], qx[2], _mm256_set1_epi32(*(const int32_t *)(yb +  8)));
+                        sumi[iy] = ggml_mm256_dpbusd_epi32(sumi[iy], qx[3], _mm256_set1_epi32(*(const int32_t *)(yb + 12)));
 #else
                         auto s0 = _mm256_maddubs_epi16(qx[0], _mm256_set1_epi32(*(const int32_t *)(yb +  0)));
                         auto s1 = _mm256_maddubs_epi16(qx[1], _mm256_set1_epi32(*(const int32_t *)(yb +  4)));
@@ -2256,7 +2256,7 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
                 expected_typeB = GGML_TYPE_Q8_2_X4;
             } else {
                 IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq1_s_q8_K, funcs);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 func16 = mul_mat_iq1_s_q8_K<16>;
 #endif
                 expected_typeB = GGML_TYPE_Q8_K;
@@ -2265,7 +2265,7 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
         case GGML_TYPE_IQ1_S_R4:
             if (ne00%128 != 0) return false;
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq1_s_r4_q8_1, funcs);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             func16 = mul_mat_iq1_s_r4_q8_1<16>;
 #endif
             break;
@@ -2277,7 +2277,7 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
         case GGML_TYPE_IQ1_M_R4:
             if (ne00%128 != 0) return false;
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq1_m_r4_q8_0, funcs);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             func16 = mul_mat_iq1_m_r4_q8_0<16>;
 #endif
             break;
