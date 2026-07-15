@@ -397,6 +397,116 @@ struct gpt_params {
 
     std::string cuda_params          = ""; // comma separated list of cuda parameters key=value1,key2=value2
 
+    // =========================================================================
+    // GPU clock-elevation flags (Windows, WDDM GPUs only). Summary of defaults:
+    //
+    //   --shark     [N[,N,...]]  interval default 25 ms;        off by default (empty)
+    //   --piranha   [N[,N,...]]  interval default 50 ms;        off by default (empty)
+    //   --orca      [FMA1,...]   FMA default 32768;             off by default (empty)
+    //   --kraken    [MMA1,...]   HMMA default 8192 (tensor cores);  off by default (empty)
+    //   --orca-ping [FMA1,...]   FMA default 8192;              off by default (empty)
+    //   --cobra     [1/0,...]    per-GPU on/off (bare = all on); off by default (empty)
+    //   --fisherman [FMA1,...]   FMA default 8192 (decode-solicited);  off by default (empty)
+    //   --harpoon   [MMA1,...]   HMMA default 8192 (decode-solicited); off by default (empty)
+    //   --hb        [N[,N,...]]  interval default 25 ms;        off by default (empty)
+    //   --barracuda [N[,N,...]]  interval default 200 ms;       off by default (empty)
+    //   --perch     [N[,N,...]]  interval default 100 ms;       off by default (empty)
+    //
+    //   - Off by default means an empty vector (flag not given).
+    //   - A bare flag (no value) activates it for every WDDM GPU at the default.
+    //   - Supplying one value broadcasts it to every WDDM GPU.
+    //   - Supplying a comma list maps positionally, in ggml device order
+    //     (TCC devices don't consume a slot); 0 in the list disables that GPU.
+    //   - All of these except --shark accept a per-GPU comma/N-value array.
+    //   - P-state forcing kicks in on top of the pollers; temp limit 85 C stops
+    //     the external poller.
+//   - --orca / --orca-ping FMA scale down as the prompt fills the context,
+    //     split into 256 brackets in 8 slices of 32 (scale in 1/256ths of the
+    //     full budget): slices 1-2 fall 2x faster than baseline, slices 3-4 at
+    //     baseline pace, slices 5-7 at half pace, and slice 8 issues no FMA at
+    //     all (the KV cache is nearly full, so real attention work suffices).
+    // =========================================================================
+
+    // Legacy GPU clock elevation via external gpu_poller.exe (Windows only, --shark)
+    bool   shark_enable            = false;
+    // Per-WDDM-GPU poller interval(s) in ms. One value applies to all WDDM GPUs;
+    // a comma list maps positionally (fewer values than GPUs: only those GPUs).
+    // e.g. --shark 20,40 : GPU0=20 ms, GPU1=40 ms. Empty = off (default); bare
+    // --shark applies 25 ms to all WDDM GPUs.
+    std::vector<int> shark_interval_ms = {};
+    std::string shark_path         = "gpu_poller.exe";
+    std::vector<std::string> shark_args; // additional arguments passed to the poller (e.g. --interval 20)
+    int    shark_temp_limit        = 85;   // temperature limit in Celsius (stops poller if exceeded)
+
+    // In-process NVAPI poller - forces high P-states on WDDM GPUs (Windows only, --piranha N)
+    bool   piranha_enable          = false;
+    // Same per-WDDM-GPU mapping as shark_interval_ms (default 50 for all);
+    // 0 in the list turns polling off for that GPU, --piranha 0 disables the poller.
+    // Empty = off (default); bare --piranha applies 50 ms to all WDDM GPUs.
+    std::vector<int> piranha_interval_ms = {};
+
+    // Per-card heat protection thresholds in Celsius (--poller-temps / -pt).
+    // First value = pause temp, second = resume temp: a GPU reaching the pause
+    // temp is skipped (no NVAPI queries, no warmup burst) until it cools below
+    // the resume temp. A single value N sets pause = N with resume = N - 10°C
+    // hysteresis. Empty = default 85,75 (bare keeps defaults); a 0 pause temp
+    // disables heat protection.
+    std::vector<int> poller_temps = {};    // e.g. --poller-temps 85,75 : pause at 85°C, resume below 75°C
+
+    // CUDA heartbeat keep-alive - warm up WDDM GPUs during TG to keep clocks elevated (Windows only)
+    // FMA chain length per non-TCC (WDDM) GPU, in device order. Single value
+    // broadcasts to every WDDM GPU; 0 disables a GPU. Empty = disabled.
+    std::vector<int> orca_fma;     // e.g. --orca 262144,393216 : GPU0=262144 FMA, GPU1=393216 FMA; 0 disables that GPU
+    // Perch FMA ping strength per WDDM GPU (same broadcast mapping as orca_fma).
+    // Default ~1 ms.
+    std::vector<int> orca_ping;    // e.g. --orca-ping 8192,98304 : stronger ping per cycle; 0 disables that GPU
+
+    // Decode-gated mem-clock companion (--cobra N[,N,...]). Per-WDDM-GPU on/off
+    // mask: 1 = the mem burst fires on that GPU at every TG batch, mirroring the
+    // orca FMA cadence (mem-only, FMA-free). Single value broadcasts to every WDDM
+    // GPU (bare --cobra = all on); 0 = off for a GPU. Empty = off (default).
+    std::vector<int> cobra_mask = {};    // e.g. --cobra 1,0,1 : GPU0 on, GPU1 off, GPU2 on
+
+    // Decode-solicited FMA probe (--fisherman N[,N,...]). Per-WDDM-GPU FMA chain
+    // length for the burst fired when that GPU actually receives compute in the
+    // current TG batch (rides along with real kernels; default ~8192). Same mapping
+    // as cobra_mask: single value broadcasts to every WDDM GPU (bare --fisherman =
+    // all GPUs at the default), 0 = off for a GPU. Empty = off (default).
+    std::vector<int> fisherman_fma = {}; // e.g. --fisherman 8192,16384 : GPU0=8192 FMA, GPU1=16384 FMA
+
+    // Tensor-core warmup (--kraken N[,N,...]). Per-WDDM-GPU HMMA chain length for
+    // the burst fired at every TG batch like --orca, but using tensor-core MMA
+    // (2048 FLOPs per m16n8k16 fp16 instruction vs 2 per scalar FMA), so the same
+    // wall-clock pulse delivers ~1000x the compute work - a denser boost for the
+    // clock governor. Same mapping as orca_fma: single value broadcasts to every
+    // WDDM GPU (bare --kraken = all GPUs at the default), 0 = off for a GPU.
+    // Empty = off (default).
+    std::vector<int> kraken_mma = {};    // e.g. --kraken 65536,32768 : GPU0=65536 HMMA, GPU1=32768 HMMA
+
+    // Decode-solicited HMMA probe (--harpoon N[,N,...]). Per-WDDM-GPU HMMA chain
+    // length for the burst fired when that GPU actually receives compute in the
+    // current TG batch (rides along with real kernels, like --fisherman but for
+    // tensor cores; ~1000x denser per ms). Same mapping as fisherman_fma: single
+    // value broadcasts to every WDDM GPU (bare --harpoon = all GPUs at the
+    // default), 0 = off for a GPU. Empty = off (default).
+    std::vector<int> harpoon_mma = {};   // e.g. --harpoon 4096,8192 : GPU0=4096 HMMA, GPU1=8192 HMMA
+
+    // Per-device event record+sync tickle (--hb N[,N,...]). Cheap WDDM keep-alive,
+    // independent of shark/orca/piranha. Per-GPU interval(s) in ms, 0 = off for a
+    // GPU. Empty = off (default); bare --hb applies 25 ms to all WDDM GPUs.
+    std::vector<int> hb_interval_ms = {};
+
+    // Autonomous mem-clock stream (--barracuda N[,N,...]) on WDDM GPUs,
+    // independent of shark/orca/piranha (no NVAPI). Same per-GPU mapping as
+    // shark_interval_ms; 0 = off for a GPU. Empty = off (default); bare
+    // --barracuda applies 200 ms to all WDDM GPUs.
+    std::vector<int> barracuda_interval_ms = {};
+
+    // Autonomous FMA ping (--perch N[,N,...]) on WDDM GPUs, the core-clock half
+    // of the ping load. Same per-GPU mapping; 0 = off for a GPU. Empty = off
+    // (default); bare --perch applies 100 ms to all WDDM GPUs.
+    std::vector<int> perch_interval_ms = {};
+
     std::vector<std::string> in_files;     // all input files
     std::vector<std::string> antiprompt;   // strings upon which more user input is prompted (a.k.a. reverse prompts)
     std::vector<std::string> ban_phrases;  // strings that are banned in generation

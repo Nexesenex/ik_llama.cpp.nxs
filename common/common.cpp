@@ -93,6 +93,96 @@
 #endif
 using json = nlohmann::ordered_json;
 
+// Shark GPU clock elevation callback (Windows only)
+// Uses a lightweight GPU poller instead of gpushark
+#if defined(_WIN32) && defined(GGML_USE_CUDA)
+static std::string g_shark_path = "gpu_poller.exe";
+static std::vector<std::string> g_shark_args;
+static std::vector<int> g_shark_interval_ms; // per-WDDM-GPU (--shark N[,N,...]); set from --shark
+static int g_shark_temp_limit  = 85;
+static bool g_shark_temp_ok    = true; // decided once at setup, off the decode path
+static HANDLE g_shark_process = nullptr;
+
+static bool check_gpu_temp_ok() {
+    // Use NVAPI (in-process) instead of spawning nvidia-smi. Fail-open.
+    return llama_nvapi_gpu_temp_ok(g_shark_temp_limit);
+}
+
+static void common_shark_callback(bool start, void * user_data) {
+    (void)user_data;
+    if (start) {
+        // Temp guard was decided once at setup (g_shark_temp_ok); nothing
+        // to check on the decode thread.
+        if (!g_shark_temp_ok) {
+            return;
+        }
+        // Launch lightweight GPU poller
+        if (g_shark_process != nullptr) {
+            return; // already running
+        }
+        // Check if file exists
+        DWORD attrs = GetFileAttributesA(g_shark_path.c_str());
+        if (attrs == INVALID_FILE_ATTRIBUTES) {
+            fprintf(stderr, "shark: GPU poller not found at %s\n", g_shark_path.c_str());
+            return;
+        }
+
+        // Build command line
+        std::string cmd = "\"" + g_shark_path + "\"";
+        for (const auto & arg : g_shark_args) {
+            cmd += " " + arg;
+        }
+        // Pass the --shark N interval unless the user already set one via --shark-arg
+        bool has_interval = false;
+        for (const auto & arg : g_shark_args) {
+            if (arg.rfind("--interval", 0) == 0) {
+                has_interval = true;
+                break;
+            }
+        }
+        if (!has_interval) {
+            cmd += " --interval ";
+            for (size_t k = 0; k < g_shark_interval_ms.size(); ++k) {
+                if (k > 0) cmd += ",";
+                cmd += std::to_string(g_shark_interval_ms[k]);
+            }
+        }
+
+        STARTUPINFOA si = { sizeof(si) };
+        PROCESS_INFORMATION pi;
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE; // run hidden
+
+        if (CreateProcessA(
+                nullptr,
+                (LPSTR)cmd.c_str(),
+                nullptr, nullptr, FALSE,
+                CREATE_NO_WINDOW | DETACHED_PROCESS,
+                nullptr, nullptr, &si, &pi)) {
+            g_shark_process = pi.hProcess;
+            CloseHandle(pi.hThread);
+            fprintf(stderr, "shark: launched GPU poller (pid=%d)\n", pi.dwProcessId);
+        } else {
+            fprintf(stderr, "shark: failed to launch GPU poller (error=%lu)\n", GetLastError());
+        }
+    } else {
+        // Stop GPU poller
+        if (g_shark_process != nullptr) {
+            if (TerminateProcess(g_shark_process, 0)) {
+                fprintf(stderr, "shark: terminated GPU poller\n");
+            }
+            CloseHandle(g_shark_process);
+            g_shark_process = nullptr;
+        }
+    }
+}
+#else
+static void common_shark_callback(bool start, void * user_data) {
+    (void)start;
+    (void)user_data;
+}
+#endif
+
 common_time_meas::common_time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
 
 common_time_meas::~common_time_meas() {
@@ -1187,6 +1277,16 @@ static common_speculative_stage_params common_speculative_stage_from_arg(const s
 
 #define CHECK_ARG if (++i >= argc) { invalid_param = true; return true; }
 
+// Defaults for the bare --orca / --orca-ping / --fisherman / --kraken /
+// --harpoon flags (no value). Mirrored in ggml-cuda.cu (GGML_CUDA_ORCA_FMA_DEFAULT /
+// GGML_CUDA_ORCA_PING_FMA_DEFAULT / GGML_CUDA_FISHERMAN_FMA_DEFAULT /
+// GGML_CUDA_KRAKEN_MMA_DEFAULT / GGML_CUDA_HARPOON_MMA_DEFAULT).
+static constexpr int GGML_ORCA_FMA_DEFAULT      = 32768;
+static constexpr int GGML_ORCA_PING_FMA_DEFAULT = 8192;
+static constexpr int GGML_FISHERMAN_FMA_DEFAULT = 8192;
+static constexpr int GGML_KRAKEN_MMA_DEFAULT    = 8192;
+static constexpr int GGML_HARPOON_MMA_DEFAULT   = 8192;
+
 bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_params & params, int & i, bool & invalid_param) {
     const char split_delim = ',';
 
@@ -2280,6 +2380,255 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "-cuda" || arg == "--cuda-params") {
         CHECK_ARG
         params.cuda_params = argv[i];
+        return true;
+    }
+    if (arg == "--shark") {
+        // Optional value: --shark N or N,N,... sets the external poller
+        // interval(s) in ms. Single value applies to every WDDM GPU; a comma
+        // list maps positionally. Bare --shark applies the default 25 ms to
+        // every WDDM GPU.
+        params.shark_enable = true;
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.shark_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.shark_interval_ms) {
+                if (v < 1) {
+                    fprintf(stderr, "error: --shark intervals must be >= 1 ms\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.shark_interval_ms = {25};
+        }
+        return true;
+    }
+    if (arg == "--piranha") {
+        // Optional value: --piranha N or N,N,... sets the in-process NVAPI
+        // poller interval(s) in ms (same per-GPU mapping as --shark). A 0 in
+        // the list disables polling on that GPU; --piranha 0 disables the
+        // poller entirely. Bare --piranha applies the default 50 ms to every
+        // WDDM GPU.
+        params.piranha_enable = true;
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.piranha_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.piranha_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --piranha intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.piranha_interval_ms = {50};
+        }
+        return true;
+    }
+    if (arg == "-pt" || arg == "--poller-temps") {
+        // --poller-temps N,N: per-card heat protection thresholds in Celsius.
+        // First value = pause temp, second = resume temp. A single value N sets
+        // pause = N with resume = N - 10°C hysteresis. Bare --poller-temps keeps
+        // the defaults (85,75); 0 disables heat protection.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_temps = string_split<int>(argv[i+1], ',');
+            if (params.poller_temps.size() > 2) {
+                fprintf(stderr, "error: --poller-temps accepts at most 2 values: pause,resume (e.g. --poller-temps 85,75)\n");
+                invalid_param = true;
+            }
+            for (int v : params.poller_temps) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-temps values must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_temps = {85, 75};
+        }
+        return true;
+    }
+    if (arg == "--orca") {
+        // Optional value: --orca FMA1,FMA2,... sets the per-GPU FMA chain
+        // length (positional, 0 disables a GPU). Bare --orca applies the
+        // default 32768 FMA to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.orca_fma = string_split<int>(argv[i+1], ',');
+            if (params.orca_fma.empty()) {
+                fprintf(stderr, "error: --orca requires at least one FMA length, e.g. --orca 262144,393216\n");
+                invalid_param = true;
+            }
+            i++;
+        } else {
+            params.orca_fma = {GGML_ORCA_FMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "--orca-ping") {
+        // Optional value: --orca-ping FMA1,FMA2,... sets the per-GPU perch FMA
+        // ping strength (positional, 0 disables a GPU). Bare --orca-ping applies
+        // the default 8192 to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.orca_ping = string_split<int>(argv[i+1], ',');
+            if (params.orca_ping.empty()) {
+                fprintf(stderr, "error: --orca-ping requires at least one FMA length, e.g. --orca-ping 8192,98304\n");
+                invalid_param = true;
+            }
+            i++;
+        } else {
+            params.orca_ping = {GGML_ORCA_PING_FMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "--cobra") {
+        // Optional value: --cobra 1,0,1,... per-WDDM-GPU on/off mask (1 = mem
+        // burst on that GPU, 0 = off). Bare --cobra enables every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.cobra_mask = string_split<int>(argv[i+1], ',');
+            if (params.cobra_mask.empty()) {
+                fprintf(stderr, "error: --cobra requires at least one value, e.g. --cobra 1,0,1\n");
+                invalid_param = true;
+            }
+            for (int v : params.cobra_mask) {
+                if (v != 0 && v != 1) {
+                    fprintf(stderr, "error: --cobra values must be 0 or 1 (per-GPU on/off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++;
+        } else {
+            params.cobra_mask = {1};  // all WDDM GPUs on
+        }
+        return true;
+    }
+    if (arg == "--fisherman") {
+        // --fisherman FMA1,FMA2,...: per-WDDM-GPU FMA chain length for the
+        // decode-solicited probe (0 = off for a GPU). Bare --fisherman applies the
+        // default 8192 to every WDDM GPU. Decoupled from --shark/--orca/--piranha.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.fisherman_fma = string_split<int>(argv[i+1], ',');
+            for (int v : params.fisherman_fma) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --fisherman FMA lengths must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.fisherman_fma = {GGML_FISHERMAN_FMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "--kraken") {
+        // --kraken MMA1,MMA2,...: per-WDDM-GPU HMMA chain length for the
+        // tensor-core warmup (0 = off for a GPU). Bare --kraken applies the
+        // default 8192 to every WDDM GPU. Same cadence as --orca (every TG
+        // batch), but tensor-core MMA gives a much denser pulse per ms.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.kraken_mma = string_split<int>(argv[i+1], ',');
+            for (int v : params.kraken_mma) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --kraken MMA lengths must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.kraken_mma = {GGML_KRAKEN_MMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "--harpoon") {
+        // --harpoon MMA1,MMA2,...: per-WDDM-GPU HMMA chain length for the
+        // decode-solicited tensor-core probe (0 = off for a GPU). Bare --harpoon
+        // applies the default 8192 to every WDDM GPU. Like --fisherman but for
+        // tensor cores: fires only when the GPU actually gets compute in the TG
+        // batch, with a far denser pulse per ms.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.harpoon_mma = string_split<int>(argv[i+1], ',');
+            for (int v : params.harpoon_mma) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --harpoon MMA lengths must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.harpoon_mma = {GGML_HARPOON_MMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-hb" || arg == "--hb") {
+        // --hb N,N,...: per-device event record+sync interval(s) in ms (0 = off
+        // for a GPU). Bare --hb applies the default 25 ms to every WDDM GPU.
+        // Decoupled from --shark/--orca/--piranha.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.hb_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.hb_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --hb intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.hb_interval_ms = {25};
+        }
+        return true;
+    }
+    if (arg == "-barracuda" || arg == "--barracuda") {
+        // --barracuda N or N,N,...: autonomous mem-clock stream. Single value
+        // applies to every WDDM GPU; a comma list maps positionally (0 = off
+        // for that GPU). Bare --barracuda applies the default 200 ms to every
+        // WDDM GPU. Decoupled from --shark/--orca/--piranha (no NVAPI).
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.barracuda_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.barracuda_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --barracuda intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.barracuda_interval_ms = {200};
+        }
+        return true;
+    }
+    if (arg == "-perch" || arg == "--perch") {
+        // --perch N or N,N,...: autonomous FMA ping. Same per-GPU mapping as
+        // --barracuda (0 = off for that GPU). Bare --perch applies the default
+        // 100 ms to every WDDM GPU. Decoupled from the pollers.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.perch_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.perch_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --perch intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.perch_interval_ms = {100};
+        }
+        return true;
+    }
+    if (arg == "--shark-path") {
+        CHECK_ARG
+        params.shark_path = argv[i];
+        return true;
+    }
+    if (arg == "--shark-arg") {
+        CHECK_ARG
+        params.shark_args.push_back(argv[i]);
         return true;
     }
     if (arg == "-mtp" || arg == "--multi-token-prediction") {
@@ -3504,6 +3853,20 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
     options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
+    options.push_back({ "win32",       "--shark [N[,N,...]]",                "enable GPU clock elevation via external gpu_poller.exe (interval(s) in ms, per-WDDM-GPU; bare = 25 ms, default off)" });
+    options.push_back({ "win32",       "--piranha [N[,N,...]]",              "in-process NVAPI poller: temps + P-state forcing + skip mask (per-WDDM-GPU interval(s) ms, 0 = off for a GPU; bare = 50 ms, default off)" });
+    options.push_back({ "win32",       "-pt, --poller-temps [PAUSE[,RESUME]]", "per-card heat protection thresholds in C (pause at PAUSE, resume below RESUME; single N = resume N-10; bare = 85,75; default off)" });
+    options.push_back({ "win32",       "--orca [FMA1,FMA2,...]",            "enable CUDA heartbeat warmup with per-GPU FMA length (non-TCC order, 0 disables a GPU; bare = 32768, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "--kraken [MMA1,MMA2,...]",          "tensor-core warmup like --orca but with HMMA (~1000x FLOPs per instruction, denser pulse; 0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "--orca-ping [FMA1,FMA2,...]",       "per-GPU FMA ping strength for --perch, shorter than the warmup (0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "--cobra [1/0[,1/0,...]]",           "decode-gated mem-clock companion: mem-only burst at every TG batch, per-WDDM-GPU on/off (1 = on, 0 = off; bare = all on, default off)" });
+    options.push_back({ "win32",       "--fisherman [FMA1,FMA2,...]",       "decode-solicited FMA probe: short burst when a GPU is actually given work in the TG batch (per-WDDM-GPU FMA length, 0 = off for a GPU; bare = 8192, default off)" });
+    options.push_back({ "win32",       "--harpoon [MMA1,MMA2,...]",          "decode-solicited HMMA probe like --fisherman but on tensor cores (~1000x FLOPs per instruction, denser pulse; per-WDDM-GPU length, 0 = off for a GPU; bare = 8192, default off)" });
+    options.push_back({ "win32",       "--hb [N[,N,...]]",                  "per-device event record+sync every N ms (cheap WDDM keep-alive, 0 = off for a GPU; bare = 25 ms, default off)" });
+    options.push_back({ "win32",       "--barracuda [N[,N,...]]",             "autonomous mem-clock stream on WDDM GPUs (per-GPU interval(s) ms, 0 = off for a GPU; bare = 200 ms, default off)" });
+    options.push_back({ "win32",       "--perch [N[,N,...]]",                "autonomous FMA ping on WDDM GPUs (per-GPU interval(s) ms, core clock, 0 = off for a GPU; bare = 100 ms, default off)" });
+    options.push_back({ "win32",       "--shark-path PATH",             "path to gpu_poller executable (default: %s)", params.shark_path.c_str() });
+    options.push_back({ "win32",       "--shark-arg ARG",               "additional argument passed to gpu_poller (can be repeated)" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
@@ -4559,6 +4922,22 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
             }
         }
     }
+    // Apply --orca / --orca-ping per-GPU FMA arrays BEFORE the orca warmup is
+    // enabled in the context params below, so set_orca(true) logs the effective
+    // values (previously it logged the defaults because hb=1 ran first).
+    if (!params.orca_fma.empty()) {
+        ggml_backend_cuda_set_orca_fmas(params.orca_fma.data(), params.orca_fma.size());
+    }
+    if (!params.orca_ping.empty()) {
+        ggml_backend_cuda_set_orca_ping(params.orca_ping.data(), params.orca_ping.size());
+    }
+    // Apply --hb per-GPU intervals (the hb= cuda-param was removed in favor of
+    // this flag). hb: per-device event record+sync interval(s) in ms (0 = off).
+    // Decoupled from shark/orca/piranha: it only runs the lightweight tickle
+    // thread, it does not enable the heartbeat warmup (that is --orca's job).
+    if (!params.hb_interval_ms.empty()) {
+        ggml_backend_cuda_set_hb(params.hb_interval_ms.data(), (int) params.hb_interval_ms.size());
+    }
 #endif
 
     if (params.n_gpu_layers != -1) {
@@ -4751,6 +5130,104 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
         }
 #endif
     }
+
+    // Legacy GPU clock elevation via external gpu_poller.exe (Windows only, --shark)
+    // In-process NVAPI poller is independent and gated by --piranha.
+#if defined(_WIN32) && defined(GGML_USE_CUDA)
+    if (params.shark_enable) {
+        g_shark_path = params.shark_path;
+        g_shark_args = params.shark_args;
+        g_shark_interval_ms = params.shark_interval_ms;
+        g_shark_temp_limit  = params.shark_temp_limit;
+        // Decide the temp guard once here, before any decode: keeps the
+        // NVAPI query off the token-generation path entirely.
+        g_shark_temp_ok = check_gpu_temp_ok();
+        if (!g_shark_temp_ok) {
+            fprintf(stderr, "shark: GPU temperature too high, not launching poller\n");
+        }
+        cparams.shark_callback = common_shark_callback;
+        cparams.shark_callback_data = nullptr; // uses globals
+    }
+    // Resolve --poller-temps into (pause, resume). Empty => defaults 85,75; a
+    // single value N => pause = N, resume = N - 10 (hysteresis); two values =>
+    // pause,resume verbatim. A 0 pause temp disables heat protection.
+    int poller_pause_temp  = 85;
+    int poller_resume_temp = 75;
+    if (params.poller_temps.size() == 1) {
+        poller_pause_temp  = params.poller_temps[0];
+        poller_resume_temp = params.poller_temps[0] - 10;
+    } else if (params.poller_temps.size() >= 2) {
+        poller_pause_temp  = params.poller_temps[0];
+        poller_resume_temp = params.poller_temps[1];
+    }
+    if (params.piranha_enable) {
+        llama_nvapi_poller_set_interval(params.piranha_interval_ms.data(), (int) params.piranha_interval_ms.size());
+        // Per-card heat protection thresholds (--poller-temps): the poller
+        // self-pauses to protect the cards during long generations.
+        llama_nvapi_poller_set_temp_limits(poller_pause_temp, poller_resume_temp);
+        llama_nvapi_poller_set_monitor_only(false);
+        bool any = false;
+        for (int v : params.piranha_interval_ms) {
+            if (v > 0) any = true;
+        }
+        if (any) {
+            llama_nvapi_poller_set_enabled(true);
+        } else {
+            // --piranha 0: all intervals off, poller disabled.
+            llama_nvapi_poller_set_enabled(false);
+            fprintf(stderr, "piranha: all intervals are 0, poller disabled\n");
+        }
+    } else if (!params.orca_fma.empty() || !params.kraken_mma.empty() || !params.harpoon_mma.empty() ||
+               !params.fisherman_fma.empty() || !params.cobra_mask.empty() ||
+               !params.hb_interval_ms.empty() || !params.barracuda_interval_ms.empty() || !params.perch_interval_ms.empty()) {
+        // Clock-elevation flags without --piranha: run the poller in monitor-only
+        // mode so the warmup / probe / tickle / ping threads consume the published
+        // per-card heat state as their skip mask (every launch path honors
+        // ggml_cuda_orca_skip: orca, kraken, cobra, fisherman, harpoon, hb, and
+        // the barracuda/perch ping threads).
+        llama_nvapi_poller_set_interval(params.piranha_interval_ms.data(), (int) params.piranha_interval_ms.size());
+        llama_nvapi_poller_set_temp_limits(poller_pause_temp, poller_resume_temp);
+        llama_nvapi_poller_set_monitor_only(true);
+        llama_nvapi_poller_set_enabled(true);
+    }
+    if (!params.orca_fma.empty()) {
+        // Enable the CUDA heartbeat warmup (--orca). Decoupled from --hb: hb
+        // only drives the event tickle, this alone starts the FMA warmup.
+        ggml_backend_cuda_set_orca(true); // logs each WDDM GPU with its effective FMA
+    }
+    if (!params.cobra_mask.empty()) {
+        // Decode-gated mem-clock companion (--cobra): fires the mem burst on each
+        // enabled WDDM GPU at every TG batch, mirroring the orca FMA cadence.
+        ggml_backend_cuda_set_cobra(params.cobra_mask.data(), (int) params.cobra_mask.size());
+    }
+    if (!params.fisherman_fma.empty()) {
+        // Decode-solicited FMA probe (--fisherman): fires a short burst on each
+        // WDDM GPU that actually receives compute in the current TG batch.
+        ggml_backend_cuda_set_fisherman(params.fisherman_fma.data(), (int) params.fisherman_fma.size());
+    }
+    if (!params.kraken_mma.empty()) {
+        // Tensor-core HMMA warmup (--kraken): same decode-gated cadence as --orca
+        // but with tensor-core MMA instructions (~1000x FLOPs per instruction), so
+        // the same wall-clock burst is a far denser power pulse. Pre-Volta cards
+        // fall back to scalar FFMA inside the kernel.
+        ggml_backend_cuda_set_kraken(params.kraken_mma.data(), (int) params.kraken_mma.size());
+    }
+    if (!params.harpoon_mma.empty()) {
+        // Decode-solicited HMMA probe (--harpoon): fires a short tensor-core burst
+        // on each WDDM GPU that actually receives compute in the current TG batch
+        // (like --fisherman, but ~1000x denser per ms).
+        ggml_backend_cuda_set_harpoon(params.harpoon_mma.data(), (int) params.harpoon_mma.size());
+    }
+    if (!params.barracuda_interval_ms.empty()) {
+        // Autonomous mem-clock stream (--barracuda). Decoupled from piranha: the
+        // poller only does NVAPI temps + P-state forcing, this supplies the load.
+        ggml_backend_cuda_set_barracuda(params.barracuda_interval_ms.data(), (int) params.barracuda_interval_ms.size());
+    }
+    if (!params.perch_interval_ms.empty()) {
+        // Autonomous FMA ping (--perch), the core-clock half of the ping load.
+        ggml_backend_cuda_set_perch(params.perch_interval_ms.data(), (int) params.perch_interval_ms.size());
+    }
+#endif
 
     return cparams;
 }
