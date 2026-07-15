@@ -5396,6 +5396,28 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
             }
         }
     }
+    // Apply --poller-warmup-fma / --poller-ping-fma-amplitude per-GPU FMA arrays BEFORE the FMA warmup is
+    // enabled in the context params below, so set_poller_warmup_fma(true) logs the effective
+    // values (previously it logged the defaults because the sync tickle ran first).
+    if (!params.poller_warmup_fma_strength.empty()) {
+        ggml_backend_cuda_set_poller_warmup_fma_strength(params.poller_warmup_fma_strength.data(), params.poller_warmup_fma_strength.size());
+    }
+    if (!params.poller_ping_fma_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_fma_amplitude(params.poller_ping_fma_amplitude.data(), params.poller_ping_fma_amplitude.size());
+    }
+    if (!params.poller_ping_mma_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_mma_amplitude(params.poller_ping_mma_amplitude.data(), params.poller_ping_mma_amplitude.size());
+    }
+    if (!params.poller_ping_mem_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_mem_amplitude(params.poller_ping_mem_amplitude.data(), params.poller_ping_mem_amplitude.size());
+    }
+    // Apply --poller-sync per-GPU intervals (the event-tickle cuda-param was removed in favor of
+    // this flag). poller-sync: per-device event record+sync interval(s) in ms (0 = off).
+    // Decoupled from shark/poller-warmup-fma/poller-nvapi: it only runs the lightweight tickle
+    // thread, it does not enable the heartbeat warmup (that is --poller-warmup-fma's job).
+    if (!params.poller_sync_interval_ms.empty()) {
+        ggml_backend_cuda_set_poller_sync(params.poller_sync_interval_ms.data(), (int) params.poller_sync_interval_ms.size());
+    }
 #endif
 
     if (params.n_gpu_layers != -1) {
