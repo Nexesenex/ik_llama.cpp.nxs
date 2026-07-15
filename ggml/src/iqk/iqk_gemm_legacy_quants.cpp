@@ -69,16 +69,32 @@ template <typename Q8, typename Q8x4, typename Dot, bool can_pack = true> struct
 template <typename Q8, typename Q8x4> struct Sum4q4 {
     inline __m256i compute(const __m256i * qx, const Q8 * y) const {
         const Q8x4 * y4 = (const Q8x4 *)y;
-        auto p0 = _mm256_maddubs_epi16(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0)); // 16x block 0
-        auto p1 = _mm256_maddubs_epi16(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1)); // 16x block 1
-        auto p2 = _mm256_maddubs_epi16(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2)); // 16x block 2
-        auto p3 = _mm256_maddubs_epi16(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3)); // 16x block 3
-        auto p01 = _mm256_add_epi16(_mm256_unpacklo_epi32(p0, p1), _mm256_unpackhi_epi32(p0, p1)); // 0,0, 1,1, 0,0, 1,1, 0,0, 1,1, 0,0, 1,1
-        auto p23 = _mm256_add_epi16(_mm256_unpacklo_epi32(p2, p3), _mm256_unpackhi_epi32(p2, p3)); // 2,2, 3,3, 2,2, 3,3, 2,2, 3,3, 2,2, 3,3
-        auto p0123 = _mm256_add_epi16(_mm256_unpacklo_epi64(p01, p23), _mm256_unpackhi_epi64(p01, p23)); // 0,0, 1,1, 2,2, 3,3, 0,0, 1,1, 2,2, 3,3
+#ifdef HAVE_VNNI256
+        auto s01 = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(),
+            qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0)),
+            qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1));
+        auto s23 = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(),
+            qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2)),
+            qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3));
+        return _mm256_add_epi32(s01, s23);
+#else
+        auto p0 = _mm256_maddubs_epi16(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0));
+        auto p1 = _mm256_maddubs_epi16(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1));
+        auto p2 = _mm256_maddubs_epi16(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2));
+        auto p3 = _mm256_maddubs_epi16(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3));
+        auto p01 = _mm256_add_epi16(_mm256_unpacklo_epi32(p0, p1), _mm256_unpackhi_epi32(p0, p1));
+        auto p23 = _mm256_add_epi16(_mm256_unpacklo_epi32(p2, p3), _mm256_unpackhi_epi32(p2, p3));
+        auto p0123 = _mm256_add_epi16(_mm256_unpacklo_epi64(p01, p23), _mm256_unpackhi_epi64(p01, p23));
         return _mm256_madd_epi16(_mm256_set1_epi16(1), p0123);
+#endif
     }
-    inline __m256i compute(__m256i x, __m256i y) const { return _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_maddubs_epi16(x, y)); }
+    inline __m256i compute(__m256i x, __m256i y) const {
+#ifdef HAVE_VNNI256
+        return ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), x, y);
+#else
+        return _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_maddubs_epi16(x, y));
+#endif
+    }
 };
 
 inline __m256 convert_scales(const uint16_t * scales) {
