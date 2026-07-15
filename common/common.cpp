@@ -94,6 +94,96 @@
 #endif
 using json = nlohmann::ordered_json;
 
+// Shark GPU clock elevation callback (Windows only)
+// Uses a lightweight GPU poller instead of gpushark
+#if defined(_WIN32) && defined(GGML_USE_CUDA)
+static std::string g_shark_path = "gpu_poller.exe";
+static std::vector<std::string> g_shark_args;
+static std::vector<int> g_shark_interval_ms; // per-WDDM-GPU (--shark N[,N,...]); set from --shark
+static int g_shark_temp_limit  = 85;
+static bool g_shark_temp_ok    = true; // decided once at setup, off the decode path
+static HANDLE g_shark_process = nullptr;
+
+static bool check_gpu_temp_ok() {
+    // Use NVAPI (in-process) instead of spawning nvidia-smi. Fail-open.
+    return llama_nvapi_gpu_temp_ok(g_shark_temp_limit);
+}
+
+static void common_shark_callback(bool start, void * user_data) {
+    (void)user_data;
+    if (start) {
+        // Temp guard was decided once at setup (g_shark_temp_ok); nothing
+        // to check on the decode thread.
+        if (!g_shark_temp_ok) {
+            return;
+        }
+        // Launch lightweight GPU poller
+        if (g_shark_process != nullptr) {
+            return; // already running
+        }
+        // Check if file exists
+        DWORD attrs = GetFileAttributesA(g_shark_path.c_str());
+        if (attrs == INVALID_FILE_ATTRIBUTES) {
+            fprintf(stderr, "shark: GPU poller not found at %s\n", g_shark_path.c_str());
+            return;
+        }
+
+        // Build command line
+        std::string cmd = "\"" + g_shark_path + "\"";
+        for (const auto & arg : g_shark_args) {
+            cmd += " " + arg;
+        }
+        // Pass the --shark N interval unless the user already set one via --shark-arg
+        bool has_interval = false;
+        for (const auto & arg : g_shark_args) {
+            if (arg.rfind("--interval", 0) == 0) {
+                has_interval = true;
+                break;
+            }
+        }
+        if (!has_interval) {
+            cmd += " --interval ";
+            for (size_t k = 0; k < g_shark_interval_ms.size(); ++k) {
+                if (k > 0) cmd += ",";
+                cmd += std::to_string(g_shark_interval_ms[k]);
+            }
+        }
+
+        STARTUPINFOA si = { sizeof(si) };
+        PROCESS_INFORMATION pi;
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE; // run hidden
+
+        if (CreateProcessA(
+                nullptr,
+                (LPSTR)cmd.c_str(),
+                nullptr, nullptr, FALSE,
+                CREATE_NO_WINDOW | DETACHED_PROCESS,
+                nullptr, nullptr, &si, &pi)) {
+            g_shark_process = pi.hProcess;
+            CloseHandle(pi.hThread);
+            fprintf(stderr, "shark: launched GPU poller (pid=%d)\n", pi.dwProcessId);
+        } else {
+            fprintf(stderr, "shark: failed to launch GPU poller (error=%lu)\n", GetLastError());
+        }
+    } else {
+        // Stop GPU poller
+        if (g_shark_process != nullptr) {
+            if (TerminateProcess(g_shark_process, 0)) {
+                fprintf(stderr, "shark: terminated GPU poller\n");
+            }
+            CloseHandle(g_shark_process);
+            g_shark_process = nullptr;
+        }
+    }
+}
+#else
+static void common_shark_callback(bool start, void * user_data) {
+    (void)start;
+    (void)user_data;
+}
+#endif
+
 common_time_meas::common_time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
 
 common_time_meas::~common_time_meas() {
@@ -1192,6 +1282,25 @@ static common_speculative_stage_params common_speculative_stage_from_arg(const s
 }
 
 #define CHECK_ARG if (++i >= argc) { invalid_param = true; return true; }
+
+// Defaults for the bare --poller-warmup-fma / --poller-ping-fma-amplitude / --poller-activity-fma / --poller-warmup-mma /
+// --poller-activity-mma flags (no value). Mirrored in ggml-cuda.cu (GGML_CUDA_POLLER_WARMUP_FMA_DEFAULT /
+// GGML_CUDA_POLLER_PING_FMA_AMPLITUDE_DEFAULT / GGML_CUDA_POLLER_ACTIVITY_FMA_DEFAULT /
+// GGML_CUDA_POLLER_WARMUP_MMA_DEFAULT / GGML_CUDA_POLLER_ACTIVITY_MMA_DEFAULT).
+static constexpr int GGML_POLLER_WARMUP_FMA_DEFAULT      = 32768;
+static constexpr int GGML_POLLER_PING_FMA_AMPLITUDE_DEFAULT = 8192;
+static constexpr int GGML_POLLER_ACTIVITY_FMA_DEFAULT = 8192;
+static constexpr int GGML_POLLER_WARMUP_MMA_DEFAULT    = 8192;
+static constexpr int GGML_POLLER_ACTIVITY_MMA_DEFAULT   = 8192;
+static constexpr int GGML_POLLER_WARMUP_MEM_BURSTS_DEFAULT  = 1;
+static constexpr int GGML_POLLER_ACTIVITY_MEM_BURSTS_DEFAULT = 1;
+static constexpr int GGML_POLLER_WARMUP_INTERVAL_DEFAULT   = 1;
+static constexpr int GGML_POLLER_WARMUP_START_DEFAULT      = 2;
+static constexpr float GGML_POLLER_FMA_OCCUPANCY_DEFAULT    = 50.0f;
+static constexpr float GGML_POLLER_MMA_OCCUPANCY_DEFAULT    = 50.0f;
+static constexpr float GGML_POLLER_MEM_OCCUPANCY_DEFAULT    = 25.0f;
+static constexpr int GGML_POLLER_PING_MEM_AMPLITUDE_DEFAULT = 1;
+static constexpr int GGML_POLLER_PING_MMA_AMPLITUDE_DEFAULT = 8192;
 
 bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_params & params, int & i, bool & invalid_param) {
     const char split_delim = ',';
@@ -2320,6 +2429,468 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "-cuda" || arg == "--cuda-params") {
         CHECK_ARG
         params.cuda_params = argv[i];
+        return true;
+    }
+    if (arg == "--shark") {
+        // Optional value: --shark N or N,N,... sets the external poller
+        // interval(s) in ms. Single value applies to every WDDM GPU; a comma
+        // list maps positionally. Bare --shark applies the default 25 ms to
+        // every WDDM GPU.
+        params.shark_enable = true;
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.shark_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.shark_interval_ms) {
+                if (v < 1) {
+                    fprintf(stderr, "error: --shark intervals must be >= 1 ms\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.shark_interval_ms = {25};
+        }
+        return true;
+    }
+    if (arg == "-p-nv" || arg == "--poller-nvapi" || arg == "-piranha") {
+        // Optional value: --poller-nvapi N or N,N,... sets the in-process NVAPI
+        // poller interval(s) in ms (same per-GPU mapping as --shark). A 0 in
+        // the list disables polling on that GPU; --poller-nvapi 0 disables the
+        // poller entirely. Bare --poller-nvapi applies the default 50 ms to every
+        // WDDM GPU.
+        params.poller_nvapi_enable = true;
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_nvapi_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_nvapi_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-nvapi intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.poller_nvapi_interval_ms = {50};
+        }
+        return true;
+    }
+    if (arg == "-p-temps" || arg == "--poller-temps" || arg == "-pt") {
+        // --poller-temps N,N: per-card heat protection thresholds in Celsius.
+        // First value = pause temp, second = resume temp. A single value N sets
+        // pause = N with resume = N - 10°C hysteresis. Bare --poller-temps keeps
+        // the defaults (85,75); 0 disables heat protection.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_temps = string_split<int>(argv[i+1], ',');
+            if (params.poller_temps.size() > 2) {
+                fprintf(stderr, "error: --poller-temps accepts at most 2 values: pause,resume (e.g. --poller-temps 85,75)\n");
+                invalid_param = true;
+            }
+            for (int v : params.poller_temps) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-temps values must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_temps = {85, 75};
+        }
+        return true;
+    }
+    if (arg == "-p-warm-fma" || arg == "--poller-warmup-fma" || arg == "-orca") {
+        // Optional value: --poller-warmup-fma FMA1,FMA2,... sets the per-GPU FMA chain
+        // length (positional, 0 disables a GPU). Bare --poller-warmup-fma applies the
+        // default 32768 FMA to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_warmup_fma_strength = string_split<int>(argv[i+1], ',');
+            if (params.poller_warmup_fma_strength.empty()) {
+                fprintf(stderr, "error: --poller-warmup-fma requires at least one FMA length, e.g. --poller-warmup-fma 262144,393216\n");
+                invalid_param = true;
+            }
+            i++;
+        } else {
+            params.poller_warmup_fma_strength = {GGML_POLLER_WARMUP_FMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-fma-a" || arg == "--poller-ping-fma-amplitude" || arg == "-orca-ping") {
+        // Optional value: --poller-ping-fma-amplitude FMA1,FMA2,... sets the per-GPU FMA ping
+        // strength (positional, 0 disables a GPU). Bare --poller-ping-fma-amplitude applies
+        // the default 8192 to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_fma_amplitude = string_split<int>(argv[i+1], ',');
+            if (params.poller_ping_fma_amplitude.empty()) {
+                fprintf(stderr, "error: --poller-ping-fma-amplitude requires at least one FMA length, e.g. --poller-ping-fma-amplitude 8192,98304\n");
+                invalid_param = true;
+            }
+            i++;
+        } else {
+            params.poller_ping_fma_amplitude = {GGML_POLLER_PING_FMA_AMPLITUDE_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-mma-a" || arg == "--poller-ping-mma-amplitude" || arg == "-kraken-ping") {
+        // Optional value: --poller-ping-mma-amplitude MMA1,MMA2,... sets the per-GPU tensor-core
+        // (HMMA) ping strength for the autonomous --poller-ping-mma thread (positional, 0 disables
+        // a GPU). Bare --poller-ping-mma-amplitude applies the default 8192 to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_mma_amplitude = string_split<int>(argv[i+1], ',');
+            if (params.poller_ping_mma_amplitude.empty()) {
+                fprintf(stderr, "error: --poller-ping-mma-amplitude requires at least one MMA length, e.g. --poller-ping-mma-amplitude 8192,16384\n");
+                invalid_param = true;
+            }
+            i++;
+        } else {
+            params.poller_ping_mma_amplitude = {GGML_POLLER_PING_MMA_AMPLITUDE_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-warm-mem" || arg == "--poller-warmup-mem" || arg == "-cobra") {
+        // Optional value: --poller-warmup-mem N1,N2,... per-WDDM-GPU burst count (number of 2 MiB
+        // passes over the companion buffer per TG batch, 0 = off for a GPU). Bare --poller-warmup-mem
+        // applies the default 1 burst to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_warmup_mem_bursts = string_split<int>(argv[i+1], ',');
+            if (params.poller_warmup_mem_bursts.empty()) {
+                fprintf(stderr, "error: --poller-warmup-mem requires at least one burst count, e.g. --poller-warmup-mem 4,8\n");
+                invalid_param = true;
+            }
+            for (int v : params.poller_warmup_mem_bursts) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-warmup-mem burst counts must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_warmup_mem_bursts = {GGML_POLLER_WARMUP_MEM_BURSTS_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-act-fma" || arg == "--poller-activity-fma" || arg == "-fisherman") {
+        // --poller-activity-fma FMA1,FMA2,...: per-WDDM-GPU FMA chain length for the
+        // decode-solicited probe (0 = off for a GPU). Bare --poller-activity-fma applies the
+        // default 8192 to every WDDM GPU. Decoupled from --shark/--poller-warmup-fma/--poller-nvapi.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_activity_fma_strength = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_activity_fma_strength) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-activity-fma FMA lengths must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_activity_fma_strength = {GGML_POLLER_ACTIVITY_FMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-warm-mma" || arg == "--poller-warmup-mma" || arg == "-kraken") {
+        // --poller-warmup-mma MMA1,MMA2,...: per-WDDM-GPU HMMA chain length for the
+        // tensor-core warmup (0 = off for a GPU). Bare --poller-warmup-mma applies the
+        // default 8192 to every WDDM GPU. Same cadence as --poller-warmup-fma (every TG
+        // batch), but tensor-core MMA gives a much denser pulse per ms.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_warmup_mma_strength = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_warmup_mma_strength) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-warmup-mma MMA lengths must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_warmup_mma_strength = {GGML_POLLER_WARMUP_MMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-warm-i" || arg == "--poller-warmup-interval" || arg == "-warmstream") {
+        // --poller-warmup-interval N[,N,...]: per-WDDM-GPU token interval between warmup bursts.
+        // Applies to all three warmup functions (mma, fma, mem): each GPU fires its burst on
+        // every N-th TG batch instead of every batch. Single value broadcasts to every WDDM GPU
+        // (bare --poller-warmup-interval = 1 = every batch); more values map positionally;
+        // missing values use the default.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_warmup_interval = string_split<int>(argv[i+1], ',');
+            if (params.poller_warmup_interval.empty()) {
+                fprintf(stderr, "error: --poller-warmup-interval requires at least one interval, e.g. --poller-warmup-interval 4,2\n");
+                invalid_param = true;
+            }
+            for (int v : params.poller_warmup_interval) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-warmup-interval intervals must be >= 0 (0 = never fire)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_warmup_interval = {GGML_POLLER_WARMUP_INTERVAL_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-warm-s" || arg == "--poller-warmup-start" || arg == "-streamsource") {
+        // --poller-warmup-start N[,N,...]: per-WDDM-GPU first TG token at which the warmup
+        // burst fires. Applies to all three warmup functions (mma, fma, mem): each GPU's burst
+        // first fires on the N-th TG batch (token) of a phase. Single value broadcasts to every
+        // WDDM GPU (bare --poller-warmup-start = 2 = fire on the second TG token, the historical
+        // skip-first-batch behavior); more values map positionally; missing values use the
+        // default. 0 = never fire on that GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_warmup_start = string_split<int>(argv[i+1], ',');
+            if (params.poller_warmup_start.empty()) {
+                fprintf(stderr, "error: --poller-warmup-start requires at least one token, e.g. --poller-warmup-start 4,2\n");
+                invalid_param = true;
+            }
+            for (int v : params.poller_warmup_start) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-warmup-start tokens must be >= 0 (0 = never fire)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_warmup_start = {GGML_POLLER_WARMUP_START_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-fma-o" || arg == "--poller-fma-occupancy" || arg == "-fishpit") {
+        // --poller-fma-occupancy N[,N,...]: per-WDDM-GPU occupancy % of the poller FMA
+        // kernels, direct 0..100: 0 = disabled (no burst), 100 = full grid. Scales the
+        // burst grid so fewer SMs are engaged during the pulse, leaving more room for
+        // the real TG compute. Single value broadcasts to every WDDM GPU (bare
+        // --poller-fma-occupancy = 50, the default); more values map positionally;
+        // missing values use the default. Applies to warmup, activity and ping. When
+        // any FMA poller is used without this flag, the default 50 applies.
+        if (i + 1 < argc && argv[i+1] != nullptr && (isdigit(argv[i+1][0]) || argv[i+1][0] == '.')) {
+            params.poller_fma_occupancy = string_split<float>(argv[i+1], ',');
+            if (params.poller_fma_occupancy.empty()) {
+                fprintf(stderr, "error: --poller-fma-occupancy requires at least one value, e.g. --poller-fma-occupancy 25,50\n");
+                invalid_param = true;
+            }
+            for (float v : params.poller_fma_occupancy) {
+                if (v < 0.0f || v > 100.0f) {
+                    fprintf(stderr, "error: --poller-fma-occupancy values must be 0..100 (0 = disabled)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_fma_occupancy = {GGML_POLLER_FMA_OCCUPANCY_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-mma-o" || arg == "--poller-mma-occupancy" || arg == "-abyss") {
+        // --poller-mma-occupancy N[,N,...]: per-WDDM-GPU occupancy % of the poller MMA
+        // kernels, direct 0..100: 0 = disabled (no burst), 100 = full grid. Scales the
+        // burst grid so fewer SMs / tensor-core warps are engaged during the pulse,
+        // leaving more room for the real TG compute. Single value broadcasts to every
+        // WDDM GPU (bare --poller-mma-occupancy = 50, the default); more values map
+        // positionally; missing values use the default. Applies to warmup, activity and
+        // ping. When any MMA poller is used without this flag, the default 50 applies.
+        if (i + 1 < argc && argv[i+1] != nullptr && (isdigit(argv[i+1][0]) || argv[i+1][0] == '.')) {
+            params.poller_mma_occupancy = string_split<float>(argv[i+1], ',');
+            if (params.poller_mma_occupancy.empty()) {
+                fprintf(stderr, "error: --poller-mma-occupancy requires at least one value, e.g. --poller-mma-occupancy 25,50\n");
+                invalid_param = true;
+            }
+            for (float v : params.poller_mma_occupancy) {
+                if (v < 0.0f || v > 100.0f) {
+                    fprintf(stderr, "error: --poller-mma-occupancy values must be 0..100 (0 = disabled)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_mma_occupancy = {GGML_POLLER_MMA_OCCUPANCY_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-mem-o" || arg == "--poller-mem-occupancy" || arg == "-snakepit") {
+        // --poller-mem-occupancy N[,N,...]: per-WDDM-GPU L2 occupancy % of the poller mem
+        // companion, direct 0..100: 0 = disabled (no burst), 100 = full 2 MiB buffer.
+        // Scales the slots streamed per pass (the L2 footprint, then multiplied by the
+        // burst count) so it leaves more L2 for the real TG compute. Single value
+        // broadcasts to every WDDM GPU (bare --poller-mem-occupancy = 25, the default);
+        // more values map positionally; missing values use the default. Applies to
+        // warmup, activity and ping. When any mem poller is used without this flag, the
+        // default 25 applies.
+        if (i + 1 < argc && argv[i+1] != nullptr && (isdigit(argv[i+1][0]) || argv[i+1][0] == '.')) {
+            params.poller_mem_occupancy = string_split<float>(argv[i+1], ',');
+            if (params.poller_mem_occupancy.empty()) {
+                fprintf(stderr, "error: --poller-mem-occupancy requires at least one value, e.g. --poller-mem-occupancy 12,25\n");
+                invalid_param = true;
+            }
+            for (float v : params.poller_mem_occupancy) {
+                if (v < 0.0f || v > 100.0f) {
+                    fprintf(stderr, "error: --poller-mem-occupancy values must be 0..100 (0 = disabled)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_mem_occupancy = {GGML_POLLER_MEM_OCCUPANCY_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-act-mma" || arg == "--poller-activity-mma" || arg == "-harpoon") {
+        // --poller-activity-mma MMA1,MMA2,...: per-WDDM-GPU HMMA chain length for the
+        // decode-solicited tensor-core probe (0 = off for a GPU). Bare --poller-activity-mma
+        // applies the default 8192 to every WDDM GPU. Like --poller-activity-fma but for
+        // tensor cores: fires only when the GPU actually gets compute in the TG
+        // batch, with a far denser pulse per ms.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_activity_mma_strength = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_activity_mma_strength) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-activity-mma MMA lengths must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_activity_mma_strength = {GGML_POLLER_ACTIVITY_MMA_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-act-mem" || arg == "--poller-activity-mem" || arg == "-spear") {
+        // --poller-activity-mem N1,N2,...: per-WDDM-GPU burst count (number of 2 MiB passes) for the
+        // decode-solicited mem-clock burst (0 = off for a GPU). Bare --poller-activity-mem applies
+        // the default 1 burst to every WDDM GPU. Like --poller-activity-fma but for the mem
+        // companion: fires only when the GPU actually gets compute in the TG batch.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_activity_mem_bursts = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_activity_mem_bursts) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-activity-mem burst counts must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_activity_mem_bursts = {GGML_POLLER_ACTIVITY_MEM_BURSTS_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-sync" || arg == "--poller-sync" || arg == "-hb") {
+        // --poller-sync N,N,...: per-device event record+sync interval(s) in ms (0 = off
+        // for a GPU). Bare --poller-sync applies the default 25 ms to every WDDM GPU.
+        // Decoupled from --shark/--poller-warmup-fma/--poller-nvapi.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_sync_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_sync_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-sync intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.poller_sync_interval_ms = {25};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-mem" || arg == "--poller-ping-mem" || arg == "-barracuda") {
+        // --poller-ping-mem N or N,N,...: autonomous mem-clock stream. Single value
+        // applies to every WDDM GPU; a comma list maps positionally (0 = off
+        // for that GPU). Bare --poller-ping-mem applies the default 200 ms to every
+        // WDDM GPU. Decoupled from --shark/--poller-warmup-fma/--poller-nvapi (no NVAPI).
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_mem_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_ping_mem_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-ping-mem intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.poller_ping_mem_interval_ms = {200};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-mem-a" || arg == "--poller-ping-mem-amplitude" || arg == "-cobra-ping") {
+        // Optional value: --poller-ping-mem-amplitude N1,N2,... sets the per-GPU number of 2 MiB
+        // passes (bursts) for each autonomous mem-clock ping (--poller-ping-mem); 0 disables a GPU.
+        // Bare --poller-ping-mem-amplitude applies the default 1 burst to every WDDM GPU.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_mem_amplitude = string_split<int>(argv[i+1], ',');
+            if (params.poller_ping_mem_amplitude.empty()) {
+                fprintf(stderr, "error: --poller-ping-mem-amplitude requires at least one burst count, e.g. --poller-ping-mem-amplitude 4,8\n");
+                invalid_param = true;
+            }
+            for (int v : params.poller_ping_mem_amplitude) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-ping-mem-amplitude burst counts must be >= 0 (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the value
+        } else {
+            params.poller_ping_mem_amplitude = {GGML_POLLER_PING_MEM_AMPLITUDE_DEFAULT};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-fma" || arg == "--poller-ping-fma" || arg == "-perch") {
+        // --poller-ping-fma N or N,N,...: autonomous FMA ping (core-clock FMA half). Same
+        // per-GPU mapping as --poller-ping-mem (0 = off for that GPU). Bare --poller-ping-fma
+        // applies the default 100 ms to every WDDM GPU. Decoupled from the pollers.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_fma_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_ping_fma_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-ping-fma intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.poller_ping_fma_interval_ms = {100};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-mma" || arg == "--poller-ping-mma" || arg == "-megalodon") {
+        // --poller-ping-mma N or N,N,...: autonomous tensor-core (HMMA) ping (core-clock MMA
+        // half). Same per-GPU mapping as --poller-ping-fma (0 = off for that GPU); shares the
+        // same ping thread. Bare --poller-ping-mma applies the default 100 ms to every WDDM
+        // GPU. Decoupled from the pollers.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_mma_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_ping_mma_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-ping-mma intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.poller_ping_mma_interval_ms = {100};
+        }
+        return true;
+    }
+    if (arg == "--shark-path") {
+        CHECK_ARG
+        params.shark_path = argv[i];
+        return true;
+    }
+    if (arg == "--shark-arg") {
+        CHECK_ARG
+        params.shark_args.push_back(argv[i]);
         return true;
     }
     if (arg == "-mtp" || arg == "--multi-token-prediction") {
@@ -3622,6 +4193,29 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
     options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
+    options.push_back({ "win32",       "--shark [N[,N,...]]",                "enable GPU clock elevation via external gpu_poller.exe (interval(s) in ms, per-WDDM-GPU; bare = 25 ms, default off)" });
+    options.push_back({ "win32",       "-p-nv, --poller-nvapi [N[,N,...]] (alias -piranha)",              "in-process NVAPI poller: temps + P-state forcing + skip mask (per-WDDM-GPU interval(s) ms, 0 = off for a GPU; bare = 50 ms, default off)" });
+    options.push_back({ "win32",       "-p-temps, --poller-temps [PAUSE[,RESUME]] (alias -pt)", "per-card heat protection thresholds in C (pause at PAUSE, resume below RESUME; single N = resume N-10; bare = 85,75; default off)" });
+    options.push_back({ "win32",       "-p-warm-fma, --poller-warmup-fma [FMA1,FMA2,...] (alias -orca)",            "enable CUDA heartbeat warmup with per-GPU FMA length (non-TCC order, 0 disables a GPU; bare = 32768, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "-p-warm-mma, --poller-warmup-mma [MMA1,MMA2,...] (alias -kraken)",          "tensor-core warmup like --poller-warmup-fma but with HMMA (~1000x FLOPs per instruction, denser pulse; 0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "-p-warm-i, --poller-warmup-interval [N1,N2,...] (alias -warmstream)",      "per-GPU token interval between warmup bursts, applies to all three warmups (mma/fma/mem): each GPU fires on every N-th TG batch (0 disables a GPU; bare = 1 = every batch, default)" });
+    options.push_back({ "win32",       "-p-warm-s, --poller-warmup-start [N1,N2,...] (alias -streamsource)",     "per-GPU first TG token at which the warmup burst fires, applies to all three warmups (mma/fma/mem): each GPU first fires on the N-th TG batch of a phase (0 never fires; bare = 2 = second token, default)" });
+    options.push_back({ "win32",       "-p-fma-o, --poller-fma-occupancy [N1,N2,...] (alias -fishpit)",      "per-GPU occupancy % of the poller FMA kernels, direct 0..100 (0 = disabled, 100 = full grid): scales the burst grid so fewer SMs are engaged during the pulse, leaving more room for TG compute (bare = 50, default; missing = default 50 whenever any FMA poller is used; applies to warmup/activity/ping)" });
+    options.push_back({ "win32",       "-p-mma-o, --poller-mma-occupancy [N1,N2,...] (alias -abyss)",       "per-GPU occupancy % of the poller MMA kernels, direct 0..100 (0 = disabled, 100 = full grid): scales the burst grid so fewer SMs / tensor-core warps are engaged during the pulse (bare = 50, default; missing = default 50 whenever any MMA poller is used; applies to warmup/activity/ping)" });
+    options.push_back({ "win32",       "-p-mem-o, --poller-mem-occupancy [N1,N2,...] (alias -snakepit)",     "per-GPU L2 occupancy % of the poller mem companion, direct 0..100 (0 = disabled, 100 = full 2 MiB buffer): scales the slots streamed per pass (the L2 footprint, multiplied by the burst count) so it leaves more L2 for TG compute (bare = 25, default; missing = default 25 whenever any mem poller is used; applies to warmup/activity/ping)" });
+    options.push_back({ "win32",       "-p-ping-fma-a, --poller-ping-fma-amplitude [FMA1,FMA2,...] (alias -orca-ping)",       "per-GPU FMA ping strength for --poller-ping-fma, shorter than the warmup (0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "-p-ping-mma-a, --poller-ping-mma-amplitude [MMA1,MMA2,...] (alias -kraken-ping)",     "per-GPU MMA ping strength for --poller-ping-mma, tensor-core half of the ping (~1000x FLOPs per instruction, denser pulse; 0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "-p-warm-mem, --poller-warmup-mem [N1,N2,...] (alias -cobra)",           "decode-gated mem-clock companion: mem-only burst at every TG batch (per-WDDM-GPU number of 2 MiB passes, 0 = off for a GPU; bare = 1, default off)" });
+    options.push_back({ "win32",       "-p-act-fma, --poller-activity-fma [FMA1,FMA2,...] (alias -fisherman)",       "decode-solicited FMA probe: short burst when a GPU is actually given work in the TG batch (per-WDDM-GPU FMA length, 0 = off for a GPU; bare = 8192, default off)" });
+    options.push_back({ "win32",       "-p-act-mma, --poller-activity-mma [MMA1,MMA2,...] (alias -harpoon)",          "decode-solicited HMMA probe like --poller-activity-fma but on tensor cores (~1000x FLOPs per instruction, denser pulse; per-WDDM-GPU length, 0 = off for a GPU; bare = 8192, default off)" });
+    options.push_back({ "win32",       "-p-act-mem, --poller-activity-mem [N1,N2,...] (alias -spear)",       "decode-solicited mem burst like --poller-activity-fma but for the mem clock (per-WDDM-GPU 2 MiB burst count, 0 = off for a GPU; bare = 1, default off)" });
+    options.push_back({ "win32",       "-p-sync, --poller-sync [N[,N,...]] (alias -hb)",                  "per-device event record+sync every N ms (cheap WDDM keep-alive, 0 = off for a GPU; bare = 25 ms, default off)" });
+    options.push_back({ "win32",       "-p-ping-mem, --poller-ping-mem [N[,N,...]] (alias -barracuda)",             "autonomous mem-clock stream on WDDM GPUs (per-GPU interval(s) ms, 0 = off for a GPU; bare = 200 ms, default off)" });
+    options.push_back({ "win32",       "-p-ping-mem-a, --poller-ping-mem-amplitude [N1,N2,...] (alias -cobra-ping)",        "per-GPU number of 2 MiB bursts for each --poller-ping-mem cycle (0 = off for a GPU; bare = 1, default off)" });
+    options.push_back({ "win32",       "-p-ping-fma, --poller-ping-fma [N[,N,...]] (alias -perch)",                "autonomous FMA ping on WDDM GPUs (per-GPU interval(s) ms, core-clock FMA half, 0 = off for a GPU; bare = 100 ms, default off)" });
+    options.push_back({ "win32",       "-p-ping-mma, --poller-ping-mma [N[,N,...]] (alias -megalodon)",               "autonomous tensor-core (HMMA) ping on WDDM GPUs (per-GPU interval(s) ms, core-clock MMA half sharing the --poller-ping-fma thread, 0 = off for a GPU; bare = 100 ms, default off)" });
+    options.push_back({ "win32",       "--shark-path PATH",             "path to gpu_poller executable (default: %s)", params.shark_path.c_str() });
+    options.push_back({ "win32",       "--shark-arg ARG",               "additional argument passed to gpu_poller (can be repeated)" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
@@ -4678,6 +5272,31 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     auto mparams = llama_model_default_params();
     mparams.devices = params.devices.c_str();
 
+#if defined(GGML_USE_CUDA)
+    // Apply --poller-warmup-fma / --poller-ping-fma-amplitude per-GPU FMA arrays BEFORE the FMA warmup is
+    // enabled in the context params below, so set_poller_warmup_fma(true) logs the effective
+    // values (previously it logged the defaults because the sync tickle ran first).
+    if (!params.poller_warmup_fma_strength.empty()) {
+        ggml_backend_cuda_set_poller_warmup_fma_strength(params.poller_warmup_fma_strength.data(), params.poller_warmup_fma_strength.size());
+    }
+    if (!params.poller_ping_fma_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_fma_amplitude(params.poller_ping_fma_amplitude.data(), params.poller_ping_fma_amplitude.size());
+    }
+    if (!params.poller_ping_mma_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_mma_amplitude(params.poller_ping_mma_amplitude.data(), params.poller_ping_mma_amplitude.size());
+    }
+    if (!params.poller_ping_mem_amplitude.empty()) {
+        ggml_backend_cuda_set_poller_ping_mem_amplitude(params.poller_ping_mem_amplitude.data(), params.poller_ping_mem_amplitude.size());
+    }
+    // Apply --poller-sync per-GPU intervals (the event-tickle cuda-param was removed in favor of
+    // this flag). poller-sync: per-device event record+sync interval(s) in ms (0 = off).
+    // Decoupled from shark/poller-warmup-fma/poller-nvapi: it only runs the lightweight tickle
+    // thread, it does not enable the heartbeat warmup (that is --poller-warmup-fma's job).
+    if (!params.poller_sync_interval_ms.empty()) {
+        ggml_backend_cuda_set_poller_sync(params.poller_sync_interval_ms.data(), (int) params.poller_sync_interval_ms.size());
+    }
+#endif
+
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
     }
@@ -4885,6 +5504,145 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
         }
 #endif
     }
+
+    // Legacy GPU clock elevation via external gpu_poller.exe (Windows only, --shark)
+    // In-process NVAPI poller is independent and gated by --poller-nvapi.
+#if defined(_WIN32) && defined(GGML_USE_CUDA)
+    if (params.shark_enable) {
+        g_shark_path = params.shark_path;
+        g_shark_args = params.shark_args;
+        g_shark_interval_ms = params.shark_interval_ms;
+        g_shark_temp_limit  = params.shark_temp_limit;
+        // Decide the temp guard once here, before any decode: keeps the
+        // NVAPI query off the token-generation path entirely.
+        g_shark_temp_ok = check_gpu_temp_ok();
+        if (!g_shark_temp_ok) {
+            fprintf(stderr, "shark: GPU temperature too high, not launching poller\n");
+        }
+        cparams.shark_callback = common_shark_callback;
+        cparams.shark_callback_data = nullptr; // uses globals
+    }
+    // Resolve --poller-temps into (pause, resume). Empty => defaults 85,75; a
+    // single value N => pause = N, resume = N - 10 (hysteresis); two values =>
+    // pause,resume verbatim. A 0 pause temp disables heat protection.
+    int poller_pause_temp  = 85;
+    int poller_resume_temp = 75;
+    if (params.poller_temps.size() == 1) {
+        poller_pause_temp  = params.poller_temps[0];
+        poller_resume_temp = params.poller_temps[0] - 10;
+    } else if (params.poller_temps.size() >= 2) {
+        poller_pause_temp  = params.poller_temps[0];
+        poller_resume_temp = params.poller_temps[1];
+    }
+    if (params.poller_nvapi_enable) {
+        llama_nvapi_poller_set_interval(params.poller_nvapi_interval_ms.data(), (int) params.poller_nvapi_interval_ms.size());
+        // Per-card heat protection thresholds (--poller-temps): the poller
+        // self-pauses to protect the cards during long generations.
+        llama_nvapi_poller_set_temp_limits(poller_pause_temp, poller_resume_temp);
+        llama_nvapi_poller_set_monitor_only(false);
+        bool any = false;
+        for (int v : params.poller_nvapi_interval_ms) {
+            if (v > 0) any = true;
+        }
+        if (any) {
+            llama_nvapi_poller_set_enabled(true);
+        } else {
+            // --poller-nvapi 0: all intervals off, poller disabled.
+            llama_nvapi_poller_set_enabled(false);
+            fprintf(stderr, "poller-nvapi: all intervals are 0, poller disabled\n");
+        }
+    } else if (!params.poller_warmup_fma_strength.empty() || !params.poller_warmup_mma_strength.empty() || !params.poller_activity_mma_strength.empty() ||
+               !params.poller_activity_fma_strength.empty() || !params.poller_warmup_mem_bursts.empty() ||
+               !params.poller_activity_mem_bursts.empty() || !params.poller_ping_mem_amplitude.empty() || !params.poller_ping_mma_amplitude.empty() ||
+               !params.poller_sync_interval_ms.empty() || !params.poller_ping_mem_interval_ms.empty() || !params.poller_ping_fma_interval_ms.empty() ||
+               !params.poller_ping_mma_interval_ms.empty()) {
+        // Clock-elevation flags without --poller-nvapi: run the poller in monitor-only
+        // mode so the warmup / probe / tickle / ping threads consume the published
+        // per-card heat state as their skip mask (every launch path honors
+        // ggml_cuda_poller_skip: warmup-fma, warmup-mma, warmup-mem, activity-fma,
+        // activity-mma, poller-sync, and the ping-mem/ping-fma ping threads).
+        llama_nvapi_poller_set_interval(params.poller_nvapi_interval_ms.data(), (int) params.poller_nvapi_interval_ms.size());
+        llama_nvapi_poller_set_temp_limits(poller_pause_temp, poller_resume_temp);
+        llama_nvapi_poller_set_monitor_only(true);
+        llama_nvapi_poller_set_enabled(true);
+    }
+    if (!params.poller_warmup_fma_strength.empty()) {
+        // Enable the CUDA heartbeat warmup (--poller-warmup-fma). Decoupled from --poller-sync: that flag
+        // only drives the event tickle, this alone starts the FMA warmup.
+        ggml_backend_cuda_set_poller_warmup_fma(true); // logs each WDDM GPU with its effective FMA
+    }
+    if (!params.poller_warmup_interval.empty()) {
+        // Token interval between warmup bursts (--poller-warmup-interval). Applies to all three
+        // warmups (mma/fma/mem): each GPU fires on every N-th TG batch instead of every batch.
+        ggml_backend_cuda_set_poller_warmup_interval(params.poller_warmup_interval.data(), (int) params.poller_warmup_interval.size());
+    }
+    if (!params.poller_warmup_start.empty()) {
+        // First TG token at which the warmup burst fires (--poller-warmup-start). Applies to all
+        // three warmups (mma/fma/mem): each GPU first fires on the N-th TG batch of a phase.
+        ggml_backend_cuda_set_poller_warmup_start(params.poller_warmup_start.data(), (int) params.poller_warmup_start.size());
+    }
+    if (!params.poller_warmup_fma_strength.empty() || !params.poller_activity_fma_strength.empty() || !params.poller_ping_fma_interval_ms.empty()) {
+        // Occupancy % of the poller FMA kernels (--poller-fma-occupancy): direct percentage
+        // 0..100 (0 = disabled, 100 = full grid). Any FMA poller (warmup / activity / ping)
+        // uses the default 50 unless the flag is given explicitly.
+        ggml_backend_cuda_set_poller_fma_occupancy(params.poller_fma_occupancy.data(), (int) params.poller_fma_occupancy.size(), GGML_POLLER_FMA_OCCUPANCY_DEFAULT);
+    }
+    if (!params.poller_warmup_mma_strength.empty() || !params.poller_activity_mma_strength.empty() || !params.poller_ping_mma_interval_ms.empty()) {
+        // Occupancy % of the poller MMA kernels (--poller-mma-occupancy): direct percentage
+        // 0..100 (0 = disabled, 100 = full grid). Any MMA poller (warmup / activity / ping)
+        // uses the default 50 unless the flag is given explicitly.
+        ggml_backend_cuda_set_poller_mma_occupancy(params.poller_mma_occupancy.data(), (int) params.poller_mma_occupancy.size(), GGML_POLLER_MMA_OCCUPANCY_DEFAULT);
+    }
+    if (!params.poller_warmup_mem_bursts.empty() || !params.poller_activity_mem_bursts.empty() || !params.poller_ping_mem_interval_ms.empty()) {
+        // L2 occupancy % of the poller mem companion (--poller-mem-occupancy): direct
+        // percentage 0..100 (0 = disabled, 100 = full 2 MiB buffer). Any mem poller
+        // (warmup / activity / ping) uses the default 25 unless the flag is given explicitly.
+        ggml_backend_cuda_set_poller_mem_occupancy(params.poller_mem_occupancy.data(), (int) params.poller_mem_occupancy.size(), GGML_POLLER_MEM_OCCUPANCY_DEFAULT);
+    }
+    if (!params.poller_warmup_mem_bursts.empty()) {
+        // Decode-gated mem-clock companion (--poller-warmup-mem): fires the mem burst on each
+        // enabled WDDM GPU at every TG batch, mirroring the warmup-fma cadence.
+        ggml_backend_cuda_set_poller_warmup_mem(params.poller_warmup_mem_bursts.data(), (int) params.poller_warmup_mem_bursts.size());
+    }
+    if (!params.poller_activity_fma_strength.empty()) {
+        // Decode-solicited FMA probe (--poller-activity-fma): fires a short burst on each
+        // WDDM GPU that actually receives compute in the current TG batch.
+        ggml_backend_cuda_set_poller_activity_fma(params.poller_activity_fma_strength.data(), (int) params.poller_activity_fma_strength.size());
+    }
+    if (!params.poller_warmup_mma_strength.empty()) {
+        // Tensor-core HMMA warmup (--poller-warmup-mma): same decode-gated cadence as --poller-warmup-fma
+        // but with tensor-core MMA instructions (~1000x FLOPs per instruction), so
+        // the same wall-clock burst is a far denser power pulse. Pre-Volta cards
+        // fall back to scalar FFMA inside the kernel.
+        ggml_backend_cuda_set_poller_warmup_mma(params.poller_warmup_mma_strength.data(), (int) params.poller_warmup_mma_strength.size());
+    }
+    if (!params.poller_activity_mma_strength.empty()) {
+        // Decode-solicited HMMA probe (--poller-activity-mma): fires a short tensor-core burst
+        // on each WDDM GPU that actually receives compute in the current TG batch
+        // (like --poller-activity-fma, but ~1000x denser per ms).
+        ggml_backend_cuda_set_poller_activity_mma(params.poller_activity_mma_strength.data(), (int) params.poller_activity_mma_strength.size());
+    }
+    if (!params.poller_activity_mem_bursts.empty()) {
+        // Decode-solicited mem burst (--poller-activity-mem): fires a short mem-clock burst on each
+        // WDDM GPU that actually receives compute in the current TG batch (mem companion to
+        // --poller-activity-fma).
+        ggml_backend_cuda_set_poller_activity_mem(params.poller_activity_mem_bursts.data(), (int) params.poller_activity_mem_bursts.size());
+    }
+    if (!params.poller_ping_mem_interval_ms.empty()) {
+        // Autonomous mem-clock stream (--poller-ping-mem). Decoupled from --poller-nvapi: that
+        // poller only does NVAPI temps + P-state forcing, this supplies the load.
+        ggml_backend_cuda_set_poller_ping_mem(params.poller_ping_mem_interval_ms.data(), (int) params.poller_ping_mem_interval_ms.size());
+    }
+    if (!params.poller_ping_fma_interval_ms.empty()) {
+        // Autonomous FMA ping (--poller-ping-fma), the core-clock FMA half of the ping load.
+        ggml_backend_cuda_set_poller_ping_fma(params.poller_ping_fma_interval_ms.data(), (int) params.poller_ping_fma_interval_ms.size());
+    }
+    if (!params.poller_ping_mma_interval_ms.empty()) {
+        // Autonomous tensor-core (HMMA) ping (--poller-ping-mma), the core-clock MMA half of
+        // the ping load; shares the --poller-ping-fma thread.
+        ggml_backend_cuda_set_poller_ping_mma(params.poller_ping_mma_interval_ms.data(), (int) params.poller_ping_mma_interval_ms.size());
+    }
+#endif
 
     return cparams;
 }

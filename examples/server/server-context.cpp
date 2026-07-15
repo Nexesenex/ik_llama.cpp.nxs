@@ -4805,6 +4805,8 @@ void server_context::send_token_results(completion_token_outputs& results, serve
                 continue;
             }
             send_final_response(slot);
+            // Stop shark GPU clock elevation (Windows only)
+            llama_shark_stop(slot.ctx);
             release_slot_after_final_response(slot);
             released = true;
             break;
@@ -4843,6 +4845,8 @@ void server_context::send_token_results(completion_token_outputs& results, serve
             {"TotCurTG t/s",    std::round(cur_tg_tok_per_sec * 100) / 100},
             });
         send_final_response(slot);
+        // Stop shark GPU clock elevation (Windows only)
+        llama_shark_stop(ctx);
         release_slot_after_final_response(slot);
     }
 
