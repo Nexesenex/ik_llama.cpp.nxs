@@ -203,6 +203,8 @@ cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
 #endif
 }
 
+static bool ggml_cuda_hb = false;
+
 static ggml_cuda_device_info ggml_cuda_init() {
 #ifdef __HIP_PLATFORM_AMD__
     // Workaround for a rocBLAS bug when using multiple graphics cards:
@@ -610,32 +612,53 @@ static bool ggml_cuda_pinmem2_stopped = false;
 static int ggml_cuda_pindev = -1; // pindev: raw CUDA ordinal for pinning (-1 = auto-detect TCC)
 static float ggml_cuda_pinamount_gb = 0.0f; // pinamount: cap pinned memory to N GiB (0 = no cap)
 
-static void ggml_cuda_watchdog_thread_proc(ggml_backend_cuda_context * ctx) {
-    auto & wd = ctx->watchdog;
-    ggml_cuda_set_device(ctx->device);
+static std::atomic<int64_t> ggml_cuda_hb_last_active[GGML_CUDA_MAX_DEVICES] = {0};
+static std::atomic<bool> ggml_cuda_hb_running{false};
+static std::thread ggml_cuda_hb_thread;
 
-    while (true) {
-        std::unique_lock<std::mutex> lock(wd.mtx);
-        wd.cv.wait(lock, [&wd]() { return wd.armed || wd.stop; });
-        if (wd.stop) break;
-        wd.armed = false;
-        lock.unlock();
-
-        auto start = ggml_time_us();
-        const int64_t timeout_us = 10000000;
-        while (true) {
-            cudaError_t err = cudaEventQuery(wd.event);
-            if (err == cudaSuccess) break;
-            if (err != cudaErrorNotReady) break;
-            auto elapsed = ggml_time_us() - start;
-            if (elapsed > timeout_us) {
-                wd.hung = true;
-                GGML_CUDA_LOG_ERROR("CUDA watchdog: device %d appears hung (kernel did not complete within 10s)\n", ctx->device);
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+static void ggml_cuda_hb_thread_proc() {
+    // Temporary per-device heartbeat streams created once, reused each iteration
+    cudaStream_t hb_streams[GGML_CUDA_MAX_DEVICES] = {nullptr};
+    for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+        if (!ggml_cuda_info().devices[i].is_tcc && ggml_cuda_info().cuda_device_id[i] >= 0) {
+            cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
+            cudaStreamCreateWithFlags(&hb_streams[i], cudaStreamNonBlocking);
         }
     }
+    while (ggml_cuda_hb_running) {
+        for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
+            if (ggml_cuda_info().devices[i].is_tcc) continue;
+            if (hb_streams[i] == nullptr) continue;
+            // Check if there was activity within the last 200ms
+            int64_t dt = ggml_time_us() - ggml_cuda_hb_last_active[i].load();
+            if (dt > 0 && dt < 200000) {
+                cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
+                cudaEvent_t ev;
+                cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
+                cudaEventRecord(ev, hb_streams[i]);
+                cudaEventSynchronize(ev);
+                cudaEventDestroy(ev);
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    // Cleanup streams
+    for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+        if (hb_streams[i] != nullptr) {
+            cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
+            cudaStreamDestroy(hb_streams[i]);
+        }
+    }
+}
+
+static void ggml_cuda_hb_start() {
+    if (ggml_cuda_hb_running.exchange(true)) return;
+    ggml_cuda_hb_thread = std::thread(ggml_cuda_hb_thread_proc);
+    ggml_cuda_hb_thread.detach();
+}
+
+static void ggml_cuda_hb_stop() {
+    ggml_cuda_hb_running = false;
 }
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * model) :
@@ -647,26 +670,9 @@ ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * mo
     } else{
         all_ctx[device] = this;
     }
-
-    ggml_cuda_set_device(device);
-    CUDA_CHECK(cudaEventCreate(&watchdog.event));
-    watchdog.thread = std::thread(ggml_cuda_watchdog_thread_proc, this);
 }
 
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
-
-    // Stop watchdog thread first
-    {
-        std::lock_guard<std::mutex> lk(watchdog.mtx);
-        watchdog.stop = true;
-    }
-    watchdog.cv.notify_one();
-    if (watchdog.thread.joinable()) {
-        watchdog.thread.join();
-    }
-    if (watchdog.event) {
-        CUDA_CHECK(cudaEventDestroy(watchdog.event));
-    }
 
 #ifdef USE_CUDA_GRAPH
     // Let's leave this debug log in for now, so we have a trace in case
@@ -5130,6 +5136,7 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
     ggml_cuda_set_device(cuda_ctx->device);
+    ggml_cuda_hb_last_active[cuda_ctx->device].store(ggml_time_us());
 
 #ifdef USE_CUDA_GRAPH
     cuda_ctx->cur_graph = nullptr;
@@ -5227,23 +5234,9 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     bool cuda_graph_update_required = false;
 #endif // USE_CUDA_GRAPH
 
-    if (cuda_ctx->watchdog.hung) {
-        GGML_CUDA_LOG_ERROR("%s: device %d is marked as hung by watchdog, returning error\n", __func__, cuda_ctx->device);
-        return GGML_STATUS_FAILED;
-    }
-
     bool graph_evaluated_or_captured = false;
 
     evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required);
-
-    // Arm the watchdog: record event on the compute stream
-    // The watchdog thread will poll this event and detect hangs
-    CUDA_CHECK(cudaEventRecord(cuda_ctx->watchdog.event, cuda_ctx->stream()));
-    {
-        std::lock_guard<std::mutex> lk(cuda_ctx->watchdog.mtx);
-        cuda_ctx->watchdog.armed = true;
-    }
-    cuda_ctx->watchdog.cv.notify_one();
 
     return GGML_STATUS_SUCCESS;
 }
@@ -5817,6 +5810,7 @@ struct cuda_params {
     std::string cslq; // CUDA_SCALE_LAUNCH_QUEUES: "1x", "2x", "4x"
     int pinmem = 3; // pinmem: 0=disabled, 1=token_embd only, 2=try all (stop on fail), 3=all, 4=quarter RAM cap, 5=TCC full-size, 6=TCC non-portable, 7=selective (token_embd + ffn_down only)
     float pinamount_gb = 0.0f; // pinamount: cap pinned memory to N GiB (0 = no cap)
+    bool hb = false; // hb: heartbeat keep-alive during TG to prevent clock drop
 };
 
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
@@ -5912,6 +5906,9 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                     }
                 }
             }
+            else if (parsed[0] == "hb") {
+                is_good = read_value(parsed[1], params.hb);
+            }
         }
         if (!is_good) {
             GGML_CUDA_LOG_WARN("%s: invalid parameter %s (%d) -> ignored\n", __func__, value.c_str(), (int)parsed.size());
@@ -5924,6 +5921,24 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
     if (device < 0 || device >= ggml_backend_cuda_get_device_count()) {
         GGML_CUDA_LOG_ERROR("%s: invalid device %d\n", __func__, device);
         return nullptr;
+    }
+
+    // Parse hb from param_string early, before context creation in constructor
+    bool hb_early = false;
+    if (param_string) {
+        std::string ps((const char *)param_string);
+        size_t pos = ps.find("hb=");
+        if (pos != std::string::npos) {
+            size_t start = pos + 3;
+            size_t end = ps.find(",", start);
+            std::string val = ps.substr(start, end - start);
+            if (val == "1" || val == "true" || val == "yes") {
+                hb_early = true;
+            }
+        }
+    }
+    if (hb_early) {
+        ggml_cuda_hb = true;
     }
 
     ggml_backend_cuda_context * ctx = new ggml_backend_cuda_context(device, model);
@@ -5950,6 +5965,8 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         ggml_backend_cuda_set_pinmem(params.pinmem);
         // Store user-provided pinamount cap
         ggml_backend_cuda_set_pinamount(params.pinamount_gb);
+        // Store user-provided hb
+        ggml_cuda_hb = params.hb;
         if (params.fusion != ctx->fusion) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting fusion to %d\n", __func__, params.fusion);
             ctx->fusion             = params.fusion;
@@ -6192,4 +6209,19 @@ GGML_CALL void ggml_backend_cuda_set_pinamount(float gb) {
 
 GGML_CALL float ggml_backend_cuda_get_pinamount(void) {
     return ggml_cuda_pinamount_gb;
+}
+
+GGML_CALL void ggml_backend_cuda_set_hb(bool val) {
+    if (val == ggml_cuda_hb) return;
+    ggml_cuda_hb = val;
+    if (val) {
+        ggml_cuda_hb_start();
+    } else {
+        ggml_cuda_hb_stop();
+    }
+    GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_hb: hb=%s\n", val ? "true" : "false");
+}
+
+GGML_CALL bool ggml_backend_cuda_get_hb(void) {
+    return ggml_cuda_hb;
 }
