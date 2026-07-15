@@ -63,6 +63,18 @@ GGML_API GGML_CALL int ggml_backend_cuda_get_pinmem(void);
 GGML_API GGML_CALL void ggml_backend_cuda_set_pindev(int val);
 GGML_API GGML_CALL int  ggml_backend_cuda_get_pindev(void);
 
+// Set heartbeat mode to prevent WDDM from idling the GPU during TG (default: false)
+// hb=1: Launch a lightweight keep-alive kernel during TG to prevent clock drop
+GGML_API GGML_CALL void ggml_backend_cuda_set_hb(bool val);
+
+// Get current heartbeat setting
+GGML_API GGML_CALL bool ggml_backend_cuda_get_hb(void);
+
+// Set stream-k efficiency threshold (0-100, default 75)
+// Lower values use stream-k more aggressively, higher values prefer wave attention
+// Use: ggml_backend_cuda_set_stream_k_thresh(50) for more stream-k
+GGML_API GGML_CALL void ggml_backend_cuda_set_stream_k_thresh(int thresh);
+
 // Set pinamount cap in GiB — limits how much of the host buffer is actually pinned.
 // pinamount=0 (default): no cap, use full pinmem mode behavior.
 // pinamount>0:  cap pinned memory at N GiB (e.g. pinamount=52.5 for 52.5 GiB).
