@@ -412,6 +412,16 @@ struct llama_context {
     int32_t n_p_eval = 0; // number of tokens in eval calls for the prompt (with batch size > 1)
     int32_t n_eval   = 0; // number of eval calls
 
+    // Shark GPU clock elevation state (Windows only)
+    bool shark_active = false;
+    bool shark_prefill_done = false; // true after first prefill (n_tokens > 8)
+
+    // CUDA heartbeat / NVAPI poller state (Windows only). Per-context like
+    // shark_prefill_done so multiple contexts do not cross-trigger each other:
+    // a static local would let one context's first prefill arm another's gate.
+    bool hb_prefill_done     = false; // true after first prefill (n_tokens > 8)
+    bool nvapi_prefill_done  = false; // true after first prefill (n_tokens > 8)
+
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_t buf_output = nullptr;
 

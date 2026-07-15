@@ -398,6 +398,191 @@ struct gpt_params {
 
     std::string cuda_params          = ""; // comma separated list of cuda parameters key=value1,key2=value2
 
+    // =========================================================================
+    // GPU clock-elevation flags (Windows, WDDM GPUs only). Summary of defaults:
+    //
+    //   --shark     [N[,N,...]]  interval default 25 ms;        off by default (empty)
+    //   --poller-nvapi   [N[,N,...]]  interval default 50 ms;        off by default (empty)
+    //   --poller-warmup-fma      [FMA1,...]   FMA default 32768;             off by default (empty)
+    //   --poller-warmup-mma    [MMA1,...]   HMMA default 8192 (tensor cores);  off by default (empty)
+    //   --poller-ping-fma-amplitude [FMA1,...]   FMA default 8192;              off by default (empty)
+    //   --poller-warmup-mem     [N1,N2,...]  per-GPU 2 MiB burst count (bare = 1); off by default (empty)
+    //   --poller-warmup-interval [N1,N2,...]  per-GPU warmup token interval (mma/fma/mem); default 1 (every batch)
+    //   --poller-warmup-start [N1,N2,...]  per-GPU first-fire TG token (mma/fma/mem); default 2 (second token)
+    //   --poller-fma-occupancy [N1,N2,...]  per-GPU FMA burst grid occupancy %; default 50 (0 = disabled, 100 = full grid)
+    //   --poller-mma-occupancy [N1,N2,...]  per-GPU MMA burst grid occupancy %; default 50 (0 = disabled, 100 = full grid)
+    //   --poller-mem-occupancy [N1,N2,...]  per-GPU mem-companion L2 occupancy %; default 25 (0 = disabled, 100 = full 2 MiB)
+    //     (occupancy defaults 50/50/25 also apply whenever the matching FMA/MMA/mem poller is used, without the flag)
+    //   --poller-activity-fma [FMA1,...]   FMA default 8192 (decode-solicited);  off by default (empty)
+    //   --poller-activity-mma   [MMA1,...]   HMMA default 8192 (decode-solicited); off by default (empty)
+    //   --poller-sync        [N[,N,...]]  interval default 25 ms;        off by default (empty)
+    //   --poller-ping-mem [N[,N,...]]  interval default 200 ms;       off by default (empty)
+    //   --poller-ping-fma [N[,N,...]]  interval default 100 ms;       off by default (empty)
+    //   --poller-ping-mma [N[,N,...]]  interval default 100 ms;       off by default (empty)
+    //
+    //   - Off by default means an empty vector (flag not given).
+    //   - A bare flag (no value) activates it for every WDDM GPU at the default.
+    //   - Supplying one value broadcasts it to every WDDM GPU.
+    //   - Supplying a comma list maps positionally, in ggml device order
+    //     (TCC devices don't consume a slot); 0 in the list disables that GPU.
+    //   - All of these except --shark accept a per-GPU comma/N-value array.
+    //   - P-state forcing kicks in on top of the pollers; temp limit 85 C stops
+    //     the external poller.
+//   - --poller-warmup-fma / --poller-ping-fma-amplitude FMA scale down as the prompt fills the context,
+    //     split into 256 brackets in 8 slices of 32 (scale in 1/256ths of the
+    //     full budget): slices 1-2 fall 2x faster than baseline, slices 3-4 at
+    //     baseline pace, slices 5-7 at half pace, and slice 8 issues no FMA at
+    //     all (the KV cache is nearly full, so real attention work suffices).
+    // =========================================================================
+
+    // Legacy GPU clock elevation via external gpu_poller.exe (Windows only, --shark)
+    bool   shark_enable            = false;
+    // Per-WDDM-GPU poller interval(s) in ms. One value applies to all WDDM GPUs;
+    // a comma list maps positionally (fewer values than GPUs: only those GPUs).
+    // e.g. --shark 20,40 : GPU0=20 ms, GPU1=40 ms. Empty = off (default); bare
+    // --shark applies 25 ms to all WDDM GPUs.
+    std::vector<int> shark_interval_ms = {};
+    std::string shark_path         = "gpu_poller.exe";
+    std::vector<std::string> shark_args; // additional arguments passed to the poller (e.g. --interval 20)
+    int    shark_temp_limit        = 85;   // temperature limit in Celsius (stops poller if exceeded)
+
+    // In-process NVAPI poller - forces high P-states on WDDM GPUs (Windows only, --poller-nvapi N)
+    bool   poller_nvapi_enable          = false;
+    // Same per-WDDM-GPU mapping as shark_interval_ms (default 50 for all);
+    // 0 in the list turns polling off for that GPU, --poller-nvapi 0 disables the poller.
+    // Empty = off (default); bare --poller-nvapi applies 50 ms to all WDDM GPUs.
+    std::vector<int> poller_nvapi_interval_ms = {};
+
+    // Per-card heat protection thresholds in Celsius (--poller-temps / -pt).
+    // First value = pause temp, second = resume temp: a GPU reaching the pause
+    // temp is skipped (no NVAPI queries, no warmup burst) until it cools below
+    // the resume temp. A single value N sets pause = N with resume = N - 10°C
+    // hysteresis. Empty = default 85,75 (bare keeps defaults); a 0 pause temp
+    // disables heat protection.
+    std::vector<int> poller_temps = {};    // e.g. --poller-temps 85,75 : pause at 85°C, resume below 75°C
+
+    // CUDA heartbeat keep-alive - warm up WDDM GPUs during TG to keep clocks elevated (Windows only)
+    // FMA chain length per non-TCC (WDDM) GPU, in device order. Single value
+    // broadcasts to every WDDM GPU; 0 disables a GPU. Empty = disabled.
+    std::vector<int> poller_warmup_fma_strength;     // e.g. --poller-warmup-fma 262144,393216 : GPU0=262144 FMA, GPU1=393216 FMA; 0 disables that GPU
+    // FMA ping strength per WDDM GPU (same broadcast mapping as poller_warmup_fma_strength).
+    // Default ~1 ms.
+    std::vector<int> poller_ping_fma_amplitude;    // e.g. --poller-ping-fma-amplitude 8192,98304 : stronger ping per cycle; 0 disables that GPU
+    // MMA (tensor-core) ping strength per WDDM GPU for the autonomous --poller-ping-mma thread
+    // (same broadcast mapping as poller_ping_fma_amplitude; ~1000x FLOPs per instruction vs scalar
+    // FMA). Default 8192; 0 disables that GPU.
+    std::vector<int> poller_ping_mma_amplitude = {};   // e.g. --poller-ping-mma-amplitude 4096,8192
+
+    // Decode-gated mem-clock companion (--poller-warmup-mem N[,N,...]). Per-WDDM-GPU burst count:
+    // the number of 2 MiB passes over the companion buffer per TG batch, mirroring the
+    // poller-warmup-fma cadence (mem-only, FMA-free). Single value broadcasts to every WDDM
+    // GPU (bare --poller-warmup-mem = 1 burst); 0 = off for a GPU. Empty = off (default).
+    std::vector<int> poller_warmup_mem_bursts = {};    // e.g. --poller-warmup-mem 4,8 : GPU0=4x2MiB, GPU1=8x2MiB per batch
+
+    // Decode-solicited FMA probe (--poller-activity-fma N[,N,...]). Per-WDDM-GPU FMA chain
+    // length for the burst fired when that GPU actually receives compute in the
+    // current TG batch (rides along with real kernels; default ~8192). Same mapping
+    // as poller_warmup_mem_bursts: single value broadcasts to every WDDM GPU (bare --poller-activity-fma =
+    // all GPUs at the default), 0 = off for a GPU. Empty = off (default).
+    std::vector<int> poller_activity_fma_strength = {}; // e.g. --poller-activity-fma 8192,16384 : GPU0=8192 FMA, GPU1=16384 FMA
+
+    // Tensor-core warmup (--poller-warmup-mma N[,N,...]). Per-WDDM-GPU HMMA chain length for
+    // the burst fired at every TG batch like --poller-warmup-fma, but using tensor-core MMA
+    // (2048 FLOPs per m16n8k16 fp16 instruction vs 2 per scalar FMA), so the same
+    // wall-clock pulse delivers ~1000x the compute work - a denser boost for the
+    // clock governor. Same mapping as poller_warmup_fma_strength: single value broadcasts to every
+    // WDDM GPU (bare --poller-warmup-mma = all GPUs at the default), 0 = off for a GPU.
+    // Empty = off (default).
+    std::vector<int> poller_warmup_mma_strength = {};    // e.g. --poller-warmup-mma 65536,32768 : GPU0=65536 HMMA, GPU1=32768 HMMA
+
+    // Token interval between warmup bursts (--poller-warmup-interval N[,N,...], aliases
+    // -p-warm-i / -warmstream). Per-WDDM-GPU: applies to all three warmup functions (mma, fma,
+    // mem), each GPU fires its burst on every N-th TG batch instead of every batch. Single value
+    // broadcasts to every WDDM GPU (bare --poller-warmup-interval = 1 = every batch, the default
+    // historical behavior); more values map positionally; missing values use the default.
+    std::vector<int> poller_warmup_interval = {};    // e.g. --poller-warmup-interval 4,2 : GPU0 every 4th batch, GPU1 every 2nd
+
+    // First TG token at which the warmup burst fires (--poller-warmup-start N[,N,...], aliases
+    // -p-warm-s / -streamsource). Per-WDDM-GPU: applies to all three warmup functions (mma, fma,
+    // mem), the burst first fires on the N-th TG batch (token) of a phase instead of the historical
+    // default second token (the skip-first-batch behavior). Single value broadcasts to every WDDM
+    // GPU (bare --poller-warmup-start = 2 = fire on the second TG token); more values map
+    // positionally; missing values use the default. 0 = never fire on that GPU.
+    std::vector<int> poller_warmup_start = {};    // e.g. --poller-warmup-start 4,2 : GPU0 first fires on the 4th TG token, GPU1 on the 2nd
+
+    // Occupancy percentage of the poller FMA kernels (--poller-fma-occupancy N[,N,...], aliases
+    // -p-fma-o / -fishpit). Per-WDDM-GPU float, direct 0..100: 0 = disabled (no burst),
+    // 100 = full grid (16 blocks/SM), and the burst grid is scaled to occ% of that residency
+    // so fewer SMs are engaged during the pulse, leaving more room for the real TG compute.
+    // Single value broadcasts to every WDDM GPU (bare --poller-fma-occupancy = 50, the
+    // default); more values map positionally; missing values use the default. Applies to
+    // warmup, activity and ping; the default 50 also applies whenever any FMA poller is
+    // used without the flag.
+    std::vector<float> poller_fma_occupancy = {};    // e.g. --poller-fma-occupancy 25,50 : GPU0 at 25%, GPU1 at 50%
+
+    // Occupancy percentage of the poller MMA kernels (--poller-mma-occupancy N[,N,...], aliases
+    // -p-mma-o / -abyss). Per-WDDM-GPU float, direct 0..100: 0 = disabled (no burst),
+    // 100 = full grid (16 blocks/SM), and the burst grid is scaled to occ% of that residency
+    // so fewer SMs (and thus fewer tensor-core warps) are engaged during the pulse, leaving
+    // more room for the real TG compute. Single value broadcasts to every WDDM GPU (bare
+    // --poller-mma-occupancy = 50, the default); more values map positionally; missing values
+    // use the default. Applies to warmup, activity and ping; the default 50 also applies
+    // whenever any MMA poller is used without the flag.
+    std::vector<float> poller_mma_occupancy = {};    // e.g. --poller-mma-occupancy 25,50 : GPU0 at 25%, GPU1 at 50%
+
+    // L2 occupancy percentage of the poller mem companion (--poller-mem-occupancy N[,N,...],
+    // aliases -p-mem-o / -snakepit). Per-WDDM-GPU float, direct 0..100: 0 = disabled (no
+    // burst), 100 = full 2 MiB buffer per pass, and the number of buffer slots streamed per
+    // pass is scaled to occ% of the full buffer, so the burst's L2 footprint (then multiplied
+    // by the burst count) leaves more L2 for the real TG compute. Single value broadcasts to
+    // every WDDM GPU (bare --poller-mem-occupancy = 25, the default); more values map
+    // positionally; missing values use the default. Applies to warmup, activity and ping;
+    // the default 25 also applies whenever any mem poller is used without the flag.
+    std::vector<float> poller_mem_occupancy = {};    // e.g. --poller-mem-occupancy 12,25 : GPU0 at 12%, GPU1 at 25%
+
+    // Decode-solicited HMMA probe (--poller-activity-mma N[,N,...]). Per-WDDM-GPU HMMA chain
+    // length for the burst fired when that GPU actually receives compute in the
+    // current TG batch (rides along with real kernels, like --poller-activity-fma but for
+    // tensor cores; ~1000x denser per ms). Same mapping as poller_activity_fma_strength: single
+    // value broadcasts to every WDDM GPU (bare --poller-activity-mma = all GPUs at the
+    // default), 0 = off for a GPU. Empty = off (default).
+    std::vector<int> poller_activity_mma_strength = {};   // e.g. --poller-activity-mma 4096,8192 : GPU0=4096 HMMA, GPU1=8192 HMMA
+
+    // Decode-solicited mem burst (--poller-activity-mem N[,N,...]). Per-WDDM-GPU burst count (number
+    // of 2 MiB passes) fired when that GPU actually receives compute in the current TG batch
+    // (mem-clock companion to --poller-activity-fma). Same mapping as poller_activity_fma_strength:
+    // single value broadcasts to every WDDM GPU (bare --poller-activity-mem = 1 burst), 0 = off for
+    // a GPU. Empty = off (default).
+    std::vector<int> poller_activity_mem_bursts = {};  // e.g. --poller-activity-mem 4,8
+
+    // Per-device event record+sync tickle (--poller-sync N[,N,...]). Cheap WDDM keep-alive,
+    // independent of shark/poller-warmup-fma/poller-nvapi. Per-GPU interval(s) in ms, 0 = off for a
+    // GPU. Empty = off (default); bare --poller-sync applies 25 ms to all WDDM GPUs.
+    std::vector<int> poller_sync_interval_ms = {};
+
+    // Autonomous mem-clock stream (--poller-ping-mem N[,N,...]) on WDDM GPUs,
+    // independent of shark/poller-warmup-fma/poller-nvapi (no NVAPI). Same per-GPU mapping as
+    // shark_interval_ms; 0 = off for a GPU. Empty = off (default); bare
+    // --poller-ping-mem applies 200 ms to all WDDM GPUs.
+    std::vector<int> poller_ping_mem_interval_ms = {};
+
+    // Number of 2 MiB passes per autonomous mem-clock ping (--poller-ping-mem-amplitude N[,N,...]),
+    // the mem ping "strength". Same per-GPU mapping; 0 = off for a GPU. Empty = off (default);
+    // bare --poller-ping-mem-amplitude applies 1 burst to all WDDM GPUs.
+    std::vector<int> poller_ping_mem_amplitude = {};
+
+    // Autonomous FMA ping (--poller-ping-fma N[,N,...]) on WDDM GPUs, the core-clock FMA
+    // half of the ping load (fires only the FMA chain; the MMA half is --poller-ping-mma's
+    // job, same thread). Same per-GPU mapping; 0 = off for a GPU. Empty = off
+    // (default); bare --poller-ping-fma applies 100 ms to all WDDM GPUs.
+    std::vector<int> poller_ping_fma_interval_ms = {};
+
+    // Autonomous tensor-core (HMMA) ping (--poller-ping-mma N[,N,...]) on WDDM GPUs, the
+    // core-clock MMA half of the ping load (fires only the MMA chain; the FMA half is
+    // --poller-ping-fma's job, same thread). Same per-GPU mapping; 0 = off for a GPU.
+    // Empty = off (default); bare --poller-ping-mma applies 100 ms to all WDDM GPUs.
+    std::vector<int> poller_ping_mma_interval_ms = {};
+
     std::vector<std::string> in_files;     // all input files
     std::vector<std::string> antiprompt;   // strings upon which more user input is prompted (a.k.a. reverse prompts)
     std::vector<std::string> ban_phrases;  // strings that are banned in generation

@@ -18,6 +18,8 @@
 #include <ctime>
 
 #include "ggml-cuda/common.cuh"
+#include "ggml-cuda/cuda-pstate-booster.cuh"
+#include "ggml-cuda/cuda-watchdog.cuh"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/arange.cuh"
 #include "ggml-cuda/argsort.cuh"
@@ -81,6 +83,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <float.h>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -116,13 +119,12 @@ GGML_CALL void ggml_backend_cuda_log_set_callback(ggml_log_callback log_callback
     ggml_cuda_log_user_data = user_data;
 }
 
-#define GGML_CUDA_LOG_INFO(...) ggml_cuda_log(GGML_LOG_LEVEL_INFO, __VA_ARGS__)
-#define GGML_CUDA_LOG_WARN(...) ggml_cuda_log(GGML_LOG_LEVEL_WARN, __VA_ARGS__)
-#define GGML_CUDA_LOG_ERROR(...) ggml_cuda_log(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
-#define GGML_CUDA_LOG_DEBUG(...) ggml_cuda_log(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
+// ggml_cuda_log and the GGML_CUDA_LOG_* macros are declared in common.cuh
+// (shared with cuda-pstate-booster.cu / cuda-watchdog.cu); the definition lives
+// here, once.
 
 GGML_ATTRIBUTE_FORMAT(2, 3)
-static void ggml_cuda_log(enum ggml_log_level level, const char * format, ...) {
+void ggml_cuda_log(enum ggml_log_level level, const char * format, ...) {
     if (ggml_cuda_log_callback != NULL) {
         va_list args;
         va_start(args, format);
@@ -629,34 +631,6 @@ static bool ggml_cuda_pinmem2_stopped = false;
 static int ggml_cuda_pindev = -1; // pindev: raw CUDA ordinal for pinning (-1 = auto-detect TCC)
 static float ggml_cuda_pinamount_gb = 0.0f; // pinamount: cap pinned memory to N GiB (0 = no cap)
 
-static void ggml_cuda_watchdog_thread_proc(ggml_backend_cuda_context * ctx) {
-    auto & wd = ctx->watchdog;
-    ggml_cuda_set_device(ctx->device);
-
-    while (true) {
-        std::unique_lock<std::mutex> lock(wd.mtx);
-        wd.cv.wait(lock, [&wd]() { return wd.armed || wd.stop; });
-        if (wd.stop) break;
-        wd.armed = false;
-        lock.unlock();
-
-        auto start = ggml_time_us();
-        const int64_t timeout_us = 16000000;
-        while (true) {
-            cudaError_t err = cudaEventQuery(wd.event);
-            if (err == cudaSuccess) break;
-            if (err != cudaErrorNotReady) break;
-            auto elapsed = ggml_time_us() - start;
-            if (elapsed > timeout_us) {
-                wd.hung = true;
-                GGML_CUDA_LOG_ERROR("CUDA watchdog: CUDA%d (Device %d) appears hung (kernel did not complete within 16s)\n", ctx->device, ggml_backend_cuda_get_device_ordinal(ctx->device));
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-    }
-}
-
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * model) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)), model(model) {
     auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
@@ -667,25 +641,13 @@ ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * mo
         all_ctx[device] = this;
     }
 
-    ggml_cuda_set_device(device);
-    CUDA_CHECK(cudaEventCreate(&watchdog.event));
-    watchdog.thread = std::thread(ggml_cuda_watchdog_thread_proc, this);
+    ggml_cuda_watchdog_init(this);
 }
 
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
     // Stop watchdog thread first
-    {
-        std::lock_guard<std::mutex> lk(watchdog.mtx);
-        watchdog.stop = true;
-    }
-    watchdog.cv.notify_one();
-    if (watchdog.thread.joinable()) {
-        watchdog.thread.join();
-    }
-    if (watchdog.event) {
-        CUDA_CHECK(cudaEventDestroy(watchdog.event));
-    }
+    ggml_cuda_watchdog_cleanup(this);
 
 #ifdef USE_CUDA_GRAPH
     // Let's leave this debug log in for now, so we have a trace in case
@@ -5245,6 +5207,17 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
+    // poller-activity-fma: fire the per-GPU FMA probe exactly when this GPU
+    // is actually solicited. The scheduler invokes graph_compute for a device only
+    // when the batch's split graph gave it nodes, so reaching this point IS the
+    // keep-alive trigger being asked for. Gated to TG via poller_gate.
+    ggml_cuda_poller_activity_fma_ping_device(cuda_ctx->device);
+    // poller-activity-mma: same decode-solicited trigger but for the tensor-core
+    // HMMA probe - a far denser pulse per ms, riding along with the real kernels.
+    ggml_cuda_poller_activity_mma_ping_device(cuda_ctx->device);
+    // poller-activity-mem: same decode-solicited trigger but for the mem-clock companion burst.
+    ggml_cuda_poller_activity_mem_ping_device(cuda_ctx->device);
+
     ggml_cuda_set_device(cuda_ctx->device);
 
 #ifdef USE_CUDA_GRAPH
@@ -5351,23 +5324,18 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     bool cuda_graph_update_required = false;
 #endif // USE_CUDA_GRAPH
 
-    if (cuda_ctx->watchdog.hung) {
+    bool graph_evaluated_or_captured = false;
+
+    if (ggml_cuda_watchdog_is_hung(cuda_ctx)) {
         GGML_CUDA_LOG_ERROR("%s: CUDA%d (Device %d) is marked as hung by watchdog, returning error\n", __func__, cuda_ctx->device, ggml_backend_cuda_get_device_ordinal(cuda_ctx->device));
         return GGML_STATUS_FAILED;
     }
-
-    bool graph_evaluated_or_captured = false;
 
     evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required);
 
     // Arm the watchdog: record event on the compute stream
     // The watchdog thread will poll this event and detect hangs
-    CUDA_CHECK(cudaEventRecord(cuda_ctx->watchdog.event, cuda_ctx->stream()));
-    {
-        std::lock_guard<std::mutex> lk(cuda_ctx->watchdog.mtx);
-        cuda_ctx->watchdog.armed = true;
-    }
-    cuda_ctx->watchdog.cv.notify_one();
+    ggml_cuda_watchdog_arm(cuda_ctx);
 
     return GGML_STATUS_SUCCESS;
 }
@@ -6346,3 +6314,4 @@ GGML_CALL void ggml_backend_cuda_set_pinamount(float gb) {
 GGML_CALL float ggml_backend_cuda_get_pinamount(void) {
     return ggml_cuda_pinamount_gb;
 }
+
