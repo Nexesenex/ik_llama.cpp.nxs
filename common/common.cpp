@@ -4383,6 +4383,19 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
             }
         }
     }
+    // Parse hb from cuda_params early, before backend initialization
+    if (!params.cuda_params.empty()) {
+        size_t pos_hb = params.cuda_params.find("hb=");
+        if (pos_hb != std::string::npos) {
+            size_t start = pos_hb + 3;
+            size_t end = params.cuda_params.find(",", start);
+            std::string hb_str = params.cuda_params.substr(start, end - start);
+            if (!hb_str.empty()) {
+                bool hb_val = (hb_str == "1" || hb_str == "true" || hb_str == "yes");
+                ggml_backend_cuda_set_hb(hb_val);
+            }
+        }
+    }
 #endif
 
     if (params.n_gpu_layers != -1) {

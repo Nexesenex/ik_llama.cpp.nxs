@@ -197,6 +197,8 @@ cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
 #endif
 }
 
+static bool ggml_cuda_hb = false;
+
 static ggml_cuda_device_info ggml_cuda_init() {
 #ifdef __HIP_PLATFORM_AMD__
     // Workaround for a rocBLAS bug when using multiple graphics cards:
@@ -604,6 +606,55 @@ static void ggml_cuda_watchdog_thread_proc(ggml_backend_cuda_context * ctx) {
 static int ggml_cuda_user_stream_k_thresh[GGML_CUDA_MAX_DEVICES] = {}; // Per-device stream-k threshold (0 = use default 75)
 static int ggml_cuda_user_stream_k_thresh_global = 75; // Global default if not set per-device
 static int ggml_cuda_user_nblocks_stream_k_raw_thresh = 4; // Threshold multiplier for nblocks_stream_k rounding (default 4)
+
+static std::atomic<int64_t> ggml_cuda_hb_last_active[GGML_CUDA_MAX_DEVICES] = {0};
+static std::atomic<bool> ggml_cuda_hb_running{false};
+static std::thread ggml_cuda_hb_thread;
+
+static void ggml_cuda_hb_thread_proc() {
+    // Temporary per-device heartbeat streams created once, reused each iteration
+    cudaStream_t hb_streams[GGML_CUDA_MAX_DEVICES] = {nullptr};
+    for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+        if (!ggml_cuda_info().devices[i].is_tcc && ggml_cuda_info().cuda_device_id[i] >= 0) {
+            cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
+            cudaStreamCreateWithFlags(&hb_streams[i], cudaStreamNonBlocking);
+        }
+    }
+    while (ggml_cuda_hb_running) {
+        for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
+            if (ggml_cuda_info().devices[i].is_tcc) continue;
+            if (hb_streams[i] == nullptr) continue;
+            // Check if there was activity within the last 200ms
+            int64_t dt = ggml_time_us() - ggml_cuda_hb_last_active[i].load();
+            if (dt > 0 && dt < 200000) {
+                cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
+                cudaEvent_t ev;
+                cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
+                cudaEventRecord(ev, hb_streams[i]);
+                cudaEventSynchronize(ev);
+                cudaEventDestroy(ev);
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+    // Cleanup streams
+    for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+        if (hb_streams[i] != nullptr) {
+            cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
+            cudaStreamDestroy(hb_streams[i]);
+        }
+    }
+}
+
+static void ggml_cuda_hb_start() {
+    if (ggml_cuda_hb_running.exchange(true)) return;
+    ggml_cuda_hb_thread = std::thread(ggml_cuda_hb_thread_proc);
+    ggml_cuda_hb_thread.detach();
+}
+
+static void ggml_cuda_hb_stop() {
+    ggml_cuda_hb_running = false;
+}
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * model) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)), model(model) {
@@ -4876,6 +4927,7 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
     ggml_cuda_set_device(cuda_ctx->device);
+    ggml_cuda_hb_last_active[cuda_ctx->device].store(ggml_time_us());
 
 #ifdef USE_CUDA_GRAPH
     cuda_ctx->cur_graph = nullptr;
@@ -5562,6 +5614,7 @@ struct cuda_params {
     bool enable_p2p = true;
     std::string cslq; // CUDA_SCALE_LAUNCH_QUEUES: "1x", "2x", "4x"
     int pinmem = 3; // pinmem: 0=disabled, 1=token_embd only, 2=try all (stop on fail), 3=all
+    bool hb = false; // hb: heartbeat keep-alive during TG to prevent clock drop
     int stream_k_thresh = 75; // Stream-k efficiency threshold: 0-100
     int nblocks_stream_k_raw_thresh = 4; // Threshold multiplier for nblocks_stream_k rounding: 1-64
 };
@@ -5647,6 +5700,9 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                     is_good = false;
                 }
             }
+            else if (parsed[0] == "hb") {
+                is_good = read_value(parsed[1], params.hb);
+            }
             else if (parsed[0] == "nblocks_stream_k_raw_thresh") {
                 is_good = read_value(parsed[1], params.nblocks_stream_k_raw_thresh);
                 if (!is_good || params.nblocks_stream_k_raw_thresh < 1 || params.nblocks_stream_k_raw_thresh > 64) {
@@ -5675,6 +5731,24 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         return nullptr;
     }
 
+    // Parse hb from param_string early, before context creation in constructor
+    bool hb_early = false;
+    if (param_string) {
+        std::string ps((const char *)param_string);
+        size_t pos = ps.find("hb=");
+        if (pos != std::string::npos) {
+            size_t start = pos + 3;
+            size_t end = ps.find(",", start);
+            std::string val = ps.substr(start, end - start);
+            if (val == "1" || val == "true" || val == "yes") {
+                hb_early = true;
+            }
+        }
+    }
+    if (hb_early) {
+        ggml_cuda_hb = true;
+    }
+
     ggml_backend_cuda_context * ctx = new ggml_backend_cuda_context(device, model);
     if (ctx == nullptr) {
         GGML_CUDA_LOG_ERROR("%s: failed to allocate context\n", __func__);
@@ -5689,7 +5763,7 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
 
     bool enable_p2p = true;
     if (param_string) {
-        [[maybe_unused]] auto params = ggml_cuda_parse_params((const char *)param_string);
+        auto params = ggml_cuda_parse_params((const char *)param_string);
         // Apply user-provided cslq (normalizes value and sets env var immediately)
         if (!params.cslq.empty()) {
             ggml_backend_cuda_set_cslq(params.cslq.c_str());
@@ -5699,6 +5773,8 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         }
         // Store user-provided pinmem for use in buffer type allocation
         ggml_backend_cuda_set_pinmem(params.pinmem);
+        // Store user-provided hb
+        ggml_cuda_hb = params.hb;
         // Store user-provided stream_k_thresh for use in FA kernel
         if (params.stream_k_thresh != 75) {
             if (params.stream_k_thresh == -1) {
@@ -5893,6 +5969,21 @@ GGML_CALL void ggml_backend_cuda_set_pinmem(int val) {
 
 GGML_CALL int ggml_backend_cuda_get_pinmem(void) {
     return ggml_cuda_pinmem;
+}
+
+GGML_CALL void ggml_backend_cuda_set_hb(bool val) {
+    if (val == ggml_cuda_hb) return;
+    ggml_cuda_hb = val;
+    if (val) {
+        ggml_cuda_hb_start();
+    } else {
+        ggml_cuda_hb_stop();
+    }
+    GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_hb: hb=%s\n", val ? "true" : "false");
+}
+
+GGML_CALL bool ggml_backend_cuda_get_hb(void) {
+    return ggml_cuda_hb;
 }
 
 GGML_CALL void ggml_backend_cuda_set_stream_k_thresh(int thresh) {
