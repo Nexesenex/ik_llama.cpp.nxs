@@ -93,6 +93,92 @@
 #endif
 using json = nlohmann::ordered_json;
 
+// Shark GPU clock elevation callback (Windows only)
+// Uses a lightweight GPU poller instead of gpushark
+#if defined(_WIN32) && defined(GGML_USE_CUDA)
+static std::string g_shark_path = "gpu_poller.exe";
+static std::vector<std::string> g_shark_args;
+static int g_shark_interval_ms = 20;
+static int g_shark_temp_limit  = 85;
+static bool g_shark_temp_ok    = true; // decided once at setup, off the decode path
+static HANDLE g_shark_process = nullptr;
+
+static bool check_gpu_temp_ok() {
+    // Use NVAPI (in-process) instead of spawning nvidia-smi. Fail-open.
+    return llama_nvapi_gpu_temp_ok(g_shark_temp_limit);
+}
+
+static void common_shark_callback(bool start, void * user_data) {
+    (void)user_data;
+    if (start) {
+        // Temp guard was decided once at setup (g_shark_temp_ok); nothing
+        // to check on the decode thread.
+        if (!g_shark_temp_ok) {
+            return;
+        }
+        // Launch lightweight GPU poller
+        if (g_shark_process != nullptr) {
+            return; // already running
+        }
+        // Check if file exists
+        DWORD attrs = GetFileAttributesA(g_shark_path.c_str());
+        if (attrs == INVALID_FILE_ATTRIBUTES) {
+            fprintf(stderr, "shark: GPU poller not found at %s\n", g_shark_path.c_str());
+            return;
+        }
+
+        // Build command line
+        std::string cmd = "\"" + g_shark_path + "\"";
+        for (const auto & arg : g_shark_args) {
+            cmd += " " + arg;
+        }
+        // Pass the --shark N interval unless the user already set one via --shark-arg
+        bool has_interval = false;
+        for (const auto & arg : g_shark_args) {
+            if (arg.rfind("--interval", 0) == 0) {
+                has_interval = true;
+                break;
+            }
+        }
+        if (!has_interval) {
+            cmd += " --interval " + std::to_string(g_shark_interval_ms);
+        }
+
+        STARTUPINFOA si = { sizeof(si) };
+        PROCESS_INFORMATION pi;
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE; // run hidden
+
+        if (CreateProcessA(
+                nullptr,
+                (LPSTR)cmd.c_str(),
+                nullptr, nullptr, FALSE,
+                CREATE_NO_WINDOW | DETACHED_PROCESS,
+                nullptr, nullptr, &si, &pi)) {
+            g_shark_process = pi.hProcess;
+            CloseHandle(pi.hThread);
+            fprintf(stderr, "shark: launched GPU poller (pid=%d)\n", pi.dwProcessId);
+        } else {
+            fprintf(stderr, "shark: failed to launch GPU poller (error=%lu)\n", GetLastError());
+        }
+    } else {
+        // Stop GPU poller
+        if (g_shark_process != nullptr) {
+            if (TerminateProcess(g_shark_process, 0)) {
+                fprintf(stderr, "shark: terminated GPU poller\n");
+            }
+            CloseHandle(g_shark_process);
+            g_shark_process = nullptr;
+        }
+    }
+}
+#else
+static void common_shark_callback(bool start, void * user_data) {
+    (void)start;
+    (void)user_data;
+}
+#endif
+
 common_time_meas::common_time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
 
 common_time_meas::~common_time_meas() {
@@ -2260,6 +2346,72 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cuda_params = argv[i];
         return true;
     }
+    if (arg == "--shark") {
+        // Optional value: --shark N sets the external poller interval in ms.
+        // Bare --shark keeps the default interval.
+        params.shark_enable = true;
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.shark_interval_ms = atoi(argv[i+1]);
+            if (params.shark_interval_ms < 1) {
+                fprintf(stderr, "error: --shark interval must be >= 1 ms\n");
+                invalid_param = true;
+            } else {
+                i++; // consume the interval value
+            }
+        }
+        return true;
+    }
+    if (arg == "--pirahna") {
+        // Optional value: --pirahna N sets the in-process NVAPI poller interval in ms.
+        // Bare --pirahna keeps the default interval.
+        params.pirahna_enable = true;
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.pirahna_interval_ms = atoi(argv[i+1]);
+            if (params.pirahna_interval_ms < 1) {
+                fprintf(stderr, "error: --pirahna interval must be >= 1 ms\n");
+                invalid_param = true;
+            } else {
+                i++; // consume the interval value
+            }
+        }
+        return true;
+    }
+    if (arg == "--orca") {
+        CHECK_ARG
+        std::string arg_str = argv[i];
+        if (arg_str.rfind("orca=", 0) == 0) {
+            arg_str = arg_str.substr(5);
+        }
+        params.orca_fma = string_split<int>(arg_str, ',');
+        if (params.orca_fma.empty()) {
+            fprintf(stderr, "error: --orca requires at least one FMA length, e.g. --orca 262144,393216\n");
+            invalid_param = true;
+        }
+        return true;
+    }
+    if (arg == "--orca-ping") {
+        CHECK_ARG
+        std::string arg_str = argv[i];
+        if (arg_str.rfind("orca-ping=", 0) == 0) {
+            arg_str = arg_str.substr(10);
+        }
+        params.orca_ping = string_split<int>(arg_str, ',');
+        if (params.orca_ping.empty()) {
+            fprintf(stderr, "error: --orca-ping requires at least one FMA length, e.g. --orca-ping 65536,98304\n");
+            invalid_param = true;
+        }
+        return true;
+    }
+    if (arg == "--shark-path") {
+        CHECK_ARG
+        params.shark_path = argv[i];
+        return true;
+    }
+    if (arg == "--shark-arg") {
+        CHECK_ARG
+        params.shark_args.push_back(argv[i]);
+        return true;
+    }
     if (arg == "-mtp" || arg == "--multi-token-prediction") {
         throw common_speculative_legacy_option_error(arg,
             "--spec-type mtp:n_max=1,p_min=0.0");
@@ -3482,6 +3634,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
     options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
+    options.push_back({ "win32",       "--shark [N]",                    "enable GPU clock elevation via external gpu_poller.exe (N = poller interval in ms, default 20)" });
+    options.push_back({ "win32",       "--pirahna [N]",                  "enable in-process NVAPI GPU poller (N = poller interval in ms, default 100)" });
+    options.push_back({ "win32",       "--orca FMA1,FMA2,...",             "enable CUDA heartbeat warmup with per-GPU FMA length (non-TCC order)" });
+    options.push_back({ "win32",       "--orca-ping FMA1,FMA2,...",        "per-GPU poller ping strength, shorter than the warmup (~1 ms default)" });
+    options.push_back({ "win32",       "--shark-path PATH",             "path to gpu_poller executable (default: %s)", params.shark_path.c_str() });
+    options.push_back({ "win32",       "--shark-arg ARG",               "additional argument passed to gpu_poller (can be repeated)" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
@@ -4534,6 +4692,28 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
             }
         }
     }
+    // Apply --orca / --orca-ping per-GPU FMA arrays BEFORE any hb=1 enablement
+    // from cuda_params below, so the set_hb(true) startup log prints the
+    // effective values (previously it logged the defaults because hb=1 ran first).
+    if (!params.orca_fma.empty()) {
+        ggml_backend_cuda_set_hb_fmas(params.orca_fma.data(), params.orca_fma.size());
+    }
+    if (!params.orca_ping.empty()) {
+        ggml_backend_cuda_set_hb_pings(params.orca_ping.data(), params.orca_ping.size());
+    }
+    // Parse hb from cuda_params early, before backend initialization
+    if (!params.cuda_params.empty()) {
+        size_t pos_hb = params.cuda_params.find("hb=");
+        if (pos_hb != std::string::npos) {
+            size_t start = pos_hb + 3;
+            size_t end = params.cuda_params.find(",", start);
+            std::string hb_str = params.cuda_params.substr(start, end - start);
+            if (!hb_str.empty()) {
+                bool hb_val = (hb_str == "1" || hb_str == "true" || hb_str == "yes");
+                ggml_backend_cuda_set_hb(hb_val);
+            }
+        }
+    }
 #endif
 
     if (params.n_gpu_layers != -1) {
@@ -4726,6 +4906,46 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
         }
 #endif
     }
+
+    // Legacy GPU clock elevation via external gpu_poller.exe (Windows only, --shark)
+    // In-process NVAPI poller is independent and gated by --pirahna.
+#if defined(_WIN32) && defined(GGML_USE_CUDA)
+    if (params.shark_enable) {
+        g_shark_path = params.shark_path;
+        g_shark_args = params.shark_args;
+        g_shark_interval_ms = params.shark_interval_ms;
+        g_shark_temp_limit  = params.shark_temp_limit;
+        // Decide the temp guard once here, before any decode: keeps the
+        // NVAPI query off the token-generation path entirely.
+        g_shark_temp_ok = check_gpu_temp_ok();
+        if (!g_shark_temp_ok) {
+            fprintf(stderr, "shark: GPU temperature too high, not launching poller\n");
+        }
+        cparams.shark_callback = common_shark_callback;
+        cparams.shark_callback_data = nullptr; // uses globals
+    }
+    if (params.pirahna_enable) {
+        llama_nvapi_poller_set_interval(params.pirahna_interval_ms);
+        // Same temperature limit as --shark: the poller self-stops to protect
+        // the cards during long generations.
+        llama_nvapi_poller_set_temp_limit(params.shark_temp_limit);
+        llama_nvapi_poller_set_monitor_only(false);
+        llama_nvapi_poller_set_enabled(true);
+    } else if (!params.orca_fma.empty()) {
+        // --orca only: run the poller in monitor-only mode so the heartbeat
+        // warmup consumes the published per-card heat state as its skip mask.
+        llama_nvapi_poller_set_interval(params.pirahna_interval_ms);
+        llama_nvapi_poller_set_temp_limit(params.shark_temp_limit);
+        llama_nvapi_poller_set_monitor_only(true);
+        llama_nvapi_poller_set_enabled(true);
+    }
+    if (!params.orca_fma.empty()) {
+        // Enable the CUDA heartbeat warmup if not already enabled via hb=1 in
+        // cuda_params (set_hb_fmas was applied above; this just logs/activates).
+        // Early-returns when hb was already enabled by the cuda params path.
+        ggml_backend_cuda_set_hb(true); // logs each WDDM GPU with its effective FMA
+    }
+#endif
 
     return cparams;
 }

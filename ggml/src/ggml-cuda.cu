@@ -204,6 +204,9 @@ cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
 #endif
 }
 
+static bool ggml_cuda_hb = false;
+static bool ggml_cuda_hb_active = false; // hb_active: true during TG, false during PP
+
 static ggml_cuda_device_info ggml_cuda_init() {
 #ifdef __HIP_PLATFORM_AMD__
     // Workaround for a rocBLAS bug when using multiple graphics cards:
@@ -291,7 +294,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].nsm        = prop.multiProcessorCount;
 #if CUDART_VERSION >= 12000
         int kernel_exec_timeout = 1;
-        cudaDeviceGetAttribute(&kernel_exec_timeout, cudaDevAttrKernelExecTimeout, id);
+        cudaDeviceGetAttribute(&kernel_exec_timeout, cudaDevAttrKernelExecTimeout, cuda_id);
         info.devices[id].is_tcc = !kernel_exec_timeout;
 #else
         info.devices[id].is_tcc     = !prop.kernelExecTimeoutEnabled;
@@ -636,6 +639,68 @@ static void ggml_cuda_watchdog_thread_proc(ggml_backend_cuda_context * ctx) {
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
+    }
+}
+
+// Spin kernel: single-block FMA chain burst, launched many times per SM to
+// produce real activity and keep clocks elevated during TG (~us per launch).
+// Per-device chain length is passed in so each WDDM GPU gets its own pulse.
+static __device__ float ggml_cuda_hb_scratch = 0.0f;
+
+static __global__ void k_hb_warmup(const int n_fma) {
+    float acc = 0.0f;
+    #pragma unroll 4
+    for (int i = 0; i < n_fma; ++i) {
+        acc = fmaf(acc, 1.0000001f, 1e-6f);
+    }
+    // Unconditional global write: guarantees the FMA chain is observable and
+    // cannot be removed by dead-code elimination (fast-math builds included).
+    ggml_cuda_hb_scratch = acc;
+}
+
+// Launch one warmup burst per non-TCC device on a cached non-blocking stream.
+// No dedicated thread: llama's decode hot path calls this through
+// ggml_backend_cuda_set_hb_active() at every TG batch, which keeps the clocks
+// elevated with real kernels. Launch is fire & forget (async).
+static cudaStream_t ggml_cuda_hb_streams[GGML_CUDA_MAX_DEVICES] = {nullptr};
+// FMA chain length per non-TCC (WDDM) device, in ggml device order (index = the
+// k-th WDDM GPU). Default 262144 keeps prior behaviour when set_hb_fmas is not used.
+static int ggml_cuda_hb_fma[GGML_CUDA_MAX_DEVICES] = {0};
+
+static constexpr int GGML_CUDA_HB_FMA_DEFAULT = 262144;
+
+// Per-GPU FMA chain length for the poller ping (index = k-th WDDM GPU).
+// Stronger than a tickle but lighter than the warmup: ~1 ms of full-residency
+// load per poller cycle, so the GPU still gets idle gaps (no constant wear).
+static int ggml_cuda_hb_ping_fma[GGML_CUDA_MAX_DEVICES] = {0};
+
+static constexpr int GGML_CUDA_HB_PING_FMA_DEFAULT = 65536;
+
+// Per-card skip mask for the heartbeat warmup (index = k-th WDDM GPU). Set from
+// the NVAPI temp monitor (--pirahna / --orca): a too-hot card is not warmed up.
+static bool ggml_cuda_hb_skip[GGML_CUDA_MAX_DEVICES] = {false};
+
+// 16 blocks per SM (resident rating), 256 threads per block — full 2048-thread
+// residency with no over-subscription. The per-GPU FMA chain makes the
+// resident threads issue back-to-back for a deep, sustained load pulse at flat
+// FLOP rate, which the clock governor needs to reach boost. Repeated every TG.
+static void ggml_cuda_hb_warmup() {
+    int w = 0;
+    for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
+        if (ggml_cuda_info().devices[i].is_tcc) continue;
+        const bool skip_this = w < GGML_CUDA_MAX_DEVICES && ggml_cuda_hb_skip[w];
+        w++;  // w = WDDM position of this device (TCC devices do not consume a slot)
+        if (skip_this) continue;
+        int cuda_id = ggml_cuda_info().cuda_device_id[i];
+        if (cuda_id < 0) continue;
+        if (ggml_cuda_hb_streams[i] == nullptr) {
+            cudaSetDevice(cuda_id);
+            cudaStreamCreateWithFlags(&ggml_cuda_hb_streams[i], cudaStreamNonBlocking);
+        }
+        int nsm = std::max(ggml_cuda_info().devices[i].nsm, 1);
+        const int fma = ggml_cuda_hb_fma[w - 1] > 0 ? ggml_cuda_hb_fma[w - 1] : GGML_CUDA_HB_FMA_DEFAULT;
+        cudaSetDevice(cuda_id);
+        k_hb_warmup<<<nsm * 16, 256, 0, ggml_cuda_hb_streams[i]>>>(fma);
     }
 }
 
@@ -5176,12 +5241,12 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     bool cuda_graph_update_required = false;
 #endif // USE_CUDA_GRAPH
 
+    bool graph_evaluated_or_captured = false;
+
     if (cuda_ctx->watchdog.hung) {
         GGML_CUDA_LOG_ERROR("%s: device %d is marked as hung by watchdog, returning error\n", __func__, cuda_ctx->device);
         return GGML_STATUS_FAILED;
     }
-
-    bool graph_evaluated_or_captured = false;
 
     evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required);
 
@@ -5740,6 +5805,7 @@ struct cuda_params {
     std::string cslq; // CUDA_SCALE_LAUNCH_QUEUES: "1x", "2x", "4x"
     int pinmem = 3; // pinmem: 0=disabled, 1=token_embd only, 2=try all (stop on fail), 3=all, 4=quarter RAM cap, 5=TCC full-size, 6=TCC non-portable, 7=selective (token_embd + ffn_down only)
     float pinamount_gb = 0.0f; // pinamount: cap pinned memory to N GiB (0 = no cap)
+    bool hb = false; // hb: heartbeat keep-alive during TG to prevent clock drop
 };
 
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
@@ -5835,6 +5901,9 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                     }
                 }
             }
+            else if (parsed[0] == "hb") {
+                is_good = read_value(parsed[1], params.hb);
+            }
         }
         if (!is_good) {
             GGML_CUDA_LOG_WARN("%s: invalid parameter %s (%d) -> ignored\n", __func__, value.c_str(), (int)parsed.size());
@@ -5847,6 +5916,24 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
     if (device < 0 || device >= ggml_backend_cuda_get_device_count()) {
         GGML_CUDA_LOG_ERROR("%s: invalid device %d\n", __func__, device);
         return nullptr;
+    }
+
+    // Parse hb from param_string early, before context creation in constructor
+    bool hb_early = false;
+    if (param_string) {
+        std::string ps((const char *)param_string);
+        size_t pos = ps.find("hb=");
+        if (pos != std::string::npos) {
+            size_t start = pos + 3;
+            size_t end = ps.find(",", start);
+            std::string val = ps.substr(start, end - start);
+            if (val == "1" || val == "true" || val == "yes") {
+                hb_early = true;
+            }
+        }
+    }
+    if (hb_early) {
+        ggml_cuda_hb = true;
     }
 
     ggml_backend_cuda_context * ctx = new ggml_backend_cuda_context(device, model);
@@ -5873,6 +5960,8 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         ggml_backend_cuda_set_pinmem(params.pinmem);
         // Store user-provided pinamount cap
         ggml_backend_cuda_set_pinamount(params.pinamount_gb);
+        // Store user-provided hb
+        ggml_cuda_hb = params.hb;
         if (params.fusion != ctx->fusion) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting fusion to %d\n", __func__, params.fusion);
             ctx->fusion             = params.fusion;
@@ -5935,12 +6024,29 @@ GGML_CALL int ggml_backend_cuda_get_device_ordinal(int device) {
     return info.cuda_device_id[device];
 }
 
+GGML_CALL bool ggml_backend_cuda_device_is_tcc(int device) {
+    const auto & info = ggml_cuda_info();
+    if (device < 0 || device >= info.device_count) {
+        GGML_CUDA_LOG_WARN("%s: device %d out of range (max %d)\n", __func__, device, info.device_count - 1);
+        return false;
+    }
+    return info.devices[device].is_tcc;
+}
+
 GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size) {
     const auto & info = ggml_cuda_info();
     int cuda_device = (device >= 0 && device < info.device_count) ? info.cuda_device_id[device] : device;
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, cuda_device));
     snprintf(description, description_size, "%s", prop.name);
+}
+
+GGML_CALL void ggml_backend_cuda_get_device_pci_bus_id(int device, char * pci_bus_id, size_t pci_bus_id_size) {
+    const auto & info = ggml_cuda_info();
+    int cuda_device = (device >= 0 && device < info.device_count) ? info.cuda_device_id[device] : device;
+    if (pci_bus_id_size > 0) {
+        cudaDeviceGetPCIBusId(pci_bus_id, (int) pci_bus_id_size, cuda_device);
+    }
 }
 
 GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total) {
@@ -6115,4 +6221,126 @@ GGML_CALL void ggml_backend_cuda_set_pinamount(float gb) {
 
 GGML_CALL float ggml_backend_cuda_get_pinamount(void) {
     return ggml_cuda_pinamount_gb;
+}
+
+GGML_CALL void ggml_backend_cuda_set_hb(bool val) {
+    if (val == ggml_cuda_hb) return;
+    ggml_cuda_hb = val;
+    if (val) {
+        const auto & info = ggml_cuda_info();
+        int w = 0;
+        for (int i = 0; i < info.device_count; ++i) {
+            if (info.devices[i].is_tcc) continue;
+            int cuda_id = info.cuda_device_id[i];
+            if (cuda_id < 0) continue;
+            char name[128] = {0};
+            cudaSetDevice(cuda_id);
+            cudaDeviceProp prop;
+            CUDA_CHECK(cudaGetDeviceProperties(&prop, cuda_id));
+            snprintf(name, sizeof(name), "%s", prop.name);
+            char pci_bus_id[16] = {0};
+            cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), cuda_id);
+            const int fma = ggml_cuda_hb_fma[w] > 0 ? ggml_cuda_hb_fma[w] : GGML_CUDA_HB_FMA_DEFAULT;
+            const int ping_fma = ggml_cuda_hb_ping_fma[w] > 0 ? ggml_cuda_hb_ping_fma[w] : GGML_CUDA_HB_PING_FMA_DEFAULT;
+            GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_hb: orca enabling heartbeat on GPU %d (%s, PCI %s), WDDM[%d]: %d FMA (ping %d)\n",
+                cuda_id, name, pci_bus_id, w, fma, ping_fma);
+            w++;
+        }
+    } else {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_hb: hb=false\n");
+    }
+}
+
+GGML_CALL void ggml_backend_cuda_set_hb_fmas(const int * fmas, int n) {
+    // Map positionally to non-TCC (WDDM) GPUs in ggml device order. TCC devices
+    // (like an A4000 in TCC mode) never receive a warmup launch and thus never
+    // consume a slot: fmas[0] => first WDDM GPU, fmas[1] => second, etc.
+    int w = 0;
+    for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
+        if (ggml_cuda_info().devices[i].is_tcc) continue;
+        if (w >= n) break;
+        ggml_cuda_hb_fma[w] = fmas[w];
+        if (fmas[w] < 0) {
+            GGML_CUDA_LOG_WARN("%s: ignoring negative FMA length %d for device %d\n",
+                __func__, fmas[w], i);
+            ggml_cuda_hb_fma[w] = GGML_CUDA_HB_FMA_DEFAULT;
+        }
+        w++;
+    }
+}
+
+GGML_CALL void ggml_backend_cuda_set_hb_pings(const int * fmas, int n) {
+    // Same positional WDDM mapping as set_hb_fmas: fmas[0] => first WDDM GPU.
+    int w = 0;
+    for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
+        if (ggml_cuda_info().devices[i].is_tcc) continue;
+        if (w >= n) break;
+        ggml_cuda_hb_ping_fma[w] = fmas[w];
+        if (fmas[w] < 0) {
+            GGML_CUDA_LOG_WARN("%s: ignoring negative ping FMA length %d for device %d\n",
+                __func__, fmas[w], i);
+            ggml_cuda_hb_ping_fma[w] = GGML_CUDA_HB_PING_FMA_DEFAULT;
+        }
+        w++;
+    }
+}
+
+GGML_CALL void ggml_backend_cuda_set_hb_skip(const bool * skip, int n) {
+    // Same positional WDDM mapping as set_hb_fmas: skip[0] => first WDDM GPU.
+    for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+        ggml_cuda_hb_skip[i] = (skip != nullptr) && (i < n) && skip[i];
+    }
+}
+
+GGML_CALL bool ggml_backend_cuda_get_hb(void) {
+    return ggml_cuda_hb;
+}
+
+GGML_CALL void ggml_backend_cuda_set_hb_active(bool val) {
+    if (!ggml_cuda_hb) {
+        // hb disabled: ignore TG/PP transitions entirely
+        ggml_cuda_hb_active = false;
+        return;
+    }
+    const bool changed = (val != ggml_cuda_hb_active);
+    ggml_cuda_hb_active = val;
+    if (val) {
+        // Launch a warmup burst on every TG batch (llama calls this per decode).
+        // Combined with the real decode kernels this sustains SM activity during
+        // the whole TG phase, keeping the clock boost alive. ~us fire & forget.
+        ggml_cuda_hb_warmup();
+    }
+    if (changed) {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_hb_active: %s\n",
+            val ? "heartbeat active during TG (GPU clocks elevated)"
+                : "heartbeat inactive during PP (GPU clocks may drop)");
+    }
+}
+
+// Fire a warmup burst on every non-TCC GPU. This is the "real work"
+// companion to the NVAPI poller: each call puts a GPC kernel in the work queue,
+// so polling reads become actual engine activity. Uses the same cached streams
+// and full-residency grid as the heartbeat, but with a shorter per-GPU chain
+// (default ~1 ms vs ~5 ms for the warmup) so the poller cycle still leaves
+// idle gaps instead of constant load. Fire-and-forget.
+GGML_CALL void ggml_backend_cuda_ping(const bool * skip, int n_skip) {
+    const auto & info = ggml_cuda_info();
+    int w = 0;
+    for (int i = 0; i < info.device_count; ++i) {
+        if (info.devices[i].is_tcc) continue;
+        const bool skip_this = (skip != nullptr) && (w < n_skip) && skip[w];
+        w++;  // w = WDDM position of this device (TCC devices do not consume a slot)
+        if (skip_this) continue;
+        int cuda_id = info.cuda_device_id[i];
+        if (cuda_id < 0) continue;
+        if (ggml_cuda_hb_streams[i] == nullptr) {
+            cudaSetDevice(cuda_id);
+            cudaStreamCreateWithFlags(&ggml_cuda_hb_streams[i], cudaStreamNonBlocking);
+        }
+        int nsm = std::max(info.devices[i].nsm, 1);
+        const int fma = ggml_cuda_hb_ping_fma[w - 1] > 0 ? ggml_cuda_hb_ping_fma[w - 1] : GGML_CUDA_HB_PING_FMA_DEFAULT;
+        cudaSetDevice(cuda_id);
+        // Full 2048-thread residency (16 blocks/SM x 256 threads), shorter chain.
+        k_hb_warmup<<<nsm * 16, 256, 0, ggml_cuda_hb_streams[i]>>>(fma);
+    }
 }

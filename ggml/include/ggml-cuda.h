@@ -36,7 +36,9 @@ GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type
 
 GGML_API GGML_CALL int  ggml_backend_cuda_get_device_count(void);
 GGML_API GGML_CALL int  ggml_backend_cuda_get_device_ordinal(int device);
+GGML_API GGML_CALL bool ggml_backend_cuda_device_is_tcc(int device);
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size);
+GGML_API GGML_CALL void ggml_backend_cuda_get_device_pci_bus_id(int device, char * pci_bus_id, size_t pci_bus_id_size);
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total);
 
 // Set CUDA_SCALE_LAUNCH_QUEUES before buffer type init (must be called before any ggml_backend_cuda_buffer_type call)
@@ -62,6 +64,48 @@ GGML_API GGML_CALL int ggml_backend_cuda_get_pinmem(void);
 // pindev=N:  use raw CUDA ordinal N (e.g. pindev=0 for the first device)
 GGML_API GGML_CALL void ggml_backend_cuda_set_pindev(int val);
 GGML_API GGML_CALL int  ggml_backend_cuda_get_pindev(void);
+
+// Set heartbeat mode to prevent WDDM from idling the GPU during TG (default: false)
+// hb=1: Launch a lightweight keep-alive kernel during TG to prevent clock drop
+GGML_API GGML_CALL void ggml_backend_cuda_set_hb(bool val);
+
+// Set per-GPU FMA chain length for the heartbeat warmup kernel. The array maps
+// positionally to non-TCC (WDDM) GPUs in ggml device order; TCC devices skip.
+// Call before or after set_hb(true); it is safe either way (set_hb(true) logs
+// each WDDM GPU with the effective FMA). Devices past the end keep defaults.
+GGML_API GGML_CALL void ggml_backend_cuda_set_hb_fmas(const int * fmas, int n);
+
+// Set per-GPU FMA chain length for the poller ping (ggml_backend_cuda_ping()).
+// Same positional non-TCC (WDDM) mapping and semantics as set_hb_fmas; shorter
+// than the warmup by default (~1 ms), so the poller cycle keeps idle gaps.
+GGML_API GGML_CALL void ggml_backend_cuda_set_hb_pings(const int * fmas, int n);
+
+// Set a per-card skip mask for the heartbeat warmup (ggml_cuda_hb_warmup, used
+// by ggml_backend_cuda_set_hb_active during TG). skip[] is indexed by WDDM
+// position (0 = first non-TCC GPU) and, when true, suppresses the warmup for
+// that GPU (e.g. a card that is too hot). Pass skip == nullptr to clear it.
+GGML_API GGML_CALL void ggml_backend_cuda_set_hb_skip(const bool * skip, int n);
+
+// Get current heartbeat setting
+GGML_API GGML_CALL bool ggml_backend_cuda_get_hb(void);
+
+// Set heartbeat active phase (TG=true, PP=false). Only issue keep-alive when active.
+// Called from llama.cpp at the same points as the shark_callback.
+GGML_API GGML_CALL void ggml_backend_cuda_set_hb_active(bool val);
+
+// Fire a single lightweight warmup burst on every non-TCC (WDDM) GPU.
+// Unlike set_hb_active() this does not track heart rate/phase — it is meant to
+// be called from an external polling loop (e.g. the NVAPI poller) to convert
+// driver-level queries into real GPC engine activity. Fire-and-forget, async.
+// skip[] is indexed by WDDM position (0 = first non-TCC GPU) and, when true,
+// suppresses the ping for that GPU (e.g. a card that is too hot). Pass
+// skip == nullptr to ping every non-TCC GPU.
+GGML_API GGML_CALL void ggml_backend_cuda_ping(const bool * skip, int n_skip);
+
+// Set stream-k efficiency threshold (0-100, default 75)
+// Lower values use stream-k more aggressively, higher values prefer wave attention
+// Use: ggml_backend_cuda_set_stream_k_thresh(50) for more stream-k
+GGML_API GGML_CALL void ggml_backend_cuda_set_stream_k_thresh(int thresh);
 
 // Set pinamount cap in GiB — limits how much of the host buffer is actually pinned.
 // pinamount=0 (default): no cap, use full pinmem mode behavior.

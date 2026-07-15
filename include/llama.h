@@ -528,6 +528,11 @@ extern "C" {
         void *              abort_callback_data;
         void *              offload_policy;
         void *              cuda_params;
+
+        // Shark GPU clock elevation callback (Windows only, personal use)
+        // Called with true when TG starts (n_tokens <= 8), false when TG stops
+        void (*shark_callback)(bool start, void * user_data);
+        void *              shark_callback_data;
     };
 
     // model quantization parameters
@@ -1139,6 +1144,31 @@ extern "C" {
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
+
+    // Stop shark GPU clock elevation (Windows only, personal use)
+    LLAMA_API void llama_shark_stop(struct llama_context * ctx);
+
+    // Enable/disable the in-process NVAPI poller (Windows only, personal use).
+    // Disabled by default; --pirahna turns it on. Safe to call before any decode.
+    LLAMA_API void llama_nvapi_poller_set_enabled(bool enabled);
+
+    // Set the in-process NVAPI poller interval in ms (--pirahna N). Applies to
+    // the next start; a running poller keeps its current interval.
+    LLAMA_API void llama_nvapi_poller_set_interval(int interval_ms);
+
+    // Set the temperature limit (Celsius, 0 = disabled) at which the NVAPI
+    // poller stops itself to protect the card during long generations.
+    LLAMA_API void llama_nvapi_poller_set_temp_limit(int limit_celsius);
+
+    // Enable/disable monitor-only mode: the NVAPI poller only tracks per-card
+    // temperatures (publishing hot_state, which the --orca heartbeat warmup
+    // consumes as its skip mask) and performs no NVAPI burst or CUDA ping.
+    LLAMA_API void llama_nvapi_poller_set_monitor_only(bool monitor_only);
+
+    // Check via NVAPI whether no physical NVIDIA GPU exceeds the given temperature
+    // limit in Celsius. Returns true when all GPUs are within the limit, or when
+    // NVAPI is unavailable (fail-open). Windows only, personal use.
+    LLAMA_API bool llama_nvapi_gpu_temp_ok(int limit_celsius);
 
     // Wait until all computations are finished
     // This is automatically done when using one of the functions below to obtain the computation results

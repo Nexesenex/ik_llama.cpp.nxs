@@ -51,6 +51,7 @@ static int64_t g_t_start_ctx = 0;
 
 #ifdef GGML_USE_CUDA
 #  include "ggml-cuda.h"
+#  include "../common/nvapi_poller.h"
 #elif defined(GGML_USE_VULKAN)
 #  include "ggml-vulkan.h"
 #elif defined(GGML_USE_SYCL)
@@ -152,12 +153,85 @@ static std::string trim(const std::string & str) {
 
 static bool stop_internal_decode = false;
 
+#ifdef GGML_USE_CUDA
+// Empty device list: the poller auto-detects WDDM (non-TCC) GPUs in ggml
+// logical order, matching the orca heartbeat's device set. TCC (e.g. A4000)
+// is never polled.
+static NvapiPoller g_nvapi_poller({});
+static bool g_nvapi_poller_enabled = false; // on only when --pirahna is passed
+#endif
+
+// Enable/disable the in-process NVAPI poller (Windows only, personal use).
+// Disabled by default; --pirahna turns it on. A stopped poller is a no-op.
+void llama_nvapi_poller_set_enabled(bool enabled) {
+#ifdef GGML_USE_CUDA
+    g_nvapi_poller_enabled = enabled;
+    if (!enabled) {
+        g_nvapi_poller.stop();
+    }
+#else
+    (void) enabled;
+#endif
+}
+
+// Set the in-process NVAPI poller interval in ms (--pirahna N). Applies to the
+// next start; a running poller keeps its current interval.
+void llama_nvapi_poller_set_interval(int interval_ms) {
+#ifdef GGML_USE_CUDA
+    g_nvapi_poller.set_interval(interval_ms);
+#else
+    (void) interval_ms;
+#endif
+}
+
+// Set the temperature limit at which the NVAPI poller stops itself (0 = off).
+void llama_nvapi_poller_set_temp_limit(int limit_celsius) {
+#ifdef GGML_USE_CUDA
+    g_nvapi_poller.set_temp_limit(limit_celsius);
+#else
+    (void) limit_celsius;
+#endif
+}
+
+// Enable/disable monitor-only mode (--orca: temperature tracking only, the
+// heartbeat warmup consumes the published hot_state as its skip mask).
+void llama_nvapi_poller_set_monitor_only(bool monitor_only) {
+#ifdef GGML_USE_CUDA
+    g_nvapi_poller.set_monitor_only(monitor_only);
+#else
+    (void) monitor_only;
+#endif
+}
+
+// Check GPU temperatures via NVAPI instead of spawning nvidia-smi (Windows only).
+// Fail-open: returns true when NVAPI is unavailable.
+bool llama_nvapi_gpu_temp_ok(int limit_celsius) {
+#ifdef GGML_USE_CUDA
+    return nvapi_gpu_temp_ok(limit_celsius);
+#else
+    (void) limit_celsius;
+    return true;
+#endif
+}
+
 void  llama_decode_reset() {
     stop_internal_decode = false;
 }
 
 void  llama_decode_stop() {
     stop_internal_decode = true;
+}
+
+// Stop shark GPU clock elevation for a specific context
+void llama_shark_stop(struct llama_context * ctx) {
+    if (ctx && ctx->cparams.shark_callback && ctx->shark_active) {
+        ctx->shark_active = false;
+        ctx->cparams.shark_callback(false, ctx->cparams.shark_callback_data);
+    }
+#ifdef GGML_USE_CUDA
+    ggml_backend_cuda_set_hb_active(false);
+    g_nvapi_poller.stop();
+#endif
 }
 
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
@@ -878,6 +952,15 @@ void llama_context::set_mtp_n_heads(int32_t value) {
 }
 
 llama_context::~llama_context() {
+    // Stop shark GPU clock elevation on context destruction
+    if (cparams.shark_callback && shark_active) {
+        shark_active = false;
+        cparams.shark_callback(false, cparams.shark_callback_data);
+    }
+#ifdef GGML_USE_CUDA
+    ggml_backend_cuda_set_hb_active(false);
+#endif
+
     if (dflash.kv.cache_sched != nullptr) {
         ggml_backend_sched_free(dflash.kv.cache_sched);
     }
@@ -6179,6 +6262,7 @@ static bool prepare_mtp_graph_inputs(
 // return positive int on warning
 // return negative int on error
 //
+
 static int llama_decode_internal(
          llama_context & lctx,
            llama_batch   batch_all) { // TODO: rename back to batch
@@ -6190,6 +6274,60 @@ static int llama_decode_internal(
         LLAMA_LOG_ERROR("%s: n_tokens == 0", __func__);
         return -1;
     }
+
+    // Shark GPU clock elevation callback (Windows only)
+    // Only activate after first prefill (n_tokens > 8), not during warmup
+    if (lctx.cparams.shark_callback) {
+        if (n_tokens_all > 8) {
+            lctx.shark_prefill_done = true;
+        }
+        if (lctx.shark_prefill_done) {
+            if (n_tokens_all <= 8 && !lctx.shark_active) {
+                lctx.shark_active = true;
+                lctx.cparams.shark_callback(true, lctx.cparams.shark_callback_data);
+            } else if (n_tokens_all > 8 && lctx.shark_active) {
+                lctx.shark_active = false;
+                lctx.cparams.shark_callback(false, lctx.cparams.shark_callback_data);
+            }
+        }
+    }
+    // Heartbeat: restrict to TG phase, same pattern as the poller
+#ifdef GGML_USE_CUDA
+    {
+        static bool hb_prefill_done = false;
+        if (n_tokens_all > 8) {
+            hb_prefill_done = true;
+        }
+        if (hb_prefill_done) {
+            ggml_backend_cuda_set_hb_active(n_tokens_all <= 8);
+        }
+    }
+    // NVAPI poller: start/stop at same TG/PP boundaries as heartbeat.
+    // Runs when enabled via --pirahna, or in monitor-only mode for --orca
+    // (temperature tracking only, feeding the heartbeat skip mask below).
+    {
+        static bool nvapi_prefill_done = false;
+        if (n_tokens_all > 8) {
+            nvapi_prefill_done = true;
+        }
+        if (nvapi_prefill_done && g_nvapi_poller_enabled) {
+            if (n_tokens_all <= 8 && !g_nvapi_poller.is_running()) {
+                g_nvapi_poller.start();
+            } else if (n_tokens_all > 8 && g_nvapi_poller.is_running()) {
+                g_nvapi_poller.stop();
+            }
+        }
+    }
+    // Feed the NVAPI poller's per-card heat state into the --orca heartbeat
+    // warmup skip mask, so a too-hot GPU is not warmed up during TG.
+    if (ggml_backend_cuda_get_hb()) {
+        std::vector<uint8_t> hot;
+        g_nvapi_poller.get_hot_state(hot);
+        ggml_backend_cuda_set_hb_skip(
+            hot.empty() ? nullptr : reinterpret_cast<const bool *>(hot.data()),
+            (int) hot.size());
+    }
+#endif
 #if IK_PRINT_TIMING > 2
     printf("===== %s: %ld\n", __func__, ggml_time_us());
 #endif
@@ -6778,6 +6916,15 @@ static int llama_decode_internal(
             prev.reset();
         }
         if (stop_internal_decode) {
+            // Stop shark on interrupted generation
+            if (lctx.cparams.shark_callback && lctx.shark_active) {
+                lctx.shark_active = false;
+                lctx.cparams.shark_callback(false, lctx.cparams.shark_callback_data);
+            }
+#ifdef GGML_USE_CUDA
+            ggml_backend_cuda_set_hb_active(false);
+            g_nvapi_poller.stop();
+#endif
             return -3;
         }
     }
@@ -7688,6 +7835,8 @@ struct llama_context_params llama_context_default_params() {
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
         /*.cuda_params                 =*/ nullptr,
+        /*.shark_callback              =*/ nullptr,
+        /*.shark_callback_data         =*/ nullptr,
     };
 
     return result;
@@ -8247,6 +8396,8 @@ struct llama_context * llama_init_from_model(
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
+    cparams.shark_callback   = params.shark_callback;
+    cparams.shark_callback_data = params.shark_callback_data;
     cparams.mtp              = params.mtp;
     cparams.worst_graph_tokens = params.worst_case_tokens;
 
