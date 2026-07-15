@@ -278,6 +278,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
         info.devices[id].integrated = prop.integrated;
         info.devices[id].nsm        = prop.multiProcessorCount;
+        info.devices[id].is_tcc     = !prop.kernelExecTimeoutEnabled;
         info.devices[id].smpb       = prop.sharedMemPerBlock;
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
