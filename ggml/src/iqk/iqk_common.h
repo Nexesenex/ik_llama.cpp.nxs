@@ -478,13 +478,13 @@ static inline void multiply_add(const Bits& bits, const __m256i * scales, int j,
 
 template <typename Q8, typename Bits>
 static inline void multiply_add_avx2(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
+#ifdef HAVE_VNNIINT8
+    auto s0 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[0]));
+    auto s1 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[1]));
+    auto s2 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[2]));
+    auto s3 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[3]));
+    auto zero = _mm256_setzero_si256();
     if (j == 0) {
-#if defined(HAVE_VNNIINT8)
-        auto s0 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[0]));
-        auto s1 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[1]));
-        auto s2 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[2]));
-        auto s3 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[3]));
-        auto zero = _mm256_setzero_si256();
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
             auto t0 = ggml_mm256_dpbssd_epi32(zero, bits.values[0], q8.load_quants(iy, i, 0));
             auto t1 = ggml_mm256_dpbssd_epi32(zero, bits.values[1], q8.load_quants(iy, i, 1));
@@ -496,8 +496,25 @@ static inline void multiply_add_avx2(const Bits& bits, const __m256i * scales, i
             t3 = _mm256_mullo_epi32(t3, s3);
             sumi[iy] = _mm256_add_epi32(_mm256_add_epi32(t0, t1), _mm256_add_epi32(t2, t3));
         }
-#elif defined(HAVE_VNNI256)
+    } else {
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
+            auto t0 = ggml_mm256_dpbssd_epi32(zero, bits.values[0], q8.load_quants(iy, i, 4));
+            auto t1 = ggml_mm256_dpbssd_epi32(zero, bits.values[1], q8.load_quants(iy, i, 5));
+            auto t2 = ggml_mm256_dpbssd_epi32(zero, bits.values[2], q8.load_quants(iy, i, 6));
+            auto t3 = ggml_mm256_dpbssd_epi32(zero, bits.values[3], q8.load_quants(iy, i, 7));
+            t0 = _mm256_mullo_epi32(t0, s0);
+            t1 = _mm256_mullo_epi32(t1, s1);
+            t2 = _mm256_mullo_epi32(t2, s2);
+            t3 = _mm256_mullo_epi32(t3, s3);
+            sumi[iy] = _mm256_add_epi32(sumi[iy], _mm256_add_epi32(t0, t2));
+            sumi[iy] = _mm256_add_epi32(sumi[iy], _mm256_add_epi32(t1, t3));
+        }
+    }
+#else
+    __m256i p[4];
+    if (j == 0) {
+        for (int iy = 0; iy < Q8::nrc_y; ++iy) {
+#ifdef HAVE_VNNI256
             auto s0 = _mm256_sign_epi8(bits.values[0], bits.values[0]);
             auto s1 = _mm256_sign_epi8(bits.values[1], bits.values[1]);
             auto s2 = _mm256_sign_epi8(bits.values[2], bits.values[2]);
@@ -511,38 +528,18 @@ static inline void multiply_add_avx2(const Bits& bits, const __m256i * scales, i
             t0 = ggml_mm256_dpwssd_epi32(t0, scales[1], _mm256_maddubs_epi16(s1, y1));
             t1 = ggml_mm256_dpwssd_epi32(t1, scales[3], _mm256_maddubs_epi16(s3, y3));
             sumi[iy] = _mm256_add_epi32(t0, t1);
-        }
 #else
-        for (int iy = 0; iy < Q8::nrc_y; ++iy) {
             __m256i p[4];
             for (int k = 0; k < 4; ++k) {
                 auto s = _mm256_sign_epi8(bits.values[k], bits.values[k]);
                 p[k] = _mm256_madd_epi16(scales[k], _mm256_maddubs_epi16(s, _mm256_sign_epi8(q8.load_quants(iy, i, k), bits.values[k])));
             }
             sumi[iy] = _mm256_add_epi32(_mm256_add_epi32(p[0], p[1]), _mm256_add_epi32(p[2], p[3]));
-        }
 #endif
-    } else {
-#if defined(HAVE_VNNIINT8)
-        auto s0 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[0]));
-        auto s1 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[1]));
-        auto s2 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[2]));
-        auto s3 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(scales[3]));
-        auto zero = _mm256_setzero_si256();
-        for (int iy = 0; iy < Q8::nrc_y; ++iy) {
-            auto t0 = ggml_mm256_dpbssd_epi32(zero, bits.values[0], q8.load_quants(iy, i, 4));
-            auto t1 = ggml_mm256_dpbssd_epi32(zero, bits.values[1], q8.load_quants(iy, i, 5));
-            auto t2 = ggml_mm256_dpbssd_epi32(zero, bits.values[2], q8.load_quants(iy, i, 6));
-            auto t3 = ggml_mm256_dpbssd_epi32(zero, bits.values[3], q8.load_quants(iy, i, 7));
-            t0 = _mm256_mullo_epi32(t0, s0);
-            t1 = _mm256_mullo_epi32(t1, s1);
-            t2 = _mm256_mullo_epi32(t2, s2);
-            t3 = _mm256_mullo_epi32(t3, s3);
-            sumi[iy] = _mm256_add_epi32(sumi[iy], _mm256_add_epi32(t0, t2));
-            sumi[iy] = _mm256_add_epi32(sumi[iy], _mm256_add_epi32(t1, t3));
         }
-#elif defined(HAVE_VNNI256)
+    } else {
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
+#ifdef HAVE_VNNI256
             auto s0 = _mm256_sign_epi8(bits.values[0], bits.values[0]);
             auto s1 = _mm256_sign_epi8(bits.values[1], bits.values[1]);
             auto s2 = _mm256_sign_epi8(bits.values[2], bits.values[2]);
@@ -556,9 +553,7 @@ static inline void multiply_add_avx2(const Bits& bits, const __m256i * scales, i
             t0 = ggml_mm256_dpwssd_epi32(t0, scales[1], _mm256_maddubs_epi16(s1, y1));
             t1 = ggml_mm256_dpwssd_epi32(t1, scales[3], _mm256_maddubs_epi16(s3, y3));
             sumi[iy] = _mm256_add_epi32(t0, t1);
-        }
 #else
-        for (int iy = 0; iy < Q8::nrc_y; ++iy) {
             __m256i p[4];
             for (int k = 0; k < 4; ++k) {
                 auto s = _mm256_sign_epi8(bits.values[k], bits.values[k]);
@@ -566,9 +561,10 @@ static inline void multiply_add_avx2(const Bits& bits, const __m256i * scales, i
             }
             sumi[iy] = _mm256_add_epi32(sumi[iy], _mm256_add_epi32(p[0], p[2]));
             sumi[iy] = _mm256_add_epi32(sumi[iy], _mm256_add_epi32(p[1], p[3]));
-        }
 #endif
+        }
     }
+#endif
 }
 
 #ifdef HAVE_FANCY_SIMD
