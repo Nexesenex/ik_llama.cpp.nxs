@@ -978,7 +978,16 @@ static void mul_mat_iq4_nl_r4_q8_2(int n, const void * vx, size_t bx, const Data
         qs[3] = _mm256_shuffle_epi8(values, _mm256_and_si256(_mm256_srli_epi16(bits2, 4), m4));
         return scales;
     };
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNIINT8)
+    auto dot = [&qs] (__m256i y) {
+        auto sumi = _mm256_setzero_si256();
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qs[0], _mm256_shuffle_epi32(y, 0x00));
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qs[1], _mm256_shuffle_epi32(y, 0x55));
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qs[2], _mm256_shuffle_epi32(y, 0xaa));
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qs[3], _mm256_shuffle_epi32(y, 0xff));
+        return sumi;
+    };
+#elif defined(HAVE_VNNI256)
     auto dot = [&qs] (__m256i y) {
         auto sumi = _mm256_setzero_si256();
         sumi = ggml_mm256_dpbusd_epi32(sumi, _mm256_sign_epi8(qs[0], qs[0]), _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x00), qs[0]));
