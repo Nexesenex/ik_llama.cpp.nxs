@@ -1729,7 +1729,7 @@ static void mul_mat_iq2_bn_r4_q8_k16(int n, const void * vx, size_t bx, const Da
 #endif
 
 void iqk_convert_iq1_s_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
-#ifdef HAVE_VNNI256
+#ifdef HAVE_FANCY_SIMD
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else
@@ -1786,7 +1786,7 @@ void iqk_convert_iq1_s_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
 }
 
 void iqk_convert_iq1_m_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
-#ifdef HAVE_VNNI256
+#ifdef HAVE_FANCY_SIMD
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else

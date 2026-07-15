@@ -2093,7 +2093,7 @@ typedef struct {
 } block_q8_1_r8;
 
 void iqk_convert_q2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
-#ifdef HAVE_VNNI256
+#ifdef HAVE_FANCY_SIMD
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else
@@ -2499,7 +2499,7 @@ void iqk_convert_q3_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int 
 }
 
 void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
-#ifdef HAVE_VNNI256
+#ifdef HAVE_FANCY_SIMD
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else
@@ -2617,7 +2617,7 @@ void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
 // TODO: move this to iqk_gemm_iquants
 void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
 
-#ifdef HAVE_VNNI256
+#ifdef HAVE_FANCY_SIMD
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else
