@@ -1645,10 +1645,10 @@ inline __m256i q8_0_r8_dot_product(const uint8_t * x, const int8_t * y, __m256i 
     return qx_r8_q8_dot_product(qx, y);
 }
 #endif
-#ifdef HAVE_FANCY_SIMD
+#if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256)
 template <int nrc_y>
 static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    GGML_ASSERT(nrc_x%16 == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_2_x4> q8(info);
     int nb = n / QK8_0;
     if constexpr (nrc_y == 1) {
@@ -1682,6 +1682,7 @@ static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
             acc[0] = acc[1] = _mm256_setzero_ps();
         }
     } else {
+#ifdef HAVE_FANCY_SIMD
         __m512  acc[2*nrc_y] = {};
         __m512i qx[8];
         float d8[8*nrc_y];
@@ -1733,6 +1734,105 @@ static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
                 acc[2*iy+0] = acc[2*iy+1] = _mm512_setzero_ps();
             }
         }
+        // Handle the trailing 8-wide tile when nrc_x is not a multiple of 16
+        // (e.g. nrc_x == 8): the main loop above always consumes a 16-wide
+        // pair (low + high halves), so the high half is absent here and loaded
+        // as zero instead of reading out of bounds.
+        if (nrc_x % 16 != 0) {
+            int ix = nrc_x - 8;
+            const block_q8_0_r8 * q8l = (const block_q8_0_r8 *)((const char *)vx + ix*bx);
+            for (int ib4 = 0; ib4 < nb/4; ++ib4) {
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib4].d));
+                }
+                for (int k = 0; k < 4; ++k) {
+                    auto scales1  = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8l[4*ib4+k].d));
+                    for (int j = 0; j < 8; ++j) {
+                        qx[j] = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)q8l[4*ib4+k].qs+j)),
+                                                                   _mm256_setzero_si256(), 1);
+                        qx[j] = _mm512_add_epi8(qx[j], _mm512_set1_epi8(127));
+                    }
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto sumi = qx_r8_q8_dot_product(qx, q8.y[iy][ib4].qs+32*k);
+                        auto dy = _mm512_set1_ps(d8[8*iy+k]);
+                        acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(_mm512_castps256_ps512(scales1), dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
+                        acc[2*iy+1] = _mm512_fmadd_ps(_mm512_castps256_ps512(scales1), _mm512_set1_ps(d8[8*iy+k+4]), acc[2*iy+1]);
+                    }
+                }
+            }
+            for (int ib = 4*(nb/4); ib < nb; ++ib) {
+                auto scales1  = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8l[ib].d));
+                for (int j = 0; j < 8; ++j) {
+                    qx[j] = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)q8l[ib].qs+j)),
+                                                              _mm256_setzero_si256(), 1);
+                    qx[j] = _mm512_add_epi8(qx[j], _mm512_set1_epi8(127));
+                }
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto qy = (const block_q8_2 *)q8.y[iy];
+                    auto sumi = qx_r8_q8_dot_product(qx, qy[ib].qs);
+                    auto [d8l, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                    auto dy = _mm512_set1_ps(d8l);
+                    acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(_mm512_castps256_ps512(scales1), dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
+                    acc[2*iy+1] = _mm512_fmadd_ps(_mm512_castps256_ps512(scales1), _mm512_set1_ps(m8), acc[2*iy+1]);
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto sum512 = _mm512_fmadd_ps(_mm512_set1_ps(-127.f), acc[2*iy+1], acc[2*iy+0]);
+                info.store(ix, iy, sum512);
+                acc[2*iy+0] = acc[2*iy+1] = _mm512_setzero_ps();
+            }
+        }
+#elif defined(HAVE_VNNI256)
+        // 256-bit AVX2 fallback for VNNI256-only builds (no AVX-512).
+        // Faithful mirror of the nrc_y==1 path below: it reuses the
+        // __m256i qx_r8_q8_dot_product helper (commit A) and applies both the
+        // per-group d-scale (low accumulator) and m-scale (high accumulator),
+        // combining them with the -127 bias exactly like the AVX-512 path.
+        __m256  acc[2*nrc_y] = {};
+        __m256i qx[8];
+        for (int ix = 0; ix < nrc_x; ix += 8) {
+            const block_q8_0_r8 * iq8 = (const block_q8_0_r8 *)((const char *)vx + ix*bx);
+            for (int ib4 = 0; ib4 < nb/4; ++ib4) {
+                float d8[8*nrc_y];
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib4].d));
+                }
+                for (int k = 0; k < 4; ++k) {
+                    auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq8[4*ib4+k].d));
+                    for (int j = 0; j < 8; ++j) {
+                        qx[j] = _mm256_add_epi8(_mm256_loadu_si256((const __m256i *)iq8[4*ib4+k].qs+j), _mm256_set1_epi8(127));
+                    }
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto sumi = qx_r8_q8_dot_product(qx, q8.y[iy][ib4].qs+32*k);
+                        auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8[8*iy+k]));
+                        acc[2*iy+0] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[2*iy+0]);
+                        acc[2*iy+1] = _mm256_fmadd_ps(scales, _mm256_set1_ps(d8[8*iy+k+4]), acc[2*iy+1]);
+                    }
+                }
+            }
+            if (4*(nb/4) < nb) {
+                for (int ib = 4*(nb/4); ib < nb; ++ib) {
+                    auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq8[ib].d));
+                    for (int j = 0; j < 8; ++j) {
+                        qx[j] = _mm256_add_epi8(_mm256_loadu_si256((const __m256i *)iq8[ib].qs+j), _mm256_set1_epi8(127));
+                    }
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto qy = (const block_q8_2 *)q8.y[iy];
+                        auto sumi = qx_r8_q8_dot_product(qx, qy[ib].qs);
+                        auto [d8l, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                        auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8l));
+                        acc[2*iy+0] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[2*iy+0]);
+                        acc[2*iy+1] = _mm256_fmadd_ps(scales, _mm256_set1_ps(m8), acc[2*iy+1]);
+                    }
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto sum256 = _mm256_fmadd_ps(_mm256_set1_ps(-127.f), acc[2*iy+1], acc[2*iy+0]);
+                info.store(ix, iy, sum256);
+                acc[2*iy+0] = acc[2*iy+1] = _mm256_setzero_ps();
+            }
+        }
+#endif
     }
 }
 #else
