@@ -273,6 +273,9 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         buft_layer_count[ggml_backend_cpu_buffer_type()]++;
     } else if (pinmem == 2) {
         LLAMA_LOG_INFO("%s: pinmem=2 mode enabled - CPU tensor overrides will use pinned allocation (stop on fail)\n", __func__);
+    } else if (pinmem == 7) {
+        LLAMA_LOG_INFO("%s: pinmem=7 mode enabled - selective pinning: token_embd + ffn_down CPU overrides use pinned memory, others use non-pinned\n", __func__);
+        buft_layer_count[ggml_backend_cpu_buffer_type()]++;
     } else {
         LLAMA_LOG_INFO("%s: pinmem=3 mode enabled - all host buffers use pinned memory\n", __func__);
     }
@@ -289,7 +292,16 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
             auto buft = o->buft;
 #if defined(GGML_USE_CUDA)
             if (ggml_backend_buft_is_host(buft)) {
-                if (pinmem < 2) {
+                if (pinmem == 7) {
+                    std::string ptrn(o->pattern);
+                    if (ptrn.find("ffn_down") != std::string::npos) {
+                        buft = default_cpu_buft;
+                        LLAMA_LOG_DEBUG("%s: pinmem=7 override '%s' -> using pinned CPU buffer (ffn_down)\n", __func__, o->pattern);
+                    } else {
+                        buft = ggml_backend_cpu_buffer_type();
+                        LLAMA_LOG_DEBUG("%s: pinmem=7 override '%s' -> using non-pinned CPU buffer\n", __func__, o->pattern);
+                    }
+                } else if (pinmem < 2) {
                     buft = ggml_backend_cpu_buffer_type();
                     LLAMA_LOG_DEBUG("%s: override '%s' -> using non-pinned CPU buffer\n", __func__, o->pattern);
                 } else {
