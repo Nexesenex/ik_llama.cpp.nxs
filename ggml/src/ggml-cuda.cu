@@ -6024,6 +6024,13 @@ GGML_CALL int ggml_backend_cuda_get_pinmem(void) {
 }
 
 GGML_CALL void ggml_backend_cuda_set_pindev(int val) {
+    if (val >= 0) {
+        const int nd = ggml_cuda_info().device_count;
+        if (val >= nd) {
+            GGML_CUDA_LOG_WARN("ggml_backend_cuda_set_pindev: pindev=%d out of range (device_count=%d), clamping to 0\n", val, nd);
+            val = 0;
+        }
+    }
     ggml_cuda_pindev = val;
     if (val < 0) {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pindev: pindev=%d - auto-detect TCC device for pinning\n", val);
