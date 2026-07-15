@@ -608,7 +608,7 @@ static std::condition_variable ggml_cuda_lock_cv;
 //static std::atomic<int> ggml_cuda_lock_counter;
 static int ggml_cuda_lock_counter = 0;
 static std::string ggml_cuda_user_cslq; // User-provided CUDA_SCALE_LAUNCH_QUEUES from -cuda cslq=X
-static int ggml_cuda_pinmem = 3; // pinmem: 0=disabled, 1=token_embd only (overrides non-pinned), 2=try all (stop on fail), 3=all (default), 4=quarter RAM cap, 5=TCC full-size (portable), 6=TCC full-size (non-portable).
+static int ggml_cuda_pinmem = 3; // pinmem: 0=disabled, 1=token_embd only (overrides non-pinned), 2=try all (stop on fail), 3=all (default), 4=quarter RAM cap, 5=TCC full-size (portable), 6=TCC full-size (non-portable), 7=selective (token_embd + ffn_down only).
 static bool ggml_cuda_pinmem2_stopped = false;
 static int ggml_cuda_pindev = -1; // pindev: raw CUDA ordinal for pinning (-1 = auto-detect TCC)
 static float ggml_cuda_pinamount_gb = 0.0f; // pinamount: cap pinned memory to N GiB (0 = no cap)
@@ -1548,8 +1548,8 @@ static void * ggml_cuda_host_malloc(size_t size) {
     std::time_t t_now = std::time(nullptr);
     if (size_GiB > k_warn_limit) {
         GGML_CUDA_LOG_INFO("%s: epoch=%lld allocating %.2f GiB\n", __func__, (long long)t_now, size_GiB);
-        if (ggml_cuda_pinmem == 1) {
-            GGML_CUDA_LOG_INFO("\n\nAllocating %.2f GiB of pinned host memory (token_embd only, pinmem=1), this may take a while.\n", size_GiB);
+        if (ggml_cuda_pinmem == 1 || ggml_cuda_pinmem == 7) {
+            GGML_CUDA_LOG_INFO("\n\nAllocating %.2f GiB of pinned host memory (token_embd only, pinmem=%d), this may take a while.\n", size_GiB, ggml_cuda_pinmem);
         } else if (ggml_cuda_pinmem == 2) {
             GGML_CUDA_LOG_INFO("\n\nAllocating %.2f GiB of pinned host memory (pinmem=2, stop on fail), this may take a while.\n", size_GiB);
         } else {
@@ -1621,7 +1621,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
             ggml_backend_cuda_set_pinmem(1);
             return ggml_cuda_host_malloc(size);
         }
-        if (ggml_cuda_pinmem == 1) {
+        if (ggml_cuda_pinmem == 1 || ggml_cuda_pinmem == 7) {
             GGML_CUDA_LOG_WARN("%s: falling back to pinmem=0 (no pinned memory)\n", __func__);
             ggml_backend_cuda_set_pinmem(0);
         }
@@ -1663,8 +1663,8 @@ static void * ggml_cuda_host_malloc(size_t size) {
     if (is_large) {
         std::time_t t_now = std::time(nullptr);
         GGML_CUDA_LOG_INFO("%s: epoch=%lld allocating %.2f GiB\n", __func__, (long long)t_now, size_GiB);
-        if (ggml_cuda_pinmem == 1) {
-            GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory (token_embd only, pinmem=1), this can take a while...\n", size_GiB);
+        if (ggml_cuda_pinmem == 1 || ggml_cuda_pinmem == 7) {
+            GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory (token_embd only, pinmem=%d), this can take a while...\n", size_GiB, ggml_cuda_pinmem);
         } else if (ggml_cuda_pinmem == 2) {
             GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory (pinmem=2, partial), this can take a while...\n", size_GiB);
         } else {
@@ -1676,8 +1676,8 @@ static void * ggml_cuda_host_malloc(size_t size) {
     } else {
         std::time_t t_now = std::time(nullptr);
         GGML_CUDA_LOG_INFO("%s: epoch=%lld allocating %.2f MiB\n", __func__, (long long)t_now, size_MiB);
-        if (ggml_cuda_pinmem == 1) {
-            GGML_CUDA_LOG_INFO("Allocating %.2f MiB of pinned host memory (token_embd only, pinmem=1)...\n", size_MiB);
+        if (ggml_cuda_pinmem == 1 || ggml_cuda_pinmem == 7) {
+            GGML_CUDA_LOG_INFO("Allocating %.2f MiB of pinned host memory (token_embd only, pinmem=%d)...\n", size_MiB, ggml_cuda_pinmem);
         } else if (ggml_cuda_pinmem == 2) {
             GGML_CUDA_LOG_INFO("Allocating %.2f MiB of pinned host memory (pinmem=2, partial)...\n", size_MiB);
         } else {
@@ -1900,7 +1900,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
                 ggml_backend_cuda_set_pinmem(1);
                 return ggml_cuda_host_malloc(size);
             }
-            if (ggml_cuda_pinmem == 1) {
+            if (ggml_cuda_pinmem == 1 || ggml_cuda_pinmem == 7) {
                 GGML_CUDA_LOG_WARN("%s: falling back to pinmem=0 (no pinned memory)\n", __func__);
                 ggml_backend_cuda_set_pinmem(0);
             }
@@ -1908,14 +1908,14 @@ static void * ggml_cuda_host_malloc(size_t size) {
         }
         if (is_large) {
             auto tim2 = ggml_time_us();
-            if (ggml_cuda_pinmem == 1) {
+            if (ggml_cuda_pinmem == 1 || ggml_cuda_pinmem == 7) {
                 GGML_CUDA_LOG_INFO("    done allocating %.2f GiB (token_embd only) in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
             } else {
                 GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
             }
         } else {
             auto tim2 = ggml_time_us();
-            if (ggml_cuda_pinmem == 1) {
+            if (ggml_cuda_pinmem == 1 || ggml_cuda_pinmem == 7) {
                 GGML_CUDA_LOG_INFO("    done allocating %.2f MiB (token_embd only) in %.1f ms\n\n", size_MiB, 1e-3*(tim2-tim1));
             } else {
                 GGML_CUDA_LOG_INFO("    done allocating %.2f MiB in %.1f ms\n\n", size_MiB, 1e-3*(tim2-tim1));
@@ -5739,7 +5739,7 @@ struct cuda_params {
 #endif
     bool enable_p2p = true;
     std::string cslq; // CUDA_SCALE_LAUNCH_QUEUES: "1x", "2x", "4x"
-    int pinmem = 3; // pinmem: 0=disabled, 1=token_embd only, 2=try all (stop on fail), 3=all, 4=quarter RAM cap, 5=TCC full-size
+    int pinmem = 3; // pinmem: 0=disabled, 1=token_embd only, 2=try all (stop on fail), 3=all, 4=quarter RAM cap, 5=TCC full-size, 6=TCC non-portable, 7=selective (token_embd + ffn_down only)
     float pinamount_gb = 0.0f; // pinamount: cap pinned memory to N GiB (0 = no cap)
 };
 
@@ -5819,8 +5819,8 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
             }
             else if (parsed[0] == "pinmem") {
                 is_good = read_value(parsed[1], params.pinmem);
-                if (!is_good || params.pinmem < 0 || params.pinmem > 6) {
-                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...6]\n", __func__, parsed[0].c_str(), params.pinmem);
+                if (!is_good || params.pinmem < 0 || params.pinmem > 7) {
+                    GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %d, but must be in [0...7]\n", __func__, parsed[0].c_str(), params.pinmem);
                     is_good = false;
                 }
             }
@@ -6074,6 +6074,8 @@ GGML_CALL void ggml_backend_cuda_set_pinmem(int val) {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=5 - TCC full-size portable pinning (no cap)\n");
     } else if (val == 6) {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=6 - TCC full-size non-portable pinning (bypasses WDDM quota)\n");
+    } else if (val == 7) {
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=7 - selective pinning (token_embd + ffn_down only)\n");
     } else {
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_pinmem: pinmem=3 - all host buffers use pinned memory (default)\n");
     }
