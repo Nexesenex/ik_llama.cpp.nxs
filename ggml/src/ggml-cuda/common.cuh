@@ -46,6 +46,18 @@
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
+// Backend-wide logging: shared by ggml-cuda.cu and the split-out TUs
+// (cuda-pstate-booster.cu, cuda-watchdog.cu). ggml_cuda_log is defined once in
+// ggml-cuda.cu; the callback globals and ggml_backend_cuda_log_set_callback
+// also live there.
+GGML_ATTRIBUTE_FORMAT(2, 3)
+void ggml_cuda_log(enum ggml_log_level level, const char * format, ...);
+
+#define GGML_CUDA_LOG_INFO(...) ggml_cuda_log(GGML_LOG_LEVEL_INFO, __VA_ARGS__)
+#define GGML_CUDA_LOG_WARN(...) ggml_cuda_log(GGML_LOG_LEVEL_WARN, __VA_ARGS__)
+#define GGML_CUDA_LOG_ERROR(...) ggml_cuda_log(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
+#define GGML_CUDA_LOG_DEBUG(...) ggml_cuda_log(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
+
 #define WARP_SIZE 32
 #define CUDART_HMAX   11070 // CUDA 11.7, min. ver. for which __hmax and __hmax2 are known to work (may be higher than needed)
 #define CUDART_HMASK  12000 // CUDA 12.0, min. ver. for half2 -> uint mask comparisons
