@@ -64,4 +64,8 @@ struct llama_cparams {
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
     void * cuda_params;
+
+    // Shark GPU clock elevation callback (Windows only)
+    void (*shark_callback)(bool start, void * user_data);
+    void * shark_callback_data;
 };
