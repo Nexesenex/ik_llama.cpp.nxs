@@ -80,6 +80,7 @@ struct server_slot {
     std::vector<completion_token_output> generated_token_probs;
 
 
+    bool shark_active = false;
     bool infill = false;
     bool embedding = false;
     bool has_next_token = true;
