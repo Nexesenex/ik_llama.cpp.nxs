@@ -163,6 +163,14 @@ void  llama_decode_stop() {
     stop_internal_decode = true;
 }
 
+// Stop shark GPU clock elevation for a specific context
+void llama_shark_stop(struct llama_context * ctx) {
+    if (ctx && ctx->cparams.shark_callback && ctx->shark_active) {
+        ctx->shark_active = false;
+        ctx->cparams.shark_callback(false, ctx->cparams.shark_callback_data);
+    }
+}
+
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
     std::vector<std::string> parts;
     size_t start = 0;
@@ -794,6 +802,12 @@ void llama_context::set_mtp_n_heads(int32_t value) {
 }
 
 llama_context::~llama_context() {
+    // Stop shark GPU clock elevation on context destruction
+    if (cparams.shark_callback && shark_active) {
+        shark_active = false;
+        cparams.shark_callback(false, cparams.shark_callback_data);
+    }
+
     if (dflash.kv.cache_sched != nullptr) {
         ggml_backend_sched_free(dflash.kv.cache_sched);
     }
@@ -5921,6 +5935,7 @@ static bool prepare_mtp_graph_inputs(
 // return positive int on warning
 // return negative int on error
 //
+
 static int llama_decode_internal(
          llama_context & lctx,
            llama_batch   batch_all) { // TODO: rename back to batch
@@ -5931,6 +5946,23 @@ static int llama_decode_internal(
     if (n_tokens_all == 0) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0", __func__);
         return -1;
+    }
+
+    // Shark GPU clock elevation callback (Windows only)
+    // Only activate after first prefill (n_tokens > 8), not during warmup
+    if (lctx.cparams.shark_callback) {
+        if (n_tokens_all > 8) {
+            lctx.shark_prefill_done = true;
+        }
+        if (lctx.shark_prefill_done) {
+            if (n_tokens_all <= 8 && !lctx.shark_active) {
+                lctx.shark_active = true;
+                lctx.cparams.shark_callback(true, lctx.cparams.shark_callback_data);
+            } else if (n_tokens_all > 8 && lctx.shark_active) {
+                lctx.shark_active = false;
+                lctx.cparams.shark_callback(false, lctx.cparams.shark_callback_data);
+            }
+        }
     }
 #if IK_PRINT_TIMING > 2
     printf("===== %s: %ld\n", __func__, ggml_time_us());
@@ -6502,6 +6534,11 @@ static int llama_decode_internal(
             prev.reset();
         }
         if (stop_internal_decode) {
+            // Stop shark on interrupted generation
+            if (lctx.cparams.shark_callback && lctx.shark_active) {
+                lctx.shark_active = false;
+                lctx.cparams.shark_callback(false, lctx.cparams.shark_callback_data);
+            }
             return -3;
         }
     }
@@ -7404,6 +7441,8 @@ struct llama_context_params llama_context_default_params() {
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
         /*.cuda_params                 =*/ nullptr,
+        /*.shark_callback              =*/ nullptr,
+        /*.shark_callback_data         =*/ nullptr,
     };
 
     return result;
@@ -7927,6 +7966,8 @@ struct llama_context * llama_init_from_model(
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
+    cparams.shark_callback   = params.shark_callback;
+    cparams.shark_callback_data = params.shark_callback_data;
     cparams.mtp              = params.mtp;
     cparams.worst_graph_tokens = params.worst_case_tokens;
 

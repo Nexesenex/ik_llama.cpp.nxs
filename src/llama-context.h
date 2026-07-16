@@ -267,6 +267,10 @@ struct llama_context {
     int32_t n_p_eval = 0; // number of tokens in eval calls for the prompt (with batch size > 1)
     int32_t n_eval   = 0; // number of eval calls
 
+    // Shark GPU clock elevation state (Windows only)
+    bool shark_active = false;
+    bool shark_prefill_done = false; // true after first prefill (n_tokens > 8)
+
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_t buf_output = nullptr;
 
