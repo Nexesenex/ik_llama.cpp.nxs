@@ -4342,6 +4342,31 @@ void server_context::speculative_decoding_accept() {
                 {"L" + std::to_string(last_n_tokens) + " t/s",    std::round(tok_per_sec * 100) / 100},
                 {"CurTG t/s",    std::round(cur_tg_tok_per_sec * 100) / 100},
             });
+
+            // Shark GPU temperature check every 100 tokens (Windows only)
+            if (slot.shark_active) {
+                static auto check_gpu_temp = [&](llama_context* ctx) -> bool {
+                    // Use nvidia-smi to check GPU temperatures
+                    std::string cmd = "nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits";
+                    FILE* pipe = _popen(cmd.c_str(), "r");
+                    if (!pipe) return true; // fail-open
+                    char buffer[256];
+                    while (fgets(buffer, sizeof(buffer), pipe)) {
+                        int temp = std::atoi(buffer);
+                        if (temp > 85) {
+                            fprintf(stderr, "shark: GPU temperature %d°C exceeds 85°C limit, stopping\n", temp);
+                            _pclose(pipe);
+                            return false;
+                        }
+                    }
+                    _pclose(pipe);
+                    return true;
+                };
+                if (!check_gpu_temp(slot.ctx)) {
+                    llama_shark_stop(slot.ctx);
+                    slot.shark_active = false;
+                }
+            }
         }
 
         slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
@@ -4451,6 +4476,8 @@ void server_context::send_token_results(completion_token_outputs& results, serve
                 continue;
             }
             send_final_response(slot);
+            // Stop shark GPU clock elevation (Windows only)
+            llama_shark_stop(slot.ctx);
             release_slot_after_final_response(slot);
             released = true;
             break;
@@ -4489,6 +4516,8 @@ void server_context::send_token_results(completion_token_outputs& results, serve
             {"TotCurTG t/s",    std::round(cur_tg_tok_per_sec * 100) / 100},
             });
         send_final_response(slot);
+        // Stop shark GPU clock elevation (Windows only)
+        llama_shark_stop(ctx);
         release_slot_after_final_response(slot);
     }
 
@@ -4949,6 +4978,30 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                     {"L100 t/s",    std::round(tok_per_sec * 100) / 100},
                     {"CurTG t/s",    std::round(cur_tg_tok_per_sec * 100) / 100},
                     });
+
+                // Shark GPU temperature check (Windows only)
+                if (slot.shark_active) {
+                    static auto check_gpu_temp = [&](llama_context* ctx) -> bool {
+                        std::string cmd = "nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits";
+                        FILE* pipe = _popen(cmd.c_str(), "r");
+                        if (!pipe) return true;
+                        char buffer[256];
+                        while (fgets(buffer, sizeof(buffer), pipe)) {
+                            int temp = std::atoi(buffer);
+                            if (temp > 85) {
+                                fprintf(stderr, "shark: GPU temperature %d°C exceeds 85°C limit, stopping\n", temp);
+                                _pclose(pipe);
+                                return false;
+                            }
+                        }
+                        _pclose(pipe);
+                        return true;
+                    };
+                    if (!check_gpu_temp(slot.ctx)) {
+                        llama_shark_stop(slot.ctx);
+                        slot.shark_active = false;
+                    }
+                }
             }
 
             slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
