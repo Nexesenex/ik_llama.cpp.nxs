@@ -382,10 +382,11 @@ struct gpt_params {
 
     std::string cuda_params          = ""; // comma separated list of cuda parameters key=value1,key2=value2
 
-    // GPUShark - external tool to boost WDDM GPUs to P-State 0
+    // GPU Poller - lightweight GPU clock elevation for WDDM GPUs (Windows only)
     bool   shark_enable            = false;
-    std::string shark_path         = "X:\\Programs\\Geeks3D\\gpushark2_win64\\gpushark_x64.exe";
-    std::vector<std::string> shark_args; // additional arguments passed to the shark tool
+    std::string shark_path         = "gpu_poller.exe";
+    std::vector<std::string> shark_args; // additional arguments passed to the poller (e.g. --interval 15)
+    int    shark_temp_limit        = 85;   // temperature limit in Celsius (stops poller if exceeded)
 
     std::vector<std::string> in_files;     // all input files
     std::vector<std::string> antiprompt;   // strings upon which more user input is prompted (a.k.a. reverse prompts)
