@@ -91,89 +91,46 @@
 using json = nlohmann::ordered_json;
 
 // Shark GPU clock elevation callback (Windows only)
+// Uses a lightweight GPU poller instead of gpushark
 #if defined(_WIN32) && defined(GGML_USE_CUDA)
-static std::string g_shark_path = "X:\\Programs\\Geeks3D\\gpushark2_win64\\gpushark_x64.exe";
+static std::string g_shark_path = "gpu_poller.exe";
 static std::vector<std::string> g_shark_args;
 static HANDLE g_shark_process = nullptr;
 
-// NVML for GPU temperature monitoring
-typedef enum nvmlReturn_enum { NVML_SUCCESS = 0 } nvmlReturn_t;
-typedef struct nvmlDevice_st * nvmlDevice_t;
-typedef nvmlReturn_t (*nvmlInit_v2_t)(void);
-typedef nvmlReturn_t (*nvmlShutdown_t)(void);
-typedef nvmlReturn_t (*nvmlDeviceGetCount_t)(unsigned int *);
-typedef nvmlReturn_t (*nvmlDeviceGetHandleByIndex_t)(unsigned int, nvmlDevice_t *);
-typedef nvmlReturn_t (*nvmlDeviceGetTemperature_t)(nvmlDevice_t, int, unsigned int *);
-
-static HMODULE g_nvml_lib = nullptr;
-static nvmlInit_v2_t g_nvml_init = nullptr;
-static nvmlShutdown_t g_nvml_shutdown = nullptr;
-static nvmlDeviceGetCount_t g_nvml_device_get_count = nullptr;
-static nvmlDeviceGetHandleByIndex_t g_nvml_device_get_handle_by_index = nullptr;
-static nvmlDeviceGetTemperature_t g_nvml_device_get_temperature = nullptr;
-
-static bool nvml_load() {
-    if (g_nvml_lib) return true;
-    g_nvml_lib = LoadLibraryA("nvml.dll");
-    if (!g_nvml_lib) {
-        // Try alternative path
-        char path[MAX_PATH];
-        if (GetSystemDirectoryA(path, MAX_PATH)) {
-            strcat_s(path, "\\nvml.dll");
-            g_nvml_lib = LoadLibraryA(path);
+static bool check_gpu_temp_ok() {
+    // Use nvidia-smi to check GPU temperatures
+    std::string cmd = "nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits";
+    FILE* pipe = _popen(cmd.c_str(), "r");
+    if (!pipe) return true; // fail-open
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        int temp = std::atoi(buffer);
+        if (temp > 85) {
+            fprintf(stderr, "shark: GPU temperature %d°C exceeds 85°C limit\n", temp);
+            _pclose(pipe);
+            return false;
         }
     }
-    if (!g_nvml_lib) return false;
-    g_nvml_init = (nvmlInit_v2_t)GetProcAddress(g_nvml_lib, "nvmlInit_v2");
-    g_nvml_shutdown = (nvmlShutdown_t)GetProcAddress(g_nvml_lib, "nvmlShutdown");
-    g_nvml_device_get_count = (nvmlDeviceGetCount_t)GetProcAddress(g_nvml_lib, "nvmlDeviceGetCount");
-    g_nvml_device_get_handle_by_index = (nvmlDeviceGetHandleByIndex_t)GetProcAddress(g_nvml_lib, "nvmlDeviceGetHandleByIndex");
-    g_nvml_device_get_temperature = (nvmlDeviceGetTemperature_t)GetProcAddress(g_nvml_lib, "nvmlDeviceGetTemperature");
-    return g_nvml_init && g_nvml_device_get_count && g_nvml_device_get_handle_by_index && g_nvml_device_get_temperature;
-}
-
-static bool nvml_check_temp_ok() {
-    if (!nvml_load()) return true; // If NVML unavailable, allow (fail-open)
-    nvmlReturn_t ret = g_nvml_init();
-    if (ret != NVML_SUCCESS) return true;
-    unsigned int count = 0;
-    ret = g_nvml_device_get_count(&count);
-    if (ret != NVML_SUCCESS) {
-        g_nvml_shutdown();
-        return true;
-    }
-    bool ok = true;
-    for (unsigned int i = 0; i < count; ++i) {
-        nvmlDevice_t handle;
-        ret = g_nvml_device_get_handle_by_index(i, &handle);
-        if (ret != NVML_SUCCESS) continue;
-        unsigned int temp = 0;
-        ret = g_nvml_device_get_temperature(handle, 0, &temp); // 0 = NVML_TEMPERATURE_GPU
-        if (ret == NVML_SUCCESS && temp > 85) {
-            fprintf(stderr, "shark: GPU %u temperature %u°C exceeds 85°C limit\n", i, temp);
-            ok = false;
-        }
-    }
-    g_nvml_shutdown();
-    return ok;
+    _pclose(pipe);
+    return true;
 }
 
 static void common_shark_callback(bool start, void * user_data) {
     (void)user_data;
     if (start) {
         // Check GPU temperatures before launching
-        if (!nvml_check_temp_ok()) {
-            fprintf(stderr, "shark: GPU temperature too high, not launching gpushark\n");
+        if (!check_gpu_temp_ok()) {
+            fprintf(stderr, "shark: GPU temperature too high, not launching poller\n");
             return;
         }
-        // Launch gpushark
+        // Launch lightweight GPU poller
         if (g_shark_process != nullptr) {
             return; // already running
         }
         // Check if file exists
         DWORD attrs = GetFileAttributesA(g_shark_path.c_str());
         if (attrs == INVALID_FILE_ATTRIBUTES) {
-            fprintf(stderr, "shark: gpushark not found at %s\n", g_shark_path.c_str());
+            fprintf(stderr, "shark: GPU poller not found at %s\n", g_shark_path.c_str());
             return;
         }
 
@@ -196,16 +153,15 @@ static void common_shark_callback(bool start, void * user_data) {
                 nullptr, nullptr, &si, &pi)) {
             g_shark_process = pi.hProcess;
             CloseHandle(pi.hThread);
-            fprintf(stderr, "shark: launched gpushark (pid=%d)\n", pi.dwProcessId);
+            fprintf(stderr, "shark: launched GPU poller (pid=%d)\n", pi.dwProcessId);
         } else {
-            fprintf(stderr, "shark: failed to launch gpushark (error=%lu)\n", GetLastError());
+            fprintf(stderr, "shark: failed to launch GPU poller (error=%lu)\n", GetLastError());
         }
     } else {
-        // Stop gpushark
+        // Stop GPU poller
         if (g_shark_process != nullptr) {
-            // gpushark doesn't seem to have a clean shutdown, so terminate
             if (TerminateProcess(g_shark_process, 0)) {
-                fprintf(stderr, "shark: terminated gpushark\n");
+                fprintf(stderr, "shark: terminated GPU poller\n");
             }
             CloseHandle(g_shark_process);
             g_shark_process = nullptr;
@@ -3521,7 +3477,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
     options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
     options.push_back({ "win32",       "--shark",                       "enable GPU clock elevation via gpushark (Windows only)" });
-    options.push_back({ "win32",       "--shark-path PATH",             "path to gpushark executable (default: %s)", params.shark_path.c_str() });
+    options.push_back({ "win32",       "--shark-path PATH",             "path to gpu_poller executable (default: %s)", params.shark_path.c_str() });
     options.push_back({ "win32",       "--shark-arg ARG",               "additional argument passed to gpushark (can be repeated)" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
