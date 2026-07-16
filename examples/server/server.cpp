@@ -402,6 +402,8 @@ struct server_response_reader {
         if (has_next() && !cancelled) {
             // if tasks is not finished yet, cancel them
             cancelled = true;
+            // Stop shark GPU clock elevation (Windows only)
+            llama_shark_stop(ctx_server.ctx);
             std::vector<server_task> cancel_tasks;
             cancel_tasks.reserve(id_tasks.size());
             for (const auto& id_task : id_tasks) {
@@ -1176,7 +1178,10 @@ int main(int argc, char ** argv) {
                 // non-stream, wait for the results
                 auto all_results = rd->wait_for_all(is_connection_closed);
                 if (all_results.is_terminated) {
-                    if (rd->any_task_on_slot()) llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+                    if (rd->any_task_on_slot()) {
+                        llama_shark_stop(ctx_server.ctx);
+                        llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+                    }
                     return; // connection is closed
                 }
                 else if (all_results.error) {
@@ -1199,7 +1204,10 @@ int main(int argc, char ** argv) {
                 // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
                 server_task_result_ptr first_result = rd->next(is_connection_closed);
                 if (first_result == nullptr) {
-                    if (rd->any_task_on_slot()) llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+                    if (rd->any_task_on_slot()) {
+                        llama_shark_stop(ctx_server.ctx);
+                        llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+                    }
                     return; // connection is closed
                 }
                 else if (first_result->is_error()) {
@@ -1572,7 +1580,10 @@ int main(int argc, char ** argv) {
 
         // collect results
         if (all_results.is_terminated) {
-            if (rd.any_task_on_slot()) llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+            if (rd.any_task_on_slot()) {
+                llama_shark_stop(ctx_server.ctx);
+                llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
+            }
             return; // connection is closed
         }
         else if (all_results.error) {
