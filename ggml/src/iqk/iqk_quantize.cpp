@@ -14,6 +14,8 @@
 #include "iqk_quantize.h"
 #include "iqk_config.h"
 
+extern bool g_iqk_r16_path;
+
 #include "iqk_gemm_ktquants.h"
 
 #include <vector>
@@ -7124,17 +7126,21 @@ static void repack_q16_k(int nrows, int n_per_row, const block_q8_K * x, block_q
                 }
             }
 #if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256)
+#if defined(HAVE_FANCY_SIMD)
             for (int l = 0; l < 64; ++l) {
-#ifdef HAVE_FANCY_SIMD
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[ibl].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[ibl].qs + l, v);
-#else
-                auto v = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[ibl].qs + 2*l+0), _mm256_set1_epi8(-128));
-                _mm256_storeu_si256((__m256i *)y[ibl].qs + 2*l+0, v);
-                v = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[ibl].qs + 2*l+1), _mm256_set1_epi8(-128));
-                _mm256_storeu_si256((__m256i *)y[ibl].qs + 2*l+1, v);
-#endif
             }
+#else
+            if (g_iqk_r16_path) {
+                for (int l = 0; l < 64; ++l) {
+                    auto v = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[ibl].qs + 2*l+0), _mm256_set1_epi8(-128));
+                    _mm256_storeu_si256((__m256i *)y[ibl].qs + 2*l+0, v);
+                    v = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[ibl].qs + 2*l+1), _mm256_set1_epi8(-128));
+                    _mm256_storeu_si256((__m256i *)y[ibl].qs + 2*l+1, v);
+                }
+            }
+#endif
 #endif
         }
         x += 16*nblock;
