@@ -1180,7 +1180,7 @@ static void mul_mat_q4_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
         mul_mat_q4_0_r8_q8_2_avx2<1>(n, vx, bx, info, nrc_x);
         return;
     }
-    GGML_ASSERT(nrc_x%16 == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_2_x4> q8(info);
     auto m4 = _mm512_set1_epi8(0xf);
     int nb = n / QK4_NL;
@@ -1241,6 +1241,49 @@ static void mul_mat_q4_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
                 auto sumi = dot(qy[ib].qs);
                 auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
                 auto dy = _mm512_set1_ps(d8);
+                acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
+                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(m8), acc[2*iy+1]);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto sum = _mm512_fmadd_ps(_mm512_set1_ps(-8.f), acc[2*iy+1], acc[2*iy+0]);
+            acc[2*iy+0] = acc[2*iy+1] = _mm512_setzero_ps();
+            info.store(ix, iy, sum);
+        }
+    }
+    // The main loop above steps by 16 columns. Handle the trailing nrc_x==8
+    // tile (which occurs when nrc_x is not a multiple of 16, e.g. the PP path
+    // where rows can be split into 8-wide groups) by processing the final 8
+    // columns with an explicit zero high-half block. This mirrors exactly how
+    // the nrc_x==8 case is reached for the VNNI256/AVX2 helper below (which
+    // already steps by 8 natively), keeping both code paths numerically
+    // identical. The two-accumulator d/m split and the -8.f combine at the end
+    // match the AVX-512 nrc_y>1 path above so results stay bit-consistent.
+    if (nrc_x % 16 != 0) {
+        int ix = nrc_x - 8;
+        const block_iq4_nl_r8 * iq4l = (const block_iq4_nl_r8 *)((const char *)vx + ix*bx);
+        block_iq4_nl_r8 iq4h_zero = {};
+        for (int ib4 = 0; ib4 < nb/4; ++ib4) {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib4].d));
+            }
+            for (int k = 0; k < 4; ++k) {
+                auto scales = prepare(iq4l[4*ib4+k], iq4h_zero);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto sumi = dot(q8.y[iy][ib4].qs+32*k);
+                    auto dy = _mm512_set1_ps(d8[8*iy+k]);
+                    acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
+                    acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(d8[8*iy+k+4]), acc[2*iy+1]);
+                }
+            }
+        }
+        for (int ib = 4*(nb/4); ib < nb; ++ib) {
+            auto scales = prepare(iq4l[ib], iq4h_zero);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto qy = (const block_q8_1 *)q8.y[iy];
+                auto sumi = dot(qy[ib].qs);
+                auto [d8l, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                auto dy = _mm512_set1_ps(d8l);
                 acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
                 acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(m8), acc[2*iy+1]);
             }
