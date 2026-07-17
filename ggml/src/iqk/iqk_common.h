@@ -18,6 +18,8 @@
 #include <vector>
 #include <cstdint>
 
+extern bool g_iqk_r16_path;
+
 #include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "iqk_mul_mat.h"
