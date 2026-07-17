@@ -9560,7 +9560,7 @@ std::pair<float, float> QuantizerIQKT<block_size, group_size, num_bits, is_abs, 
         auto vx = _mm256_loadu_ps(xb+l);
         auto vw = _mm256_loadu_ps(weight+l);
         auto vq = kGroupSize == 8 ? _mm256_loadu_ps(m_values.data() + kGroupSize*best_idx[l/kGroupSize]) :
-            _mm256_set_m128(_mm_loadu_ps(m_values.data() + kGroupSize*best_idx[l/kGroupSize+1]),
+            MM256_SET_M128(_mm_loadu_ps(m_values.data() + kGroupSize*best_idx[l/kGroupSize+1]),
                             _mm_loadu_ps(m_values.data() + kGroupSize*best_idx[l/kGroupSize+0]));
         auto vqw = _mm256_mul_ps(vq, vw);
         vqx = _mm256_fmadd_ps(vqw, vx, vqx);
@@ -9593,7 +9593,7 @@ float QuantizerIQKT<block_size, group_size, num_bits, is_abs, is_int>::find_best
         auto vx = _mm256_loadu_ps(xb+l);
         auto vw = _mm256_loadu_ps(weight+l);
         auto vq = kGroupSize == 8 ? _mm256_loadu_ps(m_values.data() + kGroupSize*best_idx[l/kGroupSize]) :
-            _mm256_set_m128(_mm_loadu_ps(m_values.data() + kGroupSize*best_idx[l/kGroupSize+1]),
+            MM256_SET_M128(_mm_loadu_ps(m_values.data() + kGroupSize*best_idx[l/kGroupSize+1]),
                             _mm_loadu_ps(m_values.data() + kGroupSize*best_idx[l/kGroupSize+0]));
         auto vxw = _mm256_mul_ps(vx, vw);
         vx2 = _mm256_fmadd_ps(vxw, vx, vx2);
@@ -9717,9 +9717,9 @@ void QuantizerIQKT<block_size, group_size, num_bits, is_abs, is_int>::find_best_
             auto xl = xb + 4*l;
             auto wl = weight + 4*l;
             auto vx4 = _mm_loadu_ps(xl);
-            auto vx = _mm256_mul_ps(vid_p, _mm256_set_m128(vx4, vx4));
+            auto vx = _mm256_mul_ps(vid_p, MM256_SET1_M128(vx4));
             auto vw4 = _mm_loadu_ps(wl);
-            auto vw = _mm256_set_m128(vw4, vw4);
+            auto vw = MM256_SET1_M128(vw4);
             int jbest = -1;
             if (ncluster == 256 || ncluster == 625) {
                 _mm256_storeu_ps(sx, vx);
