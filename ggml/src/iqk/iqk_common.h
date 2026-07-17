@@ -395,7 +395,8 @@ struct BaseDequantizer {
 };
 
 template <typename Q8, typename Bits>
-static inline void multiply_add(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
+// bits.values[k] are 4-bit raw nibble indices (unsigned 0..15, pre-iq4k_values lookup)
+static inline void multiply_add_unsigned(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
     if (j == 0) {
 #ifdef HAVE_VNNI256
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
@@ -434,8 +435,9 @@ static inline void multiply_add(const Bits& bits, const __m256i * scales, int j,
     }
 }
 
+// bits.values[k] are signed int8 dequantized values (post-iq4k_values lookup)
 template <typename Q8, typename Bits>
-static inline void multiply_add_avx2(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
+static inline void multiply_add_signed(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
     __m256i p[4];
     if (j == 0) {
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
