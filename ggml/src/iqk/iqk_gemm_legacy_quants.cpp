@@ -266,7 +266,7 @@ struct ScaleHelperQ_1 {
 };
 
 struct MinusType0 {
-    inline __m256 compute(__m128 d, int) const { return _mm256_set_m128(d, d); }
+    inline __m256 compute(__m128 d, int) const { return MM256_SET1_M128(d); }
     inline float compute(float d, int) const { return d; }
     inline float result(__m256 acc, int) const { return hsum_float_8(acc); }
     inline __m256 vresult(__m256 acc, int) const { return acc; }
@@ -279,7 +279,7 @@ template <int nrc_y> struct MinusType1 {
         const __m128 d = _mm256_castps256_ps128(dm);
         const __m128 m = _mm256_extractf128_ps(dm, 1);
         accm[iy] = _mm_add_ps(accm[iy], m);
-        return _mm256_set_m128(d, d);
+        return MM256_SET1_M128(d);
     }
     inline float compute(const std::pair<float, float>& dm, int iy) {
         accm[iy] = _mm_add_ps(accm[iy], _mm_set1_ps(dm.second*0.25f));
@@ -842,9 +842,9 @@ static void mul_mat_iq4_nl_r4_q8_2(int n, const void * vx, size_t bx, const Data
     float d8[8*nrc_y];
     auto prepare = [&qx, &m4, &values] (const block_iq4_nl_r4& iq4l, const block_iq4_nl_r4& iq4h) {
         auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq4l.d));
-        auto scales1 = _mm256_set_m128(scales128, scales128);
+        auto scales1 = MM256_SET1_M128(scales128);
         scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq4h.d));
-        auto scales2 = _mm256_set_m128(scales128, scales128);
+        auto scales2 = MM256_SET1_M128(scales128);
         auto scales = _mm512_insertf32x8(_mm512_castps256_ps512(scales1), scales2, 1);
         auto bits1 = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)iq4l.qs+0)),
                                                                _mm256_loadu_si256((const __m256i *)iq4h.qs+0), 1);
@@ -920,7 +920,7 @@ static void mul_mat_iq4_nl_r4_q8_2(int n, const void * vx, size_t bx, const Data
     float d8[4*nrc_y];
     auto prepare = [&qs, &values, &m4] (const block_iq4_nl_r4& iq4) {
         auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq4.d));
-        auto scales = _mm256_set_m128(scales128, scales128);
+        auto scales = MM256_SET1_M128(scales128);
         auto bits1 = _mm256_loadu_si256((const __m256i *)iq4.qs+0);
         auto bits2 = _mm256_loadu_si256((const __m256i *)iq4.qs+1);
         qs[0] = _mm256_shuffle_epi8(values, _mm256_and_si256(bits1, m4));
@@ -1085,7 +1085,7 @@ static void mul_mat_q4_0_r8_q8_2_avx2(int n, const void * vx, size_t bx, const D
                     auto scales = convert_scales((const uint16_t *)q8.y[iy][ib4].d);
                     _mm256_storeu_ps(d8 + 8*iy, scales);
                     auto m4 = _mm256_extractf128_ps(scales, 1);
-                    auto m8 = _mm256_set_m128(m4, m4);
+                    auto m8 = MM256_SET1_M128(m4);
                     auto sumf = _mm256_mul_ps(d4[0], _mm256_shuffle_ps(m8, m8, 0x00));
                     sumf = _mm256_fmadd_ps(d4[1], _mm256_shuffle_ps(m8, m8, 0x55), sumf);
                     sumf = _mm256_fmadd_ps(d4[2], _mm256_shuffle_ps(m8, m8, 0xaa), sumf);
@@ -1470,7 +1470,7 @@ static void mul_mat_q5_0_r4_q8_2_avx2(int n, const void * vx, size_t bx, const D
     float d8[8*nrc_y];
     auto prepare = [&qx, &m4, &m5] (const block_q5_0_r4& iq5) {
         auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq5.d));
-        auto scales = _mm256_set_m128(scales128, scales128);
+        auto scales = MM256_SET1_M128(scales128);
         auto bits1 = _mm256_loadu_si256((const __m256i *)iq5.qs+0);
         auto bits2 = _mm256_loadu_si256((const __m256i *)iq5.qs+1);
         auto hbits = _mm_loadu_si128((const __m128i *)iq5.qh);
@@ -1552,9 +1552,9 @@ static void mul_mat_q5_0_r4_q8_2(int n, const void * vx, size_t bx, const DataIn
     float d8[8*nrc_y];
     auto prepare = [&qx, &m4, &m5] (const block_q5_0_r4& iq5l, const block_q5_0_r4& iq5h) {
         auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq5l.d));
-        auto scales1 = _mm256_set_m128(scales128, scales128);
+        auto scales1 = MM256_SET1_M128(scales128);
         scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq5h.d));
-        auto scales2 = _mm256_set_m128(scales128, scales128);
+        auto scales2 = MM256_SET1_M128(scales128);
         auto scales = _mm512_insertf32x8(_mm512_castps256_ps512(scales1), scales2, 1);
         auto bits1 = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)iq5l.qs+0)),
                 _mm256_loadu_si256((const __m256i *)iq5h.qs+0), 1);
@@ -1642,7 +1642,7 @@ static void mul_mat_q6_0_r4_q8_2_avx2(int n, const void * vx, size_t bx, const D
     __m256i qx[4];
     auto prepare = [&qx, &m4, &m6] (const block_q6_0_r4& iq6) {
         auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq6.d));
-        auto scales = _mm256_set_m128(scales128, scales128);
+        auto scales = MM256_SET1_M128(scales128);
         auto bits1 = _mm256_loadu_si256((const __m256i *)iq6.qs+0);
         auto bits2 = _mm256_loadu_si256((const __m256i *)iq6.qs+1);
         auto hbits = _mm256_loadu_si256((const __m256i *)iq6.qh);
@@ -1723,9 +1723,9 @@ static void mul_mat_q6_0_r4_q8_2(int n, const void * vx, size_t bx, const DataIn
     float d8[8*nrc_y];
     auto prepare = [&qx, &m4, &m6] (const block_q6_0_r4& iq6l, const block_q6_0_r4& iq6h) {
         auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq6l.d));
-        auto scales1 = _mm256_set_m128(scales128, scales128);
+        auto scales1 = MM256_SET1_M128(scales128);
         scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq6h.d));
-        auto scales2 = _mm256_set_m128(scales128, scales128);
+        auto scales2 = MM256_SET1_M128(scales128);
         auto scales = _mm512_insertf32x8(_mm512_castps256_ps512(scales1), scales2, 1);
         auto bits1 = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)iq6l.qs+0)),
                                                                _mm256_loadu_si256((const __m256i *)iq6h.qs+0), 1);
@@ -2051,7 +2051,7 @@ static void mul_mat_q8_1_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
                     _mm_storeu_ps(d8, scales);
                     auto bsums4 = _mm_cvtepi32_ps(_mm_cvtepi16_epi32(_mm_loadl_epi64((const __m128i *)(q8.y[0][i4].d+4))));
                     bsums4 = _mm_mul_ps(bsums4, scales);
-                    auto bsums  = _mm256_set_m128(bsums4, bsums4);
+                    auto bsums  = MM256_SET1_M128(bsums4);
                     acc[0] = _mm256_fmadd_ps(mx[0], _mm256_shuffle_ps(bsums, bsums, 0x00), acc[0]);
                     acc[0] = _mm256_fmadd_ps(mx[1], _mm256_shuffle_ps(bsums, bsums, 0x55), acc[0]);
                     acc[0] = _mm256_fmadd_ps(mx[2], _mm256_shuffle_ps(bsums, bsums, 0xaa), acc[0]);
@@ -2096,7 +2096,7 @@ static void mul_mat_q8_1_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
                         _mm_storeu_ps(d8 + 4*iy, scales128);
                         auto bsums4 = _mm_cvtepi32_ps(_mm_cvtepi16_epi32(_mm_loadl_epi64((const __m128i *)(q8.y[iy][i4].d+4))));
                         bsums4 = _mm_mul_ps(bsums4, scales128);
-                        auto bsums256 = _mm256_set_m128(bsums4, bsums4);
+                        auto bsums256 = MM256_SET1_M128(bsums4);
                         auto bsums = _mm512_insertf32x8(_mm512_castps256_ps512(bsums256), bsums256, 1);
                         acc[iy] = _mm512_fmadd_ps(mx[0], _mm512_shuffle_ps(bsums, bsums, 0x00), acc[iy]);
                         acc[iy] = _mm512_fmadd_ps(mx[1], _mm512_shuffle_ps(bsums, bsums, 0x55), acc[iy]);
@@ -2164,7 +2164,7 @@ static void mul_mat_q8_1_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
                     _mm_storeu_ps(d8 + 4*iy + 0, scales);
                     auto bsums4 = _mm_cvtepi32_ps(_mm_cvtepi16_epi32(_mm_loadl_epi64((const __m128i *)(q8.y[iy][i4].d+4))));
                     bsums4 = _mm_mul_ps(bsums4, scales);
-                    auto bsums  = _mm256_set_m128(bsums4, bsums4);
+                    auto bsums  = MM256_SET1_M128(bsums4);
                     acc[iy] = _mm256_fmadd_ps(mx[0], _mm256_shuffle_ps(bsums, bsums, 0x00), acc[iy]);
                     acc[iy] = _mm256_fmadd_ps(mx[1], _mm256_shuffle_ps(bsums, bsums, 0x55), acc[iy]);
                     acc[iy] = _mm256_fmadd_ps(mx[2], _mm256_shuffle_ps(bsums, bsums, 0xaa), acc[iy]);
