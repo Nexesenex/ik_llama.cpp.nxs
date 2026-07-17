@@ -2141,7 +2141,7 @@ static void mul_mat_iq2_xs_q8_2_X4(int n, const void * vx, size_t bx, const Data
                 auto dy = _mm256_castsi256_ps(_mm256_slli_epi32(MM256_SET_M128I(d4_2, d4_1), 16));
                 if constexpr (nrc_y == 1) {
                     auto dyh = _mm256_extractf128_ps(dy, 1);
-                    scales[0] = _mm256_mul_ps(scales[0], _mm256_set_m128(_mm256_castps256_ps128(dy), _mm256_castps256_ps128(dy)));
+                    scales[0] = _mm256_mul_ps(scales[0], MM256_SET1_M128R(_mm256_castps256_ps128(dy)));
                     scales[1] = _mm256_mul_ps(scales[1], MM256_SET1_M128(dyh));
                 } else {
                     _mm256_storeu_ps(d8 + 8*iy, dy);
@@ -2381,7 +2381,7 @@ static void mul_mat_iq2_s_q8_2_X4(int n, const void * vx, size_t bx, const DataI
                 auto dy = _mm256_castsi256_ps(_mm256_slli_epi32(MM256_SET_M128I(d4_2, d4_1), 16));
                 if constexpr (nrc_y == 1) {
                     auto dyh = _mm256_extractf128_ps(dy, 1);
-                    scales[0] = _mm256_mul_ps(scales[0], _mm256_set_m128(_mm256_castps256_ps128(dy), _mm256_castps256_ps128(dy)));
+                    scales[0] = _mm256_mul_ps(scales[0], MM256_SET1_M128R(_mm256_castps256_ps128(dy)));
                     scales[1] = _mm256_mul_ps(scales[1], MM256_SET1_M128(dyh));
                 } else {
                     _mm256_storeu_ps(d8 + 8*iy, dy);
