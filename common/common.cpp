@@ -20,6 +20,7 @@
 #include "llama.h"
 #include "chat.h"
 #include "json-schema-to-grammar.h"
+#include "iqk_mul_mat.h"
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
@@ -2318,6 +2319,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.use_mmap = false;
         return true;
     }
+    if (arg == "-rtr16p" || arg == "--run-time-repack-16-path") {
+        iqk_set_r16_path(true);
+        return true;
+    }
     if (arg == "-thp" || arg == "--transparent-huge-pages") {
         params.use_thp = true;
         return true;
@@ -3443,6 +3448,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "       --no-mmap",              "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
     options.push_back({ "*",           "-rtr,   --run-time-repack",      "repack tensors if interleaved variant is available"});
+    options.push_back({ "*",           "-rtr16p, --run-time-repack-16-path", "enable Q8_K_R16 path on VNNI256 (30% faster IQ4_XS)"});
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
@@ -5587,6 +5593,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "n_probs: %d # only used by server binary, default: 0\n", sparams.n_probs);
     fprintf(stream, "no_mmap: %s # default: false\n", !params.use_mmap ? "true" : "false");
     fprintf(stream, "repack: %s # default: false\n", params.repack_tensors ? "true" : "false");
+    fprintf(stream, "r16_path: %s # default: false\n", iqk_get_r16_path() ? "true" : "false");
     fprintf(stream, "use_thp: %s # default: false\n", params.use_thp ? "true" : "false");
     fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");
     fprintf(stream, "merge_qkv: %s # default: false\n", params.merge_qkv ? "true" : "false");
