@@ -2066,15 +2066,10 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
                     auto y128 = _mm_loadu_si128((const __m128i *)q8.y[iy][ibl].qs + ib);
                     auto y = MM256_SET1_M128I(y128);
 #if defined(HAVE_VNNIINT8)
-                    auto sgn = _mm256_set1_epi8(-128);
-                    auto qx_s = _mm256_xor_si256(qx[0], sgn);
-                    isum[iy] = ggml_mm256_dpbssd_epi32(isum[iy], _mm256_shuffle_epi32(y, 0x00), qx_s);
-                    qx_s = _mm256_xor_si256(qx[1], sgn);
-                    isum[iy] = ggml_mm256_dpbssd_epi32(isum[iy], _mm256_shuffle_epi32(y, 0x55), qx_s);
-                    qx_s = _mm256_xor_si256(qx[2], sgn);
-                    isum[iy] = ggml_mm256_dpbssd_epi32(isum[iy], _mm256_shuffle_epi32(y, 0xaa), qx_s);
-                    qx_s = _mm256_xor_si256(qx[3], sgn);
-                    isum[iy] = ggml_mm256_dpbssd_epi32(isum[iy], _mm256_shuffle_epi32(y, 0xff), qx_s);
+                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_shuffle_epi32(y, 0x00), qx[0]);
+                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_shuffle_epi32(y, 0x55), qx[1]);
+                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_shuffle_epi32(y, 0xaa), qx[2]);
+                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_shuffle_epi32(y, 0xff), qx[3]);
 #else
                     isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[0], _mm256_shuffle_epi32(y, 0x00));
                     isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[1], _mm256_shuffle_epi32(y, 0x55));
