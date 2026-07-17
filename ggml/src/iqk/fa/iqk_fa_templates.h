@@ -85,7 +85,7 @@ struct F16 {
     static inline Data add(Data v1, Data v2) { return _mm512_add_ps(v1, v2); }
     static inline Data set4(const float * ptr) {
         auto v128 = _mm_loadu_ps(ptr);
-        auto v256 = _mm256_set_m128(v128, v128);
+        auto v256 = MM256_SET1_M128(v128);
         return _mm512_insertf32x8(_mm512_castps256_ps512(v256), v256, 1);
     }
     static inline void set4(const float * ptr, Data * vs) {
@@ -118,7 +118,7 @@ struct F16 {
     static inline Data add(Data v1, Data v2) { return _mm256_add_ps(v1, v2); }
     static inline Data set4(const float * ptr) {
         auto v128 = _mm_loadu_ps(ptr);
-        return _mm256_set_m128(v128, v128);
+        return MM256_SET1_M128(v128);
     }
     static inline void set4(const float * ptr, Data * vs) {
         auto v = set4(ptr);
