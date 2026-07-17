@@ -312,7 +312,7 @@ struct MulMat {
         if (type == GGML_TYPE_F8_E4M3_B128) return nrc_y >= 32 ? GGML_TYPE_F32 : type;
 #endif
 #ifdef __AVX2__
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         auto q8_k_type = GGML_TYPE_Q8_K_R16;
         constexpr int k_min_nrc_y = 16;
 #else
@@ -455,7 +455,7 @@ struct MulMat {
         return type;
     }
     static inline int num_rows([[maybe_unused]] ggml_type type) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         switch (type) {
             case GGML_TYPE_Q2_K_R4:
             case GGML_TYPE_Q3_K_R4:
