@@ -1275,8 +1275,8 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
         const block_q2_k_r4 * iq2 = (const block_q2_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dm = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq2[ibl].d));
-            auto d4 = _mm256_set_m128(_mm256_castps256_ps128(dm), _mm256_castps256_ps128(dm));
-            auto m4 = _mm256_set_m128(_mm256_extractf128_ps(dm, 1), _mm256_extractf128_ps(dm, 1));
+            auto d4 = MM256_SET_M128(_mm256_castps256_ps128(dm), _mm256_castps256_ps128(dm));
+            auto m4 = MM256_SET_M128(_mm256_extractf128_ps(dm, 1), _mm256_extractf128_ps(dm, 1));
             m4 = _mm256_mul_ps(m4, _mm256_set1_ps(-1.f));
             auto all_scales1 = _mm256_loadu_si256((const __m256i *)iq2[ibl].scales+0);
             auto all_scales2 = _mm256_loadu_si256((const __m256i *)iq2[ibl].scales+1);
@@ -1565,8 +1565,8 @@ static void mul_mat_q4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
         const block_q4_k_r4 * iq4 = (const block_q4_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[ibl].d));
-            auto d4 = _mm256_set_m128(_mm256_castps256_ps128(dl), _mm256_castps256_ps128(dl));
-            auto m4 = _mm256_mul_ps(_mm256_set1_ps(-1.0f), _mm256_set_m128(_mm256_extractf128_ps(dl, 1), _mm256_extractf128_ps(dl, 1)));
+            auto d4 = MM256_SET_M128(_mm256_castps256_ps128(dl), _mm256_castps256_ps128(dl));
+            auto m4 = _mm256_mul_ps(_mm256_set1_ps(-1.0f), MM256_SET_M128(_mm256_extractf128_ps(dl, 1), _mm256_extractf128_ps(dl, 1)));
             auto lbits = _mm256_loadu_si256((const __m256i *)iq4[ibl].scales_l);
             auto hbits128 = _mm_loadu_si128((const __m128i *)iq4[ibl].scales_h);
             auto hbits = MM256_SLLI128_M128I(hbits128, 4);
@@ -1634,8 +1634,8 @@ static void mul_mat_q5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
         const block_q5_k_r4 * iq5 = (const block_q5_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq5[ibl].d));
-            auto d4 = _mm256_set_m128(_mm256_castps256_ps128(dl), _mm256_castps256_ps128(dl));
-            auto m4 = _mm256_mul_ps(_mm256_set1_ps(-1.0f), _mm256_set_m128(_mm256_extractf128_ps(dl, 1), _mm256_extractf128_ps(dl, 1)));
+            auto d4 = MM256_SET_M128(_mm256_castps256_ps128(dl), _mm256_castps256_ps128(dl));
+            auto m4 = _mm256_mul_ps(_mm256_set1_ps(-1.0f), MM256_SET_M128(_mm256_extractf128_ps(dl, 1), _mm256_extractf128_ps(dl, 1)));
             auto lbits = _mm256_loadu_si256((const __m256i *)iq5[ibl].scales_l);
             auto hbits128 = _mm_loadu_si128((const __m128i *)iq5[ibl].scales_h);
             auto hbits = MM256_SLLI128_M128I(hbits128, 4);
