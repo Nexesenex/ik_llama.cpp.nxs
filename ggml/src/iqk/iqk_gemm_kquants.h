@@ -12,4 +12,6 @@ void iqk_gemm_q8kv_fa(int D, int nq, int type_k, const char * k, size_t stride_k
 
 bool iqk_convert_kquants_q8X_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x);
 
+void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x);
+
 #endif
