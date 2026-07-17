@@ -657,7 +657,7 @@ static void mul_mat_qX_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
 
                 set_scales_8(all_scales, j, scales);
 
-                multiply_add(deq.bits, scales, j, i, q8, sumi);
+                multiply_add_unsigned(deq.bits, scales, j, i, q8, sumi);
 
             }
 
@@ -703,7 +703,7 @@ static void mul_mat_qY_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
             for (int j = 0; j < QK_K/128; ++j) {
                 deq.prepare(i, j);
                 set_scales_16(all_scales[j], scales);
-                multiply_add(deq.bits, scales, j, i, q8, sumi);
+                multiply_add_unsigned(deq.bits, scales, j, i, q8, sumi);
             }
 
             for (int iy = 0; iy < nrc_y; ++iy) {
