@@ -1891,7 +1891,7 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
 static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    GGML_ASSERT(nrc_x%16 == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
     int nbl = n / QK_K;
     __m512  acc[nrc_y] = {};
@@ -1902,6 +1902,48 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto d4 = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)iq16[ibl].d));
             for (int ib = 0; ib < QK_K/16; ++ib) {
+                qx[0] = _mm512_loadu_si512((const __m512i *)iq16[ibl].qs+4*ib+0);
+                qx[1] = _mm512_loadu_si512((const __m512i *)iq16[ibl].qs+4*ib+1);
+                qx[2] = _mm512_loadu_si512((const __m512i *)iq16[ibl].qs+4*ib+2);
+                qx[3] = _mm512_loadu_si512((const __m512i *)iq16[ibl].qs+4*ib+3);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto y128 = _mm_loadu_si128((const __m128i*)q8.y[iy][ibl].qs+ib);
+                    auto y256 = MM256_SET1_M128I(y128);
+                    auto y = _mm512_inserti32x8(_mm512_castsi256_si512(y256), y256, 1);
+                    isum[iy] = _mm512_dpbusd_epi32(isum[iy], qx[0], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x00)));
+                    isum[iy] = _mm512_dpbusd_epi32(isum[iy], qx[1], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x55)));
+                    isum[iy] = _mm512_dpbusd_epi32(isum[iy], qx[2], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xaa)));
+                    isum[iy] = _mm512_dpbusd_epi32(isum[iy], qx[3], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xff)));
+                }
+            }
+            auto m4 = _mm512_mul_ps(d4, _mm512_set1_ps(-128.f));
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto d4y = _mm512_mul_ps(d4, _mm512_set1_ps(q8.scale(iy, ibl)));
+                acc[iy] = _mm512_fmadd_ps(d4y, _mm512_cvtepi32_ps(isum[iy]), acc[iy]);
+                acc[iy] = _mm512_fmadd_ps(m4,  _mm512_set1_ps(q8.y[iy][ibl].sum), acc[iy]);
+                isum[iy] = _mm512_setzero_si512();
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, acc[iy]);
+            acc[iy] = _mm512_setzero_ps();
+        }
+    }
+    // The main loop above steps by 16 columns (one full block_q8_k_r16). When
+    // nrc_x is not a multiple of 16 (e.g. the PP path where rows are split into
+    // 8-wide groups) the final 8 columns form a half block that was never
+    // computed. Process that trailing half block here: it is a single
+    // block_q8_k_r16 at ix = nrc_x-8 whose only the first 8 columns are valid,
+    // so we run the exact same per-column body but stop at QK_K/16/2 columns and
+    // use the low 8 of the 16 FP16 scales. The d4/-128.f bias and block-level
+    // q8.scale/q8.y[].sum math is unchanged, keeping results bit-consistent with
+    // the 8-wide path exposed by funcs[7] = mul_mat_q8_k_r16_q8_k<8>.
+    if (nrc_x % 16 != 0) {
+        int ix = nrc_x - 8;
+        const block_q8_k_r16 * iq16 = (const block_q8_k_r16 *)((const char *)vx + ix*bx);
+        for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
+            auto d4 = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)iq16[ibl].d));
+            for (int ib = 0; ib < QK_K/16/2; ++ib) {
                 qx[0] = _mm512_loadu_si512((const __m512i *)iq16[ibl].qs+4*ib+0);
                 qx[1] = _mm512_loadu_si512((const __m512i *)iq16[ibl].qs+4*ib+1);
                 qx[2] = _mm512_loadu_si512((const __m512i *)iq16[ibl].qs+4*ib+2);
