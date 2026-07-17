@@ -1,4 +1,5 @@
 #include "iqk_gemm_kquants.h"
+#include "iqk_quantize.h"
 #include <cstring>
 
 #ifdef IQK_IMPLEMENT
@@ -3026,8 +3027,47 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
     }
 }
 
-
 } // namespace
+
+void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n % QK_K == 0);
+    const int nb = n / QK_K;
+
+#if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256)
+    const bool use_r16 =
+#if defined(HAVE_FANCY_SIMD)
+        true;
+#else
+        g_iqk_r16_path;
+#endif
+    if (use_r16) {
+        GGML_ASSERT(nrc_x % 16 == 0);
+        std::vector<float> tmp(16 * n);
+        for (int ix = 0; ix < nrc_x; ix += 16) {
+            dequantize_row_iq4_xs_r8(
+                (const block_iq4_xs_r8 *)((const char *)vx + (ix + 0) * bx),
+                tmp.data(), 8 * n);
+            dequantize_row_iq4_xs_r8(
+                (const block_iq4_xs_r8 *)((const char *)vx + (ix + 8) * bx),
+                tmp.data() + 8 * n, 8 * n);
+            quantize_q8_k_r16(tmp.data(),
+                (block_q8_k_r16 *)vy + (ix / 16) * nb,
+                16, n, nullptr, nullptr);
+        }
+        return;
+    }
+#endif
+    GGML_ASSERT(nrc_x % 8 == 0);
+    std::vector<float> tmp(8 * n);
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        dequantize_row_iq4_xs_r8(
+            (const block_iq4_xs_r8 *)((const char *)vx + (ix + 0) * bx),
+            tmp.data(), 8 * n);
+        quantize_q8_k_r8(tmp.data(),
+            (block_q8_k_r8 *)vy + (ix / 8) * nb,
+            8, n, nullptr, nullptr);
+    }
+}
 
 bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
 
@@ -4833,6 +4873,21 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
     }
 }
 
+}
+
+void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n % QK_K == 0);
+    GGML_ASSERT(nrc_x % 8 == 0);
+    const int nb = n / QK_K;
+    std::vector<float> tmp(8 * n);
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        dequantize_row_iq4_xs_r8(
+            (const block_iq4_xs_r8 *)((const char *)vx + (ix + 0) * bx),
+            tmp.data(), 8 * n);
+        quantize_q8_k_r8(tmp.data(),
+            (block_q8_k_r8 *)vy + (ix / 8) * nb,
+            8, n, nullptr, nullptr);
+    }
 }
 
 bool iqk_convert_kquants_q8X_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
