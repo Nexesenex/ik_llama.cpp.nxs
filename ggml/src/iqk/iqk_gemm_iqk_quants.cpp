@@ -1673,7 +1673,7 @@ static void mul_mat_iq2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataI
         const block_iq2_k_r4 * iq2 = (const block_iq2_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq2[ibl].d));
-            auto d4 = _mm256_set_m128(dl, dl);
+            auto d4 = MM256_SET1_M128(dl);
             auto extra = _mm256_set1_epi64x(*(const uint64_t *)iq2[ibl].extra);
             auto slbits = _mm256_loadu_si256((const __m256i *)iq2[ibl].scales);
             auto i8scales1 = _mm256_add_epi8(_mm256_and_si256(slbits, m4), _mm256_set1_epi8(-8));
@@ -1755,7 +1755,7 @@ static void mul_mat_iq3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataI
         const block_iq3_k_r4 * iq3 = (const block_iq3_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq3[ibl].d));
-            auto d4 = _mm256_set_m128(dl, dl);
+            auto d4 = MM256_SET1_M128(dl);
             auto extra = _mm256_set1_epi64x(*(const uint64_t *)iq3[ibl].extra);
             auto slbits = _mm256_loadu_si256((const __m256i *)iq3[ibl].scales_l);
             auto sl1 = _mm256_add_epi8(_mm256_slli_epi16(_mm256_and_si256(slbits, m4), 1), _mm256_set1_epi8(1));
@@ -1845,7 +1845,7 @@ static void mul_mat_iq4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataI
         const block_iq4_k_r4 * iq4 = (const block_iq4_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq4[ibl].d));
-            auto d4 = _mm256_set_m128(dl, dl);
+            auto d4 = MM256_SET1_M128(dl);
             auto extra = _mm256_set1_epi64x(*(const uint64_t *)iq4[ibl].extra);
             auto slbits = _mm256_loadu_si256((const __m256i *)iq4[ibl].scales_l);
             auto sl1 = _mm256_and_si256(slbits, m4);
@@ -1955,7 +1955,7 @@ static void mul_mat_iq5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataI
         const block_iq5_k_r4 * iq5 = (const block_iq5_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq5[ibl].d));
-            auto d4 = _mm256_set_m128(dl, dl);
+            auto d4 = MM256_SET1_M128(dl);
             auto extra = _mm256_set1_epi64x(*(const uint64_t *)iq5[ibl].extra);
             auto slbits = _mm256_loadu_si256((const __m256i *)iq5[ibl].scales_l);
             auto sl1 = _mm256_and_si256(slbits, m4);

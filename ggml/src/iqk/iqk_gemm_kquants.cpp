@@ -821,7 +821,7 @@ static void mul_mat_qX_K_q8_2_X4_T(int n, const void * vx, size_t bx, const Data
             auto all_scales = _mm256_mul_ps(_mm256_set1_ps(deq.d), _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)utmp))));
             scales[0] = _mm256_set_m128(_mm256_castps256_ps128(all_scales), _mm256_castps256_ps128(all_scales));
             auto scales_h = _mm256_extractf128_ps(all_scales, 1);
-            scales[1] = _mm256_set_m128(scales_h, scales_h);
+            scales[1] = MM256_SET1_M128(scales_h);
 
             for (int j = 0; j < QK_K/128; ++j) {
 
@@ -848,7 +848,7 @@ static void mul_mat_qX_K_q8_2_X4_T(int n, const void * vx, size_t bx, const Data
                     sumi1 = _mm256_madd_epi16(_mm256_set1_epi16(1), sumi1);
 #endif
                     auto dy4 = _mm_loadu_ps(d8 + 8*iy + 4*j);
-                    auto d4d8 = _mm256_mul_ps(scales[j], _mm256_set_m128(dy4, dy4));
+                    auto d4d8 = _mm256_mul_ps(scales[j], MM256_SET1_M128(dy4));
                     accd[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi1), accd[iy]);
                 }
 
@@ -971,7 +971,7 @@ static void mul_mat_qY_K_q8_2_X4_T(int n, const void * vx, size_t bx, const Data
                 if constexpr (nrc_y == 1) {
                     auto dyh = _mm256_extractf128_ps(dy, 1);
                     scales[0] = _mm256_mul_ps(scales[0], _mm256_set_m128(_mm256_castps256_ps128(dy), _mm256_castps256_ps128(dy)));
-                    scales[1] = _mm256_mul_ps(scales[1], _mm256_set_m128(dyh, dyh));
+                    scales[1] = _mm256_mul_ps(scales[1], MM256_SET1_M128(dyh));
                 } else {
                     _mm256_storeu_ps(d8 + 8*iy, dy);
                 }
@@ -1014,7 +1014,7 @@ static void mul_mat_qY_K_q8_2_X4_T(int n, const void * vx, size_t bx, const Data
 #endif
                     if constexpr (nrc_y > 1) {
                         auto dy4 = _mm_loadu_ps(d8 + 8*iy + 4*j);
-                        auto d4d8 = _mm256_mul_ps(scales[j], _mm256_set_m128(dy4, dy4));
+                        auto d4d8 = _mm256_mul_ps(scales[j], MM256_SET1_M128(dy4));
                         accd[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi1), accd[iy]);
                     } else {
                         accd[iy] = _mm256_fmadd_ps(scales[j], _mm256_cvtepi32_ps(sumi1), accd[iy]);
@@ -1175,7 +1175,7 @@ static void mul_mat_iq4_xs_r8_q8_k(int n, const void * vx, size_t bx, const Data
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq4l[ibl].d));
             auto dh = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq4h[ibl].d));
-            auto d4 = _mm512_insertf32x8(_mm512_castps256_ps512(_mm256_set_m128(dl, dl)), _mm256_set_m128(dh, dh), 1);
+            auto d4 = _mm512_insertf32x8(_mm512_castps256_ps512(MM256_SET1_M128(dl)), MM256_SET1_M128(dh), 1);
             auto d4x64 = _mm512_mul_ps(d4, _mm512_set1_ps(-64.f));
             auto slbits_l = _mm_loadu_si128((const __m128i *)iq4l[ibl].scales_l);
             auto shbits_l = _mm_loadu_si128((const __m128i *)iq4h[ibl].scales_l);
@@ -1375,7 +1375,7 @@ static void mul_mat_q3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
         const block_q3_k_r4 * iq3 = (const block_q3_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq3[ibl].d));
-            auto d4 = _mm256_set_m128(dl, dl);
+            auto d4 = MM256_SET1_M128(dl);
 #ifndef HAVE_VNNI256
             if constexpr (nrc_y == 1) {
                 d4 = _mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(0, ibl)));
@@ -1694,7 +1694,7 @@ static void mul_mat_q6_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
         const block_q6_k_r4 * iq6 = (const block_q6_k_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto dl = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq6[ibl].d));
-            auto d4 = _mm256_set_m128(dl, dl);
+            auto d4 = MM256_SET1_M128(dl);
 #ifndef HAVE_VNNI256
             if constexpr (nrc_y == 1) {
                 d4 = _mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(0, ibl)));
