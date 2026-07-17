@@ -120,7 +120,16 @@ template <typename Q8, typename Q8x4, typename Dot, bool can_pack = true> struct
 template <typename Q8, typename Q8x4> struct Sum4q4 {
     inline __m256i compute(const __m256i * qx, const Q8 * y) const {
         const Q8x4 * y4 = (const Q8x4 *)y;
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+        auto s01 = ggml_mm256_dpbsud_epi32(ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(),
+            _mm256_loadu_si256((const __m256i *)y4->qs+0), qx[0]),
+            _mm256_loadu_si256((const __m256i *)y4->qs+1), qx[1]);
+        auto s23 = ggml_mm256_dpbsud_epi32(ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(),
+            _mm256_loadu_si256((const __m256i *)y4->qs+2), qx[2]),
+            _mm256_loadu_si256((const __m256i *)y4->qs+3), qx[3]);
+        return _mm256_add_epi32(s01, s23);
+#else
         auto s01 = ggml_mm256_dpbusd_epi32(ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(),
             qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0)),
             qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1));
@@ -128,6 +137,7 @@ template <typename Q8, typename Q8x4> struct Sum4q4 {
             qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2)),
             qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3));
         return _mm256_add_epi32(s01, s23);
+#endif
 #else
         auto p0 = _mm256_maddubs_epi16(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0));
         auto p1 = _mm256_maddubs_epi16(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1));
@@ -140,8 +150,12 @@ template <typename Q8, typename Q8x4> struct Sum4q4 {
 #endif
     }
     inline __m256i compute(__m256i x, __m256i y) const {
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+        return ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), y, x);
+#else
         return ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), x, y);
+#endif
 #else
         return _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_maddubs_epi16(x, y));
 #endif
@@ -1084,7 +1098,18 @@ inline __m256i accum_q4_0_quants(const __m256i * v, const int8_t * qs) {
     auto y4h = _mm_loadu_si128((const __m128i*)qs+1);
     auto yl  = MM256_SET1_M128I(y4l);
     auto yh  = MM256_SET1_M128I(y4h);
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+    auto sumi = _mm256_setzero_si256();
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0x00), v[0]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0x55), v[1]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0xaa), v[2]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0xff), v[3]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0x00), v[4]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0x55), v[5]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0xaa), v[6]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0xff), v[7]);
+#else
     auto sumi = _mm256_setzero_si256();
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[0], _mm256_shuffle_epi32(yl, 0x00));
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[1], _mm256_shuffle_epi32(yl, 0x55));
@@ -1094,6 +1119,7 @@ inline __m256i accum_q4_0_quants(const __m256i * v, const int8_t * qs) {
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[5], _mm256_shuffle_epi32(yh, 0x55));
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[6], _mm256_shuffle_epi32(yh, 0xaa));
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[7], _mm256_shuffle_epi32(yh, 0xff));
+#endif
 #else
     auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(v[0], _mm256_shuffle_epi32(yl, 0x00)),
                                   _mm256_maddubs_epi16(v[1], _mm256_shuffle_epi32(yl, 0x55)));
@@ -1705,12 +1731,24 @@ inline __m512i qx_r8_q8_dot_product(const __m512i * qx, const int8_t * y) {
     return sumi;
 }
 #endif
-#if defined(HAVE_VNNI256)
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
 inline __m256i qx_r8_q8_dot_product(const __m256i * qx, const int8_t * y) {
     auto y4l = _mm_loadu_si128((const __m128i*)y+0);
     auto y4h = _mm_loadu_si128((const __m128i*)y+1);
     auto yl  = MM256_SET1_M128I(y4l);
     auto yh  = MM256_SET1_M128I(y4h);
+#if defined(HAVE_VNNIINT8)
+    auto sumi = _mm256_setzero_si256();
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0x00), qx[0]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0x55), qx[1]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0xaa), qx[2]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0xff), qx[3]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0x00), qx[4]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0x55), qx[5]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0xaa), qx[6]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0xff), qx[7]);
+    return sumi;
+#else
     auto sumi = _mm256_setzero_si256();
     sumi = ggml_mm256_dpbusd_epi32(sumi, qx[0], _mm256_shuffle_epi32(yl, 0x00));
     sumi = ggml_mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(yl, 0x55));
@@ -1721,6 +1759,7 @@ inline __m256i qx_r8_q8_dot_product(const __m256i * qx, const int8_t * y) {
     sumi = ggml_mm256_dpbusd_epi32(sumi, qx[6], _mm256_shuffle_epi32(yh, 0xaa));
     sumi = ggml_mm256_dpbusd_epi32(sumi, qx[7], _mm256_shuffle_epi32(yh, 0xff));
     return sumi;
+#endif
 }
 inline __m256i q8_0_r8_dot_product(const uint8_t * x, const int8_t * y, __m256i * qx) {
     for (int i = 0; i < 8; ++i) {
