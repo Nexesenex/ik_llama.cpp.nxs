@@ -1486,9 +1486,9 @@ static void mul_mat_qY_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
                 if constexpr (std::is_same_v<Dequantizer, DequantizerIQ4K> ||
                               std::is_same_v<Dequantizer, DequantizerIQ5K> ||
                               std::is_same_v<Dequantizer, DequantizerIQ6K>) {
-                    multiply_add_avx2(deq.bits, scales, j, i, q8, sumi);
+                    multiply_add_signed(deq.bits, scales, j, i, q8, sumi);
                 } else {
-                    multiply_add(deq.bits, scales, j, i, q8, sumi);
+                    multiply_add_unsigned(deq.bits, scales, j, i, q8, sumi);
                 }
             }
 
@@ -1537,9 +1537,9 @@ static void mul_mat_qX_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
                 set_scales_8(all_scales, j, scales);
 
                 if constexpr (std::is_same_v<Dequantizer, DequantizerIQ4KS> || std::is_same_v<Dequantizer, DequantizerIQ3KS>) {
-                    multiply_add_avx2(deq.bits, scales, j, i, q8, sumi);
+                    multiply_add_signed(deq.bits, scales, j, i, q8, sumi);
                 } else {
-                    multiply_add(deq.bits, scales, j, i, q8, sumi);
+                    multiply_add_unsigned(deq.bits, scales, j, i, q8, sumi);
                 }
 
             }
