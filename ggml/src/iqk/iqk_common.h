@@ -82,6 +82,7 @@ struct Perf {
 #define MM256_SET_M128I(a, b)    _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
 #define MM256_SET1_M128I(x)      _mm256_broadcastsi128_si256(x)
 #define MM256_SET1_M128(x)       _mm256_broadcast_ps(&(x))
+#define MM256_SET1_M128R(x)      _mm256_insertf128_ps(_mm256_castps128_ps256(x), (x), 1)
 #define MM256_SRLI128_M128I(x,n) _mm256_blend_epi32(MM256_SET1_M128I(x), _mm256_srli_epi16(MM256_SET1_M128I(x), n), 0xF0)
 #define MM256_SLLI128_M128I(x,n) _mm256_blend_epi32(_mm256_slli_epi16(MM256_SET1_M128I(x), n), MM256_SET1_M128I(x), 0xF0)
 #define MM256_MULH_M128(x,y)     _mm256_blend_ps(MM256_SET1_M128(x), _mm256_mul_ps(MM256_SET1_M128(x), MM256_SET1_M128(y)), 0xF0)
