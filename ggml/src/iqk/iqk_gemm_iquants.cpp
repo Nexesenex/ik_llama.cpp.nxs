@@ -691,11 +691,18 @@ struct DequantizerIQ3S final : public BaseDequantizer<block_iq3_s> {
 template <typename Bits>
 inline void multiply_add_1(int j, const Bits& bits, const __m256i * scales, const __m256i * q8, __m256i * sumi) {
     if (j == 0) {
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+        auto p1 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), q8[0], bits.values[0]);
+        auto p2 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), q8[1], bits.values[1]);
+        auto p3 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), q8[2], bits.values[2]);
+        auto p4 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), q8[3], bits.values[3]);
+#else
         auto p1 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[0], q8[0]);
         auto p2 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[1], q8[1]);
         auto p3 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[2], q8[2]);
         auto p4 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[3], q8[3]);
+#endif
         sumi[0] = ggml_mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[0], _mm256_packs_epi32(p1, p2));
         sumi[1] = ggml_mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[1], _mm256_packs_epi32(p3, p4));
 #else
@@ -707,11 +714,18 @@ inline void multiply_add_1(int j, const Bits& bits, const __m256i * scales, cons
         sumi[1] = _mm256_add_epi32(p2, p4);
 #endif
     } else {
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+        auto p1 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), q8[0], bits.values[0]);
+        auto p2 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), q8[1], bits.values[1]);
+        auto p3 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), q8[2], bits.values[2]);
+        auto p4 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), q8[3], bits.values[3]);
+#else
         auto p1 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[0], q8[0]);
         auto p2 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[1], q8[1]);
         auto p3 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[2], q8[2]);
         auto p4 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[3], q8[3]);
+#endif
         sumi[0] = ggml_mm256_dpwssd_epi32(sumi[0], scales[0], _mm256_packs_epi32(p1, p2));
         sumi[1] = ggml_mm256_dpwssd_epi32(sumi[1], scales[1], _mm256_packs_epi32(p3, p4));
 #else
@@ -834,11 +848,18 @@ static void mul_mat_qX_K_q8_K_IQ_N(int n, const void * vx, size_t bx, const Data
 
 template <int n_sum>
 inline __m256i compute_dot_4(const __m256i * x, const __m256i * y) {
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+    auto sumi0 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), y[0], x[0]);
+    auto sumi1 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), y[1], x[1]);
+    auto sumi2 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), y[2], x[2]);
+    auto sumi3 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), y[3], x[3]);
+#else
     auto sumi0 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), x[0], y[0]);
     auto sumi1 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), x[1], y[1]);
     auto sumi2 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), x[2], y[2]);
     auto sumi3 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), x[3], y[3]);
+#endif
     sumi0 = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi0, sumi1), _mm256_unpackhi_epi32(sumi0, sumi1));
     sumi2 = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi2, sumi3), _mm256_unpackhi_epi32(sumi2, sumi3));
     return _mm256_add_epi32(_mm256_unpacklo_epi64(sumi0, sumi2), _mm256_unpackhi_epi64(sumi0, sumi2));
@@ -988,13 +1009,31 @@ static void mul_mat_iq2_xxs_q8_2_IQ_N(int n, const void * vx, size_t bx, const D
                 }
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = (const block_q8_2_x4 *)info.src1_row(iy);
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+                    sumi[0] = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+0), xv[0]);
+                    sumi[1] = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+1), xv[1]);
+                    sumi[2] = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+2), xv[2]);
+                    sumi[3] = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+3), xv[3]);
+#else
                     sumi[0] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[0], _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+0));
                     sumi[1] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[1], _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+1));
                     sumi[2] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[2], _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+2));
                     sumi[3] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[3], _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+3));
+#endif
                     sumi[0] = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi[0], sumi[1]), _mm256_unpackhi_epi32(sumi[0], sumi[1]));
                     sumi[2] = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi[2], sumi[3]), _mm256_unpackhi_epi32(sumi[2], sumi[3]));
                     sumi[0] = _mm256_add_epi32(_mm256_unpacklo_epi64(sumi[0], sumi[2]), _mm256_unpackhi_epi64(sumi[0], sumi[2]));
+#else
+                    auto m1 = _mm256_set1_epi16(1);
+                    sumi[0] = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(xv[0], _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+0)));
+                    sumi[1] = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(xv[1], _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+1)));
+                    sumi[2] = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(xv[2], _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+2)));
+                    sumi[3] = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(xv[3], _mm256_loadu_si256((const __m256i*)y[2*i+j].qs+3)));
+                    sumi[0] = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi[0], sumi[1]), _mm256_unpackhi_epi32(sumi[0], sumi[1]));
+                    sumi[2] = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi[2], sumi[3]), _mm256_unpackhi_epi32(sumi[2], sumi[3]));
+                    sumi[0] = _mm256_add_epi32(_mm256_unpacklo_epi64(sumi[0], sumi[2]), _mm256_unpackhi_epi64(sumi[0], sumi[2]));
+#endif
                     auto d4 = _mm_castsi128_ps(_mm_slli_epi32(_mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)y[2*i+j].d)), 16));
                     auto dy = MM256_SET1_M128(d4);
                     accd[iy] = _mm256_fmadd_ps(_mm256_mul_ps(scales[j], dy), _mm256_cvtepi32_ps(sumi[0]), accd[iy]);
@@ -2221,11 +2260,18 @@ static void mul_mat_iq2_xs_q8_2_X4(int n, const void * vx, size_t bx, const Data
                     auto qs = q8.y[0][2*i+j].qs;
                     for (int k = 0; k < 4; ++k) us[k] = _mm256_loadu_si256((const __m256i*)qs+k);
                     deq.prepare_signed(i, j, deq.bits.values, us);
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+                    auto sumi1 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), us[0], deq.bits.values[0]);
+                    auto sumi2 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), us[1], deq.bits.values[1]);
+                    auto sumi3 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), us[2], deq.bits.values[2]);
+                    auto sumi4 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), us[3], deq.bits.values[3]);
+#else
                     auto sumi1 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[0], us[0]);
                     auto sumi2 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[1], us[1]);
                     auto sumi3 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[2], us[2]);
                     auto sumi4 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[3], us[3]);
+#endif
                     sumi1 = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi1, sumi2), _mm256_unpackhi_epi32(sumi1, sumi2));
                     sumi3 = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi3, sumi4), _mm256_unpackhi_epi32(sumi3, sumi4));
                     sumi1 = _mm256_add_epi32(_mm256_unpacklo_epi64(sumi1, sumi3), _mm256_unpackhi_epi64(sumi1, sumi3));
@@ -2245,7 +2291,17 @@ static void mul_mat_iq2_xs_q8_2_X4(int n, const void * vx, size_t bx, const Data
 
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto qs = q8.y[iy][2*i+j].qs;
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+                    // 0...31
+                    auto sumi1 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+0), deq.bits.values[0]), us[0]);
+                    // 32...63
+                    auto sumi2 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+1), deq.bits.values[1]), us[1]);
+                    // 64...95
+                    auto sumi3 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+2), deq.bits.values[2]), us[2]);
+                    // 96...128
+                    auto sumi4 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+3), deq.bits.values[3]), us[3]);
+#else
                     // 0...31
                     auto sumi1 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), us[0], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+0), deq.bits.values[0]));
                     // 32...63
@@ -2254,6 +2310,7 @@ static void mul_mat_iq2_xs_q8_2_X4(int n, const void * vx, size_t bx, const Data
                     auto sumi3 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), us[2], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+2), deq.bits.values[2]));
                     // 96...128
                     auto sumi4 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), us[3], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+3), deq.bits.values[3]));
+#endif
                     // 0...3, 32...35,  4....7, 36...39, 16...19, 48...51, 20...23, 52...56 +
                     // 8..11, 40...43, 12...15, 44...47, 24...27, 56...59, 28...31, 60...63
                     //  b0      b2       b0       b2       b1       b3       b1       b3
@@ -2461,11 +2518,18 @@ static void mul_mat_iq2_s_q8_2_X4(int n, const void * vx, size_t bx, const DataI
                     auto qs = q8.y[0][2*i+j].qs;
                     for (int k = 0; k < 4; ++k) us[k] = _mm256_loadu_si256((const __m256i*)qs+k);
                     deq.prepare_signed(i, j, deq.bits.values, us);
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+                    auto sumi1 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), us[0], deq.bits.values[0]);
+                    auto sumi2 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), us[1], deq.bits.values[1]);
+                    auto sumi3 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), us[2], deq.bits.values[2]);
+                    auto sumi4 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), us[3], deq.bits.values[3]);
+#else
                     auto sumi1 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[0], us[0]);
                     auto sumi2 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[1], us[1]);
                     auto sumi3 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[2], us[2]);
                     auto sumi4 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[3], us[3]);
+#endif
                     sumi1 = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi1, sumi2), _mm256_unpackhi_epi32(sumi1, sumi2));
                     sumi3 = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi3, sumi4), _mm256_unpackhi_epi32(sumi3, sumi4));
                     sumi1 = _mm256_add_epi32(_mm256_unpacklo_epi64(sumi1, sumi3), _mm256_unpackhi_epi64(sumi1, sumi3));
@@ -2485,7 +2549,17 @@ static void mul_mat_iq2_s_q8_2_X4(int n, const void * vx, size_t bx, const DataI
 
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto qs = q8.y[iy][2*i+j].qs;
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+                    // 0...31
+                    auto sumi1 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+0), deq.bits.values[0]), us[0]);
+                    // 32...63
+                    auto sumi2 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+1), deq.bits.values[1]), us[1]);
+                    // 64...95
+                    auto sumi3 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+2), deq.bits.values[2]), us[2]);
+                    // 96...128
+                    auto sumi4 = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+3), deq.bits.values[3]), us[3]);
+#else
                     // 0...31
                     auto sumi1 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), us[0], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+0), deq.bits.values[0]));
                     // 32...63
@@ -2494,6 +2568,7 @@ static void mul_mat_iq2_s_q8_2_X4(int n, const void * vx, size_t bx, const DataI
                     auto sumi3 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), us[2], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+2), deq.bits.values[2]));
                     // 96...128
                     auto sumi4 = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), us[3], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+3), deq.bits.values[3]));
+#endif
                     // 0...3, 32...35,  4....7, 36...39, 16...19, 48...51, 20...23, 52...56 +
                     // 8..11, 40...43, 12...15, 44...47, 24...27, 56...59, 28...31, 60...63
                     //  b0      b2       b0       b2       b1       b3       b1       b3
