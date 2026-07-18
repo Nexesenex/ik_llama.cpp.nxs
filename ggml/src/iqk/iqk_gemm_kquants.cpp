@@ -3097,8 +3097,8 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
 
         for (int ix = 0; ix < nrc_x; ix += k_nr) {
             const block_iq4_xs_r8 * r8[2] = {
-                (const block_iq4_xs_r8 *)((const char *)vx + (ix + 0) * bx),
-                (const block_iq4_xs_r8 *)((const char *)vx + (ix + 8) * bx)
+                (const block_iq4_xs_r8 *)((const char *)vx + (ix / 8 + 0) * bx),
+                (const block_iq4_xs_r8 *)((const char *)vx + (ix / 8 + 1) * bx)
             };
             block_q8_k_r16 * y = (block_q8_k_r16 *)vy + (ix / k_nr) * nb;
 
@@ -3160,13 +3160,13 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
         std::vector<float> tmp(16 * n);
         for (int ix = 0; ix < nrc_x; ix += 16) {
             dequantize_row_iq4_xs_r8(
-                (const block_iq4_xs_r8 *)((const char *)vx + (ix + 0) * bx),
+                (const block_iq4_xs_r8 *)((const char *)vx + (ix / 8 + 0) * bx),
                 tmp.data(), 8 * n);
             dequantize_row_iq4_xs_r8(
-                (const block_iq4_xs_r8 *)((const char *)vx + (ix + 8) * bx),
+                (const block_iq4_xs_r8 *)((const char *)vx + (ix / 8 + 1) * bx),
                 tmp.data() + (size_t)8 * n, 8 * n);
             quantize_q8_k_r16(tmp.data(),
-                (block_q8_k_r16 *)vy + (ix / 16) * (16 * nb),
+                (block_q8_k_r16 *)vy + (ix / 16) * nb,
                 16, n, nullptr, nullptr);
         }
         return;
@@ -3175,10 +3175,10 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
     std::vector<float> tmp(8 * n);
     for (int ix = 0; ix < nrc_x; ix += 8) {
         dequantize_row_iq4_xs_r8(
-            (const block_iq4_xs_r8 *)((const char *)vx + (ix + 0) * bx),
+            (const block_iq4_xs_r8 *)((const char *)vx + (ix / 8 + 0) * bx),
             tmp.data(), 8 * n);
         quantize_q8_k_r8(tmp.data(),
-            (block_q8_k_r8 *)vy + (ix / 8) * (8 * nb),
+            (block_q8_k_r8 *)vy + (ix / 8) * nb,
             8, n, nullptr, nullptr);
     }
 }
@@ -4996,10 +4996,10 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
     std::vector<float> tmp(8 * n);
     for (int ix = 0; ix < nrc_x; ix += 8) {
         dequantize_row_iq4_xs_r8(
-            (const block_iq4_xs_r8 *)((const char *)vx + (ix + 0) * bx),
+            (const block_iq4_xs_r8 *)((const char *)vx + (ix / 8 + 0) * bx),
             tmp.data(), 8 * n);
         quantize_q8_k_r8(tmp.data(),
-            (block_q8_k_r8 *)vy + (ix / 8) * (8 * nb),
+            (block_q8_k_r8 *)vy + (ix / 8) * nb,
             8, n, nullptr, nullptr);
     }
 }
