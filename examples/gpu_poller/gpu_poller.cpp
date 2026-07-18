@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
     }
 
     std::vector<int> devices;
-    int interval_ms = 15;
+    int interval_ms = 10;
     int temp_limit = 85;
 
     for (int i = 1; i < argc; ++i) {
