@@ -3813,6 +3813,16 @@ void iqk_quantize_row_q8_K_T(const float * x, void * vy, int64_t k) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
     block_q8_K * y = (block_q8_K *)vy;
+    // BOUNDS CHECK: ensure vy doesn't overlap with x
+    if ((const char*)vy >= (const char*)x && (const char*)vy < (const char*)x + k*sizeof(float)) {
+        fprintf(stderr, "FATAL: quantize_row_q8_K32 vy (%p) overlaps src (%p)!\n", vy, (const void*)x);
+        abort();
+    }
+    if ((const char*)vy + nb*sizeof(block_q8_K) > (const char*)x + k*sizeof(float) &&
+        (const char*)vy < (const char*)x + k*sizeof(float)) {
+        fprintf(stderr, "FATAL: quantize_row_q8_K32 vy extends past src end!\n");
+        abort();
+    }
 #ifdef __AVX2__
     const __m256 signBit = _mm256_set1_ps(-0.0f);
     const __m256i perm = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
@@ -6923,6 +6933,11 @@ static void repack_q8_k(int nrows, int n_per_row, const block_q8_K * x, block_q8
     GGML_ASSERT(nrows%8 == 0);
     GGML_ASSERT(n_per_row%QK_K == 0);
     int nblock = n_per_row/QK_K;
+    // BOUNDS: y[0..nblock-1] must not overlap x
+    if ((const char*)y >= (const char*)x && (const char*)y < (const char*)x + 8*nblock*sizeof(block_q8_K)) {
+        fprintf(stderr, "FATAL: repack y overlaps x: y=%p x=%p nblock=%d\n", (const void*)y, (const void*)x, nblock);
+        abort();
+    }
     const block_q8_K * x8[8];
     for (int row = 0; row < nrows; row += 8) {
         for (int k = 0; k < 8; ++k) x8[k] = x + nblock*k;
