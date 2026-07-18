@@ -3081,7 +3081,7 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
     GGML_ASSERT(n % QK_K == 0);
     const int nb = n / QK_K;
 
-#if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256)
+#if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
     if (g_iqk_r16_path) {
         constexpr int k_nr = 16;
         GGML_ASSERT(nrc_x % k_nr == 0);
