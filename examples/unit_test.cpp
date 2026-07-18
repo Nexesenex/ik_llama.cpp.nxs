@@ -60,6 +60,8 @@
 #define HAVE_VNNIINT8
 #endif
 bool g_iqk_r16_path = false;
+bool g_flag_rtr  = false;  // -rtr flag was passed
+bool g_flag_r16p = false;  // -r16p flag was passed
 
 // init_unit_test_fp16_table() is provided by your build (populates
 // ggml_table_f32_f16). Declared here; do not redefine.
@@ -123,7 +125,9 @@ static void test_path(bool r16, int nrc_x, int n) {
     std::vector<block_iq4_xs_r8> src(nblk_x);
     for (int i = 0; i < nblk_x; ++i) make_random_iq4_xs_r8(&src[i]);
 
-    const char * path_name = r16 ? "-rtr -r16p" : "-rtr";
+    const char * path_name;
+    if (r16) path_name = g_flag_rtr ? "-rtr -r16p" : "-r16p";
+    else     path_name = "-rtr";
     const size_t rowsz = q8_row_size(r16, n);
     const int rows_per_block = r16 ? 16 : 8;
     // delta region size = rows_per_block fp16 values = rows_per_block*2 bytes
@@ -150,13 +154,17 @@ static void test_path(bool r16, int nrc_x, int n) {
     std::vector<uint8_t> ref((size_t)nrc_x * rowsz);
     std::vector<float> tmp((size_t)rows_per_block * n);
     std::vector<float> tmp_saved; // for debugging
+    printf("    [TRACE] nblocks=%d rows_per_block=%d nb=%d nblk_x=%d\n", nblocks, rows_per_block, nb, nblk_x); fflush(stdout);
     for (int ib = 0; ib < nblocks; ++ib) {
+        printf("    [TRACE] ib=%d/%d\n", ib, nblocks); fflush(stdout);
         float * tp = tmp.data();
         for (int s = 0; s < rows_per_block; s += 8) {
-            // One block_iq4_xs_r8 = 8 rows; consecutive groups are consecutive
-            // blocks in the source (stride = bx = sizeof(block_iq4_xs_r8)).
+            // One block_iq4_xs_r8 = 8 rows; nb consecutive blocks per 8-row group
+            // (one per QK_K chunk).  The correct source index for the 8-row group
+            // at offset s within 16-row group ib is (ib*rpb + s/8) * nb  where
+            // rpb = rows_per_block/8.
             dequantize_row_iq4_xs_r8(
-                &src[ib * (rows_per_block / 8) + s / 8],
+                &src[(ib * (rows_per_block / 8) + s / 8) * nb],
                 tp, 8 * n);
             tp += (size_t)8 * n;
         }
@@ -177,7 +185,7 @@ static void test_path(bool r16, int nrc_x, int n) {
     {
         float * fp = fbuf_interleaved.data();
         for (int r = 0; r < nrc_x; r += 8) {
-            dequantize_row_iq4_xs_r8(&src[(r / 8)], fp, 8 * n);
+            dequantize_row_iq4_xs_r8(&src[(r / 8) * nb], fp, 8 * n);
             fp += (size_t)8 * n;
         }
     }
@@ -245,11 +253,14 @@ static void test_path(bool r16, int nrc_x, int n) {
     // Byte-compare converter output vs reference.
     // First check the converter actually wrote something (not all zeros).
     bool all_zero = true;
+    printf("    [DEBUG] all_zero check: expected_bytes=%zu nrc_x*rowsz=%zu got.size=%zu ref.size=%zu\n", expected_bytes, (size_t)nrc_x * rowsz, got.size(), ref.size()); fflush(stdout);
     for (size_t o = 0; o < expected_bytes && o < 4096; ++o) { if (got[o] != 0) { all_zero = false; break; } }
+    printf("    [DEBUG] all_zero=%d\n", (int)all_zero); fflush(stdout);
     (void)all_zero;
     long first_mm = -1, last_mm = -1, delta_mm = -1, qs_mm = -1;
     long total_mismatches = 0;
     (void)delta_mm; (void)qs_mm; // used only for info
+    printf("    [DEBUG] starting byte compare loop, expected_bytes=%zu\n", expected_bytes); fflush(stdout);
     for (size_t o = 0; o < expected_bytes && o < (size_t)nrc_x * rowsz; ++o) {
         if (got[o] != ref[o]) {
             ++total_mismatches;
@@ -264,6 +275,7 @@ static void test_path(bool r16, int nrc_x, int n) {
     if (byte_ok) {
         printf("  [OK]   %s nrc_x=%-3d n=%-5d : matches quantize_q8_k_%s byte-for-byte\n",
                path_name, nrc_x, n, r16 ? "r16" : "r8");
+        fflush(stdout);
     } else {
         ++g_failures;
         printf("  [FAIL] %s nrc_x=%-3d n=%-5d : %ld byte(s) differ", path_name, nrc_x, n, total_mismatches);
@@ -313,22 +325,6 @@ static void test_path(bool r16, int nrc_x, int n) {
             }
             printf("\n");
         }
-    }
-
-    // Check: does converter output match reference with a DIFFERENT bx (simulating what
-    // happens if the caller passes the wrong stride)?  This catches stride mismatch bugs.
-    {
-        // Wrong bx = nb * sizeof(block_iq4_xs_r8) (simulates caller passing an
-        // over-large stride, as the original broken converter effectively did).
-        size_t wrong_bx = (size_t)nb * sizeof(block_iq4_xs_r8);
-        std::vector<uint8_t> got_wrong_bx((size_t)nrc_x * rowsz + 1024 * 1024);
-        g_iqk_r16_path = r16;
-        iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), wrong_bx, got_wrong_bx.data(), nrc_x);
-        g_iqk_r16_path = false;
-        long mismatches = 0;
-        for (size_t o = 0; o < expected_bytes; ++o) if (got_wrong_bx[o] != ref[o]) ++mismatches;
-        if (mismatches)
-            printf("         (INFO: using wrong_bx (=nb*sizeof block) yields %ld mismatches vs ref\n", mismatches);
     }
 
     // Secondary: round-trip (dequant converter output → compare against interleaved fbuf).
@@ -401,14 +397,31 @@ static void test_path(bool r16, int nrc_x, int n) {
                 printf("         suspicious d-distrib in R8  block %d: neg=%d pos=%d zero=%d\n", i*nb, nneg, npos, nzero);
         }
     }
+
+    // Check: does converter output match reference with a DIFFERENT bx (simulating what
+    // happens if the caller passes the wrong stride)?  This catches stride mismatch bugs.
+    // NOTE: this is intentionally LAST because wrong_bx causes OOB access on the fixed
+    // converter (correct formula (ix+0)*bx with over-large bx goes out of bounds).
+    {
+        size_t wrong_bx = (size_t)nb * sizeof(block_iq4_xs_r8);
+        std::vector<uint8_t> got_wrong_bx((size_t)nrc_x * rowsz + 1024 * 1024);
+        g_iqk_r16_path = r16;
+        iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), wrong_bx, got_wrong_bx.data(), nrc_x);
+        g_iqk_r16_path = false;
+        long mismatches = 0;
+        for (size_t o = 0; o < expected_bytes; ++o) if (got_wrong_bx[o] != ref[o]) ++mismatches;
+        if (mismatches)
+            printf("         (INFO: using wrong_bx (=nb*sizeof block) yields %ld mismatches vs ref\n", mismatches);
+    }
 }
 
 static void usage(const char * prog) {
     printf("Usage: %s [options]\n", prog);
     printf("Options:\n");
     printf("  --all        Test all flag combos (default)\n");
-    printf("  -rtr         Test -rtr only (R8 output)\n");
-    printf("  -rtr -r16p   Test -rtr -r16p (R16 output)\n");
+    printf("  -rtr         Test -rtr only (R8 converter)\n");
+    printf("  -r16p        Test -r16p only (R16 converter)\n");
+    printf("  -rtr -r16p   Test both R8 and R16 converters\n");
     printf("  -n  SIZE     Set element count per row (default: 2048,4096,8192)\n");
     printf("  -nrc_x N     Set nrc_x (default: 16,32,64,128)\n");
     printf("  --seed N     Random seed (default: 12345)\n");
@@ -446,8 +459,8 @@ int main(int argc, char ** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
-        if (arg == "-rtr")  { test_all = false; test_rtr  = true; continue; }
-        if (arg == "-r16p") { test_all = false; test_r16p = true; continue; }
+        if (arg == "-rtr")  { test_all = false; test_rtr  = true; g_flag_rtr  = true; continue; }
+        if (arg == "-r16p") { test_all = false; test_r16p = true; g_flag_r16p = true; continue; }
         if (arg == "--all") { test_all = true; continue; }
         if (arg == "-n" && i+1 < argc) {
             ns.clear(); ns.push_back(atoi(argv[++i]));
