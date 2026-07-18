@@ -3162,7 +3162,7 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
             (const block_iq4_xs_r8 *)((const char *)vx + (ix + 0) * bx),
             tmp.data(), 8 * n);
         quantize_q8_k_r8(tmp.data(),
-            (block_q8_k_r8 *)vy + (ix / 8) * nb,
+            (block_q8_k_r8 *)vy + (ix / 8) * (8 * nb),
             8, n, nullptr, nullptr);
     }
 }
@@ -4983,7 +4983,7 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
             (const block_iq4_xs_r8 *)((const char *)vx + (ix + 0) * bx),
             tmp.data(), 8 * n);
         quantize_q8_k_r8(tmp.data(),
-            (block_q8_k_r8 *)vy + (ix / 8) * nb,
+            (block_q8_k_r8 *)vy + (ix / 8) * (8 * nb),
             8, n, nullptr, nullptr);
     }
 }
