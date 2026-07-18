@@ -153,6 +153,27 @@ size_t quantize_q6_0_r4(const float * GGML_RESTRICT src, void * GGML_RESTRICT ds
 void   dequantize_row_q6_0_r4(const block_q6_0_r4  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void   vec_dot_q6_0_r4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 
+// Test-only entry: drives the static repack_q6_0 directly
+// (mirrors iqk_test_convert_iq4_xs_r8 in iqk_gemm_kquants.cpp).
+void   iqk_test_repack_q6_0(int nrows, int n_per_row, const block_q6_0 * GGML_RESTRICT x, block_q6_0_r4 * GGML_RESTRICT y);
+
+// Test-only repack entries for R4 lane-duplication coverage (see the hooks
+// block at the end of iqk_quantize.cpp). Plain linkage like iqk_test_repack_q6_0.
+void   iqk_test_repack_q2_k(int nrows, int n_per_row, const block_q2_K * GGML_RESTRICT x, block_q2_k_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_q3_k(int nrows, int n_per_row, const block_q3_K * GGML_RESTRICT x, block_q3_k_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_iq2_k(int nrows, int n_per_row, const block_iq2_k * GGML_RESTRICT x, block_iq2_k_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_iq5_k(int nrows, int n_per_row, const block_iq5_k * GGML_RESTRICT x, block_iq5_k_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_iq5_ks(int nrows, int n_per_row, const block_iq5_ks * GGML_RESTRICT x, block_iq5_ks_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_iq3_k(int nrows, int n_per_row, const block_iq3_k * GGML_RESTRICT x, block_iq3_k_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_q5_k(int nrows, int n_per_row, const block_q5_K * GGML_RESTRICT x, block_q5_k_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_q6_k(int nrows, int n_per_row, const block_q6_K * GGML_RESTRICT x, block_q6_k_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_iq2_bn(int nrows, int n_per_row, const char * x, char * y);
+void   iqk_test_repack_q4_k(int nrows, int n_per_row, const block_q4_K * GGML_RESTRICT x, block_q4_k_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_iq4_k(int nrows, int n_per_row, const block_iq4_k * GGML_RESTRICT x, block_iq4_k_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_iq4_ks(int nrows, int n_per_row, const block_iq4_ks * GGML_RESTRICT x, block_iq4_ks_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_iq2_s(int nrows, int n_per_row, const block_iq2_s * GGML_RESTRICT x, block_iq2_s_r4 * GGML_RESTRICT y);
+void   iqk_test_repack_iq3_s(int nrows, int n_per_row, const block_iq3_s * GGML_RESTRICT x, block_iq3_s_r4 * GGML_RESTRICT y);
+
 void   quantize_row_iq4_xs_r8_ref(const float * GGML_RESTRICT x, block_iq4_xs_r8 * GGML_RESTRICT y, int64_t k);
 void   quantize_row_iq4_xs_r8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 size_t quantize_iq4_xs_r8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * use_data);
