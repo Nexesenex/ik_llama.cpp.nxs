@@ -145,7 +145,7 @@ static void test_path(bool r16, int nrc_x, int n) {
         float * tp = tmp.data();
         for (int s = 0; s < rows_per_block; s += 8) {
             dequantize_row_iq4_xs_r8(
-                &src[ib * rows_per_block + s],
+                &src[ib * (rows_per_block / 8) + s / 8],
                 tp, 8 * n);
             tp += (size_t)8 * n;
         }
