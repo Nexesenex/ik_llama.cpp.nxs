@@ -115,8 +115,10 @@ static size_t q8_row_size(bool r16, int n) {
 }
 
 static void test_path(bool r16, int nrc_x, int n) {
-    const size_t bx = sizeof(block_iq4_xs_r8);
-    const int nblk_x = nrc_x; // rows of source
+    const int nb = n / QK_K;
+    // Each block_iq4_xs_r8 holds 8 rows.  Total source blocks regardless of
+    // target (R8 / R16) = (nrc_x / 8) * nb.
+    const int nblk_x = (nrc_x / 8) * nb;
 
     std::vector<block_iq4_xs_r8> src(nblk_x);
     for (int i = 0; i < nblk_x; ++i) make_random_iq4_xs_r8(&src[i]);
@@ -126,6 +128,13 @@ static void test_path(bool r16, int nrc_x, int n) {
     const int rows_per_block = r16 ? 16 : 8;
     // delta region size = rows_per_block fp16 values = rows_per_block*2 bytes
     const size_t delta_region = (size_t)rows_per_block * 2;
+
+    // Row stride for IQ4_XS_R8 source data: one row of n elements =
+    // nb channel-blocks, each row-of-QK_K takes sizeof(block_iq4_xs) bytes
+    // (= sizeof(block_iq4_xs_r8) / 8).
+    const size_t bx = ggml_row_size(GGML_TYPE_IQ4_XS_R8, n);
+    printf("    [INFO] bx=ggml_row_size(IQ4_XS_R8,%d)=%zu  sizeof(block_iq4_xs_r8)=%zu  nb=%d\n",
+           n, bx, sizeof(block_iq4_xs_r8), nb);
 
     // g_iqk_r16_path controls the XOR(-128) bias inside BOTH the converter's SIMD
     // path AND the reference quantize_q8_k_r16 (repack_q16_k). It MUST be set before
@@ -137,18 +146,21 @@ static void test_path(bool r16, int nrc_x, int n) {
     //   Groups must be placed back-to-back: offset = ib * nb blocks.
     //   This matches the layout the downstream kernels expect.
     const int nblocks = nrc_x / rows_per_block;
-    const int nb = n / QK_K;
     const size_t expected_bytes = (size_t)nblocks * nb * (r16 ? sizeof(block_q8_k_r16) : sizeof(block_q8_k_r8));
     std::vector<uint8_t> ref((size_t)nrc_x * rowsz);
     std::vector<float> tmp((size_t)rows_per_block * n);
+    std::vector<float> tmp_saved; // for debugging
     for (int ib = 0; ib < nblocks; ++ib) {
         float * tp = tmp.data();
         for (int s = 0; s < rows_per_block; s += 8) {
+            // One block_iq4_xs_r8 = 8 rows; consecutive groups are consecutive
+            // blocks in the source (stride = bx = sizeof(block_iq4_xs_r8)).
             dequantize_row_iq4_xs_r8(
                 &src[ib * (rows_per_block / 8) + s / 8],
                 tp, 8 * n);
             tp += (size_t)8 * n;
         }
+        if (ib == 0) { tmp_saved = tmp; } // save before quantize overwrites
         if (r16)
             quantize_q8_k_r16(tmp.data(),
                 (block_q8_k_r16 *)ref.data() + ib * nb,
@@ -160,12 +172,12 @@ static void test_path(bool r16, int nrc_x, int n) {
     }
 
     // Interleaved float buffer: nrc_x rows of n floats, row-major.
-    // Dequant in rows_per_block groups (8 rows per dequantize call).
+    // Dequant in 8-row groups, each group reads nb blocks.
     std::vector<float> fbuf_interleaved((size_t)nrc_x * n);
     {
         float * fp = fbuf_interleaved.data();
         for (int r = 0; r < nrc_x; r += 8) {
-            dequantize_row_iq4_xs_r8(&src[r], fp, 8 * n);
+            dequantize_row_iq4_xs_r8(&src[(r / 8)], fp, 8 * n);
             fp += (size_t)8 * n;
         }
     }
@@ -174,6 +186,59 @@ static void test_path(bool r16, int nrc_x, int n) {
     // stride bug does not crash before we can report the mismatch).
     std::vector<uint8_t> got((size_t)nrc_x * rowsz + 1024 * 1024);
     printf("  ... calling converter %s nrc_x=%-3d n=%-5d\n", path_name, nrc_x, n); fflush(stdout);
+
+    // Sanity: does dequantize_row_iq4_xs_r8 modify its input?
+    if (!r16 && n == 8192 && nrc_x == 16) {
+        // Save a copy of src[0] before dequantize
+        block_iq4_xs_r8 src0_copy;
+        memcpy(&src0_copy, &src[0], sizeof(block_iq4_xs_r8));
+        // Dequantize fresh
+        std::vector<float> dq1((size_t)rows_per_block * n);
+        dequantize_row_iq4_xs_r8(&src[0], dq1.data(), 8 * n);
+        int src_mut = memcmp(&src0_copy, &src[0], sizeof(block_iq4_xs_r8));
+        printf("    [SANITY] dequantize modified src[0]: %s\n", src_mut ? "YES" : "NO");
+        // Compare saved tmp (from reference ib=0) with fresh dq1
+        int tmp_diff = 0; long first_td = -1; double max_td = 0;
+        for (size_t i = 0; i < tmp_saved.size(); ++i) {
+            double e = std::fabs((double)tmp_saved[i] - (double)dq1[i]);
+            if (e > max_td) max_td = e;
+            if (e > 1e-6) { ++tmp_diff; if (first_td < 0) first_td = (long)i; }
+        }
+        printf("    [SANITY] tmp_saved vs dq1: max_diff=%.2e diff_cnt=%d first@%ld\n", max_td, tmp_diff, first_td);
+        if (first_td >= 0) {
+            // Check if the difference is just NaN vs different-NaN
+            uint32_t * saved_u32 = (uint32_t*)tmp_saved.data();
+            uint32_t * dq1_u32 = (uint32_t*)dq1.data();
+            printf("    [SANITY] first diff: tmp_saved[%ld]=%f(0x%08x) dq1[%ld]=%f(0x%08x)\n",
+                   first_td, (double)tmp_saved[first_td], (unsigned)saved_u32[first_td],
+                   first_td, (double)dq1[first_td], (unsigned)dq1_u32[first_td]);
+            // Check if rows 1..7 also differ at the same block index
+            for (int r = 1; r < 8; ++r) {
+                long idx = (long)r * n + first_td;
+                if (idx < (long)tmp_saved.size()) {
+                    printf("    [SANITY] row%d: tmp_saved=0x%08x dq1=0x%08x\n", r,
+                           (unsigned)saved_u32[idx], (unsigned)dq1_u32[idx]);
+                }
+            }
+        }
+        // Quantize from the SAVED tmp (what the reference used for group 0)
+        std::vector<uint8_t> q_tmp((size_t)nb * sizeof(block_q8_k_r8) * rows_per_block);
+        quantize_q8_k_r8(tmp_saved.data(), q_tmp.data(), rows_per_block, n, nullptr, nullptr);
+        // Quantize from fresh dq1
+        std::vector<uint8_t> q_dq1((size_t)nb * sizeof(block_q8_k_r8) * rows_per_block);
+        quantize_q8_k_r8(dq1.data(), q_dq1.data(), rows_per_block, n, nullptr, nullptr);
+        // Both should match ref's group 0
+        int ref_vs_tmp = 0; long first_rqt = -1;
+        for (size_t o = 0; o < q_tmp.size(); ++o) { if (ref[o] != q_tmp[o]) { ++ref_vs_tmp; if (first_rqt < 0) first_rqt = (long)o; } }
+        int ref_vs_dq1 = 0; long first_rqd = -1;
+        for (size_t o = 0; o < q_dq1.size(); ++o) { if (ref[o] != q_dq1[o]) { ++ref_vs_dq1; if (first_rqd < 0) first_rqd = (long)o; } }
+        int q_vs_q = 0;
+        for (size_t o = 0; o < q_tmp.size(); ++o) { if (q_tmp[o] != q_dq1[o]) ++q_vs_q; }
+        printf("    [SANITY] ref vs q(tmp_saved) mismatches=%d first@%ld\n", ref_vs_tmp, first_rqt);
+        printf("    [SANITY] ref vs q(dq1)      mismatches=%d first@%ld\n", ref_vs_dq1, first_rqd);
+        printf("    [SANITY] q(tmp_saved) vs q(dq1) differ in %d bytes\n", q_vs_q);
+    }
+
     iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got.data(), nrc_x);
     g_iqk_r16_path = false;
 
@@ -250,17 +315,33 @@ static void test_path(bool r16, int nrc_x, int n) {
         }
     }
 
+    // Check: does converter output match reference with a DIFFERENT bx (simulating what
+    // happens if the caller passes the wrong stride)?  This catches stride mismatch bugs.
+    {
+        // Wrong bx = nb * sizeof(block_iq4_xs_r8) (simulates caller passing an
+        // over-large stride, as the original broken converter effectively did).
+        size_t wrong_bx = (size_t)nb * sizeof(block_iq4_xs_r8);
+        std::vector<uint8_t> got_wrong_bx((size_t)nrc_x * rowsz + 1024 * 1024);
+        g_iqk_r16_path = r16;
+        iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), wrong_bx, got_wrong_bx.data(), nrc_x);
+        g_iqk_r16_path = false;
+        long mismatches = 0;
+        for (size_t o = 0; o < expected_bytes; ++o) if (got_wrong_bx[o] != ref[o]) ++mismatches;
+        if (mismatches)
+            printf("         (INFO: using wrong_bx (=nb*sizeof block) yields %ld mismatches vs ref\n", mismatches);
+    }
+
     // Secondary: round-trip (dequant converter output → compare against interleaved fbuf).
-    // Dequant in rows_per_block groups from contiguous nb-block groups.
+    // dequantize_row_q8_k_r8/r16(x, y, k) takes k = total elements for ALL rows.
     std::vector<float> fgot((size_t)nrc_x * n);
     if (r16) {
         const block_q8_k_r16 * rb = (const block_q8_k_r16 *)got.data();
         for (int b = 0; b < nblocks; ++b)
-            dequantize_row_q8_k_r16(&rb[b * nb], fgot.data() + (size_t)b * rows_per_block * n, n);
+            dequantize_row_q8_k_r16(&rb[b * nb], fgot.data() + (size_t)b * rows_per_block * n, (int64_t)n * rows_per_block);
     } else {
         const block_q8_k_r8 * rb = (const block_q8_k_r8 *)got.data();
         for (int b = 0; b < nblocks; ++b)
-            dequantize_row_q8_k_r8(&rb[b * nb], fgot.data() + (size_t)b * rows_per_block * n, n);
+            dequantize_row_q8_k_r8(&rb[b * nb], fgot.data() + (size_t)b * rows_per_block * n, (int64_t)n * rows_per_block);
     }
     double max_abs = 0; long first_bad = -1; int bad_count = 0;
     for (size_t i = 0; i < (size_t)nrc_x * n; ++i) {
@@ -290,6 +371,35 @@ static void test_path(bool r16, int nrc_x, int n) {
         const block_q8_k_r8 * rb = (const block_q8_k_r8 *)got.data();
         for (int i = 0; i < nblocks; ++i)
             if (deltas_bad(&rb[i * nb], 8))  { ++g_failures; printf("  [FAIL] R8  block %d (group %d) has NaN/Inf delta\n", i*nb, i); break; }
+    }
+
+    // Delta distribution sanity: check for suspicious patterns (all same, all zero)
+    if (r16) {
+        const block_q8_k_r16 * rb = (const block_q8_k_r16 *)got.data();
+        for (int i = 0; i < nblocks && i < 3; ++i) {
+            int nneg = 0, npos = 0, nzero = 0;
+            for (int k = 0; k < 16; ++k) {
+                float d = GGML_FP16_TO_FP32(rb[i * nb].d[k]);
+                if (d == 0) nzero++;
+                else if (d < 0) nneg++;
+                else npos++;
+            }
+            if (nneg == 16 || npos == 16 || nzero > 8)
+                printf("         suspicious d-distrib in R16 block %d: neg=%d pos=%d zero=%d\n", i*nb, nneg, npos, nzero);
+        }
+    } else {
+        const block_q8_k_r8 * rb = (const block_q8_k_r8 *)got.data();
+        for (int i = 0; i < nblocks && i < 3; ++i) {
+            int nneg = 0, npos = 0, nzero = 0;
+            for (int k = 0; k < 8; ++k) {
+                float d = GGML_FP16_TO_FP32(rb[i * nb].d[k]);
+                if (d == 0) nzero++;
+                else if (d < 0) nneg++;
+                else npos++;
+            }
+            if (nneg == 8 || npos == 8 || nzero > 4)
+                printf("         suspicious d-distrib in R8  block %d: neg=%d pos=%d zero=%d\n", i*nb, nneg, npos, nzero);
+        }
     }
 }
 
