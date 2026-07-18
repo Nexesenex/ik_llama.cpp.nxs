@@ -12,6 +12,7 @@
 #if defined IQK_IMPLEMENT
 
 #include <cstring>
+#include <cstdlib>
 #include <type_traits>
 #include <vector>
 #include <new>
@@ -54,6 +55,62 @@
 // performance.
 
 namespace {
+
+// Dispatch tracer, opt-in via IQK_TRACE_DISPATCH=1 (default off: these are hot
+// paths and default logs stay clean). Logs dispatch decisions and
+// converter-missing fallbacks across the GEMM / MoE / indexer routes.
+// Dedupe by (site,type,Ny,decision): first sight of each route prints,
+// repeats count silently, so TG volume can never starve PP shapes and
+// output stays bounded by the (small) distinct-route space. Races benign.
+// Covers all types (not just R): the full route map in a handful of lines.
+inline bool iqk_trace_dispatch_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * e = getenv("IQK_TRACE_DISPATCH");
+        enabled = (e && e[0] != '\0' && e[0] != '0') ? 1 : 0;
+    }
+    return enabled > 0;
+}
+inline void iqk_trace_dispatch(const char * site, ggml_type typeA, long Ny, ggml_type deq_type) {
+    if (!iqk_trace_dispatch_enabled()) return;
+    // Dedupe by (site,type,Ny,decision): first sight prints, repeats count
+    // silently. Distinct dispatch routes are few (sites x R-types x Ny values),
+    // so PP shapes are never starved by TG volume (first-N capping flaw).
+    struct Key { const char * site; int type; long Ny; int deq; long count; };
+    static Key keys[128];
+    static int nkeys = 0;
+    static long n_total = 0;
+    static bool overflowed = false;
+    ++n_total;
+    for (int i = 0; i < nkeys; ++i) {
+        if (keys[i].site == site && keys[i].type == (int)typeA && keys[i].Ny == Ny && keys[i].deq == (int)deq_type) {
+            ++keys[i].count;
+            return;
+        }
+    }
+    if (nkeys < 128) {
+        keys[nkeys] = {site, (int)typeA, Ny, (int)deq_type, 1};
+        ++nkeys;
+        fprintf(stderr, "[iqk-dispatch] %s type=%s Ny=%ld -> %s\n",
+                site, ggml_type_name(typeA), Ny, ggml_type_name(deq_type));
+    } else if (!overflowed) {
+        overflowed = true;
+        fprintf(stderr, "[iqk-dispatch] ... key table full (%d keys, %ld total), further routes suppressed\n",
+                nkeys, n_total);
+    }
+}
+inline void iqk_trace_fallback(const char * site, int typeA, long Ny) {
+    if (!iqk_trace_dispatch_enabled()) return;
+    static long n_fb = 0;
+    if (n_fb < 20) {
+        ++n_fb;
+        fprintf(stderr, "[iqk-dispatch] %s FALLBACK to direct: converter missing for type=%s Ny=%ld\n",
+                site, ggml_type_name(ggml_type(typeA)), Ny);
+    } else if (n_fb == 20) {
+        ++n_fb;
+        fprintf(stderr, "[iqk-dispatch] ... further fallbacks suppressed\n");
+    }
+}
 
 struct MulMat {
     std::array<mul_mat_t, IQK_MAX_NY> funcs = {};
@@ -546,8 +603,20 @@ bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy,
 
 }
 
+// Test hook for unit_test (test_dispatch_pipeline 2c/2d): forwards to the
+// TU-local iqk_convert_repack above, which lives in an anonymous namespace
+// (internal linkage) and is otherwise unreachable from outside. Zero impact
+// on production: existing callers keep binding the TU-local one, and the
+// name differs so no overload ambiguity can arise.
+extern "C" IQK_API bool iqk_convert_repack_for_test(int typeA, int n, const void * vx, size_t bx,
+        void * vy, size_t stride_y, int nrc_x) {
+    return iqk_convert_repack(typeA, n, vx, bx, vy, stride_y, nrc_x);
+}
+
 extern "C" IQK_API int iqk_dequant_type(int type, int Ny) {
-    return MulMat::is_dequant_better(ggml_type(type), Ny);
+    auto deq = MulMat::is_dequant_better(ggml_type(type), Ny);
+    iqk_trace_dispatch("query", ggml_type(type), Ny, deq);
+    return deq;
 }
 
 extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
@@ -584,7 +653,9 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
     int npt = (Nx + nth - 1)/nth;
 
     auto etypeA = ggml_type(typeA);
-    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); npt >= 16 &&
+    auto dequant_type = MulMat::is_dequant_better(etypeA, Ny);
+    iqk_trace_dispatch("mul_mat", etypeA, Ny, dequant_type);
+    if (npt >= 16 &&
              dequant_type != etypeA && MulMat::prepare(dequant_type, typeB, ne00, mm, Ny) &&
              Nx%MulMat::num_rows(ggml_type(dequant_type)) == 0) {
 
@@ -623,6 +694,7 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         }
 
         if (convert_ok) return true;
+        iqk_trace_fallback("mul_mat", typeA, Ny);
 
     }
 
@@ -781,6 +853,7 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
     //if (etypeB != GGML_TYPE_F32) {
     //    if (ith == 0) printf("%s: typeA = %s, typeB = %s, dequant_type = %s\n", __func__, ggml_type_name(etypeA), ggml_type_name(etypeB), ggml_type_name(dequant_type));
     //}
+    iqk_trace_dispatch("mul_mat_moe", etypeA, Ny, dequant_type);
     if (dequant_type != etypeA && Nx%MulMat::num_rows(dequant_type) == 0 &&
         MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
 
@@ -817,6 +890,7 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
         }
 
         if (convert_ok) return true;
+        iqk_trace_fallback("mul_mat_moe", typeA, Ny);
 
     }
 
@@ -852,7 +926,9 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
     MulMat mm;
 
     auto etypeA = ggml_type(typeA);
-    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); dequant_type != etypeA) {
+    auto dequant_type = MulMat::is_dequant_better(etypeA, Ny);
+    iqk_trace_dispatch("moe_fused", etypeA, Ny, dequant_type);
+    if (dequant_type != etypeA) {
         if (MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
 
             constexpr int k_x_step = 64;
@@ -894,6 +970,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
             }
 
             if (convert_ok) return true;
+            iqk_trace_fallback("moe_fused", typeA, Ny);
         }
 
     }
@@ -2108,6 +2185,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     int num_k_rows = 1;
     if (q->ne[2] >= nth) {
         auto requant_type = MulMat::is_dequant_better(k_type, q->ne[1]);
+        iqk_trace_dispatch("indexer", k_type, (long)q->ne[1], requant_type);
         if (requant_type != k_type) {
             int nr = MulMat::num_rows(requant_type);
             if (k->ne[1] % nr == 0 && k->ne[1] % k_indexer_chunks == 0 && k_indexer_chunks % nr == 0) {
@@ -2162,6 +2240,10 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
         if (last > first) {
             if (!iqk_convert_repack(int(k->type), k->ne[0], (const char *)k->data + first*num_k_rows*k->nb[1], k->nb[1],
                         (char *)k_data + first*num_k_rows*row_size, k->ne[0], (last - first)*num_k_rows)) {
+                // No fallback here: the barrier rendezvous below requires uniform
+                // participation, so this stays fatal. Always log (crash path).
+                fprintf(stderr, "[iqk-dispatch] indexer_topk: no converter for k-type=%s; aborting\n",
+                        ggml_type_name(k->type));
                 GGML_ABORT("Fatal error");
             }
         }

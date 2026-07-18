@@ -1168,6 +1168,23 @@ static void mul_mat_iq4_xs_r8_q8_k_avx2(int n, const void * vx, size_t bx, const
     }
 }
 
+// Exported thin wrapper so external tests can drive the direct R8 kernel
+// (the production CPU path for repacked experts) on any x86_64 build.
+// Mirrors iqk_test_gemm_q8_k_r8 above.
+extern "C" void iqk_test_gemm_iq4_xs_r8(int n, const void * vx, size_t bx,
+                                        const DataInfo& info, int nrc_x, int nrc_y) {
+    switch (nrc_y) {
+        case 1: mul_mat_iq4_xs_r8_q8_k_avx2<1>(n, vx, bx, info, nrc_x); break;
+        case 2: mul_mat_iq4_xs_r8_q8_k_avx2<2>(n, vx, bx, info, nrc_x); break;
+        case 3: mul_mat_iq4_xs_r8_q8_k_avx2<3>(n, vx, bx, info, nrc_x); break;
+        case 4: mul_mat_iq4_xs_r8_q8_k_avx2<4>(n, vx, bx, info, nrc_x); break;
+        case 5: mul_mat_iq4_xs_r8_q8_k_avx2<5>(n, vx, bx, info, nrc_x); break;
+        case 6: mul_mat_iq4_xs_r8_q8_k_avx2<6>(n, vx, bx, info, nrc_x); break;
+        case 7: mul_mat_iq4_xs_r8_q8_k_avx2<7>(n, vx, bx, info, nrc_x); break;
+        default: mul_mat_iq4_xs_r8_q8_k_avx2<8>(n, vx, bx, info, nrc_x); break;
+    }
+}
+
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
 static void mul_mat_iq4_xs_r8_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
@@ -1905,6 +1922,24 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
     }
 }
 
+// Exported thin wrapper so external tests can drive the R8 GEMM kernel
+// directly (it has internal linkage inside the anonymous namespace).
+// Mirrors iqk_test_gemm_q8_k_r16 below, but is available on all x86_64
+// builds (the R8 kernel is AVX2; the R16 one needs HAVE_FANCY_SIMD).
+extern "C" void iqk_test_gemm_q8_k_r8(int n, const void * vx, size_t bx,
+                                      const DataInfo& info, int nrc_x, int nrc_y) {
+    switch (nrc_y) {
+        case 1: mul_mat_q8_k_r8_q8_k<1>(n, vx, bx, info, nrc_x); break;
+        case 2: mul_mat_q8_k_r8_q8_k<2>(n, vx, bx, info, nrc_x); break;
+        case 3: mul_mat_q8_k_r8_q8_k<3>(n, vx, bx, info, nrc_x); break;
+        case 4: mul_mat_q8_k_r8_q8_k<4>(n, vx, bx, info, nrc_x); break;
+        case 5: mul_mat_q8_k_r8_q8_k<5>(n, vx, bx, info, nrc_x); break;
+        case 6: mul_mat_q8_k_r8_q8_k<6>(n, vx, bx, info, nrc_x); break;
+        case 7: mul_mat_q8_k_r8_q8_k<7>(n, vx, bx, info, nrc_x); break;
+        default: mul_mat_q8_k_r8_q8_k<8>(n, vx, bx, info, nrc_x); break;
+    }
+}
+
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
 static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
@@ -1945,6 +1980,22 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
             info.store(ix, iy, acc[iy]);
             acc[iy] = _mm512_setzero_ps();
         }
+    }
+}
+#endif
+
+// Exported thin wrapper so external tests can drive the R16 GEMM kernel
+// directly (bypassing the full iqk_mul_mat dispatch). Selects the nrc_y
+// instantiation. Requires HAVE_FANCY_SIMD: mul_mat_q8_k_r16_q8_k is an
+// AVX-512 (__m512) kernel defined only behind HAVE_FANCY_SIMD.
+#ifdef HAVE_FANCY_SIMD
+extern "C" void iqk_test_gemm_q8_k_r16(int n, const void * vx, size_t bx,
+                                       const DataInfo& info, int nrc_x, int nrc_y) {
+    switch (nrc_y) {
+        case 32: mul_mat_q8_k_r16_q8_k<32>(n, vx, bx, info, nrc_x); break;
+        case 64: mul_mat_q8_k_r16_q8_k<64>(n, vx, bx, info, nrc_x); break;
+        case 128: mul_mat_q8_k_r16_q8_k<128>(n, vx, bx, info, nrc_x); break;
+        default: mul_mat_q8_k_r16_q8_k<8>(n, vx, bx, info, nrc_x); break;
     }
 }
 #endif
@@ -3059,6 +3110,13 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
         }
         y += nb;
     }
+}
+
+// Exported thin wrapper so external tests can drive the IQ4_XS_R8 converter
+// directly (it has internal linkage inside the anonymous namespace).
+// Mirrors iqk_test_gemm_q8_k_r16 below.
+extern "C" void iqk_test_convert_iq4_xs_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    iqk_convert_iq4_xs_r8_q8_k_r16(n, vx, bx, vy, nrc_x);
 }
 
 void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
