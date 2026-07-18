@@ -3088,7 +3088,6 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
 
         auto values128 = _mm_loadu_si128((const __m128i *)iq4k_values);
         auto values = MM256_SET1_M128I(values128);
-        auto m4 = _mm256_set1_epi8(0xf);
 
         int16_t  ls[16];
         float    dnew[k_nr];
@@ -3105,22 +3104,26 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
             for (int i = 0; i < nb; ++i) {
                 for (int r = 0; r < 2; ++r) {
                     const auto & blk = r8[r][i];
-                    for (int ib32 = 0; ib32 < 8; ++ib32) {
-                        const uint8_t * qs_base = blk.qs + (size_t)128 * ib32;
-                        __m256i g[4];
-                        g[0] = _mm256_loadu_si256((const __m256i *)(qs_base + 0));
-                        g[1] = _mm256_loadu_si256((const __m256i *)(qs_base + 32));
-                        g[2] = _mm256_loadu_si256((const __m256i *)(qs_base + 64));
-                        g[3] = _mm256_loadu_si256((const __m256i *)(qs_base + 96));
-                        uint32_t g0[8], g1[8], g2[8], g3[8];
-                        _mm256_storeu_si256((__m256i *)g0, g[0]);
-                        _mm256_storeu_si256((__m256i *)g1, g[1]);
-                        _mm256_storeu_si256((__m256i *)g2, g[2]);
-                        _mm256_storeu_si256((__m256i *)g3, g[3]);
-                        for (int rk = 0; rk < 8; ++rk) {
-                            __m128i row_bytes = _mm_setr_epi32(g0[rk], g1[rk], g2[rk], g3[rk]);
-                            xv_rows[rk][ib32] = _mm256_and_si256(MM256_SRLI128_M128I(row_bytes, 4), m4);
-                            xv_rows[rk][ib32] = _mm256_shuffle_epi8(values, xv_rows[rk][ib32]);
+                    // Reconstruct each row's q8 sub-window in the same position order the
+                    // R8 converter (and thus convert_to_q8_k_r8) expects: even positions
+                    // (0,2,...,30) in the low 128 lanes, odd positions (1,3,...,31) in the
+                    // high 128 lanes. block_iq4_xs_r8 packs the 8 rows' nibbles interleaved,
+                    // so we gather per the dequant layout (see dequantize_row_iq4_xs_r8):
+                    //   pos = 32*ib + 8*l + i     -> low  nibble of qs[128*ib + 4*k + i + 32*l]
+                    //   pos = 32*ib + 8*l + i + 4 -> high nibble of qs[128*ib + 4*k + i + 32*l]
+                    for (int rk = 0; rk < 8; ++rk) {
+                        for (int ib32 = 0; ib32 < 8; ++ib32) {
+                            uint8_t nib[32];
+                            for (int p = 0; p < 32; ++p) {
+                                int l = p / 8, rr = p % 8, ii = rr % 4;
+                                int off = (int)(128*ib32 + 4*rk + ii + 32*l);
+                                uint8_t n = (rr < 4) ? (blk.qs[off] & 0xf) : (blk.qs[off] >> 4);
+                                // convert_to_q8_k_r8 expects the 32 sub-window q8 values in
+                                // SEQUENTIAL position order [pos0, pos1, ..., pos31] in lanes 0..31.
+                                nib[p] = n;
+                            }
+                            __m256i nb = _mm256_loadu_si256((const __m256i *)nib);
+                            xv_rows[rk][ib32] = _mm256_shuffle_epi8(values, nb);
                         }
                     }
                     for (int rk = 0; rk < 8; ++rk) {
