@@ -3158,6 +3158,22 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
         return;
     }
 #endif
+    if (g_iqk_r16_path) {
+        GGML_ASSERT(nrc_x % 16 == 0);
+        std::vector<float> tmp(16 * n);
+        for (int ix = 0; ix < nrc_x; ix += 16) {
+            dequantize_row_iq4_xs_r8(
+                (const block_iq4_xs_r8 *)((const char *)vx + (ix + 0) * bx),
+                tmp.data(), 8 * n);
+            dequantize_row_iq4_xs_r8(
+                (const block_iq4_xs_r8 *)((const char *)vx + (ix + 8) * bx),
+                tmp.data() + (size_t)8 * n, 8 * n);
+            quantize_q8_k_r16(tmp.data(),
+                (block_q8_k_r16 *)vy + (ix / 16) * (16 * nb),
+                16, n, nullptr, nullptr);
+        }
+        return;
+    }
     GGML_ASSERT(nrc_x % 8 == 0);
     std::vector<float> tmp(8 * n);
     for (int ix = 0; ix < nrc_x; ix += 8) {
