@@ -3118,9 +3118,11 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
                                 int l = p / 8, rr = p % 8, ii = rr % 4;
                                 int off = (int)(128*ib32 + 4*rk + ii + 32*l);
                                 uint8_t n = (rr < 4) ? (blk.qs[off] & 0xf) : (blk.qs[off] >> 4);
-                                // convert_to_q8_k_r8 expects the 32 sub-window q8 values in
-                                // SEQUENTIAL position order [pos0, pos1, ..., pos31] in lanes 0..31.
-                                nib[p] = n;
+                                // convert_to_q8_k_r8 expects [evens, odds] layout:
+                                //   lanes 0..15 = positions 0,2,4,...,30
+                                //   lanes 16..31 = positions 1,3,5,...,31
+                                int dest = (p & 1) ? (16 + p/2) : (p/2);
+                                nib[dest] = n;
                             }
                             __m256i nb = _mm256_loadu_si256((const __m256i *)nib);
                             xv_rows[rk][ib32] = _mm256_shuffle_epi8(values, nb);
