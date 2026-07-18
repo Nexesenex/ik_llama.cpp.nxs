@@ -50,7 +50,6 @@
 #include "iqk/iqk_quantize.h"
 #include "iqk/iqk_gemm_kquants.h"
 #include "iqk/iqk_mul_mat.h"
-#include "iqk/iqk_quantize.h"
 
 // g_iqk_r16_path normally lives in the ggml lib (iqk_mul_mat.cpp).  The test
 // provides a local copy; set it before each call to iqk_convert_iq4_xs_r8_q8_k_r16.
@@ -652,10 +651,25 @@ static void test_repack_integrity(int n) {
         for (auto & v : blk.qs)      v = (uint8_t)(g_rng() & 0xff);
     }
 
-    // 2. Dequantize native → F1
+    // 2. Dequantize native → F1 (inline, uses iq4k_values first half = kvalues_iq4nl)
+    auto dequant_native_iq4_xs = [](const block_iq4_xs * x, float * y, int64_t k) {
+        int64_t nb = k / QK_K;
+        for (int i = 0; i < nb; ++i) {
+            float d = GGML_FP16_TO_FP32(x[i].d);
+            for (int ib = 0; ib < QK_K/32; ++ib) {
+                int ls = ((x[i].scales_l[ib/2] >> 4*(ib%2)) & 0xf) | (((x[i].scales_h >> 2*ib) & 3) << 4);
+                float dl = d * (ls - 32);
+                for (int j = 0; j < 16; ++j) {
+                    y[j+ 0] = dl * iq4k_values[x[i].qs[16*ib+j] & 0xf];
+                    y[j+16] = dl * iq4k_values[x[i].qs[16*ib+j] >>  4];
+                }
+                y += 32;
+            }
+        }
+    };
     std::vector<float> f1((size_t)nrows * n);
     for (int r = 0; r < nrows; ++r)
-        dequantize_row_iq4_xs(&native[r * nb], &f1[(size_t)r * n], n);
+        dequant_native_iq4_xs(&native[r * nb], &f1[(size_t)r * n], n);
 
     // 3. Manually repack native → block_iq4_xs_r8 (replicating repack_iq4_xs)
     std::vector<block_iq4_xs_r8> repacked((size_t)nrows / 8 * nb);
@@ -687,23 +701,35 @@ static void test_repack_integrity(int n) {
         }
     }
 
-    // 4. Dequantize repacked → F2
+    // 4. Dequantize repacked → F2 (one call per 8-row group)
     std::vector<float> f2((size_t)nrows * n);
-    dequantize_row_iq4_xs_r8(repacked.data(), f2.data(), (int64_t)((size_t)nrows * n));
+    for (int g = 0; g < nrows / 8; ++g)
+        dequantize_row_iq4_xs_r8(&repacked[g * nb], &f2[(size_t)g * 8 * n], 8 * n);
 
     // 5. Compare F1 vs F2
     float max_err = 0.f, max_val = 0.f;
+    size_t first_bad = (size_t)-1;
     for (size_t j = 0; j < (size_t)nrows * n; ++j) {
         float e = std::fabs(f1[j] - f2[j]);
         float a = std::fabs(f1[j]);
-        if (e > max_err) max_err = e;
+        if (e > max_err) { max_err = e; first_bad = j; }
         if (a > max_val) max_val = a;
     }
     bool dequant_ok = (max_err == 0.f);
     if (dequant_ok)
         printf("  [OK]   repack-dequant    n=%-5d : max|Δfloat|=%.2g  (identical)\n", n, (double)max_err);
-    else
+    else {
         printf("  [FAIL] repack-dequant    n=%-5d : max|Δfloat|=%.2g  max_ref=%.2g\n", n, (double)max_err, (double)max_val);
+        int r0 = (int)(first_bad / n), c0 = (int)(first_bad % n);
+        printf("         first bad @ row=%d col=%d: f1=%.2f f2=%.2f\n", r0, c0, f1[first_bad], f2[first_bad]);
+        // Dump first QK_K values from row 0
+        printf("         row0 f1[0..31]: "); for (int j = 0; j < 32 && j < n; ++j) printf(" %5.0f", (double)f1[j]); printf("\n");
+        printf("         row0 f2[0..31]: "); for (int j = 0; j < 32 && j < n; ++j) printf(" %5.0f", (double)f2[j]); printf("\n");
+        // Dump first QK_K values from row 8
+        int r8 = 8 * n;
+        printf("         row8 f1[0..31]: "); for (int j = 0; j < 32 && j < n; ++j) printf(" %5.0f", (double)f1[r8+j]); printf("\n");
+        printf("         row8 f2[0..31]: "); for (int j = 0; j < 32 && j < n; ++j) printf(" %5.0f", (double)f2[r8+j]); printf("\n");
+    }
 
     // 6. Quantize F1 → Q8_K_R16
     const size_t r16_bytes = (size_t)(nrows / 16) * nb * sizeof(block_q8_k_r16);
