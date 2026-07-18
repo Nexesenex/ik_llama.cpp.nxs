@@ -518,13 +518,23 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
 
     constexpr int k_min_step = 32;
 
+    if (ith == 0) {
+        auto npt = (Nx + nth - 1)/nth;
+        auto dq = MulMat::is_dequant_better(ggml_type(typeA), Ny);
+        printf("[IQK_TRACE] iqk_mul_mat: Nx=%ld Ny=%ld ne00=%ld typeA=%s typeB=%s npt=%ld r16=%d dq=%s\n",
+               Nx, Ny, ne00, ggml_type_name(ggml_type(typeA)), ggml_type_name(ggml_type(typeB)),
+               npt, g_iqk_r16_path, ggml_type_name(dq));
+    }
+
     MulMat mm;
 
     size_t row_size_qx = strideA; //*ggml_type_size(ggml_type(typeA));
     size_t row_size_qy = strideB; //*ggml_type_size(ggml_type(typeB));
 
     if (Nx/nth < k_min_step) {
+        if (ith == 0) printf("[IQK_TRACE]   path=min_step (Nx/nth=%ld < %d)\n", Nx/nth, k_min_step);
         if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
+            if (ith == 0) printf("[IQK_TRACE]   min_step prepare FAIL\n");
             return false;
         }
         const int min_step = Ny <= 16 ? 16 : 32;
@@ -548,6 +558,9 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
     if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); npt >= 16 &&
              dequant_type != etypeA && MulMat::prepare(dequant_type, typeB, ne00, mm, Ny) &&
              Nx%MulMat::num_rows(ggml_type(dequant_type)) == 0) {
+
+        if (ith == 0) printf("[IQK_TRACE]   path=dequant dequant_type=%s num_rows=%d\n",
+                            ggml_type_name(dequant_type), MulMat::num_rows(ggml_type(dequant_type)));
 
         constexpr int k_x_step = 32;
 
@@ -579,11 +592,22 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
 
         return true;
 
+    } else {
+        if (ith == 0) {
+            auto dq = MulMat::is_dequant_better(etypeA, Ny);
+            printf("[IQK_TRACE]   dequant SKIPPED (npt=%d >=16?%d dq=%s != typeA?%d prepare=%d Nx%%%%=%d)\n",
+                   (int)npt, npt>=16, ggml_type_name(dq), dq!=etypeA,
+                   (int)MulMat::prepare(dq, typeB, ne00, mm, Ny),
+                   (int)(Nx % MulMat::num_rows(ggml_type(dq))));
+        }
     }
 
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
+        if (ith == 0) printf("[IQK_TRACE]   direct prepare FAIL\n");
         return false;
     }
+    if (ith == 0) printf("[IQK_TRACE]   path=direct typeA=%s num_rows=%d\n",
+                        ggml_type_name(ggml_type(typeA)), MulMat::num_rows(ggml_type(typeA)));
 
     auto num_rows = MulMat::num_rows(ggml_type(typeA));
     if (Nx%num_rows) {
@@ -594,6 +618,7 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
     GGML_ASSERT(Nx%num_rows == 0);
 
     if (npt <= 16 && nth%2 == 0 && Ny >= 16 && Ny%2 == 0) {
+        if (ith == 0) printf("[IQK_TRACE]   direct sub-path=halfNy npt=%d Ny=%ld\n", npt, Ny);
         int nth_new = nth/2;
         auto nrc_x = num_rows*((Nx/num_rows + nth_new - 1)/nth_new);
         if (ith < nth_new) {
