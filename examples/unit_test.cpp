@@ -1,16 +1,22 @@
 //
-// unit_test.cpp - IQK iq4_xs_r8 -> q8_k_r8 / q8_k_r16 conversion verification
+// unit_test.cpp - IQK iq4_xs_r8 -> q8_k_r8 / q8_k_r16 converter verification
 //
-// Compares the SIMD converter (iqk_convert_iq4_xs_r8_q8_k_r16, which branches on
-// g_iqk_r16_path) against the reference dequant -> quant pipeline, for both the
-// R8 path (g_iqk_r16_path = false) and the R16 path (g_iqk_r16_path = true).
+// Compares the converter (iqk_convert_iq4_xs_r8_q8_k_r16) against the reference
+// dequant -> quant pipeline for R8 (-rtr) and R16 (-r16p) paths.
+//
+// The reference builds data in the CONTIGUOUS layout expected by the downstream
+// kernels (nb blocks per group-of-rows, no gaps).  The converter must produce the
+// same byte layout.
 //
 // Exercises PP-like (large nrc_x) and TG-like (minimum nrc_x) sizes, and checks
 // the converter output for NaN / Inf.
 //
+// Add -DTEST_VNNI256 or -DTEST_VNNIINT8 to exercise the SIMD code path (the one
+// used on Panther Lake / AVX_VNNI_INT8=1).  Without those the float fallback is
+// tested.
+//
 // Build (via cmake examples target that links the full ggml lib):
 //   cmake --build build --target unit_test -j
-//   cmake -DTEST_VNNI256=ON -DTEST_VNNIINT8=ON ... ditto
 //
 // Or standalone cl:
 //   cl /EHsc /std:c++17 /O2 /arch:AVX2 /DGGML_USE_IQK_MULMAT /DIQK_IMPLEMENT
@@ -43,11 +49,10 @@
 #include "iqk/iqk_quantize.h"
 #include "iqk/iqk_gemm_kquants.h"
 
-// g_iqk_r16_path normally lives in the ggml lib (iqk_mul_mat.cpp), but it is not
-// exported across the DLL boundary. Define a local copy the converter reads.
+// g_iqk_r16_path normally lives in the ggml lib (iqk_mul_mat.cpp).  The test
+// provides a local copy; set it before each call to iqk_convert_iq4_xs_r8_q8_k_r16.
 // Build with -DTEST_VNNI256 and/or -DTEST_VNNIINT8 to exercise the SIMD converter
-// path (the one used on Panther Lake / AVX_VNNI_INT8=1 servers). Without those,
-// the converter falls back to the float dequant->quant path.
+// path (Panther Lake / AVX_VNNI_INT8).  Without those the float fallback is tested.
 #ifdef TEST_VNNI256
 #define HAVE_VNNI256
 #endif
@@ -127,45 +132,41 @@ static void test_path(bool r16, int nrc_x, int n) {
     // the reference quantize so both apply (or both skip) the bias consistently.
     g_iqk_r16_path = r16;
 
-    // Build reference matching the converter's exact data layout.
-    // The converter processes groups of rows_per_block source blocks, dequantizes
-    // them into an INTERLEAVED layout (row k = subrow k from each source block in
-    // the group), and requants to the target format.  We replicate that here.
-    int nblocks = nrc_x / rows_per_block;
+    // Build the reference with CONTIGUOUS layout:
+    //   quantize_q8_k_r8/r16 writes nb blocks per rows_per_block-row group.
+    //   Groups must be placed back-to-back: offset = ib * nb blocks.
+    //   This matches the layout the downstream kernels expect.
+    const int nblocks = nrc_x / rows_per_block;
     const int nb = n / QK_K;
+    const size_t expected_bytes = (size_t)nblocks * nb * (r16 ? sizeof(block_q8_k_r16) : sizeof(block_q8_k_r8));
     std::vector<uint8_t> ref((size_t)nrc_x * rowsz);
     std::vector<float> tmp((size_t)rows_per_block * n);
     for (int ib = 0; ib < nblocks; ++ib) {
         float * tp = tmp.data();
-        // Dequant rows_per_block source blocks into interleaved layout:
-        // For R8:  one dequant call handles 8 blocks → 8 rows.
-        // For R16: two dequant calls (8+8) handle 16 source blocks.
         for (int s = 0; s < rows_per_block; s += 8) {
             dequantize_row_iq4_xs_r8(
                 &src[ib * rows_per_block + s],
                 tp, 8 * n);
             tp += (size_t)8 * n;
         }
-        // Requant the interleaved rows to target format.
-        if (r16) quantize_q8_k_r16(tmp.data(),
-                     (block_q8_k_r16 *)ref.data() + ib * (rows_per_block * nb),
-                     rows_per_block, n, nullptr, nullptr);
-        else     quantize_q8_k_r8 (tmp.data(),
-                     (block_q8_k_r8  *)ref.data() + ib * (rows_per_block * nb),
-                     rows_per_block, n, nullptr, nullptr);
+        if (r16)
+            quantize_q8_k_r16(tmp.data(),
+                (block_q8_k_r16 *)ref.data() + ib * nb,
+                rows_per_block, n, nullptr, nullptr);
+        else
+            quantize_q8_k_r8(tmp.data(),
+                (block_q8_k_r8  *)ref.data() + ib * nb,
+                rows_per_block, n, nullptr, nullptr);
     }
 
-    // Also build interleaved float buffer matching the converter's data layout.
+    // Interleaved float buffer: nrc_x rows of n floats, row-major.
+    // Dequant in rows_per_block groups (8 rows per dequantize call).
     std::vector<float> fbuf_interleaved((size_t)nrc_x * n);
     {
         float * fp = fbuf_interleaved.data();
-        for (int ib = 0; ib < nblocks; ++ib) {
-            for (int s = 0; s < rows_per_block; s += 8) {
-                dequantize_row_iq4_xs_r8(
-                    &src[ib * rows_per_block + s],
-                    fp, 8 * n);
-                fp += (size_t)8 * n;
-            }
+        for (int r = 0; r < nrc_x; r += 8) {
+            dequantize_row_iq4_xs_r8(&src[r], fp, 8 * n);
+            fp += (size_t)8 * n;
         }
     }
 
@@ -176,11 +177,15 @@ static void test_path(bool r16, int nrc_x, int n) {
     iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got.data(), nrc_x);
     g_iqk_r16_path = false;
 
-    // Byte-compare converter output vs reference (both use same interleaved layout).
+    // Byte-compare converter output vs reference.
+    // First check the converter actually wrote something (not all zeros).
+    bool all_zero = true;
+    for (size_t o = 0; o < expected_bytes && o < 4096; ++o) { if (got[o] != 0) { all_zero = false; break; } }
+    (void)all_zero;
     long first_mm = -1, last_mm = -1, delta_mm = -1, qs_mm = -1;
     long total_mismatches = 0;
     (void)delta_mm; (void)qs_mm; // used only for info
-    for (size_t o = 0; o < (size_t)nrc_x * rowsz; ++o) {
+    for (size_t o = 0; o < expected_bytes && o < (size_t)nrc_x * rowsz; ++o) {
         if (got[o] != ref[o]) {
             ++total_mismatches;
             if (first_mm < 0) first_mm = (long)o;
@@ -205,52 +210,57 @@ static void test_path(bool r16, int nrc_x, int n) {
         // Dump region around first mismatch
         long dump_start = (first_mm > 8) ? first_mm - 8 : 0;
         long dump_end = first_mm + 24;
-        if (dump_end > (long)(nrc_x * rowsz)) dump_end = (long)(nrc_x * rowsz);
+        if (dump_end > (long)expected_bytes) dump_end = (long)expected_bytes;
         printf("    ref["); for (long d = dump_start; d < dump_end; ++d) printf("%s%02x", d == first_mm ? " >" : " ", (int)(uint8_t)ref[d]); printf("\n");
         printf("    got["); for (long d = dump_start; d < dump_end; ++d) printf("%s%02x", d == first_mm ? " >" : " ", (int)(uint8_t)got[d]); printf("\n");
 
         // Block-level summary: which blocks have deltas/qs mismatches
         if (total_mismatches < 200) {
             printf("    mismatched bytes:");
-            for (size_t o = 0; o < (size_t)nrc_x * rowsz; ++o)
+            for (size_t o = 0; o < expected_bytes; ++o)
                 if (got[o] != ref[o]) printf(" %zu", o);
             printf("\n");
         }
 
         if (g_failures <= 3) {
-            int blk_idx = (int)(first_mm / (long)rowsz);
+            // first_mm falls in group first_mm / (nb * blocksize).
+            // Show the group's first block (base of the group).
+            auto bs = (r16 ? sizeof(block_q8_k_r16) : sizeof(block_q8_k_r8));
+            int group_base = (int)(first_mm / (long)((size_t)nb * bs)) * nb;
             if (r16) {
-                const auto * rb = (const block_q8_k_r16 *)ref.data() + blk_idx;
-                const auto * gb = (const block_q8_k_r16 *)got.data() + blk_idx;
-                printf("    R16 block%d d(ref):", blk_idx);
+                const auto * rb = (const block_q8_k_r16 *)ref.data() + group_base;
+                const auto * gb = (const block_q8_k_r16 *)got.data() + group_base;
+                printf("    R16 block%d d(ref):", group_base);
                 for (int k = 0; k < 16; ++k) printf(" %.4f", (double)GGML_FP16_TO_FP32(rb->d[k]));
-                printf("\n    R16 block%d d(got):", blk_idx);
+                printf("\n    R16 block%d d(got):", group_base);
                 for (int k = 0; k < 16; ++k) printf(" %.4f", (double)GGML_FP16_TO_FP32(gb->d[k]));
-                printf("\n    R16 block%d qs[0..31](ref):", blk_idx); for (int o = 0; o < 32; ++o) printf(" %3d", (int)rb->qs[o]);
-                printf("\n    R16 block%d qs[0..31](got):", blk_idx); for (int o = 0; o < 32; ++o) printf(" %3d", (int)gb->qs[o]);
+                printf("\n    R16 block%d qs[0..31](ref):", group_base); for (int o = 0; o < 32; ++o) printf(" %3d", (int)rb->qs[o]);
+                printf("\n    R16 block%d qs[0..31](got):", group_base); for (int o = 0; o < 32; ++o) printf(" %3d", (int)gb->qs[o]);
             } else {
-                const auto * rb = (const block_q8_k_r8 *)ref.data() + blk_idx;
-                const auto * gb = (const block_q8_k_r8 *)got.data() + blk_idx;
-                printf("    R8  block%d d(ref):", blk_idx);
+                const auto * rb = (const block_q8_k_r8 *)ref.data() + group_base;
+                const auto * gb = (const block_q8_k_r8 *)got.data() + group_base;
+                printf("    R8  block%d d(ref):", group_base);
                 for (int k = 0; k < 8; ++k) printf(" %.4f", (double)GGML_FP16_TO_FP32(rb->d[k]));
-                printf("\n    R8  block%d d(got):", blk_idx);
+                printf("\n    R8  block%d d(got):", group_base);
                 for (int k = 0; k < 8; ++k) printf(" %.4f", (double)GGML_FP16_TO_FP32(gb->d[k]));
-                printf("\n    R8  block%d qs[0..31](ref):", blk_idx); for (int o = 0; o < 32; ++o) printf(" %3d", (int)rb->qs[o]);
-                printf("\n    R8  block%d qs[0..31](got):", blk_idx); for (int o = 0; o < 32; ++o) printf(" %3d", (int)gb->qs[o]);
+                printf("\n    R8  block%d qs[0..31](ref):", group_base); for (int o = 0; o < 32; ++o) printf(" %3d", (int)rb->qs[o]);
+                printf("\n    R8  block%d qs[0..31](got):", group_base); for (int o = 0; o < 32; ++o) printf(" %3d", (int)gb->qs[o]);
             }
             printf("\n");
         }
     }
 
     // Secondary: round-trip (dequant converter output → compare against interleaved fbuf).
-    // Run this on ALL cases (not just failures) to catch silent degradation.
+    // Dequant in rows_per_block groups from contiguous nb-block groups.
     std::vector<float> fgot((size_t)nrc_x * n);
     if (r16) {
         const block_q8_k_r16 * rb = (const block_q8_k_r16 *)got.data();
-        for (int b = 0; b < nblocks; ++b) dequantize_row_q8_k_r16(&rb[b], fgot.data() + (size_t)b * rows_per_block * n, n);
+        for (int b = 0; b < nblocks; ++b)
+            dequantize_row_q8_k_r16(&rb[b * nb], fgot.data() + (size_t)b * rows_per_block * n, n);
     } else {
         const block_q8_k_r8 * rb = (const block_q8_k_r8 *)got.data();
-        for (int b = 0; b < nblocks; ++b) dequantize_row_q8_k_r8(&rb[b], fgot.data() + (size_t)b * rows_per_block * n, n);
+        for (int b = 0; b < nblocks; ++b)
+            dequantize_row_q8_k_r8(&rb[b * nb], fgot.data() + (size_t)b * rows_per_block * n, n);
     }
     double max_abs = 0; long first_bad = -1; int bad_count = 0;
     for (size_t i = 0; i < (size_t)nrc_x * n; ++i) {
@@ -271,13 +281,15 @@ static void test_path(bool r16, int nrc_x, int n) {
         }
     }
 
-    // NaN / Inf check on deltas (true NaN/Inf only)
+    // NaN / Inf check on deltas — scan every nb-th block (contiguous groups)
     if (r16) {
         const block_q8_k_r16 * rb = (const block_q8_k_r16 *)got.data();
-        for (int i = 0; i < nblocks; ++i) if (deltas_bad(&rb[i], 16)) { ++g_failures; printf("  [FAIL] R16 block %d has NaN/Inf delta\n", i); break; }
+        for (int i = 0; i < nblocks; ++i)
+            if (deltas_bad(&rb[i * nb], 16)) { ++g_failures; printf("  [FAIL] R16 block %d (group %d) has NaN/Inf delta\n", i*nb, i); break; }
     } else {
         const block_q8_k_r8 * rb = (const block_q8_k_r8 *)got.data();
-        for (int i = 0; i < nblocks; ++i) if (deltas_bad(&rb[i], 8)) { ++g_failures; printf("  [FAIL] R8 block %d has NaN/Inf delta\n", i); break; }
+        for (int i = 0; i < nblocks; ++i)
+            if (deltas_bad(&rb[i * nb], 8))  { ++g_failures; printf("  [FAIL] R8  block %d (group %d) has NaN/Inf delta\n", i*nb, i); break; }
     }
 }
 
@@ -298,15 +310,17 @@ int main(int argc, char ** argv) {
     printf("=== IQK iq4_xs_r8 -> q8_k_r8 / q8_k_r16 converter verification ===\n"); fflush(stdout);
 
     // Detect SIMD level available at compile time
+    const char * simd_name = "(unknown)";
 #if defined(HAVE_FANCY_SIMD)
-    printf("SIMD path: HAVE_FANCY_SIMD (AVX-512)\n");
+    simd_name = "HAVE_FANCY_SIMD (AVX-512)";
 #elif defined(HAVE_VNNIINT8)
-    printf("SIMD path: HAVE_VNNIINT8 (AVX-VNNI-INT8)\n");
+    simd_name = "HAVE_VNNIINT8 (AVX-VNNI-INT8)";
 #elif defined(HAVE_VNNI256)
-    printf("SIMD path: HAVE_VNNI256 (AVX2 + VNNI)\n");
+    simd_name = "HAVE_VNNI256 (AVX2 + VNNI)";
 #else
-    printf("SIMD path: NONE (float dequant->quant fallback)\n");
+    simd_name = "NONE (float dequant->quant fallback)";
 #endif
+    printf("SIMD path: %s\n", simd_name);
     fflush(stdout);
     printf("QK_K=%d  sizeof(block_iq4_xs_r8)=%zu  sizeof(block_q8_k_r8)=%zu  sizeof(block_q8_k_r16)=%zu\n",
            QK_K, sizeof(block_iq4_xs_r8), sizeof(block_q8_k_r8), sizeof(block_q8_k_r16));
@@ -315,13 +329,14 @@ int main(int argc, char ** argv) {
     bool test_rtr  = false;
     bool test_r16p = false;
     bool test_all  = true;
+    bool test_vnni = true;  // also test VNNI path when available
     std::vector<int> ns = { 2048, 4096, 8192 };
     std::vector<int> nrc_xs = { 16, 32, 64, 128 };
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
-        if (arg == "-rtr")  { test_all = false; test_rtr = true; continue; }
+        if (arg == "-rtr")  { test_all = false; test_rtr  = true; continue; }
         if (arg == "-r16p") { test_all = false; test_r16p = true; continue; }
         if (arg == "--all") { test_all = true; continue; }
         if (arg == "-n" && i+1 < argc) {
