@@ -5871,6 +5871,12 @@ static void repack_iq4_nl(int nrows, int n_per_row, const block_iq4_nl * x, bloc
     }
 }
 
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_repack_q6_0 below).
+extern "C" void iqk_test_repack_iq4_nl(int nrows, int n_per_row, const block_iq4_nl * x, block_iq4_nl_r4 * y) {
+    repack_iq4_nl(nrows, n_per_row, x, y, false);
+}
+
 size_t quantize_iq4_nl_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         const quantize_user_data * user_data) {
     GGML_ASSERT(nrows%4 == 0);
@@ -5969,6 +5975,12 @@ static void repack_q4_0(int nrows, int n_per_row, const block_q4_0 * x, block_iq
         y += nblock;
     }
 }
+
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_repack_q6_0 below).
+extern "C" void iqk_test_repack_q4_0(int nrows, int n_per_row, const block_q4_0 * x, block_iq4_nl_r8 * y) {
+    repack_q4_0(nrows, n_per_row, x, y, false);
+}
 #ifdef __ARM_NEON
 static void modify_q4_0_r8(int64_t k, char * cy) {
     auto y = (block_iq4_nl_r8 *)cy;
@@ -6006,6 +6018,12 @@ static void repack_mxfp4(int nrows, int n_per_row, const block_mxfp4 * x, block_
         x += 8*nblock;
         y += nblock;
     }
+}
+
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_repack_q6_0 below).
+extern "C" void iqk_test_repack_mxfp4(int nrows, int n_per_row, const block_mxfp4 * x, block_mxfp4_r8 * y) {
+    repack_mxfp4(nrows, n_per_row, x, y, false);
 }
 
 size_t quantize_q4_0_r8(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
@@ -6101,6 +6119,12 @@ static void repack_q8_0(int nrows, int n_per_row, const block_q8_0 * x, block_q8
         x += 8*nblock;
         y += nblock;
     }
+}
+
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_repack_q6_0 below).
+extern "C" void iqk_test_repack_q8_0(int nrows, int n_per_row, const block_q8_0 * x, block_q8_0_r8 * y) {
+    repack_q8_0(nrows, n_per_row, x, y, false);
 }
 
 #ifdef HAVE_FANCY_SIMD
@@ -6214,6 +6238,12 @@ static void repack_q5_0(int nrows, int n_per_row, const block_q5_0 * x, block_q5
     }
 }
 
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_repack_q6_0 below).
+extern "C" void iqk_test_repack_q5_0(int nrows, int n_per_row, const block_q5_0 * x, block_q5_0_r4 * y) {
+    repack_q5_0(nrows, n_per_row, x, y, false);
+}
+
 size_t quantize_q5_0_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         [[maybe_unused]] const quantize_user_data * user_data) {
     GGML_ASSERT(nrows%4 == 0);
@@ -6312,6 +6342,12 @@ static void repack_q6_0(int nrows, int n_per_row, const block_q6_0 * x, block_q6
     }
 }
 
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_convert_iq4_xs_r8 in iqk_gemm_kquants.cpp).
+extern "C" void iqk_test_repack_q6_0(int nrows, int n_per_row, const block_q6_0 * x, block_q6_0_r4 * y) {
+    repack_q6_0(nrows, n_per_row, x, y, false);
+}
+
 size_t quantize_q6_0_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         const quantize_user_data * user_data) {
     GGML_ASSERT(nrows%4 == 0);
@@ -6408,6 +6444,12 @@ static void repack_iq4_xs(int nrows, int n_per_row, const block_iq4_xs * x, bloc
         x += 8*nblock;
         y += nblock;
     }
+}
+
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_repack_q6_0 below).
+extern "C" void iqk_test_repack_iq4_xs(int nrows, int n_per_row, const block_iq4_xs * x, block_iq4_xs_r8 * y) {
+    repack_iq4_xs(nrows, n_per_row, x, y, false);
 }
 
 size_t quantize_iq4_xs_r8(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
@@ -12203,3 +12245,68 @@ bool iqk_validate_tensor(const ggml_tensor * tensor) {
     }
     return true;
 }
+
+// Test-only repack hooks for R4 lane-duplication coverage (one block: the 7
+// older hooks are scattered next to their repack fns). Each drives its static
+// repack directly with online=false, mirroring iqk_test_repack_q6_0.
+extern "C" {
+void iqk_test_repack_q2_k(int nrows, int n_per_row, const block_q2_K * x, block_q2_k_r4 * y) {
+    repack_q2_k(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_q3_k(int nrows, int n_per_row, const block_q3_K * x, block_q3_k_r4 * y) {
+    repack_q3_k(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_iq2_k(int nrows, int n_per_row, const block_iq2_k * x, block_iq2_k_r4 * y) {
+    repack_iq2_k(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_iq5_k(int nrows, int n_per_row, const block_iq5_k * x, block_iq5_k_r4 * y) {
+    repack_iq5_k(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_iq5_ks(int nrows, int n_per_row, const block_iq5_ks * x, block_iq5_ks_r4 * y) {
+    repack_iq5_ks(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_iq3_k(int nrows, int n_per_row, const block_iq3_k * x, block_iq3_k_r4 * y) {
+    repack_iq3_k(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_q5_k(int nrows, int n_per_row, const block_q5_K * x, block_q5_k_r4 * y) {
+    repack_q5_k(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_q6_k(int nrows, int n_per_row, const block_q6_K * x, block_q6_k_r4 * y) {
+    repack_q6_k(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_iq2_bn(int nrows, int n_per_row, const char * x, char * y) {
+    repack_iq2_bn(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_q4_k(int nrows, int n_per_row, const block_q4_K * x, block_q4_k_r4 * y) {
+    repack_q4_k(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_iq4_k(int nrows, int n_per_row, const block_iq4_k * x, block_iq4_k_r4 * y) {
+    repack_iq4_k(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_iq3_xxs(int nrows, int n_per_row, const block_iq3_xxs * x, block_iq3_xxs_r4 * y) {
+    repack_iq3_xxs(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_iq4_ks(int nrows, int n_per_row, const block_iq4_ks * x, block_iq4_ks_r4 * y) {
+    repack_iq4_ks(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_iq2_s(int nrows, int n_per_row, const block_iq2_s * x, block_iq2_s_r4 * y) {
+    repack_iq2_s(nrows, n_per_row, x, y, false);
+}
+
+void iqk_test_repack_iq3_s(int nrows, int n_per_row, const block_iq3_s * x, block_iq3_s_r4 * y) {
+    repack_iq3_s(nrows, n_per_row, x, y, false);
+}
+} // extern "C"

@@ -162,3 +162,5 @@ a.out
 a.out.*
 .dev
 .github
+# IQK speed-bench DB (editable local store, see unit_test --bench-save)
+iqk_bench.db
