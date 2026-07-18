@@ -20,6 +20,7 @@ target_compile_definitions(unit_test PRIVATE
     GGML_USE_IQK_MULMAT
     IQK_IMPLEMENT
     HAVE_VNNI256
+    TEST_VNNI256
 )
 
 if (MSVC)
