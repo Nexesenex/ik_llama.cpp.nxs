@@ -3139,13 +3139,11 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
                     }
                 }
                 {
-                    __m128i d0 = _mm_cvtps_ph(_mm_loadu_ps(dnew + 0), _MM_ROUND_NEAREST);
-                    __m128i d1 = _mm_cvtps_ph(_mm_loadu_ps(dnew + 4), _MM_ROUND_NEAREST);
-                    __m128i d2 = _mm_cvtps_ph(_mm_loadu_ps(dnew + 8), _MM_ROUND_NEAREST);
-                    __m128i d3 = _mm_cvtps_ph(_mm_loadu_ps(dnew + 12), _MM_ROUND_NEAREST);
-                    __m128i lo = _mm_unpacklo_epi64(d0, d1);
-                    __m128i hi = _mm_unpacklo_epi64(d2, d3);
-                    _mm256_storeu_si256((__m256i *)y[i].d, _mm256_set_m128i(hi, lo));
+                    __m256 d0 = _mm256_loadu_ps(dnew + 0);
+                    __m256 d1 = _mm256_loadu_ps(dnew + 8);
+                    __m128i h0 = _mm256_cvtps_ph(d0, _MM_ROUND_NEAREST);
+                    __m128i h1 = _mm256_cvtps_ph(d1, _MM_ROUND_NEAREST);
+                    _mm256_storeu_si256((__m256i *)y[i].d, _mm256_set_m128i(h1, h0));
                 }
                 for (int l = 0; l < 64; ++l) {
                     __m256i v0 = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[i].qs + 2*l+0), _mm256_set1_epi8(-128));
