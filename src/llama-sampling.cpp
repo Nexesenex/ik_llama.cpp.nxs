@@ -10,6 +10,7 @@
 #include <cfloat>
 #include <numeric>
 #include <unordered_map>
+#include <cmath>
 #include <fstream>
 
 static void llama_log_softmax(float * array, size_t size) {
@@ -312,7 +313,10 @@ void llama_sample_typical_impl(struct llama_sampling * smpl, llama_token_data_ar
 
     float entropy = 0.0f;
     for (size_t i = 0; i < candidates->size; ++i) {
-        entropy += -candidates->data[i].p * logf(candidates->data[i].p);
+        const float p = candidates->data[i].p;
+        if (p > 0.0f) {
+            entropy -= p * logf(p);
+        }
     }
 
     // Compute the absolute difference between negative log probability and entropy for each candidate
@@ -723,8 +727,8 @@ llama_token llama_sample_token_with_rng_impl(struct llama_sampling * smpl, llama
     }
     probs.back() += sump;
 
-    if (sump == 0.0f) {
-        // all logits underflowed - pick first candidate
+    if (sump == 0.0f || std::isnan(sump)) {
+        // all logits underflowed or NaN - pick first candidate
         smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
         smpl->n_sample++;
         return candidates->data[0].id;
