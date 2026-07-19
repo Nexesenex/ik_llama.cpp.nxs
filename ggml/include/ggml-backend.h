@@ -106,6 +106,7 @@ extern "C" {
     GGML_API           void ggml_backend_cpu_set_moe_expert_prefetch(ggml_backend_t backend_cpu, bool enable);
     GGML_API           void ggml_backend_cpu_set_cpu_affinity  (ggml_backend_t backend_cpu, const int32_t * cpus, int n_cpus);
     GGML_API           void ggml_backend_cpu_set_abort_callback(ggml_backend_t backend_cpu, ggml_abort_callback abort_callback, void * abort_callback_data);
+    GGML_API           void ggml_backend_cpu_set_threadpool    (ggml_backend_t backend_cpu, struct ggml_threadpool * threadpool);
 
     // Create a backend buffer from an existing pointer
     GGML_API GGML_CALL ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size);
