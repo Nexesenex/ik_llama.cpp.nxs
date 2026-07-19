@@ -569,6 +569,8 @@ extern "C" {
         //bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
         bool scheduler_async;   // if true, with split mode "graph" graph evaluation will be done using multiple threads
         int  sched_max_copies;   // max number of graph parallel copies (default: from GGML_SCHED_MAX_COPIES)
+        bool threadpool;         // if true, use a persistent threadpool for CPU graph compute (instead of OpenMP fork-join)
+        int  tpool_threshold;    // pool batches with n_tokens >= N (0 = off); --threadpool forces 1
         bool mtp;   // Activate MTP if supported
         enum llama_mtp_op_type mtp_op_type;
 
@@ -1251,6 +1253,14 @@ extern "C" {
 
     // Set whether the model is in warmup mode or not
     LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup);
+
+    // Attach a threadpool to the context for inference
+    // `threadpool` is used for generation (single token)
+    // `threadpool_batch` is used for prompt and batch processing (multiple tokens)
+    LLAMA_API void llama_attach_threadpool(struct llama_context * ctx, ggml_threadpool_t threadpool, ggml_threadpool_t threadpool_batch);
+
+    // Detach the threadpool from the context
+    LLAMA_API void llama_detach_threadpool(struct llama_context * ctx);
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
