@@ -723,6 +723,13 @@ llama_token llama_sample_token_with_rng_impl(struct llama_sampling * smpl, llama
     }
     probs.back() += sump;
 
+    if (sump == 0.0f) {
+        // all logits underflowed - pick first candidate
+        smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+        smpl->n_sample++;
+        return candidates->data[0].id;
+    }
+
     auto r = rng();
     auto p = sump * r / rng.max();
     auto iter = std::upper_bound(probs.begin(), probs.end(), p);
