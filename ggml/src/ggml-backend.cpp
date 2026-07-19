@@ -810,6 +810,8 @@ struct ggml_backend_cpu_context {
     // optional per-thread CPU affinity
     int32_t cpu_affinity[GGML_MAX_CPU_AFFINITY];
     int32_t n_cpu_affinity;
+
+    struct ggml_threadpool * threadpool;
 };
 
 GGML_CALL static const char * ggml_backend_cpu_name(ggml_backend_t backend) {
@@ -841,7 +843,9 @@ GGML_CALL static ggml_backend_graph_plan_t ggml_backend_cpu_graph_plan_create(gg
 
     struct ggml_backend_plan_cpu * cpu_plan = (ggml_backend_plan_cpu *)malloc(sizeof(struct ggml_backend_plan_cpu));
 
-    cpu_plan->cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads);
+    cpu_plan->cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads,
+        cpu_ctx->threadpool
+    );
     cpu_plan->cgraph = *cgraph; // FIXME: deep copy
 
     if (cpu_plan->cplan.work_size > 0) {
@@ -881,7 +885,9 @@ GGML_CALL static enum ggml_status ggml_backend_cpu_graph_plan_compute(ggml_backe
 GGML_CALL static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
 
-    struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads);
+    struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads,
+        cpu_ctx->threadpool
+    );
 
     if (cpu_ctx->work_size < cplan.work_size) {
         free(cpu_ctx->work_data);
@@ -978,7 +984,10 @@ ggml_backend_t ggml_backend_cpu_init(void) {
     ctx->abort_callback      = NULL;
     ctx->abort_callback_data = NULL;
     ctx->moe_expert_prefetch = false;
+
     ctx->n_cpu_affinity      = 0;
+
+    ctx->threadpool          = NULL;
 
     ggml_backend_t cpu_backend = (ggml_backend_t)malloc(sizeof(struct ggml_backend));
     if (cpu_backend == NULL) {
@@ -1032,6 +1041,13 @@ void ggml_backend_cpu_set_abort_callback(ggml_backend_t backend_cpu, ggml_abort_
     struct ggml_backend_cpu_context * ctx = (struct ggml_backend_cpu_context *)backend_cpu->context;
     ctx->abort_callback = abort_callback;
     ctx->abort_callback_data = abort_callback_data;
+}
+
+void ggml_backend_cpu_set_threadpool(ggml_backend_t backend_cpu, struct ggml_threadpool * threadpool) {
+    GGML_ASSERT(ggml_backend_is_cpu(backend_cpu));
+
+    struct ggml_backend_cpu_context * ctx = (struct ggml_backend_cpu_context *)backend_cpu->context;
+    ctx->threadpool = threadpool;
 }
 
 GGML_CALL ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) {
