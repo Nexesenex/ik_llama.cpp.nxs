@@ -204,7 +204,11 @@ static void llama_graph_compute_sched(
         llama_context & lctx,
         ggml_backend_sched_t sched,
           ggml_cgraph * gf,
-                  int   n_threads) {
+                  int   n_threads
+#ifdef GGML_USE_THREADPOOL
+        , ggml_threadpool_t threadpool
+#endif
+        ) {
 #ifdef GGML_USE_METAL
     if (ggml_backend_is_metal(lctx.backend_metal)) {
         ggml_backend_metal_set_n_cb(lctx.backend_metal, n_threads);
@@ -213,6 +217,9 @@ static void llama_graph_compute_sched(
 
     if (lctx.backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
+#ifdef GGML_USE_THREADPOOL
+        ggml_backend_cpu_set_threadpool(lctx.backend_cpu, threadpool);
+#endif
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
     }
 
@@ -593,7 +600,11 @@ bool llama_prepare_dflash_graph_inputs(
                         ggml_nbytes(lctx.dflash.kv.cache_input_rows));
             }
         }
-        llama_graph_compute_sched(lctx, lctx.dflash.kv.cache_sched, gf_kv, lctx.cparams.n_threads);
+        llama_graph_compute_sched(lctx, lctx.dflash.kv.cache_sched, gf_kv, lctx.cparams.n_threads
+#ifdef GGML_USE_THREADPOOL
+            , lctx.threadpool
+#endif
+            );
         ggml_backend_sched_synchronize(lctx.dflash.kv.cache_sched);
 
         if ((int32_t) lctx.dflash.kv.cache_pos.size() != cross_ctx) {
