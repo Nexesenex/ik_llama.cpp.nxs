@@ -917,6 +917,14 @@ llama_context::~llama_context() {
     ggml_backend_sched_free(sched);
     moe_cache.reset();
 
+    if (threadpool_owned) {
+        // Batch-only mode splits the pointers (threadpool == NULL): free via
+        // batch, which also covers the shared-pool case (same pointer).
+        ggml_threadpool_free(threadpool_batch ? threadpool_batch : threadpool);
+        threadpool       = nullptr;
+        threadpool_batch = nullptr;
+    }
+
     for (ggml_backend_t backend : backends) {
         ggml_backend_free(backend);
     }
@@ -3355,7 +3363,7 @@ static ggml_tensor * llm_compute_wkv_b(ggml_context * ctx, ggml_cgraph * graph,
 
     ggml_build_forward_expand(graph, wkv_b);
 
-    auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+    auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL); // manually added
     if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
     plan.work_data = work_data.data();
 
@@ -3450,7 +3458,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
 
             ggml_build_forward_expand(graph, wk_b);
 
-            auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+            auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL);
             if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
             plan.work_data = work_data.data();
 
@@ -3592,7 +3600,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 GGML_ASSERT((char *)wk_b_pp->data + ggml_nbytes(wk_b_pp) <=
                             (char *)tensor_data.data() + tensor_data.size());
                 ggml_build_forward_expand(graph, wk_b_pp);
-                auto plan_pp = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+                auto plan_pp = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL);
                 if (plan_pp.work_size > work_data.size()) work_data.resize(plan_pp.work_size);
                 plan_pp.work_data = work_data.data();
                 auto status_pp = ggml_graph_compute(graph, &plan_pp);
@@ -3609,7 +3617,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                         l.wkv_b->nb[1], l.wkv_b->nb[1]*(n_embd_head_qk_nope + n_embd_head_v), l.wkv_b->nb[1]*n_embd_head_qk_nope));
             wv_b->data = tensor_data.data();
             ggml_build_forward_expand(graph, wv_b);
-            plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+            plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL);
             if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
             plan.work_data = work_data.data();
             status = ggml_graph_compute(graph, &plan);
@@ -3747,7 +3755,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 auto f_q    = ggml_cast(ctx_pp, f_cont, l.wk_b->type);
                 f_q->data   = (char *)f_cont->data + ggml_nbytes(f_cont);
                 ggml_build_forward_expand(graph_pp, f_q);
-                auto plan = ggml_graph_plan(graph_pp, std::thread::hardware_concurrency()/2);
+                auto plan = ggml_graph_plan(graph_pp, std::thread::hardware_concurrency()/2, NULL);
                 if (plan.work_size > work_data_pp.size()) work_data_pp.resize(plan.work_size);
                 plan.work_data = work_data_pp.data();
                 auto status = ggml_graph_compute(graph_pp, &plan);
@@ -4061,7 +4069,7 @@ static void llm_prepare_openpangu_param_sinks(llama_model & model) {
         ggml_build_forward_expand(graph, sink_blk);
         ggml_build_forward_expand(graph, s_lat_t);
 
-        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL);
         if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
         plan.work_data = work_data.data();
 
@@ -4169,7 +4177,7 @@ static void llm_apply_khad_pretransform(llama_model & model) {
         ggml_build_forward_expand(graph, out_q);
 
         std::vector<uint8_t> work_data;
-        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL);
         if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
         plan.work_data = work_data.data();
         bool ok = (ggml_graph_compute(graph, &plan) == GGML_STATUS_SUCCESS);
@@ -7375,10 +7383,23 @@ void llama_cpu_affinity_apply(llama_context & lctx, int n_threads) {
     }
 }
 
+// Pool routing for a token batch: pool iff enabled and n_tokens >= threshold
+// (gbtt/OpenMP keep smaller batches; the pool path bypasses gbtt barrier
+// selection by construction). n == 1 still routes via threadpool so
+// API-attached split pools (llama_attach_threadpool) keep decode/batch
+// separation. Covers decode, MTP/speculative batches and embeddings alike.
+static ggml_threadpool_t llama_pool_for(llama_context & lctx, int64_t n_tokens) {
+    const int thr = lctx.cparams.tpool_threshold;
+    if (thr < 1 || n_tokens < thr) return nullptr;
+    return n_tokens == 1 ? lctx.threadpool : lctx.threadpool_batch;
+}
+
 static void llama_graph_compute(
         llama_context & lctx,
           ggml_cgraph * gf,
-                  int   n_threads) {
+                  int   n_threads
+        , ggml_threadpool_t threadpool
+        ) {
 #ifdef GGML_USE_METAL
     if (ggml_backend_is_metal(lctx.backend_metal)) {
         ggml_backend_metal_set_n_cb(lctx.backend_metal, n_threads);
@@ -7387,6 +7408,7 @@ static void llama_graph_compute(
 
     if (lctx.backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
+        ggml_backend_cpu_set_threadpool(lctx.backend_cpu, threadpool);
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
         llama_cpu_affinity_apply(lctx, n_threads);
@@ -7401,7 +7423,9 @@ static void llama_graph_compute_sched(
         llama_context & lctx,
         ggml_backend_sched_t sched,
           ggml_cgraph * gf,
-                  int   n_threads) {
+                  int   n_threads
+        , ggml_threadpool_t threadpool
+        ) {
 #ifdef GGML_USE_METAL
     if (ggml_backend_is_metal(lctx.backend_metal)) {
         ggml_backend_metal_set_n_cb(lctx.backend_metal, n_threads);
@@ -7410,6 +7434,7 @@ static void llama_graph_compute_sched(
 
     if (lctx.backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
+        ggml_backend_cpu_set_threadpool(lctx.backend_cpu, threadpool);
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
         llama_cpu_affinity_apply(lctx, n_threads);
@@ -7895,7 +7920,7 @@ static int llama_decode_internal(
         tim1 = ggml_time_us();
 #endif
         //fprintf(stderr, "%s: invoking llama_graph_compute\n", __func__);
-        llama_graph_compute(lctx, gf, n_threads);
+        llama_graph_compute(lctx, gf, n_threads, llama_pool_for(lctx, n_tokens));
 
         if (llm_arch_is_dsv4(lctx.model.arch) &&
             llama_dsv4_per_step_capture_active(lctx, { LLAMA_CHECKPOINT_SPEC, 0 }) &&
@@ -8294,7 +8319,7 @@ static int llama_encode_internal(
 
     llama_set_inputs(lctx, batch);
 
-    llama_graph_compute(lctx, gf, n_threads);
+    llama_graph_compute(lctx, gf, n_threads, llama_pool_for(lctx, n_tokens));
 
     // extract embeddings
     if (embd) {
@@ -8588,7 +8613,9 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
 
     ggml_cgraph * gf = llm_build_context::llama_build_graph_defrag(lctx, ids);
 
-    llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
+    llama_graph_compute(lctx, gf, lctx.cparams.n_threads
+        , lctx.threadpool
+        );
 #endif
 
     //const int64_t t_end = ggml_time_us();
@@ -8627,7 +8654,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
             llama_set_k_shift(lctx);
 
-            llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
+            llama_graph_compute(lctx, gf, lctx.cparams.n_threads
+                , lctx.threadpool
+                );
 
             need_reserve = true;
         }
@@ -8653,7 +8682,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
             llama_set_s_copy(lctx);
 
-            llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
+            llama_graph_compute(lctx, gf, lctx.cparams.n_threads
+                , lctx.threadpool
+                );
 
             need_reserve = true;
         }
@@ -9050,6 +9081,8 @@ struct llama_context_params llama_context_default_params() {
         // /*.split_mode_f16           =*/ true,
         /*.scheduler_async             =*/ false,
         /*.sched_max_copies            =*/ -1,
+        /*.threadpool                 =*/ false,
+        /*.tpool_threshold            =*/ 0,
         /*.mtp                         =*/ false,
         /*.mtp_op_type                 =*/ MTP_OP_NONE,
         /*.abort_callback              =*/ nullptr,
@@ -9565,6 +9598,25 @@ struct llama_context * llama_init_from_model(
     cparams.n_seq_max        = std::max(1u, params.n_seq_max);
     cparams.n_threads        = params.n_threads;
     cparams.n_threads_batch  = params.n_threads_batch;
+    // Pool threshold: --threadpool forces 1 (everywhere); --tpool [N] gates
+    // batches with n_tokens >= N (default 32, aligned with gbtt default >32).
+    const int tp_thr = params.threadpool ? 1 : params.tpool_threshold;
+    cparams.tpool_threshold = tp_thr;
+    if (tp_thr >= 1) {
+        uint32_t n_tp = std::max(params.n_threads, params.n_threads_batch);
+        if (n_tp > 0) {
+            struct ggml_threadpool_params tpp = ggml_threadpool_params_default((int)n_tp);
+            ggml_threadpool_t tp = ggml_threadpool_new(&tpp);
+            if (tp) {
+                ctx->threadpool = tp;
+                ctx->threadpool_batch = tp;
+                ctx->threadpool_owned = true;
+                LLAMA_LOG_INFO("%s: ggml_threadpool: ON (threshold=%d, pool=%u, n_threads=%u, n_threads_batch=%u)\n", __func__, tp_thr, n_tp, params.n_threads, params.n_threads_batch);
+            } else {
+                LLAMA_LOG_WARN("%s: ggml_threadpool: FAILED, falling back to OpenMP\n", __func__);
+            }
+        }
+    }
     cparams.yarn_ext_factor  = params.yarn_ext_factor >= 0.0f ? params.yarn_ext_factor : hparams.yarn_ext_factor;
     cparams.yarn_attn_factor = params.yarn_attn_factor >= 0.0f ? params.yarn_attn_factor : hparams.yarn_attn_factor;
     cparams.yarn_beta_fast   = params.yarn_beta_fast >= 0.0f ? params.yarn_beta_fast : hparams.yarn_beta_fast;
@@ -13482,6 +13534,24 @@ uint32_t llama_n_threads(struct llama_context * ctx) {
 
 uint32_t llama_n_threads_batch(struct llama_context * ctx) {
     return ctx->cparams.n_threads_batch;
+}
+
+void llama_attach_threadpool(struct llama_context * ctx, ggml_threadpool_t threadpool, ggml_threadpool_t threadpool_batch) {
+    if (ctx->threadpool_owned) {
+        ggml_threadpool_free(ctx->threadpool_batch ? ctx->threadpool_batch : ctx->threadpool);
+    }
+    ctx->threadpool       = threadpool;
+    ctx->threadpool_batch = threadpool_batch;
+    ctx->threadpool_owned = false;
+}
+
+void llama_detach_threadpool(struct llama_context * ctx) {
+    if (ctx->threadpool_owned) {
+        ggml_threadpool_free(ctx->threadpool_batch ? ctx->threadpool_batch : ctx->threadpool);
+    }
+    ctx->threadpool       = nullptr;
+    ctx->threadpool_batch = nullptr;
+    ctx->threadpool_owned = false;
 }
 
 void llama_set_abort_callback(struct llama_context * ctx, bool (*abort_callback)(void * data), void * abort_callback_data) {
