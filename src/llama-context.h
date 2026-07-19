@@ -372,6 +372,10 @@ struct llama_context {
     std::vector<int32_t> cpu_affinity_auto_cpus;
     int cpu_affinity_mode = 0; // LLAMA_CPU_AFFINITY_DISABLED by default (see llama.h)
 
+    ggml_threadpool_t threadpool       = nullptr;
+    ggml_threadpool_t threadpool_batch = nullptr;
+    bool              threadpool_owned = false;
+
     bool has_evaluated_once = false;
 
     int64_t t_start_us;

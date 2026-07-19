@@ -51,6 +51,9 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
+# Persistent threadpool is always compiled in; enable it at runtime with --threadpool
+add_compile_definitions(GGML_USE_THREADPOOL)
+
 # force MSVC compiler charset to utf-8
 if (MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:/utf-8>")

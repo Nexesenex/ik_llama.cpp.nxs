@@ -249,6 +249,7 @@
 #endif
 #define GGML_MAX_OP_PARAMS      64
 #define GGML_DEFAULT_N_THREADS  4
+#define GGML_MAX_N_THREADS 512
 #define GGML_DEFAULT_GRAPH_SIZE 2048
 #if UINTPTR_MAX == 0xFFFFFFFF
     #define GGML_MEM_ALIGN 4
@@ -841,6 +842,23 @@ extern "C" {
     // If it returns true, the computation is aborted
     typedef bool (*ggml_abort_callback)(void * data);
 
+    enum ggml_sched_priority {
+        GGML_SCHED_PRIORITY_NORMAL = 0,
+        GGML_SCHED_PRIORITY_MEDIUM,
+        GGML_SCHED_PRIORITY_HIGH,
+        GGML_SCHED_PRIORITY_REALTIME,
+    };
+
+    struct ggml_threadpool_params {
+        bool          cpumask[GGML_MAX_N_THREADS];
+        int           n_threads;
+        enum ggml_sched_priority prio;
+        uint32_t      polling;
+    };
+
+    struct ggml_threadpool;
+    typedef struct ggml_threadpool * ggml_threadpool_t;
+
     // the compute plan that needs to be prepared for ggml_graph_compute()
     // since https://github.com/ggerganov/ggml/issues/287
     // maximum number of logical CPU ids that can be pinned via ggml_cplan.cpu_affinity
@@ -862,6 +880,8 @@ extern "C" {
         // optional CPU affinity: pin worker ith to cpu_affinity[ith % n_cpu_affinity]
         const int32_t * cpu_affinity;
         int32_t         n_cpu_affinity;
+
+        struct ggml_threadpool * threadpool;
     };
 
     enum ggml_cgraph_eval_order {
@@ -2927,13 +2947,21 @@ extern "C" {
     GGML_API int                   ggml_graph_n_nodes(struct ggml_cgraph* cgraph);
 
 
-    // ggml_graph_plan() has to be called before ggml_graph_compute()
-    // when plan.work_size > 0, caller must allocate memory for plan.work_data
-    GGML_API struct ggml_cplan ggml_graph_plan   (const struct ggml_cgraph * cgraph, int n_threads /*= GGML_DEFAULT_N_THREADS*/);
+    GGML_API struct ggml_cplan ggml_graph_plan   (const struct ggml_cgraph * cgraph, int n_threads, struct ggml_threadpool * threadpool /*= NULL*/);
     GGML_API enum ggml_status  ggml_graph_compute(      struct ggml_cgraph * cgraph, struct ggml_cplan * cplan);
     // same as ggml_graph_compute() but the work data is allocated as a part of the context
     // note: the drawback of this API is that you must have ensured that the context has enough memory for the work data
     GGML_API enum ggml_status  ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads);
+
+// threadpool API
+    GGML_API struct ggml_threadpool_params ggml_threadpool_params_default      (int n_threads);
+    GGML_API void                           ggml_threadpool_params_init         (struct ggml_threadpool_params * p, int n_threads);
+    GGML_API bool                           ggml_threadpool_params_match        (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
+    GGML_API struct ggml_threadpool *       ggml_threadpool_new                (struct ggml_threadpool_params * params);
+    GGML_API void                           ggml_threadpool_free               (struct ggml_threadpool * threadpool);
+    GGML_API int                            ggml_threadpool_get_n_threads      (struct ggml_threadpool * threadpool);
+    GGML_API void                           ggml_threadpool_pause              (struct ggml_threadpool * threadpool);
+    GGML_API void                           ggml_threadpool_resume             (struct ggml_threadpool * threadpool);
 
     GGML_API struct ggml_tensor * ggml_graph_get_tensor(struct ggml_cgraph * cgraph, const char * name);
 
