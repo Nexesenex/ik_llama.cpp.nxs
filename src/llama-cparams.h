@@ -11,6 +11,7 @@ struct llama_cparams {
     uint32_t n_seq_max;
     uint32_t n_threads;       // number of threads to use for generation
     uint32_t n_threads_batch; // number of threads to use for batch processing
+    int tpool_threshold;      // pool batches with n_tokens >= N (0 = off, from --tpool/--threadpool)
 
     std::vector<std::string> devices;
     std::vector<std::string> devices_draft;
