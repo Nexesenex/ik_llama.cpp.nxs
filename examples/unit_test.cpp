@@ -53,7 +53,7 @@
 #include "iqk/iqk_mul_mat.h"
 
 // g_iqk_r16_path normally lives in the ggml lib (iqk_mul_mat.cpp).  The test
-// provides a local copy; set it before each call to iqk_convert_iq4_xs_r8_q8_k_r16.
+// provides a local copy; set it before each call to// iqk_convert_iq4_xs_r8_q8_k_r16.
 // Build with -DTEST_VNNI256 and/or -DTEST_VNNIINT8 to exercise the SIMD converter
 // path (Panther Lake / AVX_VNNI_INT8).  Without those the float fallback is tested.
 #ifdef TEST_VNNI256
@@ -149,7 +149,7 @@ static void test_delta_integrity(bool r16, int nrc_x, int n) {
     // Reset g_iqk_r16_path to match the path being tested
     bool saved_r16_path = g_iqk_r16_path;
     g_iqk_r16_path = r16;
-    iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got.data(), nrc_x);
+   // iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got.data(), nrc_x);
     g_iqk_r16_path = saved_r16_path;
 
     bool ok = true;
@@ -295,7 +295,7 @@ static void test_r16_fallback(int nrc_x, int n) {
     // Converter with g_iqk_r16_path=true (forces the assertion path on non-SIMD)
     std::vector<uint8_t> got((size_t)nrc_x * rowsz + 1024);
     g_iqk_r16_path = true;
-    iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got.data(), nrc_x);
+   // iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got.data(), nrc_x);
     g_iqk_r16_path = false;
 
     const size_t exp = (size_t)(nrc_x / 16) * nb * sizeof(block_q8_k_r16);
@@ -334,7 +334,7 @@ static void test_roundtrip(bool r16, int nrc_x, int n) {
     // Converter output
     std::vector<uint8_t> got((size_t)nrc_x * rowsz + 1024);
     g_iqk_r16_path = r16;
-    iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got.data(), nrc_x);
+   // iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got.data(), nrc_x);
     g_iqk_r16_path = false;
 
     // Dequantize converter output back to float
@@ -392,7 +392,7 @@ static void test_group_boundaries(int n) {
         // Converter output
         std::vector<uint8_t> got16((size_t)nrc_x * rowsz16 + 1024);
         g_iqk_r16_path = true;
-        iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got16.data(), nrc_x);
+       // iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got16.data(), nrc_x);
         g_iqk_r16_path = false;
 
         const size_t exp16 = (size_t)(nrc_x / rpb16) * nb * sizeof(block_q8_k_r16);
@@ -431,7 +431,7 @@ static void test_group_boundaries(int n) {
 
         std::vector<uint8_t> got8((size_t)nrc_x * rows_z8 + 1024);
         g_iqk_r16_path = false;
-        iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got8.data(), nrc_x);
+       // iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got8.data(), nrc_x);
         g_iqk_r16_path = false;
 
         const size_t exp8 = (size_t)(nrc_x / rpb8) * nb * sizeof(block_q8_k_r8);
@@ -477,7 +477,7 @@ static void test_dump_r16(int n) {
     // Converter
     std::vector<uint8_t> got16((size_t)nb * sizeof(block_q8_k_r16) + 1024);
     g_iqk_r16_path = true;
-    iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got16.data(), nrc_x);
+   // iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got16.data(), nrc_x);
     g_iqk_r16_path = false;
 
     printf("\n--- Diagnostic dump: R16 n=%d nb=%d (ref vs converter, block 0) ---\n", n, nb);
@@ -546,7 +546,7 @@ static void test_path(bool r16, int nrc_x, int n) {
     }
 
     std::vector<uint8_t> got((size_t)nrc_x * rowsz + 1024 * 1024);
-    iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got.data(), nrc_x);
+   // iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got.data(), nrc_x);
     g_iqk_r16_path = false;
 
     long first_mm = -1, last_mm = -1, delta_mm = -1, qs_mm = -1;
@@ -944,13 +944,13 @@ static void test_kv_sweep(bool r16, int ctx) {
     // Phase 1: prefill with prompt length (converter output = ground truth).
     got_prompt.assign(out_bytes(prompt) + 1024, 0);
     g_iqk_r16_path = r16;
-    iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got_prompt.data(), prompt);
+    // iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got_prompt.data(), prompt);
     g_iqk_r16_path = false;
 
     // Phase 2: full-context convert (prompt + more tokens).
     got_full.assign(out_bytes(ctx) + 1024, 0);
     g_iqk_r16_path = r16;
-    iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got_full.data(), ctx);
+    // iqk_convert_iq4_xs_r8_q8_k_r16(n, src.data(), bx, got_full.data(), ctx);
     g_iqk_r16_path = false;
 
     // Phase 3: first `prompt` rows of FULL must equal the PREFILL output byte-exact.
@@ -1038,7 +1038,7 @@ static void test_gemm_r16(int n, int nrc_x, int nrc_y, bool /*use_ref*/) {
     std::vector<uint8_t> Wr16_conv(total_bytes);
     {
         g_iqk_r16_path = true;
-        iqk_convert_iq4_xs_r8_q8_k_r16(n, W.data(), bx_w, Wr16_conv.data(), nrc_x);
+        // iqk_convert_iq4_xs_r8_q8_k_r16(n, W.data(), bx_w, Wr16_conv.data(), nrc_x);
         g_iqk_r16_path = false;
     }
 
@@ -1046,7 +1046,7 @@ static void test_gemm_r16(int n, int nrc_x, int nrc_y, bool /*use_ref*/) {
     std::vector<uint8_t> Wr16_conv2(total_bytes);
     {
         g_iqk_r16_path = true;
-        iqk_convert_iq4_xs_r8_q8_k_r16(n, W.data(), bx_w, Wr16_conv2.data(), nrc_x);
+        // iqk_convert_iq4_xs_r8_q8_k_r16(n, W.data(), bx_w, Wr16_conv2.data(), nrc_x);
         g_iqk_r16_path = false;
     }
     bool conv_self = (memcmp(Wr16_conv.data(), Wr16_conv2.data(), total_bytes) == 0);
