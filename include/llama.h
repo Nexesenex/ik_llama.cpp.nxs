@@ -1197,6 +1197,16 @@ extern "C" {
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
 
+#ifdef GGML_USE_THREADPOOL
+    // Attach a threadpool to the context for inference
+    // `threadpool` is used for generation (single token)
+    // `threadpool_batch` is used for prompt and batch processing (multiple tokens)
+    LLAMA_API void llama_attach_threadpool(struct llama_context * ctx, ggml_threadpool_t threadpool, ggml_threadpool_t threadpool_batch);
+
+    // Detach the threadpool from the context
+    LLAMA_API void llama_detach_threadpool(struct llama_context * ctx);
+#endif
+
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 
