@@ -2845,7 +2845,7 @@ static ggml_tensor * llm_compute_wkv_b(ggml_context * ctx, ggml_cgraph * graph,
 
     ggml_build_forward_expand(graph, wkv_b);
 
-    auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+    auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL); // manually added
     if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
     plan.work_data = work_data.data();
 
@@ -2940,7 +2940,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
 
             ggml_build_forward_expand(graph, wk_b);
 
-            auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+            auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL);
             if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
             plan.work_data = work_data.data();
 
@@ -3072,7 +3072,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 GGML_ASSERT((char *)wk_b_pp->data + ggml_nbytes(wk_b_pp) <=
                             (char *)tensor_data.data() + tensor_data.size());
                 ggml_build_forward_expand(graph, wk_b_pp);
-                auto plan_pp = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+                auto plan_pp = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL);
                 if (plan_pp.work_size > work_data.size()) work_data.resize(plan_pp.work_size);
                 plan_pp.work_data = work_data.data();
                 auto status_pp = ggml_graph_compute(graph, &plan_pp);
@@ -3089,7 +3089,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                         l.wkv_b->nb[1], l.wkv_b->nb[1]*(n_embd_head_qk_nope + n_embd_head_v), l.wkv_b->nb[1]*n_embd_head_qk_nope));
             wv_b->data = tensor_data.data();
             ggml_build_forward_expand(graph, wv_b);
-            plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+            plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL);
             if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
             plan.work_data = work_data.data();
             status = ggml_graph_compute(graph, &plan);
@@ -3227,7 +3227,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 auto f_q    = ggml_cast(ctx_pp, f_cont, l.wk_b->type);
                 f_q->data   = (char *)f_cont->data + ggml_nbytes(f_cont);
                 ggml_build_forward_expand(graph_pp, f_q);
-                auto plan = ggml_graph_plan(graph_pp, std::thread::hardware_concurrency()/2);
+                auto plan = ggml_graph_plan(graph_pp, std::thread::hardware_concurrency()/2, NULL);
                 if (plan.work_size > work_data_pp.size()) work_data_pp.resize(plan.work_size);
                 plan.work_data = work_data_pp.data();
                 auto status = ggml_graph_compute(graph_pp, &plan);
@@ -3541,7 +3541,7 @@ static void llm_prepare_openpangu_param_sinks(llama_model & model) {
         ggml_build_forward_expand(graph, sink_blk);
         ggml_build_forward_expand(graph, s_lat_t);
 
-        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL);
         if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
         plan.work_data = work_data.data();
 
@@ -3649,7 +3649,7 @@ static void llm_apply_khad_pretransform(llama_model & model) {
         ggml_build_forward_expand(graph, out_q);
 
         std::vector<uint8_t> work_data;
-        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL);
         if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
         plan.work_data = work_data.data();
         bool ok = (ggml_graph_compute(graph, &plan) == GGML_STATUS_SUCCESS);
@@ -6033,7 +6033,11 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
 static void llama_graph_compute(
         llama_context & lctx,
           ggml_cgraph * gf,
-                  int   n_threads) {
+                  int   n_threads
+#ifdef GGML_USE_THREADPOOL
+        , ggml_threadpool_t threadpool
+#endif
+        ) {
 #ifdef GGML_USE_METAL
     if (ggml_backend_is_metal(lctx.backend_metal)) {
         ggml_backend_metal_set_n_cb(lctx.backend_metal, n_threads);
@@ -6042,6 +6046,9 @@ static void llama_graph_compute(
 
     if (lctx.backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
+#ifdef GGML_USE_THREADPOOL
+        ggml_backend_cpu_set_threadpool(lctx.backend_cpu, threadpool);
+#endif
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
     }
@@ -6055,7 +6062,11 @@ static void llama_graph_compute_sched(
         llama_context & lctx,
         ggml_backend_sched_t sched,
           ggml_cgraph * gf,
-                  int   n_threads) {
+                  int   n_threads
+#ifdef GGML_USE_THREADPOOL
+        , ggml_threadpool_t threadpool
+#endif
+        ) {
 #ifdef GGML_USE_METAL
     if (ggml_backend_is_metal(lctx.backend_metal)) {
         ggml_backend_metal_set_n_cb(lctx.backend_metal, n_threads);
@@ -6064,6 +6075,9 @@ static void llama_graph_compute_sched(
 
     if (lctx.backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
+#ifdef GGML_USE_THREADPOOL
+        ggml_backend_cpu_set_threadpool(lctx.backend_cpu, threadpool);
+#endif
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
     }
@@ -6537,7 +6551,11 @@ static int llama_decode_internal(
         tim1 = ggml_time_us();
 #endif
         //fprintf(stderr, "%s: invoking llama_graph_compute\n", __func__);
-        llama_graph_compute(lctx, gf, n_threads);
+        llama_graph_compute(lctx, gf, n_threads
+#ifdef GGML_USE_THREADPOOL
+            , n_tokens == 1 ? lctx.threadpool : lctx.threadpool_batch
+#endif
+            );
 
         if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 &&
             lctx.kv_self.ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_PER_STEP &&
@@ -6872,7 +6890,11 @@ static int llama_encode_internal(
 
     llama_set_inputs(lctx, batch);
 
-    llama_graph_compute(lctx, gf, n_threads);
+    llama_graph_compute(lctx, gf, n_threads
+#ifdef GGML_USE_THREADPOOL
+        , lctx.threadpool
+#endif
+        );
 
     // extract embeddings
     if (embd) {
@@ -7158,7 +7180,11 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
 
     ggml_cgraph * gf = llm_build_context::llama_build_graph_defrag(lctx, ids);
 
-    llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
+    llama_graph_compute(lctx, gf, lctx.cparams.n_threads
+#ifdef GGML_USE_THREADPOOL
+        , lctx.threadpool
+#endif
+        );
 #endif
 
     //const int64_t t_end = ggml_time_us();
@@ -7199,7 +7225,11 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
             llama_set_k_shift(lctx);
 
-            llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
+            llama_graph_compute(lctx, gf, lctx.cparams.n_threads
+#ifdef GGML_USE_THREADPOOL
+                , lctx.threadpool
+#endif
+                );
 
             need_reserve = true;
         }
@@ -7225,7 +7255,11 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
             llama_set_s_copy(lctx);
 
-            llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
+            llama_graph_compute(lctx, gf, lctx.cparams.n_threads
+#ifdef GGML_USE_THREADPOOL
+                , lctx.threadpool
+#endif
+                );
 
             need_reserve = true;
         }
@@ -11665,6 +11699,18 @@ uint32_t llama_n_threads(struct llama_context * ctx) {
 uint32_t llama_n_threads_batch(struct llama_context * ctx) {
     return ctx->cparams.n_threads_batch;
 }
+
+#ifdef GGML_USE_THREADPOOL
+void llama_attach_threadpool(struct llama_context * ctx, ggml_threadpool_t threadpool, ggml_threadpool_t threadpool_batch) {
+    ctx->threadpool       = threadpool;
+    ctx->threadpool_batch = threadpool_batch;
+}
+
+void llama_detach_threadpool(struct llama_context * ctx) {
+    ctx->threadpool       = nullptr;
+    ctx->threadpool_batch = nullptr;
+}
+#endif
 
 void llama_set_abort_callback(struct llama_context * ctx, bool (*abort_callback)(void * data), void * abort_callback_data) {
     ctx->abort_callback      = abort_callback;
