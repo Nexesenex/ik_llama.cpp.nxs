@@ -7032,7 +7032,7 @@ static void repack_q16_k(int nrows, int n_per_row, const block_q8_K * x, block_q
                     for (int i = 0; i < 4; ++i) y[ibl].qs[64*ib + 4*k + i] = x16[k][ibl].qs[4*ib+i];
                 }
             }
-#if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256)
+#if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
 #if defined(HAVE_FANCY_SIMD)
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[ibl].qs + l), _mm512_set1_epi8(-128));
