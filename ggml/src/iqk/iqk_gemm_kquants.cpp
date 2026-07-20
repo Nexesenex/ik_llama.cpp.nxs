@@ -1949,6 +1949,22 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
 }
 #endif
 
+// Exported thin wrapper so external tests can drive the R16 GEMM kernel
+// directly (bypassing the full iqk_mul_mat dispatch). Selects the nrc_y
+// instantiation. Only the non-AVX-512 instantiation is wrapped here; the
+// AVX-512 variant lives behind HAVE_FANCY_SIMD.
+#if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+extern "C" void iqk_test_gemm_q8_k_r16(int n, const void * vx, size_t bx,
+                                       const DataInfo& info, int nrc_x, int nrc_y) {
+    switch (nrc_y) {
+        case 32: mul_mat_q8_k_r16_q8_k<32>(n, vx, bx, info, nrc_x); break;
+        case 64: mul_mat_q8_k_r16_q8_k<64>(n, vx, bx, info, nrc_x); break;
+        case 128: mul_mat_q8_k_r16_q8_k<128>(n, vx, bx, info, nrc_x); break;
+        default: mul_mat_q8_k_r16_q8_k<8>(n, vx, bx, info, nrc_x); break;
+    }
+}
+#endif
+
 template <int nrc_y>
 static void mul_mat_q8_KV_q8_KV(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
