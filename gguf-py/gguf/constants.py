@@ -1905,6 +1905,7 @@ class GGMLQuantizationType(IntEnum):
     IQ3_KS    = 156
     IQ2_KL    = 157
     IQ1_KT    = 158
+    IQ6_KS    = 159
     Q4_0_R8   = 202
     Q5_0_R4   = 206
     Q8_0_R8   = 208
@@ -1932,6 +1933,7 @@ class GGMLQuantizationType(IntEnum):
     IQ5_K_R4  = 340
     IQ4_KS_R4 = 344
     IQ5_KS_R4 = 352
+    IQ6_KS_R4 = 359
     Q8_KV_R8  = 398
     Q8_K_R8   = 399
 
@@ -2004,6 +2006,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_Q6_1_R4       = 336 #except 1d tensors
     MOSTLY_IQ2_KL        = 155 #except 1d tensors
     MOSTLY_IQ1_KT        = 156 #except 1d tensors
+    MOSTLY_IQ6_KS        = 157 #except 1d tensors
 
     MOSTLY_Q4_0_R8       = 202 #except 1d tensors
     MOSTLY_Q8_0_R8       = 207 #except 1d tensors
@@ -2031,6 +2034,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ5_K_R4      = 341 #except 1d tensors
     MOSTLY_IQ4_KS_R4     = 345 #except 1d tensors
     MOSTLY_IQ5_KS_R4     = 350 #except 1d tensors
+    MOSTLY_IQ6_KS_R4     = 351 #except 1d tensors
     MOSTLY_Q8_KV_R8      = 398 #except 1d tensors
     MOSTLY_Q8_K_R8       = 399 #except 1d tensors
 
@@ -2135,6 +2139,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.Q8_K128     : ( 128,  140),
     GGMLQuantizationType.Q8_KV       : (  32,   32),
     GGMLQuantizationType.IQ5_KS      : ( 256,  168),
+    GGMLQuantizationType.IQ6_KS      : ( 256,  208),
     GGMLQuantizationType.IQ2_KT      : ( 256,   68),
     GGMLQuantizationType.IQ3_KT      : ( 256,  100),
     GGMLQuantizationType.IQ4_KT      : ( 256,  128),
@@ -2168,6 +2173,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ5_K_R4    : ( 256,  176),
     GGMLQuantizationType.IQ4_KS_R4   : ( 256,  136),
     GGMLQuantizationType.IQ5_KS_R4   : ( 256,  168),
+    GGMLQuantizationType.IQ6_KS_R4   : ( 256,  208),
     GGMLQuantizationType.Q8_KV_R8    : (  32,   32),
     GGMLQuantizationType.Q8_K_R8     : ( 256,  258),
 }
