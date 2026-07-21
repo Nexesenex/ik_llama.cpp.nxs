@@ -1805,6 +1805,12 @@ QuantizationDone:;
         gguf_free(c);
     }
 
+    if (params->dry_run) {
+        LLAMA_LOG_INFO("%s: dry-run mode - no files written\n", __func__);
+    } else if (params->partial_requant && total_size_new == 0) {
+        LLAMA_LOG_INFO("%s: nothing requantized - all output files already exist\n", __func__);
+    }
+
     LLAMA_LOG_INFO("%s: model size  = %8.2f MB\n", __func__, total_size_org/1024.0/1024.0);
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MB\n", __func__, total_size_new/1024.0/1024.0);
 
