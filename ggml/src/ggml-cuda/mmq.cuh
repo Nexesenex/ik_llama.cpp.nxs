@@ -2938,8 +2938,7 @@ template <ggml_type type, int mmq_x, int nwarps, bool need_check>
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
 static __global__ void mul_mat_q(
     const char * __restrict__ x, const char * __restrict__ yc, float * __restrict__ dst, float * __restrict__ tmp_fixup,
-    const int ne00, const int ne01, const int stride01, const int ne10, const int ne11, const int stride11, const int ne0,
-    const uint3 blocks_per_ne00_fd, const uint3 nty_fd) {
+    const int ne00, const int ne01, const int stride01, const int ne10, const int ne11, const int stride11, const int ne0) {
 
     // Skip unused template specializations for faster compilation:
     if (mmq_x > get_mmq_x_max_device() || mmq_x % mmq_get_granularity_device(mmq_x) != 0) {
@@ -2956,52 +2955,49 @@ static __global__ void mul_mat_q(
         constexpr bool fixup = false;
         mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup>
             (x, yc, dst, tmp_fixup, ne00, ne01, stride01, ne10, ne11, stride11, ne0,
-                blockIdx.x, blockIdx.y, 0, blocks_per_ne00_fd.z);
+                blockIdx.x, blockIdx.y, 0, ne00/qk);
         return;
     }
 #endif // (defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) || __CUDA_ARCH__ < CC_VOLTA
 
+    const     int64_t blocks_per_ne00 = ne00 / qk;
     constexpr int     blocks_per_iter = MMQ_ITER_K / qk;
 
     const int ntx = (ne11 + mmq_x - 1) / mmq_x; // Number of tiles x
-    const int nty = nty_fd.z;                   // Number of tiles y
+    const int nty = (ne01 + mmq_y - 1) / mmq_y; // Number of tiles y
 
     // kbc == k block continuous, current index in continuous ijk space.
-    int kbc      = int64_t(blockIdx.x)     *blocks_per_ne00_fd.z*ntx*nty / gridDim.x;
-    int kbc_stop = int64_t(blockIdx.x + 1)*blocks_per_ne00_fd.z*ntx*nty / gridDim.x;
+    int64_t kbc      = (int64_t) blockIdx.x     *blocks_per_ne00*ntx*nty / gridDim.x;
+    int64_t kbc_stop = (int64_t)(blockIdx.x + 1)*blocks_per_ne00*ntx*nty / gridDim.x;
 
-    kbc      -= fastmodulo((uint32_t)kbc,      blocks_per_ne00_fd) % blocks_per_iter;
-    kbc_stop -= fastmodulo((uint32_t)kbc_stop, blocks_per_ne00_fd) % blocks_per_iter;
+    kbc      -= (kbc      % blocks_per_ne00) % blocks_per_iter;
+    kbc_stop -= (kbc_stop % blocks_per_ne00) % blocks_per_iter;
 
     // kb0 == k index when doing the matrix multiplication for an output tile.
-    int kb0_start = fastmodulo((uint32_t)kbc, blocks_per_ne00_fd);
-    int kb0_stop  = min(blocks_per_ne00_fd.z, (uint32_t)(kb0_start + kbc_stop - kbc));
-    while (kbc < kbc_stop && kb0_stop == (int)blocks_per_ne00_fd.z) {
-        int idx = fastdiv((uint32_t)kbc, blocks_per_ne00_fd);
-        uint2 divmod = fast_div_modulo((uint32_t)idx, nty_fd);
-        const int jt = divmod.x; // j index of current tile.
-        const int it = divmod.y; // i index of current tile.
+    int kb0_start = kbc % blocks_per_ne00;
+    int kb0_stop  = min(blocks_per_ne00, kb0_start + kbc_stop - kbc);
+    while (kbc < kbc_stop && kb0_stop == blocks_per_ne00) {
+        const int jt =  kbc /    (blocks_per_ne00*nty);                    // j index of current tile.
+        const int it = (kbc - jt*(blocks_per_ne00*nty)) / blocks_per_ne00; // i index of current tile.
 
         constexpr bool fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
         mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup>
             (x, yc, dst, tmp_fixup, ne00, ne01, stride01, ne10, ne11, stride11, ne0,
              it, jt, kb0_start, kb0_stop);
 
-        kbc += blocks_per_ne00_fd.z;
-        kbc -= fastmodulo((uint32_t)kbc, blocks_per_ne00_fd);
+        kbc += blocks_per_ne00;
+        kbc -= kbc % blocks_per_ne00;
 
         kb0_start = 0;
-        kb0_stop  = min(blocks_per_ne00_fd.z, (uint32_t)(kbc_stop - kbc));
+        kb0_stop  = min(blocks_per_ne00, kbc_stop - kbc);
     }
 
     if (kbc >= kbc_stop) {
         return;
     }
 
-    int idx = fastdiv((uint32_t)kbc, blocks_per_ne00_fd);
-    uint2 divmod = fast_div_modulo((uint32_t)idx, nty_fd);
-    const int jt = divmod.x;
-    const int it = divmod.y;
+    const int jt =  kbc /    (blocks_per_ne00*nty);
+    const int it = (kbc - jt*(blocks_per_ne00*nty)) / blocks_per_ne00;
 
     constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
     mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup>
@@ -3011,94 +3007,89 @@ static __global__ void mul_mat_q(
 
 
 template <ggml_type type, int mmq_x, int nwarps, bool need_check>
-__launch_bounds__(WARP_SIZE*nwarps/2, 1)
 static __global__ void mul_mat_q_stream_k_fixup(
-    float * __restrict__ dst, const float * __restrict__ tmp_last_tile, const int ne01, const int ne11, const int ne0,
-    const uint3 blocks_per_ne00_fd, const uint3 nty_fd, const int nblocks_stream_k) {
+    float * __restrict__ dst, const float * __restrict__ tmp_last_tile, const int ne00, const int ne01, const int ne11, const int ne0, const int block_num_mmq) {
 
-    constexpr int mmq_y           = get_mmq_y_device();
-    constexpr int qk              = ggml_cuda_type_traits<type>::qk;
-    constexpr int blocks_per_iter = MMQ_ITER_K / qk;
+    constexpr int     mmq_y           = get_mmq_y_device();
+    constexpr int     qk              = ggml_cuda_type_traits<type>::qk;
+    constexpr int     blocks_per_iter = MMQ_ITER_K / qk;
+    const     int64_t blocks_per_ne00 = ne00 / qk;
+
+    float sum[mmq_x*mmq_y / (nwarps*WARP_SIZE)] = {0.0f};
 
     const int ntx = (ne11 + mmq_x - 1) / mmq_x;
-    const int nty = nty_fd.z;
-
-    const int i = blockIdx.y*WARP_SIZE + threadIdx.x;
-
-    float sum[mmq_x / (nwarps/2)] = {0.0f};
-
-    const int bidx0 = blockIdx.x;
-
-    int kbc0      = int64_t(blockIdx.x)    *blocks_per_ne00_fd.z*ntx*nty / gridDim.x;
-    int kbc0_stop = int64_t(blockIdx.x + 1)*blocks_per_ne00_fd.z*ntx*nty / gridDim.x;
-
-    kbc0      -= fastmodulo((uint32_t)kbc0,      blocks_per_ne00_fd) % blocks_per_iter;
-    kbc0_stop -= fastmodulo((uint32_t)kbc0_stop, blocks_per_ne00_fd) % blocks_per_iter;
-
-    const bool did_not_have_any_data   = kbc0 == kbc0_stop;
-    const bool wrote_beginning_of_tile = fastmodulo((uint32_t)kbc0, blocks_per_ne00_fd) == 0;
-    const bool did_not_write_last      = fastdiv((uint32_t)kbc0, blocks_per_ne00_fd) == fastdiv((uint32_t)kbc0_stop, blocks_per_ne00_fd) && fastmodulo((uint32_t)kbc0_stop, blocks_per_ne00_fd) != 0;
-    if (did_not_have_any_data || wrote_beginning_of_tile || did_not_write_last) {
-        return;
-    }
+    const int nty = (ne01 + mmq_y - 1) / mmq_y;
 
     bool any_fixup = false;
 
-    int bidx = bidx0 - 1;
-    int kbc_stop = kbc0;
-    while(true) {
-        int kbc = int64_t(bidx)*blocks_per_ne00_fd.z*ntx*nty / nblocks_stream_k;
-        kbc -= fastmodulo((uint32_t)kbc, blocks_per_ne00_fd) % blocks_per_iter;
+    const int bidx_start = ((blockIdx.y*nty + blockIdx.x)     * block_num_mmq)                           / (gridDim.y*gridDim.x);
+    const int bidx_stop  = ((blockIdx.y*nty + blockIdx.x + 1) * block_num_mmq + gridDim.y*gridDim.x - 1) / (gridDim.y*gridDim.x);
 
-        if (kbc == kbc_stop) {
-            bidx--;
-            kbc_stop = kbc;
+    int64_t kbc_0;
+    int64_t kbc_stop_0 = (int64_t) bidx_start*blocks_per_ne00*ntx*nty / block_num_mmq;
+
+    for (int bidx = bidx_start; bidx < bidx_stop; ++bidx) {
+        kbc_0 = kbc_stop_0;
+        kbc_stop_0 = (int64_t) (bidx + 1)*blocks_per_ne00*ntx*nty / block_num_mmq;
+
+        const int64_t kbc      = kbc_0      - (kbc_0      % blocks_per_ne00) % blocks_per_iter;
+        const int64_t kbc_stop = kbc_stop_0 - (kbc_stop_0 % blocks_per_ne00) % blocks_per_iter;
+
+        // Skip fixup tile if the MMQ CUDA block never wrote anything to it:
+        if (kbc == kbc_stop || kbc_stop % blocks_per_ne00 == 0) {
+            continue;
+        }
+
+        const int jt =  kbc_stop /    (blocks_per_ne00*nty);
+        const int it = (kbc_stop - jt*(blocks_per_ne00*nty)) / blocks_per_ne00;
+
+        // Skip fixup tile if it's unrelated to the output tile assigned to this CUDA block:
+        if (it != blockIdx.x || jt != blockIdx.y) {
             continue;
         }
 
         any_fixup = true;
 
 #pragma unroll
-        for (int j0 = 0; j0 < mmq_x; j0 += (nwarps/2)) {
+        for (int j0 = 0; j0 < mmq_x; j0 += nwarps) {
             const int j = j0 + threadIdx.y;
 
-            sum[j0/(nwarps/2)] += tmp_last_tile[bidx*(mmq_x*mmq_y) + j*mmq_y + i];
-        }
+#pragma unroll
+            for (int i0 = 0; i0 < mmq_y; i0 += WARP_SIZE) {
+                const int i = i0 + threadIdx.x;
 
-        if (fastmodulo((uint32_t)kbc, blocks_per_ne00_fd) == 0 || fastdiv((uint32_t)kbc, blocks_per_ne00_fd) < fastdiv((uint32_t)kbc0, blocks_per_ne00_fd)) {
-            break;
+                sum[(j0/nwarps) * (mmq_y/WARP_SIZE) + i0/WARP_SIZE] += tmp_last_tile[bidx*(mmq_x*mmq_y) + j*mmq_y + i];
+            }
         }
-        bidx--;
-        kbc_stop = kbc;
     }
 
     if (!any_fixup) {
         return;
     }
 
-    int idx = fastdiv((uint32_t)kbc0, blocks_per_ne00_fd);
-    uint2 divmod = fast_div_modulo((uint32_t)idx, nty_fd);
-    const int jt = divmod.x;
-    const int it = divmod.y;
+    dst += blockIdx.y*mmq_x*ne0 + blockIdx.x*mmq_y;
 
-    dst += jt*mmq_x*ne0 + it*mmq_y;
-
-    const int i_max = ne01 - it*mmq_y - 1;
-    const int j_max = ne11 - jt*mmq_x - 1;
-
-    if (need_check && i > i_max) {
-        return;
-    }
+    const int i_max = ne01 - blockIdx.x*mmq_y - 1;
+    const int j_max = ne11 - blockIdx.y*mmq_x - 1;
 
 #pragma unroll
-    for (int j0 = 0; j0 < mmq_x; j0 += (nwarps/2)) {
+    for (int j0 = 0; j0 < mmq_x; j0 += nwarps) {
         const int j = j0 + threadIdx.y;
 
         if (j > j_max) {
             return;
         }
 
-        dst[j*ne0 + i] += sum[j0/(nwarps/2)];
+#pragma unroll
+        for (int i0 = 0; i0 < mmq_y; i0 += WARP_SIZE) {
+            const int i = i0 + threadIdx.x;
+
+            if (need_check && i > i_max) {
+                continue;
+            }
+
+            dst[j*ne0 + i] += sum[(j0/nwarps) * (mmq_y/WARP_SIZE) + i0/WARP_SIZE];
+        }
     }
 }
 
@@ -3142,77 +3133,42 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const int ntx = (args.ne11 + mmq_x - 1) / mmq_x;
     const dim3 block_nums_xy_tiling(nty, ntx, 1);
 
-    const uint3 blocks_per_ne00_fd = init_fastdiv_values(args.ne00 / ggml_cuda_type_traits<type>::qk);
-    const uint3 nty_fd             = init_fastdiv_values(nty);
-
     const bool use_stream_k = cc >= CC_VOLTA && cc < CC_OFFSET_AMD;
     if (!use_stream_k) {
         if (args.ne01 % mmq_y == 0) {
             constexpr bool need_check = false;
             mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
-                (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0,
-                 blocks_per_ne00_fd, nty_fd);
+                (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
         } else {
             constexpr bool need_check = true;
             mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
-                (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0,
-                 blocks_per_ne00_fd, nty_fd);
+                (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
         }
         return;
     }
 
-    // When tiling is efficient (>= 90%), use ntiles_dst blocks (one per tile) to skip the fixup
-    const int ntiles_dst = ntx * nty;
-    const int tiles_nwaves = (ntiles_dst + nsm - 1) / nsm;
-    const int tiles_efficiency_percent = 100 * ntiles_dst / (nsm * tiles_nwaves);
-
-    const dim3 block_nums_mmq = (GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90)
-        ? dim3(ntiles_dst, 1, 1)
-        : dim3(nsm, 1, 1);
-
-    const bool fixup_needed = ntiles_dst % block_nums_mmq.x != 0;
-
-    GGML_ASSERT(ntiles_dst * blocks_per_ne00_fd.z < (1u << 30));
+    const dim3 block_nums_mmq(nsm, 1, 1);
 
     ggml_cuda_pool & pool = ctx.pool(id);
-    ggml_cuda_pool_alloc<float> tmp_fixup(pool);
-    if (fixup_needed) {
-        tmp_fixup.alloc(block_nums_mmq.x * mmq_x*mmq_y);
-    }
+    ggml_cuda_pool_alloc<float> tmp_fixup(pool, block_nums_mmq.x * mmq_x*mmq_y);
 
     if (args.ne01 % mmq_y == 0) {
         constexpr bool need_check = false;
 
         mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_mmq, block_dims, shmem, stream>>>
-            (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0,
-             blocks_per_ne00_fd, nty_fd);
+            (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
 
-        if (fixup_needed) {
-            CUDA_CHECK(cudaGetLastError());
-
-            const dim3 block_dims_fixup(WARP_SIZE, MMQ_NWARPS/2, 1);
-            const dim3 block_nums_fixup(block_nums_mmq.x, mmq_y / WARP_SIZE, 1);
-
-            mul_mat_q_stream_k_fixup<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_fixup, block_dims_fixup, 0, stream>>>
-                (args.dst, tmp_fixup.ptr, args.ne01, args.ne11, args.ne0, blocks_per_ne00_fd, nty_fd, block_nums_mmq.x);
-        }
+        mul_mat_q_stream_k_fixup<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, 0, stream>>>
+            (args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.ne11, args.ne0, block_nums_mmq.x);
 
     } else {
         constexpr bool need_check = true;
 
         mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_mmq, block_dims, shmem, stream>>>
-            (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0,
-             blocks_per_ne00_fd, nty_fd);
+            (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
 
-        if (fixup_needed) {
-            CUDA_CHECK(cudaGetLastError());
-
-            const dim3 block_dims_fixup(WARP_SIZE, MMQ_NWARPS/2, 1);
-            const dim3 block_nums_fixup(block_nums_mmq.x, mmq_y / WARP_SIZE, 1);
-
-            mul_mat_q_stream_k_fixup<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_fixup, block_dims_fixup, 0, stream>>>
-                (args.dst, tmp_fixup.ptr, args.ne01, args.ne11, args.ne0, blocks_per_ne00_fd, nty_fd, block_nums_mmq.x);
-        }
+        mul_mat_q_stream_k_fixup<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, 0, stream>>>
+            (args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.ne11, args.ne0, block_nums_mmq.x);
 
     }
 }
