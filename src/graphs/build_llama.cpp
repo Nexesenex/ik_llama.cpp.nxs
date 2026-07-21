@@ -153,29 +153,13 @@ ggml_cgraph * llm_build_context::build_llama() {
                     cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
 
             // Shared experts
-            ggml_tensor * shexp_out;
-            if (model.layers[il].ffn_up_gate_shexp) {
-                auto n_ff_shexp = model.layers[il].ffn_up_gate_shexp->ne[1] / 2;
-                auto combined = llm_build_lora_mm(lctx, ctx0, model.layers[il].ffn_up_gate_shexp, ffn_inp_normed);
-                cb(combined, "ffn_shexp_combined", il);
-                auto type_size = ggml_type_size(combined->type);
-                auto gate_part = ggml_view_2d(ctx0, combined, n_ff_shexp, combined->ne[1], combined->nb[1], 0);
-                auto up_part = ggml_view_2d(ctx0, combined, n_ff_shexp, combined->ne[1], combined->nb[1], n_ff_shexp * type_size);
-                gate_part = ggml_silu(ctx0, gate_part);
-                cb(gate_part, "ffn_shexp_silu", il);
-                shexp_out = ggml_mul(ctx0, up_part, gate_part);
-                cb(shexp_out, "ffn_shexp_up_gated", il);
-                shexp_out = llm_build_lora_mm(lctx, ctx0, model.layers[il].ffn_down_shexp, shexp_out);
-                cb(shexp_out, "ffn_moe_shexp", il);
-            } else {
-                shexp_out = llm_build_ffn(ctx0, lctx, nullptr, ffn_inp_normed,
-                        model.layers[il].ffn_up_shexp,   NULL, NULL,
-                        model.layers[il].ffn_gate_shexp, NULL, NULL,
-                        model.layers[il].ffn_down_shexp, NULL, NULL,
-                        NULL,
-                        LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
-                cb(shexp_out, "ffn_moe_shexp", il);
-            }
+            ggml_tensor * shexp_out = llm_build_ffn(ctx0, lctx, nullptr, ffn_inp_normed,
+                    model.layers[il].ffn_up_shexp,   NULL, NULL,
+                    model.layers[il].ffn_gate_shexp, NULL, NULL,
+                    model.layers[il].ffn_down_shexp, NULL, NULL,
+                    NULL,
+                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+            cb(shexp_out, "ffn_moe_shexp", il);
 
             cur = ggml_add(ctx0, moe_out, shexp_out);
             cb(cur, "ffn_moe_out_merged", il);

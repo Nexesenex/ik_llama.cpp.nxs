@@ -170,8 +170,7 @@ ggml_cgraph * llm_build_context::build_ernie4_5_moe() {
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, true, false, 0.0f,
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    LLM_FFN_SILU, cb, il, gf, true, nullptr, nullptr, nullptr, nullptr,
-                    model.layers[il].ffn_up_gate_shexp);
+                    LLM_FFN_SILU, cb, il, gf, true);
         }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
