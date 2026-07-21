@@ -4426,7 +4426,6 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
             const int8_t * block_values = y[ibl].scales[ib] & 0x01 ? shifted_values : values;
             int l = nearest_int(0.5f*(id*scales[ib]+127.f));
             l = std::max(0, std::min(127, l)) << 1;
-            //printf("d = %g, id = %g, scales = %g, l = %d, dl = %g\n", d, id, scales[ib], l, d*(l - 127));
             y[ibl].scales[ib] |= l;
             l -= 127;
             float dl = d * l;
@@ -6800,7 +6799,9 @@ static void quantize_row_iq6_ks_impl(const int super_block_size, const int block
     dptr[0] = 0;
     block_iq6_ks * y = (block_iq6_ks *)(dptr + 1);
 
-    const int8_t * shifted_values = values + 64;
+    float fvalues[128];
+    for (int i = 0; i < 128; ++i) fvalues[i] = (float)values[i];
+    const float * shifted_values = fvalues + 64;
 
     float amax_scale = 0;
 
@@ -6830,19 +6831,19 @@ static void quantize_row_iq6_ks_impl(const int super_block_size, const int block
                 scales[ib] = 0;
                 continue;
             }
-            float d = ntry > 0 ? -max/values[0] : max/values[0];
+            float d = ntry > 0 ? -max/fvalues[0] : max/fvalues[0];
             float id = 1/d;
             float sumqx_p = 0, sumq2_p = 0;
             float sumqx_m = 0, sumq2_m = 0;
             for (int j = 0; j < block_size; ++j) {
                 float w = weight[j];
                 float al = id*xb[j];
-                int l = best_index_iq6nl(values, al);
-                float q = values[l];
+                int l = best_index_iq6nl(fvalues, al);
+                float q = fvalues[l];
                 sumqx_p += w*q*xb[j];
                 sumq2_p += w*q*q;
-                l = best_index_iq6nl(values, -al);
-                q = values[l];
+                l = best_index_iq6nl(fvalues, -al);
+                q = fvalues[l];
                 sumqx_m += w*q*xb[j];
                 sumq2_m += w*q*q;
             }
@@ -6853,18 +6854,18 @@ static void quantize_row_iq6_ks_impl(const int super_block_size, const int block
                 d = sumqx_m/sumq2_m; best = d*sumqx_m;
             }
             for (int itry = -ntry; itry <= ntry; ++itry) {
-                id = (itry + values[0])/max;
+                id = (itry + fvalues[0])/max;
                 sumqx_p = sumq2_p = 0;
                 sumqx_m = sumq2_m = 0;
                 for (int j = 0; j < block_size; ++j) {
                     float w = weight[j];
                     float al = id*xb[j];
-                    int l = best_index_iq6nl(values, al);
-                    float q = values[l];
+                    int l = best_index_iq6nl(fvalues, al);
+                    float q = fvalues[l];
                     sumqx_p += w*q*xb[j];
                     sumq2_p += w*q*q;
-                    l = best_index_iq6nl(values, -al);
-                    q = values[l];
+                    l = best_index_iq6nl(fvalues, -al);
+                    q = fvalues[l];
                     sumqx_m += w*q*xb[j];
                     sumq2_m += w*q*q;
                 }
@@ -6913,7 +6914,7 @@ static void quantize_row_iq6_ks_impl(const int super_block_size, const int block
         sigma2 *= 2.f/super_block_size;
         auto scales = all_scales + (super_block_size/block_size)*ibl;
         for (int ib = 0; ib < super_block_size/block_size; ++ib) {
-            const int8_t * block_values = y[ibl].scales[ib] & 0x01 ? shifted_values : values;
+            const float * block_values = y[ibl].scales[ib] & 0x01 ? shifted_values : fvalues;
             int l = nearest_int(0.5f*(id*scales[ib]+127.f));
             l = std::max(0, std::min(127, l)) << 1;
             y[ibl].scales[ib] |= l;
