@@ -1114,10 +1114,6 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                         type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU :
                         type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI;
-        {
-            static int fg_count = 0;
-            if (++fg_count <= 3) LLAMA_LOG_INFO("%s: ggml_fused_up_gate called (up=%s, gate=%s, cur=%s)\n", __func__, up->name, gate->name, cur->name);
-        }
         cur = ggml_fused_up_gate(ctx, up, gate, cur, unary_op);
         cb(cur, "ffn_up_gate", il);
         if (lctx.model.arch == LLM_ARCH_STEP35 || lctx.model.arch == LLM_ARCH_DEEPSEEK4) {
@@ -1594,8 +1590,7 @@ llm_expert_gating_func_type   gating_op,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input,
          ggml_tensor * up_gate_exps, ggml_tensor * up_gate_exps_b,
          ggml_tensor * shexp_gate,
-         ggml_tensor * add_extra,
-         ggml_tensor * up_gate_shexp, ggml_tensor * up_gate_shexp_b) {
+         ggml_tensor * add_extra) {
 
     auto split_up_exps    = up_exps ? (ggml_split_tensor_t *)up_exps->extra : nullptr;
     auto split_gate_exps  = gate_exps ? (ggml_split_tensor_t *)gate_exps->extra : nullptr;
@@ -1607,7 +1602,6 @@ llm_expert_gating_func_type   gating_op,
     auto split_gate_b_shexp = gate_b_shexp ? (ggml_split_tensor_t *)gate_b_shexp : nullptr;
     auto split_down_b_shexp = down_b_shexp ? (ggml_split_tensor_t *)down_b_shexp : nullptr;
     auto split_up_gate_exps = up_gate_exps ? (ggml_split_tensor_t *)up_gate_exps->extra : nullptr;
-    auto split_up_gate_shexp = up_gate_shexp ? (ggml_split_tensor_t *)up_gate_shexp->extra : nullptr;
     if (!split_up_exps && !split_gate_exps && !split_up_gate_exps && !split_down_exps) {
         auto cur = input;
         if (ffn_norm) {
@@ -1640,88 +1634,40 @@ llm_expert_gating_func_type   gating_op,
         ggml_build_forward_expand(graph, routed_out);
 
         bool handled_add_extra = false;
-        if (up_gate_shexp || (up_shexp && gate_shexp && down_shexp)) {
-            bool is_fused = up_gate_shexp != nullptr;
-            if ((is_fused && split_up_gate_shexp) || (!is_fused && split_up_shexp)) {
-                int n_device = is_fused ? split_up_gate_shexp->n_device : split_up_shexp->n_device;
-                std::vector<ggml_tensor *> results(n_device, nullptr);
-                if (!is_fused) {
-                    GGML_ASSERT(!split_up_b_shexp   || split_up_b_shexp->n_device   == split_up_shexp->n_device);
-                    GGML_ASSERT(!split_gate_b_shexp || split_gate_b_shexp->n_device == split_up_shexp->n_device);
-                }
-                GGML_ASSERT(!split_down_b_shexp || split_down_b_shexp->n_device == n_device);
+        if (up_shexp && gate_shexp && down_shexp) {
+            if (split_up_shexp) {
+                std::vector<ggml_tensor *> results(split_up_shexp->n_device, nullptr);
+                GGML_ASSERT(!split_up_b_shexp   || split_up_b_shexp->n_device   == split_up_shexp->n_device);
+                GGML_ASSERT(!split_gate_b_shexp || split_gate_b_shexp->n_device == split_up_shexp->n_device);
+                GGML_ASSERT(!split_down_b_shexp || split_down_b_shexp->n_device == split_up_shexp->n_device);
                 bool down_bias_added = false;
                 int id_add_routed = -1;
-                auto & first_split = is_fused ? split_up_gate_shexp : split_up_shexp;
-                if (first_split->splits[lctx.model.main_gpu]) {
+                if (split_up_shexp->splits[lctx.model.main_gpu]) {
                     id_add_routed = lctx.model.main_gpu;
                 } else {
-                    for (int id = 0; id < n_device; ++id) {
-                        if (first_split->splits[id]) {
+                    for (int id = 0; id < split_up_shexp->n_device; ++id) {
+                        if (split_up_shexp->splits[id]) {
                             id_add_routed = id;
                             break;
                         }
                     }
                 }
                 GGML_ASSERT(id_add_routed >= 0);
-                for (int id = 0; id < n_device; ++id) {
+                for (int id = 0; id < split_up_shexp->n_device; ++id) {
                     int il_cb = 1000*id + il;
-                    if (is_fused) {
-                        GGML_ASSERT((split_up_gate_shexp->splits[id] && split_down_shexp->splits[id]) ||
-                                    (!split_up_gate_shexp->splits[id] && !split_down_shexp->splits[id]));
-                    } else {
-                        GGML_ASSERT((split_up_shexp->splits[id] && split_gate_shexp->splits[id] && split_down_shexp->splits[id]) ||
-                                    (!split_up_shexp->splits[id] && !split_gate_shexp->splits[id] && !split_down_shexp->splits[id]));
-                    }
-                    if (!first_split->splits[id]) continue;
+                    GGML_ASSERT((split_up_shexp->splits[id] && split_gate_shexp->splits[id] && split_down_shexp->splits[id]) ||
+                                (!split_up_shexp->splits[id] && !split_gate_shexp->splits[id] && !split_down_shexp->splits[id]));
+                    if (!split_up_shexp->splits[id]) continue;
                     auto the_ffn_norm = ffn_norm ? ffn_norm->extra ? ((ggml_split_tensor_t *)ffn_norm->extra)->splits[id] : ffn_norm : nullptr;
                     auto this_input = input;
                     if (the_ffn_norm) {
                         this_input = llm_build_norm(ctx, input, lctx.model.hparams, the_ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
                     }
-                    ggml_tensor * shared_out;
-                    if (is_fused) {
-                        auto combined = llm_build_lora_mm(lctx, ctx, split_up_gate_shexp->splits[id], this_input);
-                        cb(combined, "ffn_shexp_combined", il_cb);
-                        auto n_ff_shexp = split_up_gate_shexp->splits[id]->ne[1] / 2;
-                        auto type_size = ggml_type_size(combined->type);
-                        auto gate_part = ggml_view_2d(ctx, combined, n_ff_shexp, combined->ne[1], combined->nb[1], 0);
-                        auto up_part = ggml_view_2d(ctx, combined, n_ff_shexp, combined->ne[1], combined->nb[1], n_ff_shexp * type_size);
-                        switch (type_op_shexp) {
-                            case LLM_FFN_SILU: {
-                                gate_part = ggml_silu(ctx, gate_part);
-                                cb(gate_part, "ffn_shexp_silu", il_cb);
-                                shared_out = ggml_mul(ctx, up_part, gate_part);
-                                cb(shared_out, "ffn_shexp_up_gated", il_cb);
-                            } break;
-                            case LLM_FFN_GELU: {
-                                gate_part = ggml_gelu(ctx, gate_part);
-                                cb(gate_part, "ffn_shexp_gelu", il_cb);
-                                shared_out = ggml_mul(ctx, up_part, gate_part);
-                                cb(shared_out, "ffn_shexp_up_gated", il_cb);
-                            } break;
-                            case LLM_FFN_RELU: {
-                                gate_part = ggml_relu(ctx, gate_part);
-                                cb(gate_part, "ffn_shexp_relu", il_cb);
-                                shared_out = ggml_mul(ctx, up_part, gate_part);
-                                cb(shared_out, "ffn_shexp_up_gated", il_cb);
-                            } break;
-                            case LLM_FFN_SWIGLU_OAI: {
-                                shared_out = ggml_swiglu_oai(ctx, gate_part, up_part, 1.702f, 7.0f);
-                                cb(shared_out, "ffn_shexp_swiglu_oai", il_cb);
-                            } break;
-                            default:
-                                GGML_ABORT("fatal error");
-                        }
-                        shared_out = llm_build_lora_mm(lctx, ctx, split_down_shexp->splits[id], shared_out);
-                        cb(shared_out, "ffn_shexp_down", il_cb);
-                    } else {
-                        shared_out = llm_build_ffn(ctx, lctx, nullptr, this_input,
-                                split_up_shexp->splits[id],   split_up_b_shexp   ? split_up_b_shexp->splits[id]   : nullptr, nullptr,
-                                split_gate_shexp->splits[id], split_gate_b_shexp ? split_gate_b_shexp->splits[id] : nullptr, nullptr,
-                                split_down_shexp->splits[id], !down_bias_added && split_down_b_shexp ? split_down_b_shexp->splits[id] : nullptr, nullptr,
-                                nullptr, type_op_shexp, LLM_FFN_PAR, cb, il, graph, false, false, nullptr);
-                    }
+                    auto shared_out = llm_build_ffn(ctx, lctx, nullptr, this_input,
+                            split_up_shexp->splits[id],   split_up_b_shexp   ? split_up_b_shexp->splits[id]   : nullptr, nullptr,
+                            split_gate_shexp->splits[id], split_gate_b_shexp ? split_gate_b_shexp->splits[id] : nullptr, nullptr,
+                            split_down_shexp->splits[id], !down_bias_added && split_down_b_shexp ? split_down_b_shexp->splits[id] : nullptr, nullptr,
+                            nullptr, type_op_shexp, LLM_FFN_PAR, cb, il, graph, false, false, nullptr);
                     cb(shared_out, "ffn_shexp_out", il_cb);
                     if (shexp_gate) {
                         auto split_shexp_gate = (ggml_split_tensor_t *)shexp_gate->extra;
@@ -1753,57 +1699,7 @@ llm_expert_gating_func_type   gating_op,
                     results[id] = shared_out;
                 }
                 GGML_ASSERT(!results.empty());
-                cur = ggml_reduce(ctx, results.data(), n_device, GGML_OP_ADD);
-                cb(cur, "ffn_out", il);
-            } else if (is_fused) {
-                auto n_ff_shexp = up_gate_shexp->ne[1] / 2;
-                auto combined = llm_build_lora_mm(lctx, ctx, up_gate_shexp, cur);
-                cb(combined, "ffn_shexp_combined", il);
-                auto type_size = ggml_type_size(combined->type);
-                auto gate_part = ggml_view_2d(ctx, combined, n_ff_shexp, combined->ne[1], combined->nb[1], 0);
-                auto up_part = ggml_view_2d(ctx, combined, n_ff_shexp, combined->ne[1], combined->nb[1], n_ff_shexp * type_size);
-                ggml_tensor * shared_out;
-                switch (type_op_shexp) {
-                    case LLM_FFN_SILU: {
-                        gate_part = ggml_silu(ctx, gate_part);
-                        cb(gate_part, "ffn_shexp_silu", il);
-                        shared_out = ggml_mul(ctx, up_part, gate_part);
-                        cb(shared_out, "ffn_shexp_up_gated", il);
-                    } break;
-                    case LLM_FFN_GELU: {
-                        gate_part = ggml_gelu(ctx, gate_part);
-                        cb(gate_part, "ffn_shexp_gelu", il);
-                        shared_out = ggml_mul(ctx, up_part, gate_part);
-                        cb(shared_out, "ffn_shexp_up_gated", il);
-                    } break;
-                    case LLM_FFN_RELU: {
-                        gate_part = ggml_relu(ctx, gate_part);
-                        cb(gate_part, "ffn_shexp_relu", il);
-                        shared_out = ggml_mul(ctx, up_part, gate_part);
-                        cb(shared_out, "ffn_shexp_up_gated", il);
-                    } break;
-                    case LLM_FFN_SWIGLU_OAI: {
-                        shared_out = ggml_swiglu_oai(ctx, gate_part, up_part, 1.702f, 7.0f);
-                        cb(shared_out, "ffn_shexp_swiglu_oai", il);
-                    } break;
-                    default:
-                        GGML_ABORT("fatal error");
-                }
-                shared_out = llm_build_lora_mm(lctx, ctx, down_shexp, shared_out);
-                cb(shared_out, "ffn_shexp_down", il);
-                if (shexp_gate) {
-                    auto shared_gate = llm_build_lora_mm(lctx, ctx, shexp_gate, cur);
-                    cb(shared_gate, "shared_expert_gate", il);
-                    if (shared_gate->ne[1] == 1) {
-                        shared_out = ggml_fused_mul_unary(ctx, shared_gate, shared_out, GGML_UNARY_OP_SIGMOID);
-                    } else {
-                        shared_gate = ggml_sigmoid(ctx, shared_gate);
-                        cb(shared_gate, "shared_expert_gate_sigmoid", il);
-                        shared_out = ggml_mul(ctx, shared_out, shared_gate);
-                    }
-                    cb(shared_out, "ffn_shexp_gated", il);
-                }
-                cur = ggml_add(ctx, routed_out, shared_out);
+                cur = ggml_reduce(ctx, results.data(), split_up_shexp->n_device, GGML_OP_ADD);
                 cb(cur, "ffn_out", il);
             } else {
                 auto shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
@@ -1851,8 +1747,7 @@ llm_expert_gating_func_type   gating_op,
     }
     std::vector<ggml_tensor *> results(n_device, nullptr);
     GGML_ASSERT((!split_up_shexp && !split_gate_shexp && !split_down_shexp) ||
-                ( split_up_shexp &&  split_gate_shexp &&  split_down_shexp) ||
-                ( split_up_gate_shexp && split_down_shexp));
+                ( split_up_shexp &&  split_gate_shexp &&  split_down_shexp));
     auto split_gate_inp = (ggml_split_tensor_t *)gate_inp->extra;
     GGML_ASSERT(split_gate_inp && split_gate_inp->n_device == n_device);
     auto split_exp_probs_b = exp_probs_b ? (ggml_split_tensor_t *)exp_probs_b->extra : nullptr;
@@ -1893,29 +1788,15 @@ llm_expert_gating_func_type   gating_op,
                     split_exps_up_gate_b ? split_exps_up_gate_b->splits[id] : nullptr);
         cb(routed_out, "routed_out", il_cb);
 
-        if (split_up_gate_shexp || split_up_shexp) {
-            if (!split_down_b_shexp || split_down_b_shexp->n_device == n_device);
-            ggml_tensor * shared_out;
-            if (split_up_gate_shexp) {
-                auto merged_shard = split_up_gate_shexp->splits[id];
-                auto n_ff_shexp = merged_shard->ne[1] / 2;
-                auto row_size = ggml_row_size(merged_shard->type, merged_shard->ne[0]);
-                auto gate_view = ggml_view_2d(ctx, merged_shard, merged_shard->ne[0], n_ff_shexp, merged_shard->nb[1], 0);
-                auto up_view = ggml_view_2d(ctx, merged_shard, merged_shard->ne[0], n_ff_shexp, merged_shard->nb[1], n_ff_shexp * row_size);
-                shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
-                        up_view,   nullptr, nullptr,
-                        gate_view, nullptr, nullptr,
-                        split_down_shexp->splits[id], !down_bias_added && split_down_b_shexp ? split_down_b_shexp->splits[id] : nullptr, nullptr,
-                        nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
-            } else {
-                GGML_ASSERT(!split_up_b_shexp   || split_up_b_shexp->n_device   == n_device);
-                GGML_ASSERT(!split_gate_b_shexp || split_gate_b_shexp->n_device == n_device);
-                shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
-                        split_up_shexp->splits[id],   split_up_b_shexp   ? split_up_b_shexp->splits[id]   : nullptr, nullptr,
-                        split_gate_shexp->splits[id], split_gate_b_shexp ? split_gate_b_shexp->splits[id] : nullptr, nullptr,
-                        split_down_shexp->splits[id], !down_bias_added && split_down_b_shexp ? split_down_b_shexp->splits[id] : nullptr, nullptr,
-                        nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
-            }
+        if (split_up_shexp) {
+            GGML_ASSERT(!split_up_b_shexp   || split_up_b_shexp->n_device   == n_device);
+            GGML_ASSERT(!split_gate_b_shexp || split_gate_b_shexp->n_device == n_device);
+            GGML_ASSERT(!split_down_b_shexp || split_down_b_shexp->n_device == n_device);
+            auto shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
+                    split_up_shexp->splits[id],   split_up_b_shexp   ? split_up_b_shexp->splits[id]   : nullptr, nullptr,
+                    split_gate_shexp->splits[id], split_gate_b_shexp ? split_gate_b_shexp->splits[id] : nullptr, nullptr,
+                    split_down_shexp->splits[id], !down_bias_added && split_down_b_shexp ? split_down_b_shexp->splits[id] : nullptr, nullptr,
+                    nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
             cb(shared_out, "ffn_shexp_out", il_cb);
             if (shexp_gate) {
                 auto split_shexp_gate = (ggml_split_tensor_t *)shexp_gate->extra;
