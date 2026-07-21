@@ -784,6 +784,20 @@ typedef struct {
 } block_iq5_ks_r4;
 static_assert(sizeof(block_iq5_ks_r4) == 4*sizeof(block_iq5_ks), "wrong iq5_ks_r4 block size/padding");
 
+typedef struct {
+    uint8_t  scales[QK_K/16];
+    uint8_t  qs[QK_K/2];
+    uint8_t  qh[QK_K/4];
+} block_iq6_ks;
+static_assert(sizeof(block_iq6_ks) == QK_K/16 + QK_K/2 + QK_K/4, "wrong iq6_ks block size/padding");
+
+typedef struct {
+    uint8_t  scales[QK_K/4];
+    uint8_t  qs[QK_K*2];
+    uint8_t  qh[QK_K];
+} block_iq6_ks_r4;
+static_assert(sizeof(block_iq6_ks_r4) == 4*sizeof(block_iq6_ks), "wrong iq6_ks_r4 block size/padding");
+
 
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL

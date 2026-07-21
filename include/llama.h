@@ -214,6 +214,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ3_KS        = 154, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ2_KL        = 155, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ1_KT        = 156, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ6_KS        = 157, // except 1d tensors
                                                 //
         LLAMA_FTYPE_MOSTLY_Q6_1          = 180, // except 1d tensors
                                                 //
@@ -243,6 +244,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ5_K_R4      = 341, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KS_R4     = 345, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ5_KS_R4     = 350, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ6_KS_R4     = 351, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_KV_R8      = 398, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_K_R8       = 399, // except 1d tensors
 
