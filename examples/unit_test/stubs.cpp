@@ -31,6 +31,7 @@ void   quantize_q4_K  (const float *, void *, int64_t, int64_t, const float *, c
 void   quantize_q5_0  (const float *, void *, int64_t, int64_t, const float *, const struct quantize_user_data *) {}
 void   quantize_q5_K  (const float *, void *, int64_t, int64_t, const float *, const struct quantize_user_data *) {}
 void   quantize_q6_0  (const float *, void *, int64_t, int64_t, const float *, const struct quantize_user_data *) {}
+void   quantize_q6_1  (const float *, void *, int64_t, int64_t, const float *, const struct quantize_user_data *) {}
 void   quantize_q6_K  (const float *, void *, int64_t, int64_t, const float *, const struct quantize_user_data *) {}
 void   quantize_q8_0  (const float *, void *, int64_t, int64_t, const float *, const struct quantize_user_data *) {}
 void   quantize_iq3_s (const float *, void *, int64_t, int64_t, const float *, const struct quantize_user_data *) {}

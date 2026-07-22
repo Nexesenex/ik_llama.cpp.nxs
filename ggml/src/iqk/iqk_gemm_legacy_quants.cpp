@@ -1711,6 +1711,112 @@ static void mul_mat_q6_0_r4_q8_2(int n, const void * vx, size_t bx, const DataIn
 }
 #endif
 
+// MulMat kernel for Q6_1_R4 (4 logical rows per physical block) × Q8_2 format.
+// Q6_1 has d (scale) and m (min) per block. Values are unsigned [0, 63].
+// Dot: d * sum(q6_i * q8_i) + m * sum(q8_i)
+// The q8_i and sum(q8_i) come from Q8_2 format (d8 = scale, m8 = scale * sum(q8)).
+// Q6_0 uses -16*d for the offset (centered), Q6_1 uses m.
+template <int nrc_y>
+static void mul_mat_q6_1_r4_q8_2_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%4 == 0);
+    Q8<nrc_y, block_q8_2_x4> q8(info);
+    auto m4 = _mm256_set1_epi8(0xf);
+    auto m6 = _mm256_set1_epi8(0x30);
+    int nb = n / QK6_1;
+    __m256 acc[nrc_y] = {};
+    float d8[8*nrc_y];
+    __m256i qx[4];
+    auto prepare = [&qx, &m4, &m6] (const block_q6_1_r4& iq6, __m256& m_scales) {
+        auto d128 = _mm_cvtph_ps(_mm_loadu_si128((const __m128i *)iq6.d));
+        auto m128 = _mm_cvtph_ps(_mm_loadu_si128((const __m128i *)iq6.m));
+        auto d_scales = MM256_SET1_M128(d128);
+        m_scales = MM256_SET1_M128(m128);
+        auto bits1 = _mm256_loadu_si256((const __m256i *)iq6.qs+0);
+        auto bits2 = _mm256_loadu_si256((const __m256i *)iq6.qs+1);
+        auto hbits = _mm256_loadu_si256((const __m256i *)iq6.qh);
+        qx[0] = _mm256_or_si256(_mm256_and_si256(bits1, m4), _mm256_and_si256(_mm256_slli_epi16(hbits, 4), m6));
+        qx[1] = _mm256_or_si256(_mm256_and_si256(bits2, m4), _mm256_and_si256(_mm256_slli_epi16(hbits, 2), m6));
+        qx[2] = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(bits1, 4), m4), _mm256_and_si256(hbits, m6));
+        qx[3] = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(bits2, 4), m4), _mm256_and_si256(_mm256_srli_epi16(hbits, 2), m6));
+        return d_scales;
+    };
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+    auto dot = [&qx] (__m256i y) {
+#if defined(HAVE_VNNIINT8)
+        auto sumi = ggml_mm256_dpbsud_epi32(_mm256_setzero_si256(), _mm256_shuffle_epi32(y, 0x00), qx[0]);
+        sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(y, 0x55), qx[1]);
+        sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(y, 0xaa), qx[2]);
+        sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(y, 0xff), qx[3]);
+#else
+        auto sumi = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[0], _mm256_shuffle_epi32(y, 0x00));
+        sumi = ggml_mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
+        sumi = ggml_mm256_dpbusd_epi32(sumi, qx[2], _mm256_shuffle_epi32(y, 0xaa));
+        sumi = ggml_mm256_dpbusd_epi32(sumi, qx[3], _mm256_shuffle_epi32(y, 0xff));
+#endif
+        return sumi;
+    };
+#else
+    auto m1 = _mm256_set1_epi16(1);
+    auto dot = [&qx, &m1] (__m256i y) {
+        auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[0], _mm256_shuffle_epi32(y, 0x00)),
+                                      _mm256_maddubs_epi16(qx[1], _mm256_shuffle_epi32(y, 0x55)));
+        auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[2], _mm256_shuffle_epi32(y, 0xaa)),
+                                      _mm256_maddubs_epi16(qx[3], _mm256_shuffle_epi32(y, 0xff)));
+        auto sumi = _mm256_add_epi32(_mm256_madd_epi16(m1, sumi1), _mm256_madd_epi16(m1, sumi2));
+        return sumi;
+    };
+#endif
+    auto mscale = _mm256_set_m128(_mm_set1_ps(-16.f), _mm_set1_ps(1.f));
+    for (int ix = 0; ix < nrc_x; ix += 4) {
+        const block_q6_1_r4 * iq6 = (const block_q6_1_r4 *)((const char *)vx + ix*bx);
+        for (int ib = 0; ib < nb/4; ++ib) {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto scales = convert_scales((const uint16_t *)q8.y[iy][ib].d);
+                _mm256_storeu_ps(d8 + 8*iy, _mm256_mul_ps(scales, mscale));
+            }
+            for (int k = 0; k < 4; ++k) {
+                __m256 m_scales;
+                auto d_scales = prepare(iq6[4*ib+k], m_scales);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto sumi = dot(_mm256_loadu_si256((const __m256i*)q8.y[iy][ib].qs+k));
+                    auto d4d8 = _mm256_mul_ps(d_scales, _mm256_set1_ps(d8[8*iy+k]));
+                    acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
+                    acc[iy] = _mm256_fmadd_ps(m_scales, _mm256_set1_ps(d8[8*iy+k+4] * (-1.f/16.f)), acc[iy]);
+                }
+            }
+        }
+        for (int ib = 4*(nb/4); ib < nb; ++ib) {
+            __m256 m_scales;
+            auto d_scales = prepare(iq6[ib], m_scales);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto qy = (const block_q8_2 *)q8.y[iy];
+                auto sumi = dot(_mm256_loadu_si256((const __m256i*)qy[ib].qs));
+                auto [d8v, m8v] = ScaleHelperQ8_2::prepare1(qy + ib);
+                auto d4d8 = _mm256_mul_ps(d_scales, _mm256_set1_ps(d8v));
+                acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(m_scales, _mm256_set1_ps(m8v), acc[iy]);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto sum = _mm_add_ps(_mm256_castps256_ps128(acc[iy]), _mm256_extractf128_ps(acc[iy], 1));
+            info.store(ix, iy, sum);
+            acc[iy] = _mm256_setzero_ps();
+        }
+    }
+}
+
+#ifdef HAVE_FANCY_SIMD
+template <int nrc_y>
+static void mul_mat_q6_1_r4_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    mul_mat_q6_1_r4_q8_2_avx2<nrc_y>(n, vx, bx, info, nrc_x);
+}
+#else
+template <int nrc_y>
+static void mul_mat_q6_1_r4_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    mul_mat_q6_1_r4_q8_2_avx2<nrc_y>(n, vx, bx, info, nrc_x);
+}
+#endif
+
 #if defined(HAVE_FANCY_SIMD)
 inline __m512i qx_r8_q8_dot_product(const __m512i * qx, const int8_t * y) {
     auto y4l = _mm_loadu_si128((const __m128i*)y+0);
@@ -2428,6 +2534,41 @@ template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX
     }
 }
 
+// Convert Q6_1_R4 (4 logical rows per physical row) to Q8_1_R8
+static void iqk_convert_q6_1_r4_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%32 == 0);
+    GGML_ASSERT(nrc_x%2 == 0);
+
+    int nb = n/32; // Q6_1 blocks per logical row
+    block_q8_1_r8 * y = (block_q8_1_r8 *)vy;
+
+    Q6_1_Dequantizer<block_q6_1> deq;
+    uint32_t block[8];
+
+    for (int ix = 0; ix < nrc_x; ix += 2) {
+        // 2 physical R4 rows = 8 logical Q6_1 rows → 1 Q8_1_R8 row
+        const block_q6_1 * x8[8];
+        for (int k = 0; k < 8; ++k) {
+            int phys = ix + k/4;
+            int sub  = k % 4;
+            x8[k] = (const block_q6_1 *)((const char *)vx + phys*bx) + sub*nb;
+        }
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                y[i].d[k+0] = x8[k][i].d;
+                y[i].d[k+8] = x8[k][i].m;
+                _mm256_storeu_si256((__m256i *)block, deq.dequant(x8[k] + i));
+                auto qs = (uint32_t *)y[i].qs;
+                for (int l = 0; l < 4; ++l) {
+                    qs[8*l + k +  0] = block[l + 0];
+                    qs[8*l + k + 32] = block[l + 4];
+                }
+            }
+        }
+        y += nb;
+    }
+}
+
 } // namespace
 
 bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
@@ -2437,6 +2578,7 @@ bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx
         case GGML_TYPE_Q5_0  : iqk_convert_qX_q80_r8<block_q5_0, Q5_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q5_1  : iqk_convert_qX_1_q8_1_r8<block_q5_1, Q5_1_Dequantizer<block_q5_1>>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_1  : iqk_convert_qX_1_q8_1_r8<block_q6_1, Q6_1_Dequantizer<block_q6_1>>(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q6_1_R4: iqk_convert_q6_1_r4_q8_1_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_0  : iqk_convert_qX_q80_r8<block_q6_0, Q6_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_NL: iqk_convert_qX_q80_r8<block_iq4_nl, IQ4_NL_DequantizerS>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q8_0  : iqk_convert_q80_q80_r8(n, vx, bx, vy, nrc_x); break;
@@ -2511,6 +2653,9 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
         case GGML_TYPE_Q8_1: // Note: we are misusing the Q8_1 type for Q8_1_R8
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_1_r8_q8_2, kernels)
             break;
+        case GGML_TYPE_Q6_1_R4:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q6_1_r4_q8_2, kernels)
+            break;
         default:
             return false;
     }
@@ -2532,6 +2677,7 @@ bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx
         case GGML_TYPE_Q5_0  : iqk_convert_qX_q80_r8<block_q5_0, DeqQ50>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q5_1  : iqk_convert_qX_1_q8_1_r8<block_q5_1, DeqQ51>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_1  : iqk_convert_qX_1_q8_1_r8<block_q6_1, DeqQ61>(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q6_1_R4: iqk_convert_qX_1_q8_1_r8<block_q6_1, DeqQ61>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_0  : iqk_convert_qX_q80_r8<block_q6_0, DeqQ60>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_NL: iqk_convert_qX_q80_r8<block_iq4_nl, DeqIQ4NL>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_MXFP4 : iqk_convert_qX_q80_r8<block_mxfp4, DeqMXFP4>(n, vx, bx, vy, nrc_x); break;
