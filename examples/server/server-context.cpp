@@ -1067,8 +1067,10 @@ server_slot* server_context::get_available_slot(const server_task& task) {
         // don't update the cache if the slot's context is above cache_ram_n_min
         update_cache = update_cache && cache_token_size >= cache_ram_n_min;
 
-        LLAMA_LOG_INFO("======== Prompt cache: cache size: %d, n_keep: %d, n_discarded_prompt: %d, cache_ram_n_min: %d, f_keep: %.2f, cache_ram_similarity: %.2f\n",
-            (int)tokens.size(), ret->n_kept_prompt, ret->n_discarded_prompt, cache_ram_n_min, f_keep, cache_ram_similarity);
+        if (prompt_cache) {
+            LLAMA_LOG_INFO("======== Prompt cache: cache size: %d, n_keep: %d, n_discarded_prompt: %d, cache_ram_n_min: %d, f_keep: %.2f, cache_ram_similarity: %.2f\n",
+                (int)tokens.size(), ret->n_kept_prompt, ret->n_discarded_prompt, cache_ram_n_min, f_keep, cache_ram_similarity);
+        }
         if (update_cache) {
             const int64_t t_start = ggml_time_us();
             LLAMA_LOG_INFO("updating prompt cache\n");
