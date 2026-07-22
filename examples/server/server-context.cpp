@@ -1081,7 +1081,7 @@ server_slot* server_context::get_available_slot(const server_task& task) {
             LLAMA_LOG_INFO("prompt cache save took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
         }
         // has prompts saved earlier to load
-        if (prompt_cache && !prompt_cache->states.empty()) {
+        if (prompt_cache && !prompt_cache->states.empty() && cache_token_size >= cache_ram_n_min) {
             const int64_t t_start = ggml_time_us();
             copy_data_to_cached_prompt(tokens, *ret);
 
