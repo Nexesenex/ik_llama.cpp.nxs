@@ -204,7 +204,7 @@ static ggml_tensor * dsv4_pad_raw_k_to(
         zero_row = ggml_cast(ctx, zero_row, GGML_TYPE_F32);
     }
     zero_row = ggml_scale(ctx, zero_row, 0.0f);
-    if (raw_k->type != zero_row->type && !ggml_is_quantized(raw_k->type)) {
+    if (raw_k->type != zero_row->type) {
         zero_row = ggml_cast(ctx, zero_row, raw_k->type);
     }
     ggml_tensor * zeros = ggml_repeat_4d(ctx, zero_row, zero_row->ne[0], zero_row->ne[1], n_pad, zero_row->ne[3]);
