@@ -1124,8 +1124,9 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #endif
 
 #ifndef GGML_SCHED_MAX_SPLIT_INPUTS
-// Gemma4 with per-layer embeddings and uses up to 32 inputs
-#define GGML_SCHED_MAX_SPLIT_INPUTS 32
+// Gemma4 with per-layer embeddings and DeepSeek-V4 with DSV4 cache management
+// can exceed 32 inputs
+#define GGML_SCHED_MAX_SPLIT_INPUTS 64
 #endif
 
 #ifndef GGML_SCHED_MAX_COPIES
