@@ -201,7 +201,7 @@ static ggml_tensor * dsv4_pad_raw_k_to(
         zero_row = ggml_cast(ctx, zero_row, GGML_TYPE_F32);
     }
     zero_row = ggml_scale(ctx, zero_row, 0.0f);
-    if (raw_k->type != zero_row->type && !ggml_is_quantized(raw_k->type)) {
+    if (raw_k->type != zero_row->type) {
         zero_row = ggml_cast(ctx, zero_row, raw_k->type);
     }
     ggml_tensor * zeros = ggml_repeat_4d(ctx, zero_row, zero_row->ne[0], zero_row->ne[1], n_pad, zero_row->ne[3]);
@@ -1355,6 +1355,19 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             if (raw_k->type != csa_k->type) {
                 csa_k = ggml_cast(ctx0, csa_k, raw_k->type);
             }
+            {
+                constexpr int k_fa_chunk = 256;
+                int n_swa = hparams.n_swa;
+                int ntokens = std::max(k_fa_chunk, int(q->ne[2]));
+                int nton = k_fa_chunk*((ntokens + n_swa + k_fa_chunk - 1)/k_fa_chunk);
+                int first = raw_k->ne[2] - nton;
+                if (first > 0) {
+                    raw_k = ggml_view_4d(ctx0, raw_k, raw_k->ne[0], raw_k->ne[1], nton, raw_k->ne[3],
+                                raw_k->nb[1], raw_k->nb[2], raw_k->nb[3], raw_k->nb[2]*first);
+                    raw_mask = ggml_view_4d(ctx0, raw_mask, nton, raw_mask->ne[1], raw_mask->ne[2], raw_mask->ne[3],
+                            raw_mask->nb[1], raw_mask->nb[2], raw_mask->nb[3], raw_mask->nb[0]*first);
+                }
+            }
             ggml_tensor * k_all = ggml_concat(ctx0, raw_k, csa_k, 2);
             ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, csa_mask, 0);
             cb(csa_k, "csa_k", il);
@@ -1387,6 +1400,19 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             }
             if (hca_k->type != raw_k->type) {
                 hca_k = ggml_cast(ctx0, hca_k, raw_k->type);
+            }
+            {
+                constexpr int k_fa_chunk = 256;
+                int n_swa = hparams.n_swa;
+                int ntokens = std::max(k_fa_chunk, int(q->ne[2]));
+                int nton = k_fa_chunk*((ntokens + n_swa + k_fa_chunk - 1)/k_fa_chunk);
+                int first = raw_k->ne[2] - nton;
+                if (first > 0) {
+                    raw_k = ggml_view_4d(ctx0, raw_k, raw_k->ne[0], raw_k->ne[1], nton, raw_k->ne[3],
+                                raw_k->nb[1], raw_k->nb[2], raw_k->nb[3], raw_k->nb[2]*first);
+                    raw_mask = ggml_view_4d(ctx0, raw_mask, nton, raw_mask->ne[1], raw_mask->ne[2], raw_mask->ne[3],
+                            raw_mask->nb[1], raw_mask->nb[2], raw_mask->nb[3], raw_mask->nb[0]*first);
+                }
             }
             ggml_tensor * k_all = ggml_concat(ctx0, raw_k, hca_k, 2);
             ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, hca_mask, 0);
