@@ -15,7 +15,7 @@
 #include <unordered_set>
 
 static bool dsv4_cache_type_supported(ggml_type type) {
-    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0;
+    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_1;
 }
 
 static bool dsv4_validate_cache_type(ggml_type type, int64_t width, const char * name) {
