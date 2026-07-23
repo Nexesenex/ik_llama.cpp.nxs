@@ -2244,7 +2244,7 @@ inline bool iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
 #if GGML_IQK_FA_ALL_QUANTS
         case GGML_TYPE_Q6_1: {
             HelperQ61 vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
         } break;
         case GGML_TYPE_Q4_0: {
             HelperQ40 vh(v, stride_v);
@@ -2295,7 +2295,7 @@ inline bool iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
         } break;
         case GGML_TYPE_Q6_1: {
             HelperQ61 kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
         } break;
         case GGML_TYPE_Q4_0: {
             HelperQ40 kh(k, stride_k);
