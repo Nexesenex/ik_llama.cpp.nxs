@@ -3642,7 +3642,38 @@ inline static void ggml_vec_sigmoid_f32 (const int n, float * y, const float * x
 }
 inline static float ggml_compute_softplus_f32(const float x) { return x > 20.0f ? x : logf(1.0f + expf(x)); }
 inline static float ggml_compute_sqrt_softplus_f32(const float x) { return sqrtf(ggml_compute_softplus_f32(x)); }
-inline static void ggml_vec_sqrt_softplus_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_compute_sqrt_softplus_f32(x[i]); }
+inline static void ggml_vec_softplus_f32 (const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(__AVX2__) && defined(_MSC_VER) && !defined(__clang__)
+    __m256 twenty = _mm256_set1_ps(20.0f);
+    __m256 one = _mm256_set1_ps(1.0f);
+    for (; i + 7 < n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        __m256 ve = _mm256_exp_ps(vx);
+        __m256 vlog = _mm256_log_ps(_mm256_add_ps(one, ve));
+        __m256 mask = _mm256_cmp_ps(vx, twenty, _CMP_GT_OQ);
+        _mm256_storeu_ps(y + i, _mm256_blendv_ps(vlog, vx, mask));
+    }
+#endif
+    for (; i < n; ++i) y[i] = ggml_compute_softplus_f32(x[i]);
+}
+inline static void ggml_vec_sqrt_softplus_f32 (const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(__AVX2__) && defined(_MSC_VER) && !defined(__clang__)
+    __m256 twenty = _mm256_set1_ps(20.0f);
+    __m256 one = _mm256_set1_ps(1.0f);
+    __m256 zero = _mm256_setzero_ps();
+    for (; i + 7 < n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        __m256 ve = _mm256_exp_ps(vx);
+        __m256 vlog = _mm256_log_ps(_mm256_add_ps(one, ve));
+        __m256 vsoft = _mm256_blendv_ps(vlog, vx, _mm256_cmp_ps(vx, twenty, _CMP_GT_OQ));
+        vsoft = _mm256_max_ps(vsoft, zero);
+        _mm256_storeu_ps(y + i, _mm256_sqrt_ps(vsoft));
+    }
+#endif
+    for (; i < n; ++i) y[i] = ggml_compute_sqrt_softplus_f32(x[i]);
+}
 inline static void ggml_vec_exp_f32(const int n, float * y, const float * x) {
     int i = 0;
 #if defined(__AVX2__) && defined(_MSC_VER) && !defined(__clang__)
@@ -3654,7 +3685,6 @@ inline static void ggml_vec_exp_f32(const int n, float * y, const float * x) {
 #endif
     for (; i < n; ++i) y[i] = expf(x[i]);
 }
-inline static void ggml_vec_softplus_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_compute_softplus_f32(x[i]); }
 inline static void ggml_vec_hardswish_f32 (const int n, float * y, const float * x) {
     int i = 0;
 #if defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
