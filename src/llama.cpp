@@ -51,6 +51,7 @@ static int64_t g_t_start_ctx = 0;
 
 #ifdef GGML_USE_CUDA
 #  include "ggml-cuda.h"
+#  include "../common/nvapi_poller.h"
 #elif defined(GGML_USE_VULKAN)
 #  include "ggml-vulkan.h"
 #elif defined(GGML_USE_SYCL)
@@ -152,6 +153,10 @@ static std::string trim(const std::string & str) {
 
 static bool stop_internal_decode = false;
 
+#ifdef GGML_USE_CUDA
+static NvapiPoller g_nvapi_poller({0, 1}, 5);
+#endif
+
 void  llama_decode_reset() {
     stop_internal_decode = false;
 }
@@ -168,6 +173,7 @@ void llama_shark_stop(struct llama_context * ctx) {
     }
 #ifdef GGML_USE_CUDA
     ggml_backend_cuda_set_hb_active(false);
+    g_nvapi_poller.stop();
 #endif
 }
 
@@ -6239,6 +6245,20 @@ static int llama_decode_internal(
             ggml_backend_cuda_set_hb_active(n_tokens_all <= 8);
         }
     }
+    // NVAPI poller: start/stop at same TG/PP boundaries as heartbeat
+    {
+        static bool nvapi_prefill_done = false;
+        if (n_tokens_all > 8) {
+            nvapi_prefill_done = true;
+        }
+        if (nvapi_prefill_done) {
+            if (n_tokens_all <= 8 && !g_nvapi_poller.is_running()) {
+                g_nvapi_poller.start();
+            } else if (n_tokens_all > 8 && g_nvapi_poller.is_running()) {
+                g_nvapi_poller.stop();
+            }
+        }
+    }
 #endif
 #if IK_PRINT_TIMING > 2
     printf("===== %s: %ld\n", __func__, ggml_time_us());
@@ -6835,6 +6855,7 @@ static int llama_decode_internal(
             }
 #ifdef GGML_USE_CUDA
             ggml_backend_cuda_set_hb_active(false);
+            g_nvapi_poller.stop();
 #endif
             return -3;
         }
