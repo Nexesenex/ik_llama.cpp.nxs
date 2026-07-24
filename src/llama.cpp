@@ -169,6 +169,9 @@ void llama_shark_stop(struct llama_context * ctx) {
         ctx->shark_active = false;
         ctx->cparams.shark_callback(false, ctx->cparams.shark_callback_data);
     }
+#ifdef GGML_USE_CUDA
+    ggml_backend_cuda_set_hb_active(false);
+#endif
 }
 
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
@@ -869,6 +872,9 @@ llama_context::~llama_context() {
         shark_active = false;
         cparams.shark_callback(false, cparams.shark_callback_data);
     }
+#ifdef GGML_USE_CUDA
+    ggml_backend_cuda_set_hb_active(false);
+#endif
 
     if (dflash.kv.cache_sched != nullptr) {
         ggml_backend_sched_free(dflash.kv.cache_sched);
@@ -6184,6 +6190,18 @@ static int llama_decode_internal(
             }
         }
     }
+    // Heartbeat: restrict to TG phase, same pattern as the poller
+#ifdef GGML_USE_CUDA
+    {
+        static bool hb_prefill_done = false;
+        if (n_tokens_all > 8) {
+            hb_prefill_done = true;
+        }
+        if (hb_prefill_done) {
+            ggml_backend_cuda_set_hb_active(n_tokens_all <= 8);
+        }
+    }
+#endif
 #if IK_PRINT_TIMING > 2
     printf("===== %s: %ld\n", __func__, ggml_time_us());
 #endif
@@ -6770,6 +6788,9 @@ static int llama_decode_internal(
                 lctx.shark_active = false;
                 lctx.cparams.shark_callback(false, lctx.cparams.shark_callback_data);
             }
+#ifdef GGML_USE_CUDA
+            ggml_backend_cuda_set_hb_active(false);
+#endif
             return -3;
         }
     }
