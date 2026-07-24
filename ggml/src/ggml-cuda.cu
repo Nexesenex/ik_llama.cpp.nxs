@@ -4191,10 +4191,17 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     if (!ops_are_same_device(cgraph, i, i + n_fuse)) break;
                 }
                 if (n_fuse > 1) {
+                    struct ggml_tensor * saved_src[7]; // max n_fuse=8 -> save src[2..8] = up to 7 slots
+                    for (int j = 0; j < n_fuse - 1; ++j) {
+                        saved_src[j] = dst->src[j + 2];
+                    }
                     for (int j = 0; j < n_fuse - 1; ++j) {
                         dst->src[j + 2] = cgraph->nodes[i + j + 1]->src[1];
                     }
                     ggml_cuda_op_fused_add(ctx, dst, n_fuse);
+                    for (int j = 0; j < n_fuse - 1; ++j) {
+                        dst->src[j + 2] = saved_src[j];
+                    }
                     i += n_fuse - 1;
                 } else {
                     ggml_cuda_op_add(ctx, dst);
