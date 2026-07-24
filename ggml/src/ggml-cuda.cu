@@ -205,6 +205,7 @@ cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
 }
 
 static bool ggml_cuda_hb = false;
+static bool ggml_cuda_hb_active = false; // hb_active: true during TG, false during PP
 
 static ggml_cuda_device_info ggml_cuda_init() {
 #ifdef __HIP_PLATFORM_AMD__
@@ -655,18 +656,20 @@ static void ggml_cuda_hb_thread_proc() {
         }
     }
     while (ggml_cuda_hb_running) {
-        for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
-            if (ggml_cuda_info().devices[i].is_tcc) continue;
-            if (hb_streams[i] == nullptr) continue;
-            // Check if there was activity within the last 200ms
-            int64_t dt = ggml_time_us() - ggml_cuda_hb_last_active[i].load();
-            if (dt > 0 && dt < 200000) {
-                cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
-                cudaEvent_t ev;
-                cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
-                cudaEventRecord(ev, hb_streams[i]);
-                cudaEventSynchronize(ev);
-                cudaEventDestroy(ev);
+        if (ggml_cuda_hb_active) {
+            for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
+                if (ggml_cuda_info().devices[i].is_tcc) continue;
+                if (hb_streams[i] == nullptr) continue;
+                // Check if there was activity within the last 200ms
+                int64_t dt = ggml_time_us() - ggml_cuda_hb_last_active[i].load();
+                if (dt > 0 && dt < 200000) {
+                    cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
+                    cudaEvent_t ev;
+                    cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
+                    cudaEventRecord(ev, hb_streams[i]);
+                    cudaEventSynchronize(ev);
+                    cudaEventDestroy(ev);
+                }
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -5147,7 +5150,9 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
     ggml_cuda_set_device(cuda_ctx->device);
-    ggml_cuda_hb_last_active[cuda_ctx->device].store(ggml_time_us());
+    if (ggml_cuda_hb_active) {
+        ggml_cuda_hb_last_active[cuda_ctx->device].store(ggml_time_us());
+    }
 
 #ifdef USE_CUDA_GRAPH
     cuda_ctx->cur_graph = nullptr;
@@ -6206,4 +6211,8 @@ GGML_CALL void ggml_backend_cuda_set_hb(bool val) {
 
 GGML_CALL bool ggml_backend_cuda_get_hb(void) {
     return ggml_cuda_hb;
+}
+
+GGML_CALL void ggml_backend_cuda_set_hb_active(bool val) {
+    ggml_cuda_hb_active = val;
 }

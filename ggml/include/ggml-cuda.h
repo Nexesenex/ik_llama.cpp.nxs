@@ -70,6 +70,10 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_hb(bool val);
 // Get current heartbeat setting
 GGML_API GGML_CALL bool ggml_backend_cuda_get_hb(void);
 
+// Set heartbeat active phase (TG=true, PP=false). Only issue keep-alive when active.
+// Called from llama.cpp at the same points as the shark_callback.
+GGML_API GGML_CALL void ggml_backend_cuda_set_hb_active(bool val);
+
 // Set stream-k efficiency threshold (0-100, default 75)
 // Lower values use stream-k more aggressively, higher values prefer wave attention
 // Use: ggml_backend_cuda_set_stream_k_thresh(50) for more stream-k
