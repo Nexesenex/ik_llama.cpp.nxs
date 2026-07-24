@@ -6,6 +6,8 @@
 #include <windows.h>
 #include <nvapi.h>
 
+#include <cuda_runtime.h>
+
 #include <chrono>
 #include <cstdio>
 
@@ -70,9 +72,11 @@ void NvapiPoller::thread_func() {
     fprintf(stderr, "[NvapiPoller] Started on %zu device(s), interval=%dms\n",
             handles.size(), interval_ms);
 
+    static char* d_bufs[64] = {};
+
     while (should_run.load()) {
-        for (auto handle : handles) {
-            // Aggressive metric hammering — forces high P-states
+        for (size_t i = 0; i < handles.size(); ++i) {
+            auto handle = handles[i];
             NV_GPU_DYNAMIC_PSTATES_INFO_EX pstates = {};
             pstates.version = NV_GPU_DYNAMIC_PSTATES_INFO_EX_VER;
             NvAPI_GPU_GetDynamicPstatesInfoEx(handle, &pstates);
@@ -89,8 +93,24 @@ void NvapiPoller::thread_func() {
             NV_GPU_PERF_PSTATES20_INFO pstates20 = {};
             pstates20.version = NV_GPU_PERF_PSTATES20_INFO_VER;
             NvAPI_GPU_GetPstates20(handle, &pstates20);
+
+            if (d_bufs[i] == nullptr) {
+                cudaSetDevice(devices[i]);
+                cudaMalloc(&d_bufs[i], 4096);
+            }
+            cudaSetDevice(devices[i]);
+            cudaMemset(d_bufs[i], 0, 4096);
+            cudaMemset(d_bufs[i], 0xFF, 4096);
+            cudaDeviceSynchronize();
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
+    }
+
+    for (size_t i = 0; i < handles.size(); ++i) {
+        if (d_bufs[i] != nullptr) {
+            cudaSetDevice(devices[i]);
+            cudaFree(d_bufs[i]);
+        }
     }
 
     NvAPI_Unload();

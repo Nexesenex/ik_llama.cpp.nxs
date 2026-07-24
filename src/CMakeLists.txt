@@ -143,9 +143,12 @@ target_compile_features   (llama PUBLIC cxx_std_17)
 target_link_libraries(llama PUBLIC ggml)
 
 if (WIN32)
+    find_package(CUDAToolkit QUIET)
     target_include_directories(llama PRIVATE ../nvapi)
+    target_include_directories(llama PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
     target_link_directories(llama PRIVATE ../nvapi/amd64)
     target_link_libraries(llama PRIVATE nvapi64)
+    target_link_libraries(llama PRIVATE CUDA::cudart)
 endif()
 
 if (BUILD_SHARED_LIBS)
