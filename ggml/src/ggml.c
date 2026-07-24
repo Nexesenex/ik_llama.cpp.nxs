@@ -4401,7 +4401,19 @@ inline static void ggml_vec_gelu_f32(const int n, float * y, const float * x) {
 }
 
 inline static void ggml_vec_gelu_erf_f32(const int n, float * y, const float * x) {
-    for (int i = 0; i < n; ++i) {
+    int i = 0;
+#if defined(__AVX2__) && defined(_MSC_VER) && !defined(__clang__)
+    __m256 half = _mm256_set1_ps(0.5f);
+    __m256 one = _mm256_set1_ps(1.0f);
+    __m256 sqrt2_inv = _mm256_set1_ps(SQRT_2_INV);
+    for (; i + 7 < n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        __m256 verf = _mm256_erf_ps(_mm256_mul_ps(vx, sqrt2_inv));
+        __m256 vgelu = _mm256_mul_ps(_mm256_mul_ps(half, vx), _mm256_add_ps(one, verf));
+        _mm256_storeu_ps(y + i, vgelu);
+    }
+#endif
+    for (; i < n; ++i) {
         y[i] = ggml_gelu_erf_f32(x[i]);
     }
 }
@@ -4681,7 +4693,20 @@ inline static void ggml_vec_geglu_bf16(const int n, ggml_bf16_t * y, const ggml_
 }
 
 inline static void ggml_vec_geglu_erf_f32(const int n, float * y, const float * x, const float * g) {
-    for (int i = 0; i < n; ++i) {
+    int i = 0;
+#if defined(__AVX2__) && defined(_MSC_VER) && !defined(__clang__)
+    __m256 half = _mm256_set1_ps(0.5f);
+    __m256 one = _mm256_set1_ps(1.0f);
+    __m256 sqrt2_inv = _mm256_set1_ps(SQRT_2_INV);
+    for (; i + 7 < n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        __m256 vg = _mm256_loadu_ps(g + i);
+        __m256 verf = _mm256_erf_ps(_mm256_mul_ps(vx, sqrt2_inv));
+        __m256 vgelu = _mm256_mul_ps(_mm256_mul_ps(half, vx), _mm256_add_ps(one, verf));
+        _mm256_storeu_ps(y + i, _mm256_mul_ps(vgelu, vg));
+    }
+#endif
+    for (; i < n; ++i) {
         float xi = x[i];
         y[i] = 0.5f * xi * (1.0f + erff(xi*SQRT_2_INV)) * g[i];
     }
