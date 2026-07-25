@@ -1182,6 +1182,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         { GGML_TYPE_IQ2_S_R4  , 4},
         { GGML_TYPE_IQ4_XS_R8 , 8},
         { GGML_TYPE_IQ1_M_R4  , 4},
+        { GGML_TYPE_MXFP4_R8  , 8},
         { GGML_TYPE_BF16_R16  , 16},
         { GGML_TYPE_Q6_0_R4   , 4},
         { GGML_TYPE_IQ2_BN_R4 , 4},
@@ -1415,7 +1416,8 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_get_tensor([[maybe_unused]]
             t == GGML_TYPE_IQ1_M_R4   || t == GGML_TYPE_BF16_R16  || t == GGML_TYPE_IQ2_BN_R4 ||
             t == GGML_TYPE_IQ2_K_R4   || t == GGML_TYPE_IQ3_K_R4  || t == GGML_TYPE_IQ4_K_R4   ||
             t == GGML_TYPE_IQ5_K_R4   || t == GGML_TYPE_IQ4_KS_R4 || t == GGML_TYPE_IQ5_KS_R4 ||
-            t == GGML_TYPE_Q8_K_R16   || t == GGML_TYPE_Q8_KV_R8  || t == GGML_TYPE_Q8_K_R8;
+            t == GGML_TYPE_Q8_K_R16   || t == GGML_TYPE_Q8_KV_R8  || t == GGML_TYPE_Q8_K_R8  ||
+            t == GGML_TYPE_MXFP4_R8;
         if (is_repacked) {
             GGML_ABORT("%s: get_tensor of repacked type %s is not invertible",
                        __func__, ggml_type_name(t));
