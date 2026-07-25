@@ -1005,7 +1005,19 @@ inline void rms_rms_add(int ncols, float scale1, float scale2, const ggml_half *
     }
 }
 inline void rms_rms_add(int ncols, float scale1, float scale2, const ggml_bf16_t * x1, const ggml_bf16_t * x2, const float * c1, const float * c2, float * dst) {
-    for (int j = 0; j < ncols; ++j) {
+    int j = 0;
+#if defined(__AVX2__)
+    auto vs1 = _mm256_set1_ps(scale1);
+    auto vs2 = _mm256_set1_ps(scale2);
+    for (; j + 7 < ncols; j += 8) {
+        auto vx1 = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)(x1 + j))), 16));
+        auto vx2 = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)(x2 + j))), 16));
+        auto vc1 = _mm256_loadu_ps(c1 + j);
+        auto vc2 = _mm256_loadu_ps(c2 + j);
+        _mm256_storeu_ps(dst + j, _mm256_add_ps(_mm256_mul_ps(_mm256_mul_ps(vs1, vc1), vx1), _mm256_mul_ps(_mm256_mul_ps(vs2, vc2), vx2)));
+    }
+#endif
+    for (; j < ncols; ++j) {
         float v1 = GGML_BF16_TO_FP32(x1[j]);
         float v2 = GGML_BF16_TO_FP32(x2[j]);
         dst[j] = scale1 * c1[j] * v1 + scale2 * c2[j] * v2;
