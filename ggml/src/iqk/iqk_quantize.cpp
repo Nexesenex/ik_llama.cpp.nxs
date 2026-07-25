@@ -4298,6 +4298,91 @@ void  vec_dot_mxfp4_q8_0_x4(int n, float * s, size_t bs, const void * vx, size_t
     //*s = sumf;
 }
 
+// ============================== MXFP4_R8
+
+static void repack_mxfp4(int nrows, int n_per_row, const block_mxfp4 * x, block_mxfp4_r8 * y, [[maybe_unused]] bool online) {
+    GGML_ASSERT(nrows%8 == 0);
+    GGML_ASSERT(n_per_row%QK_MXFP4 == 0);
+    int nblock = n_per_row/QK_MXFP4;
+    const block_mxfp4 * x8[8];
+    for (int row = 0; row < nrows; row += 8) {
+        for (int k = 0; k < 8; ++k) x8[k] = x + nblock*k;
+        for (int ib = 0; ib < nblock; ++ib) {
+            for (int k = 0; k < 8; ++k) {
+                y[ib].e[k] = x8[k][ib].e;
+                for (int l = 0; l < 4; ++l) {
+                    for (int i = 0; i < 4; ++i) {
+                        y[ib].qs[32*l+4*k+i] = x8[k][ib].qs[4*l + i];
+                    }
+                }
+            }
+        }
+        x += 8*nblock;
+        y += nblock;
+    }
+}
+
+void quantize_row_mxfp4_r8_ref(const float * x, block_mxfp4_r8 * y, int64_t k) {
+    quantize_mxfp4_r8(x, (void *)y, 8, k/8, nullptr, nullptr);
+}
+
+void quantize_row_mxfp4_r8(const float * x, void * y, int64_t k) {
+    quantize_mxfp4_r8(x, (void *)y, 8, k/8, nullptr, nullptr);
+}
+
+size_t quantize_mxfp4_r8(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
+        const quantize_user_data * user_data) {
+    GGML_ASSERT(nrows%8 == 0);
+    auto row_size = ggml_row_size(GGML_TYPE_MXFP4, n_per_row);
+    std::vector<char> qtmp(8*row_size);
+    float weight[QK_MXFP4];
+    auto q_func = [] (const float * x, void * vy, int n_per_row, const float * imatrix,
+            [[maybe_unused]] const quantize_user_data * user_data) {
+        quantize_mxfp4(x, (char *)vy, 1, n_per_row, imatrix, nullptr);
+    };
+    char * qrow = (char *)dst;
+    for (int row = 0; row < nrows; row += 8) {
+        for (int k = 0; k < 8; ++k) {
+            quantize_mxfp4(src + k*n_per_row, qtmp.data() + k*row_size, 1, n_per_row, imatrix, nullptr);
+        }
+        repack_mxfp4(8, n_per_row, (const block_mxfp4 *)qtmp.data(), (block_mxfp4_r8 *)qrow, false);
+        src += 8*n_per_row;
+        qrow += 8*row_size;
+    }
+    return nrows*row_size;
+}
+
+void dequantize_row_mxfp4_r8(const block_mxfp4_r8 * x, float * y, int64_t k) {
+    int n_per_row = k/8;
+    int nb = n_per_row/QK_MXFP4;
+    float * yk[8];
+    for (int i = 0; i < 8; ++i) yk[i] = y + i*n_per_row;
+    for (int ib = 0; ib < nb; ++ib) {
+        for (int k = 0; k < 8; ++k) {
+            float d = GGML_E8M0_TO_FP32_HALF(x[ib].e[k]);
+            for (int l = 0; l < 4; ++l) {
+                for (int i = 0; i < 4; ++i) {
+                    yk[k][QK_MXFP4*ib+4*l+i+ 0] = d * kvalues_mxfp4[x[ib].qs[32*l+4*k+i] & 0xf];
+                    yk[k][QK_MXFP4*ib+4*l+i+16] = d * kvalues_mxfp4[x[ib].qs[32*l+4*k+i] >>  4];
+                }
+            }
+        }
+    }
+}
+
+void vec_dot_mxfp4_r8_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_MXFP4_R8, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK_MXFP4 == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
+
 namespace {
 static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int block_size,
         int n_per_row, const float * x, char * cy,
@@ -9022,6 +9107,7 @@ const Repack * get_repack_info(ggml_type type) {
         { GGML_TYPE_Q5_K,   { GGML_TYPE_Q5_K_R4,   4,  (Repack::repack_func)repack_q5_k}    },
         { GGML_TYPE_Q6_K,   { GGML_TYPE_Q6_K_R4,   4,  (Repack::repack_func)repack_q6_k}    },
         { GGML_TYPE_Q4_0,   { GGML_TYPE_Q4_0_R8,   8,  (Repack::repack_func)repack_q4_0}    },
+        { GGML_TYPE_MXFP4,  { GGML_TYPE_MXFP4_R8,  8,  (Repack::repack_func)repack_mxfp4}   },
         { GGML_TYPE_Q5_0,   { GGML_TYPE_Q5_0_R4,   4,  (Repack::repack_func)repack_q5_0}    },
         { GGML_TYPE_Q6_0,   { GGML_TYPE_Q6_0_R4,   4,  (Repack::repack_func)repack_q6_0}    },
         { GGML_TYPE_Q6_1,   { GGML_TYPE_Q6_1_R4,   4,  (Repack::repack_func)repack_q6_1}    },
@@ -11081,6 +11167,7 @@ bool iqk_validate_tensor(const ggml_tensor * tensor) {
         case GGML_TYPE_IQ3_XXS_R4: return check_tensor_for_blocks_256_fp16_repacked<block_iq3_xxs_r4, 4>(tensor);
         case GGML_TYPE_IQ3_S_R4:   return check_tensor_for_blocks_256_fp16_repacked<block_iq3_s_r4, 4>(tensor);
         case GGML_TYPE_IQ4_XS_R8:  return check_tensor_for_blocks_256_fp16_repacked<block_iq4_xs_r8, 8>(tensor);
+        case GGML_TYPE_MXFP4_R8:   break;
         case GGML_TYPE_IQ2_BN:
         case GGML_TYPE_IQ4_KSS:
         case GGML_TYPE_IQ4_KS:

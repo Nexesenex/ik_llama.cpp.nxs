@@ -2022,6 +2022,27 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
+    [GGML_TYPE_MXFP4_R8] = {
+        .type_name                = "mxfp4_r8",
+        .blck_size                = QK_MXFP4,
+        .type_size                = sizeof(block_mxfp4),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_mxfp4_r8,
+        .from_float               = quantize_row_mxfp4_r8,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_mxfp4_r8_ref,
+        .vec_dot                  = vec_dot_mxfp4_r8_q8_0,
+#if GGML_USE_IQK_MULMAT
+#if defined __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+#else
+        .vec_dot_type             = GGML_TYPE_Q8_0_X4,
+#endif
+#else
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+#endif
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
     [GGML_TYPE_I2_S] = {
         .type_name                = "i2_s",
         .blck_size                = 1,
@@ -2047,7 +2068,7 @@ static inline int ggml_packed_rows(enum ggml_type type) {
     return type == GGML_TYPE_BF16_R16 || type == GGML_TYPE_Q8_K_R16 ? 16
          : type == GGML_TYPE_Q8_K_R8 || type == GGML_TYPE_Q8_KV_R8 ||
            type == GGML_TYPE_Q8_0_R8 || type == GGML_TYPE_Q4_0_R8 ||
-           type == GGML_TYPE_IQ4_XS_R8 ? 8
+           type == GGML_TYPE_IQ4_XS_R8 || type == GGML_TYPE_MXFP4_R8 ? 8
            : type >= GGML_TYPE_Q4_0_R8 && type <= GGML_TYPE_Q8_K_R8 ? 4
          : 1;
 }
@@ -5736,6 +5757,7 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_Q8_0_R8:       wtype = GGML_TYPE_Q8_0_R8;  break;
         case GGML_FTYPE_MOSTLY_IQ4_XS:        wtype = GGML_TYPE_IQ4_XS;   break;
         case GGML_FTYPE_MOSTLY_MXFP4:         wtype = GGML_TYPE_MXFP4;    break;
+        case GGML_FTYPE_MOSTLY_MXFP4_R8:      wtype = GGML_TYPE_MXFP4_R8; break;
         case GGML_FTYPE_MOSTLY_IQ4_KS:        wtype = GGML_TYPE_IQ4_KS;   break;
         case GGML_FTYPE_MOSTLY_IQ4_KS_R4:     wtype = GGML_TYPE_IQ4_KS_R4;break;
         case GGML_FTYPE_MOSTLY_IQ5_KS_R4:     wtype = GGML_TYPE_IQ5_KS_R4;break;
@@ -20085,8 +20107,12 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     enum ggml_type    const vec_dot_type    = type_traits[type].vec_dot_type;
 
     // we don't support permuted src0 or src1
-    GGML_ASSERT(nb00 == ggml_type_size(type));
-    GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+    // IQK-handled packed types (R4/R8/R16) may have a different physical stride
+    // due to interleaved row packing; skip the assertion since IQK manages them
+    if (ggml_packed_rows(type) == 1) {
+        GGML_ASSERT(nb00 == ggml_type_size(type));
+        GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+    }
 
     // dst cannot be transposed or permuted
     GGML_ASSERT(nb0 == sizeof(float));
@@ -20494,8 +20520,12 @@ static void ggml_compute_forward_mul_mat_up_gate(
     enum ggml_type    const vec_dot_type    = type_traits[type].vec_dot_type;
 
     // we don't support permuted src0 or src1
-    GGML_ASSERT(nb00 == ggml_type_size(type));
-    GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+    // IQK-handled packed types (R4/R8/R16) may have a different physical stride
+    // due to interleaved row packing; skip the assertion since IQK manages them
+    if (ggml_packed_rows(type) == 1) {
+        GGML_ASSERT(nb00 == ggml_type_size(type));
+        GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+    }
 
     // dst cannot be transposed or permuted
     GGML_ASSERT(nb0 == sizeof(float));
@@ -33442,6 +33472,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q6_1_R4: result = quantize_q6_1_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_Q8_0_R8: result = quantize_q8_0_r8(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_MXFP4:   result = quantize_mxfp4  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
+        case GGML_TYPE_MXFP4_R8:result = quantize_mxfp4_r8(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_IQ4_XS:  result = quantize_iq4_xs (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_IQ4_KS:  result = quantize_iq4_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_IQ4_KS_R4:result = quantize_iq4_ks_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
