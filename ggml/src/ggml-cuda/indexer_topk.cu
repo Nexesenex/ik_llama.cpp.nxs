@@ -86,7 +86,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     constexpr int k_block_size = 256;
 
     if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32) {
-        constexpr int k_max_rows = 16;
+        constexpr int k_max_rows = 256;
         int max_rows = std::min<int>(k_max_rows, q->ne[2]);
         int nstep = (q->ne[2] + max_rows - 1)/max_rows;
 
