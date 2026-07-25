@@ -73,7 +73,6 @@ void NvapiPoller::thread_func() {
             handles.size(), interval_ms);
 
     static char* d_bufs[64] = {};
-    static cudaStream_t d_streams[64] = {};
 
     while (should_run.load()) {
         for (size_t i = 0; i < handles.size(); ++i) {
@@ -95,14 +94,14 @@ void NvapiPoller::thread_func() {
             pstates20.version = NV_GPU_PERF_PSTATES20_INFO_VER;
             NvAPI_GPU_GetPstates20(handle, &pstates20);
 
-            cudaSetDevice(devices[i]);
             if (d_bufs[i] == nullptr) {
-                cudaStreamCreateWithFlags(&d_streams[i], cudaStreamNonBlocking);
+                cudaSetDevice(devices[i]);
                 cudaMalloc(&d_bufs[i], 4096);
             }
-            cudaMemsetAsync(d_bufs[i], 0, 4096, d_streams[i]);
-            cudaMemsetAsync(d_bufs[i], 0xFF, 4096, d_streams[i]);
-            cudaStreamSynchronize(d_streams[i]);
+            cudaSetDevice(devices[i]);
+            cudaMemset(d_bufs[i], 0, 4096);
+            cudaMemset(d_bufs[i], 0xFF, 4096);
+            cudaDeviceSynchronize();
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
     }
@@ -110,7 +109,6 @@ void NvapiPoller::thread_func() {
     for (size_t i = 0; i < handles.size(); ++i) {
         if (d_bufs[i] != nullptr) {
             cudaSetDevice(devices[i]);
-            cudaStreamDestroy(d_streams[i]);
             cudaFree(d_bufs[i]);
         }
     }
