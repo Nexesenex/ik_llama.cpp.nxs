@@ -366,6 +366,27 @@ static void hgemm_f32acc_strided_batched(
             CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 }
 
+static void convert_prefix_tensors(
+        const ggml_tensor * pk, const ggml_tensor * pv,
+        int64_t P, int64_t Dk, int64_t dv, bool f16,
+        ggml_cuda_pool_alloc<float> & pk_f32, ggml_cuda_pool_alloc<float> & pv_f32,
+        ggml_cuda_pool_alloc<half>  & pk_f16, ggml_cuda_pool_alloc<half>  & pv_f16,
+        const float *& pk_f, const float *& pv_f,
+        const half  *& pk_h, const half  *& pv_h,
+        cudaStream_t stream) {
+    if (!f16) {
+        if (pk->type == GGML_TYPE_F32) { pk_f = (const float *) pk->data; }
+        else { pk_f32.alloc((int64_t) Dk*P); ggml_get_to_fp32_cuda(pk->type)(pk->data, pk_f32.get(), (int64_t) Dk*P, 1, stream); pk_f = pk_f32.get(); }
+        if (pv->type == GGML_TYPE_F32) { pv_f = (const float *) pv->data; }
+        else { pv_f32.alloc((int64_t) P*dv); ggml_get_to_fp32_cuda(pv->type)(pv->data, pv_f32.get(), (int64_t) P*dv, 1, stream); pv_f = pv_f32.get(); }
+    } else {
+        if (pk->type == GGML_TYPE_F16) { pk_h = (const half *) pk->data; }
+        else { pk_f16.alloc((int64_t) Dk*P); ggml_get_to_fp16_cuda(pk->type)(pk->data, pk_f16.get(), (int64_t) Dk*P, 1, stream); pk_h = pk_f16.get(); }
+        if (pv->type == GGML_TYPE_F16) { pv_h = (const half *) pv->data; }
+        else { pv_f16.alloc((int64_t) P*dv); ggml_get_to_fp16_cuda(pv->type)(pv->data, pv_f16.get(), (int64_t) P*dv, 1, stream); pv_h = pv_f16.get(); }
+    }
+}
+
 static void ggml_cuda_op_latent_attn_indexed(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * q       = dst->src[0];
     const ggml_tensor * cache   = dst->src[1];
@@ -413,37 +434,9 @@ static void ggml_cuda_op_latent_attn_indexed(ggml_backend_cuda_context & ctx, gg
     const half  * pk_h = nullptr;
     const half  * pv_h = nullptr;
     if (P > 0) {
-        if (!f16) {
-            if (pk->type == GGML_TYPE_F32) {
-                pk_f = (const float *) pk->data;
-            } else {
-                pk_f32.alloc((int64_t) Dk*P);
-                ggml_get_to_fp32_cuda(pk->type)(pk->data, pk_f32.get(), (int64_t) Dk*P, 1, stream);
-                pk_f = pk_f32.get();
-            }
-            if (pv->type == GGML_TYPE_F32) {
-                pv_f = (const float *) pv->data;
-            } else {
-                pv_f32.alloc((int64_t) P*dv);
-                ggml_get_to_fp32_cuda(pv->type)(pv->data, pv_f32.get(), (int64_t) P*dv, 1, stream);
-                pv_f = pv_f32.get();
-            }
-        } else {
-            if (pk->type == GGML_TYPE_F16) {
-                pk_h = (const half *) pk->data;
-            } else {
-                pk_f16.alloc((int64_t) Dk*P);
-                ggml_get_to_fp16_cuda(pk->type)(pk->data, pk_f16.get(), (int64_t) Dk*P, 1, stream);
-                pk_h = pk_f16.get();
-            }
-            if (pv->type == GGML_TYPE_F16) {
-                pv_h = (const half *) pv->data;
-            } else {
-                pv_f16.alloc((int64_t) P*dv);
-                ggml_get_to_fp16_cuda(pv->type)(pv->data, pv_f16.get(), (int64_t) P*dv, 1, stream);
-                pv_h = pv_f16.get();
-            }
-        }
+        convert_prefix_tensors(pk, pv, P, Dk, dv, f16,
+                pk_f32, pv_f32, pk_f16, pv_f16,
+                pk_f, pv_f, pk_h, pv_h, stream);
     }
 
     const int64_t tile_cols = (int64_t) H*max_rows;
@@ -613,17 +606,9 @@ void ggml_cuda_op_latent_attn(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const float * pk_f = nullptr; const float * pv_f = nullptr;
     const half  * pk_h = nullptr; const half  * pv_h = nullptr;
     if (P > 0) {
-        if (!f16) {
-            if (pk->type == GGML_TYPE_F32) { pk_f = (const float *) pk->data; }
-            else { pk_f32.alloc(Dk*P); ggml_get_to_fp32_cuda(pk->type)(pk->data, pk_f32.get(), Dk*P, 1, stream); pk_f = pk_f32.get(); }
-            if (pv->type == GGML_TYPE_F32) { pv_f = (const float *) pv->data; }
-            else { pv_f32.alloc(P*dv); ggml_get_to_fp32_cuda(pv->type)(pv->data, pv_f32.get(), P*dv, 1, stream); pv_f = pv_f32.get(); }
-        } else {
-            if (pk->type == GGML_TYPE_F16) { pk_h = (const half *) pk->data; }
-            else { pk_f16.alloc(Dk*P); ggml_get_to_fp16_cuda(pk->type)(pk->data, pk_f16.get(), Dk*P, 1, stream); pk_h = pk_f16.get(); }
-            if (pv->type == GGML_TYPE_F16) { pv_h = (const half *) pv->data; }
-            else { pv_f16.alloc(P*dv); ggml_get_to_fp16_cuda(pv->type)(pv->data, pv_f16.get(), P*dv, 1, stream); pv_h = pv_f16.get(); }
-        }
+        convert_prefix_tensors(pk, pv, P, Dk, dv, f16,
+                pk_f32, pv_f32, pk_f16, pv_f16,
+                pk_f, pv_f, pk_h, pv_h, stream);
     }
 
     // ---- per-tile buffers ----
