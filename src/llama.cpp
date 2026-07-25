@@ -4056,118 +4056,20 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     if (!ow_size) ow_size = embd_size;
     result[n_layer] = ow_size + output_misc_size;
 
-    // Compile override regex patterns to determine per-layer buffer assignment
-    std::vector<std::pair<std::regex, ggml_backend_buffer_type_t>> override_regex;
-    if (ml.tensor_buft_overrides) {
-        for (const auto * o = ml.tensor_buft_overrides; o->pattern != nullptr; ++o) {
-            try {
-                override_regex.emplace_back(std::regex(o->pattern), o->buft);
-            } catch (...) {
-                // skip invalid regex
-            }
-        }
-    }
-    std::vector<std::string> layer_buft(n_layer + 1);
-
-    // Determine buffer type per layer by checking tensor names against overrides
-    for (int i = 0; i < ml.n_tensors; ++i) {
-        auto t = ml.get_weight(i)->tensor;
-        std::string name(t->name);
-        auto pos = name.find("blk.");
-        if (pos != 0) continue;
-        pos += 4;
-        auto pos1 = name.find('.', pos);
-        if (pos1 == std::string::npos) continue;
-        std::string layer_string = name.substr(pos, pos1 - pos);
-        std::istringstream str(layer_string);
-        int il; str >> il;
-        if (str.fail()) continue;
-        if (il < 0 || il >= n_layer) continue;
-        if (layer_buft[il].empty() && !override_regex.empty()) {
-            for (auto & [regex, buft] : override_regex) {
-                if (std::regex_match(name, regex)) {
-                    layer_buft[il] = ggml_backend_buft_name(buft);
-                    break;
-                }
-            }
-        }
-    }
-    // Also check the output/non-repeating layer
-    if (layer_buft[n_layer].empty() && !override_regex.empty()) {
-        for (int i = 0; i < ml.n_tensors; ++i) {
-            auto t = ml.get_weight(i)->tensor;
-            std::string name(t->name);
-            if (name.find("blk.") == 0) continue;
-            for (auto & [regex, buft] : override_regex) {
-                if (std::regex_match(name, regex)) {
-                    layer_buft[n_layer] = ggml_backend_buft_name(buft);
-                    break;
-                }
-            }
-            if (!layer_buft[n_layer].empty()) break;
-        }
-    }
-
-    // Collect unique buffer types for subtotals
-    std::vector<std::pair<std::string, double>> buft_sizes;
-    std::map<std::string, int> buft_index;
-    for (auto & name : layer_buft) {
-        if (!name.empty() && buft_index.find(name) == buft_index.end()) {
-            buft_index[name] = buft_sizes.size();
-            buft_sizes.emplace_back(name, 0.0);
-        }
-    }
-
-    LLAMA_LOG_INFO("------------------- Layer sizes:\n");
-    double tot_model = 0, tot_cache = 0, max_compute = 0;
+    double max_compute = 0;
     for (int il = 0; il < n_layer; ++il) {
         auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn, (uint32_t) n_ubatch, swa_compress);
-        double l_kv = (result[il] + kv_size)/1024./1024.;
-        double l_kv_c = (result[il] + kv_size + compute[il])/1024./1024.;
-        if (!layer_buft[il].empty()) {
-            LLAMA_LOG_INFO("Layer %2d (%s): %9.2f MiB layer, %9.2f MiB KV cache, %9.2f MiB L+KV, %9.2f MiB Compute, %9.2f L+KV+C\n",
-                il, layer_buft[il].c_str(), result[il]/1024./1024., kv_size/1024./1024., l_kv, compute[il]/1024./1024., l_kv_c);
-        } else {
-            LLAMA_LOG_INFO("Layer %2d: %9.2f MiB layer, %9.2f MiB KV cache, %9.2f MiB L+KV, %9.2f MiB Compute, %9.2f L+KV+C\n",
-                il, result[il]/1024./1024., kv_size/1024./1024., l_kv, compute[il]/1024./1024., l_kv_c);
-        }
         max_compute = std::max(max_compute, compute[il]);
-        tot_model += result[il];
-        tot_cache += kv_size;
-        if (!layer_buft[il].empty()) {
-            buft_sizes[buft_index[layer_buft[il]]].second += result[il];
-        }
         result[il] += kv_size;
     }
     int n_output = worst_case_tokens > 0 ? worst_case_tokens : n_ubatch;
     size_t output_size = model.hparams.n_vocab * n_output * sizeof(float);
     if (output_size < max_compute) output_size = max_compute;
     output_size -= max_compute;
-    double last_l_kv = (result[n_layer] + output_size)/1024./1024.;
-    double last_l_kv_c = (result[n_layer] + output_size + max_compute)/1024./1024.;
-    if (!layer_buft[n_layer].empty()) {
-        LLAMA_LOG_INFO("Layer %2d (%s): %9.2f MiB ?, %9.2f MiB output, %9.2f MiB (? + output), %9.2f MiB (?+output+C)\n",
-            n_layer, layer_buft[n_layer].c_str(), result[n_layer]/1024./1024., output_size/1024./1024., last_l_kv, last_l_kv_c);
-    } else {
-        LLAMA_LOG_INFO("Layer %2d: %9.2f MiB ?, %9.2f MiB output, %9.2f MiB (? + output), %9.2f MiB (?+output+C)\n",
-            n_layer, result[n_layer]/1024./1024., output_size/1024./1024., last_l_kv, last_l_kv_c);
-    }
-    if (!layer_buft[n_layer].empty()) {
-        buft_sizes[buft_index[layer_buft[n_layer]]].second += result[n_layer];
-    }
     result[n_layer] += output_size;
-    tot_cache += output_size;
-    LLAMA_LOG_INFO("--------------------------------------------------------------------------\n");
-    if (!buft_sizes.empty()) {
-        LLAMA_LOG_INFO("Sizes per buffer:\n");
-        for (auto & [name, size] : buft_sizes) {
-            LLAMA_LOG_INFO("  %11s: %9.2f MiB\n", name.c_str(), size/1024./1024.);
-        }
-    }
     if (compute_out) {
         *compute_out = std::move(compute);
     }
-    LLAMA_LOG_INFO("Total Sizes: %9.2f MiB Model, %9.2f MiB Expected Cache, %9.2f MiB Expected Total\n", tot_model/1024./1024., tot_cache/1024./1024., (tot_model + tot_cache)/1024./1024.);
     return std::make_pair(std::move(result), max_compute);
 }
 
@@ -4942,15 +4844,19 @@ static bool llm_load_tensors(
                 n_layer, layer_actual[n_layer]/1024./1024., output_size/1024./1024., last_l_kv, last_l_kv_c);
         }
         tot_cache += output_size;
-        // Per-buffer subtotals
+        // Per-buffer subtotals using L+KV+C (layer + KV cache + compute)
         std::map<std::string, double> buft_sums;
-        for (int il = 0; il <= n_layer; ++il) {
+        for (int il = 0; il < n_layer; ++il) {
             if (!layer_buft[il].empty()) {
-                buft_sums[layer_buft[il]] += layer_actual[il];
+                auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn, (uint32_t) n_ubatch, swa_compress);
+                buft_sums[layer_buft[il]] += layer_actual[il] + kv_size + compute_per_layer[il];
             }
         }
+        if (!layer_buft[n_layer].empty()) {
+            buft_sums[layer_buft[n_layer]] += layer_actual[n_layer] + output_size + max_compute_val;
+        }
         if (!buft_sums.empty()) {
-            LLAMA_LOG_INFO("Sizes per buffer:\n");
+            LLAMA_LOG_INFO("Sizes per buffer (L+KV+C):\n");
             for (auto & [name, size] : buft_sums) {
                 LLAMA_LOG_INFO("  %11s: %9.2f MiB\n", name.c_str(), size/1024./1024.);
             }
