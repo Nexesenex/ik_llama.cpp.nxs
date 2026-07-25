@@ -344,12 +344,22 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
                     (const float *)((const char *)Q->data + first*Q->nb[1]), q16.get());
         }
 
-        CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(), ctx.stream()));
-        CUBLAS_CHECK(cublasHgemmStridedBatched(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
-                    indexer->ne[0], Q->ne[2], Q->ne[0],
-                    &alpha, k16.get(), K->ne[0], K->ne[0]*indexer->ne[0],
-                    q16.get(), Q->ne[0], Q->ne[0]*Q->ne[2],
-                    &beta, kq16.get(), indexer->ne[0], indexer->ne[0]*Q->ne[2], nrows));
+        // TF32 math mode can conflict with F16 strided batched GEMM on Ampere
+        {
+            cublasMath_t prev_math_mode;
+
+            CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(), &prev_math_mode));
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(), CUBLAS_DEFAULT_MATH));
+
+            CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(), ctx.stream()));
+            CUBLAS_CHECK(cublasHgemmStridedBatched(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
+                        indexer->ne[0], Q->ne[2], Q->ne[0],
+                        &alpha, k16.get(), K->ne[0], K->ne[0]*indexer->ne[0],
+                        q16.get(), Q->ne[0], Q->ne[0]*Q->ne[2],
+                        &beta, kq16.get(), indexer->ne[0], indexer->ne[0]*Q->ne[2], nrows));
+
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(), prev_math_mode));
+        }
 
         soft_max_f16_cuda_simple(kq16.get(), mask16.get() + first*indexer->ne[0],
                 sink ? (const float *)sink->data : nullptr,
@@ -357,20 +367,29 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
                 Q->ne[2], scale, inv_sum.get(), ctx.stream());
         CUDA_CHECK(cudaGetLastError());
 
-        if (is_k_view) {
-            CUBLAS_CHECK(cublasGemmStridedBatchedEx(ctx.cublas_handle(), CUBLAS_OP_N, CUBLAS_OP_N,
-                        V->ne[0], Q->ne[2], indexer->ne[0],
-                        &alpha_32, k16.get() + v_offset, CUDA_R_16F, K->ne[0], K->ne[0]*indexer->ne[0],
-                        kq16.get(),                      CUDA_R_16F, indexer->ne[0], indexer->ne[0]*Q->ne[2],
-                        &beta_32, kqv32.get(),           CUDA_R_32F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
-                        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-        } else {
-            CUBLAS_CHECK(cublasGemmStridedBatchedEx(ctx.cublas_handle(), CUBLAS_OP_N, CUBLAS_OP_N,
-                        V->ne[0], Q->ne[2], indexer->ne[0],
-                        &alpha_32, v16.get(),  CUDA_R_16F, V->ne[0], V->ne[0]*indexer->ne[0],
-                        kq16.get(),            CUDA_R_16F, indexer->ne[0], indexer->ne[0]*Q->ne[2],
-                        &beta_32, kqv32.get(), CUDA_R_32F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
-                        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+        // TF32 math mode can conflict with F16 strided batched GEMM on Ampere
+        {
+            cublasMath_t prev_math_mode;
+            CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(), &prev_math_mode));
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(), CUBLAS_DEFAULT_MATH));
+
+            if (is_k_view) {
+                CUBLAS_CHECK(cublasGemmStridedBatchedEx(ctx.cublas_handle(), CUBLAS_OP_N, CUBLAS_OP_N,
+                            V->ne[0], Q->ne[2], indexer->ne[0],
+                            &alpha_32, k16.get() + v_offset, CUDA_R_16F, K->ne[0], K->ne[0]*indexer->ne[0],
+                            kq16.get(),                      CUDA_R_16F, indexer->ne[0], indexer->ne[0]*Q->ne[2],
+                            &beta_32, kqv32.get(),           CUDA_R_32F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
+                            CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            } else {
+                CUBLAS_CHECK(cublasGemmStridedBatchedEx(ctx.cublas_handle(), CUBLAS_OP_N, CUBLAS_OP_N,
+                            V->ne[0], Q->ne[2], indexer->ne[0],
+                            &alpha_32, v16.get(),  CUDA_R_16F, V->ne[0], V->ne[0]*indexer->ne[0],
+                            kq16.get(),            CUDA_R_16F, indexer->ne[0], indexer->ne[0]*Q->ne[2],
+                            &beta_32, kqv32.get(), CUDA_R_32F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
+                            CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            }
+
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(), prev_math_mode));
         }
 
         {
