@@ -2180,6 +2180,10 @@ static void ggml_cuda_op_mul_mat_cublas(
         const float beta_f32  = 0.0f;
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
+        // TF32 math mode can conflict with BF16 GEMM on Ampere
+        cublasMath_t prev_math_mode;
+        CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(id), &prev_math_mode));
+        CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), CUBLAS_DEFAULT_MATH));
         CUBLAS_CHECK(
             cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                     row_diff, src1_ncols, ne10,
@@ -2188,6 +2192,7 @@ static void ggml_cuda_op_mul_mat_cublas(
                     &beta_f32,   dst_bf16.get(), CUDA_R_16BF, ldc,
                     CUBLAS_COMPUTE_32F,
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+        CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), prev_math_mode));
 
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
         to_fp32_cuda(dst_bf16.get(), dst_dd_i, row_diff, src1_ncols, stream);
@@ -2218,6 +2223,10 @@ static void ggml_cuda_op_mul_mat_cublas(
             const float beta_f32  = 0.0f;
 
             CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
+            // TF32 math mode can conflict with BF16 GEMM on Ampere
+            cublasMath_t prev_math_mode;
+            CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(id), &prev_math_mode));
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), CUBLAS_DEFAULT_MATH));
             CUBLAS_CHECK(
                     cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                         row_diff, src1_ncols, ne10,
@@ -2226,6 +2235,7 @@ static void ggml_cuda_op_mul_mat_cublas(
                         &beta_f32,   dst_bf16.get(), CUDA_R_16BF, ldc,
                         CUBLAS_COMPUTE_32F,
                         CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), prev_math_mode));
 
             const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
             to_fp32_cuda(dst_bf16.get(), dst_dd_i, row_diff, src1_ncols, stream);
