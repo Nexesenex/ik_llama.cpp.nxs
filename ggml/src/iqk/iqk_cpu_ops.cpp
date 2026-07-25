@@ -447,7 +447,14 @@ void iqk_openai_experts(struct ggml_tensor * topk, struct ggml_tensor * softmax,
         }
         GGML_ASSERT(sum > 0);
         float norm = 1/sum;
-        for (int j = 0; j < ne0; ++j) weights[j] *= norm;
+        int j = 0;
+#if defined(__AVX2__)
+        auto vnorm = _mm256_set1_ps(norm);
+        for (; j + 7 < ne0; j += 8) {
+            _mm256_storeu_ps(weights + j, _mm256_mul_ps(_mm256_loadu_ps(weights + j), vnorm));
+        }
+#endif
+        for (; j < ne0; ++j) weights[j] *= norm;
     }
 }
 
