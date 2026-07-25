@@ -1789,9 +1789,14 @@ size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth)
     }
     return 0;
 }
-// TODO: SIMDify
 inline void iqk_f16_to_f32(int n, const ggml_fp16_t * x, float * y) {
-    for (int i = 0; i < n; ++i) {
+    int i = 0;
+#if defined(__AVX2__) && defined(__F16C__)
+    for (; i + 7 < n; i += 8) {
+        _mm256_storeu_ps(y + i, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i))));
+    }
+#endif
+    for (; i < n; ++i) {
         y[i] = GGML_FP16_TO_FP32(x[i]);
     }
 }
