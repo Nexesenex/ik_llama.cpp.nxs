@@ -2245,7 +2245,7 @@ static void ggml_cuda_op_mul_mat_cublas(
 
     const int compute_capability = ggml_cuda_info().devices[id].cc;
 
-    if (src0->type == GGML_TYPE_BF16 && ggml_is_contiguous(src0) && row_diff == src0->ne[1]) {
+    if (src0->type == GGML_TYPE_BF16 && ggml_is_contiguous(src0) && row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT) {
 
         ggml_cuda_pool_alloc<nv_bfloat16> src1_as_bf16(ctx.pool(id));
         if (src1->type != GGML_TYPE_BF16) {
@@ -2283,7 +2283,7 @@ static void ggml_cuda_op_mul_mat_cublas(
     }
 
 #ifdef GGML_CUDA_IQK_FORCE_BF16
-    if (ggml_is_quantized(src0->type) && ggml_is_contiguous(src0) && row_diff == src0->ne[1]) {
+    if (ggml_is_quantized(src0->type) && ggml_is_contiguous(src0) && row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT) {
         to_bf16_cuda_t to_bf16_cuda = ggml_get_to_bf16_cuda(src0->type);
         to_bf16_cuda_t to_bf16_cuda_1 = src1->type != GGML_TYPE_BF16 ? ggml_get_to_bf16_cuda(src1->type) : nullptr;
         if (to_bf16_cuda && (src1->type == GGML_TYPE_BF16 || to_bf16_cuda_1)) {
@@ -2355,6 +2355,10 @@ static void ggml_cuda_op_mul_mat_cublas(
         const half beta_f16 = 0.0f;
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
+        // TF32 math mode can conflict with F16 GEMM on Ampere
+        cublasMath_t prev_math_mode;
+        CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(id), &prev_math_mode));
+        CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), CUBLAS_DEFAULT_MATH));
         CUBLAS_CHECK(
             cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                     row_diff, src1_ncols, ne10,
@@ -2363,6 +2367,7 @@ static void ggml_cuda_op_mul_mat_cublas(
                     &beta_f16,   dst_f16.get(), CUDA_R_16F, ldc,
                     CUBLAS_COMPUTE_16F,
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+        CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), prev_math_mode));
 
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
         to_fp32_cuda(dst_f16.get(), dst_dd_i, row_diff, src1_ncols, stream);
@@ -2390,12 +2395,17 @@ static void ggml_cuda_op_mul_mat_cublas(
         const float beta = 0.0f;
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
+        // TF32 math mode can conflict with non-F32-tensor-core GEMM on Ampere
+        cublasMath_t prev_math_mode;
+        CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(id), &prev_math_mode));
+        CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), CUBLAS_DEFAULT_MATH));
         CUBLAS_CHECK(
             cublasSgemm(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                     row_diff, src1_ncols, ne10,
                     &alpha, src0_ddf_i,  ne00,
                             src1_ddf1_i, ne10,
                     &beta,  dst_dd_i,    ldc));
+        CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), prev_math_mode));
     }
 
     GGML_UNUSED(dst);
@@ -2924,6 +2934,11 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
     const int64_t r2 = ne12/ne02;
     const int64_t r3 = ne13/ne03;
 
+    // TF32 math mode can conflict with non-F32 batched GEMM on Ampere
+    cublasMath_t prev_math_mode;
+    CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(), &prev_math_mode));
+    CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(), CUBLAS_DEFAULT_MATH));
+
     if (r2 == 1 && r3 == 1 && is_src0_cont_2 && is_src1_cont_2) {
         //printf("Using cublasGemmStridedBatchedEx for %s\n", dst->name);
         // with a [0, 2, 1, 3] perm. and ne02==1 the matrix strides need to be determined from dim 3:
@@ -2985,6 +3000,8 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
                 cu_compute_type,
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP));
     }
+
+    CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(), prev_math_mode));
 
     // Convert output back to F32 if needed
     if (dst->op_params[0] == GGML_PREC_DEFAULT && cu_data_type != CUDA_R_32F) {
