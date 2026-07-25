@@ -222,7 +222,7 @@ static void soft_max_f16_cuda_simple(half * x, const half * mask, const float * 
 bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     if (!dst) return false;
 
-    constexpr int k_max_rows = 32;
+    constexpr int k_max_rows = 256;
 
     const ggml_tensor * Q    = dst->src[0];
     const ggml_tensor * K    = dst->src[1];
