@@ -3846,7 +3846,8 @@ struct expert_tensors {
 static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_loader & ml, const llama_model & model,
         ggml_type cache_type_k, ggml_type cache_type_v, ggml_type idx_type_k, uint32_t max_ctx_size, int mla_attn, int n_seq_max, int n_ubatch,
         int amb, int worst_case_tokens, bool flash_attn, bool swa_compress,
-        std::vector<expert_tensors> & experts) {
+        std::vector<expert_tensors> & experts,
+        std::vector<double> * compute_out = nullptr) {
     int n_layer = model.hparams.n_layer;
     std::vector<double> result(n_layer+1, 0);
     std::vector<double> compute(n_layer+1, 0);
@@ -4163,6 +4164,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             LLAMA_LOG_INFO("  %11s: %9.2f MiB\n", name.c_str(), size/1024./1024.);
         }
     }
+    if (compute_out) {
+        *compute_out = std::move(compute);
+    }
     LLAMA_LOG_INFO("Total Sizes: %9.2f MiB Model, %9.2f MiB Expected Cache, %9.2f MiB Expected Total\n", tot_model/1024./1024., tot_cache/1024./1024., (tot_model + tot_cache)/1024./1024.);
     return std::make_pair(std::move(result), max_compute);
 }
@@ -4415,10 +4419,11 @@ static bool llm_load_tensors(
     // -ngl 0). This block indexes device_mem[id] for id < device_count, so it reads out of
     // bounds and crashes unless we also require a non-empty GPU device list. CPU-only
     // placement is already handled above, so skipping this block is safe.
+    std::vector<double> compute_per_layer;
     if (device_count > 0 && !model.devices.empty()) {
         std::vector<expert_tensors> experts;
         auto [layer_sizes, max_compute] = get_layer_sizes(ml, model, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, n_ubatch,
-                amb, worst_case_tokens, flash_attn, swa_compress, experts);
+                amb, worst_case_tokens, flash_attn, swa_compress, experts, &compute_per_layer);
         size_t required_mem = 0;
         for (int i = 0; i <= n_layer; ++i) {
             required_mem += layer_sizes[i];
@@ -4866,6 +4871,91 @@ static bool llm_load_tensors(
         for (auto * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
             model.tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
+    }
+
+    // Print per-layer buffer assignment from actual tensor data
+    if (!compute_per_layer.empty()) {
+        std::vector<double> layer_actual(n_layer + 1, 0);
+        std::vector<std::string> layer_buft(n_layer + 1);
+        for (auto & [name, tensor] : model.tensors_by_name) {
+            size_t size = ggml_nbytes(tensor);
+            auto pos = name.find("blk.");
+            if (pos != 0) {
+                layer_actual[n_layer] += size;
+                if (tensor->buffer && layer_buft[n_layer].empty()) {
+                    const char * buf_name = ggml_backend_buffer_name(tensor->buffer);
+                    if (buf_name && buf_name[0]) {
+                        layer_buft[n_layer] = buf_name;
+                    } else {
+                        layer_buft[n_layer] = ggml_backend_buft_name(ggml_backend_buffer_get_type(tensor->buffer));
+                    }
+                }
+                continue;
+            }
+            pos += 4;
+            auto pos1 = name.find('.', pos);
+            if (pos1 == std::string::npos) continue;
+            std::string layer_string = name.substr(pos, pos1 - pos);
+            std::istringstream str(layer_string);
+            int il; str >> il;
+            if (str.fail()) continue;
+            if (il < 0 || il >= n_layer) continue;
+            layer_actual[il] += size;
+            if (tensor->buffer && layer_buft[il].empty()) {
+                const char * buf_name = ggml_backend_buffer_name(tensor->buffer);
+                if (buf_name && buf_name[0]) {
+                    layer_buft[il] = buf_name;
+                } else {
+                    layer_buft[il] = ggml_backend_buft_name(ggml_backend_buffer_get_type(tensor->buffer));
+                }
+            }
+        }
+        double max_compute_val = 0;
+        LLAMA_LOG_INFO("------------------- Layer sizes (actual):\n");
+        double tot_model = 0, tot_cache = 0;
+        for (int il = 0; il < n_layer; ++il) {
+            max_compute_val = std::max(max_compute_val, compute_per_layer[il]);
+            auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn, (uint32_t) n_ubatch, swa_compress);
+            double l_kv = (layer_actual[il] + kv_size)/1024./1024.;
+            double l_kv_c = (layer_actual[il] + kv_size + compute_per_layer[il])/1024./1024.;
+            if (!layer_buft[il].empty()) {
+                LLAMA_LOG_INFO("Layer %2d (%s): %9.2f MiB layer, %9.2f MiB KV cache, %9.2f MiB L+KV, %9.2f MiB Compute, %9.2f L+KV+C\n",
+                    il, layer_buft[il].c_str(), layer_actual[il]/1024./1024., kv_size/1024./1024., l_kv, compute_per_layer[il]/1024./1024., l_kv_c);
+            } else {
+                LLAMA_LOG_INFO("Layer %2d: %9.2f MiB layer, %9.2f MiB KV cache, %9.2f MiB L+KV, %9.2f MiB Compute, %9.2f L+KV+C\n",
+                    il, layer_actual[il]/1024./1024., kv_size/1024./1024., l_kv, compute_per_layer[il]/1024./1024., l_kv_c);
+            }
+            tot_model += layer_actual[il];
+            tot_cache += kv_size;
+        }
+        int n_output = worst_case_tokens > 0 ? worst_case_tokens : n_ubatch;
+        size_t output_size = model.hparams.n_vocab * n_output * sizeof(float);
+        if (output_size < max_compute_val) output_size = max_compute_val;
+        output_size -= max_compute_val;
+        double last_l_kv = (layer_actual[n_layer] + output_size)/1024./1024.;
+        double last_l_kv_c = (layer_actual[n_layer] + output_size + max_compute_val)/1024./1024.;
+        if (!layer_buft[n_layer].empty()) {
+            LLAMA_LOG_INFO("Layer %2d (%s): %9.2f MiB ?, %9.2f MiB output, %9.2f MiB (? + output), %9.2f MiB (?+output+C)\n",
+                n_layer, layer_buft[n_layer].c_str(), layer_actual[n_layer]/1024./1024., output_size/1024./1024., last_l_kv, last_l_kv_c);
+        } else {
+            LLAMA_LOG_INFO("Layer %2d: %9.2f MiB ?, %9.2f MiB output, %9.2f MiB (? + output), %9.2f MiB (?+output+C)\n",
+                n_layer, layer_actual[n_layer]/1024./1024., output_size/1024./1024., last_l_kv, last_l_kv_c);
+        }
+        tot_cache += output_size;
+        // Per-buffer subtotals
+        std::map<std::string, double> buft_sums;
+        for (int il = 0; il <= n_layer; ++il) {
+            if (!layer_buft[il].empty()) {
+                buft_sums[layer_buft[il]] += layer_actual[il];
+            }
+        }
+        if (!buft_sums.empty()) {
+            LLAMA_LOG_INFO("Sizes per buffer:\n");
+            for (auto & [name, size] : buft_sums) {
+                LLAMA_LOG_INFO("  %11s: %9.2f MiB\n", name.c_str(), size/1024./1024.);
+            }
+        }
+        LLAMA_LOG_INFO("Total Sizes: %9.2f MiB Model, %9.2f MiB Expected Cache, %9.2f MiB Expected Total\n", tot_model/1024./1024., tot_cache/1024./1024., (tot_model + tot_cache)/1024./1024.);
     }
 
     // load tensor data
