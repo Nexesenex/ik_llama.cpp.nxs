@@ -127,6 +127,11 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
             to_fp16_cuda((const float *)q->data + q->ne[0]*q->ne[1]*first_row, q_f16.get(), q->ne[0]*q->ne[1]*nrows, 1, ctx.stream());
             CUDA_CHECK(cudaGetLastError());
 
+            CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+            // TF32 math mode can conflict with F16 GEMM on Ampere
+            cublasMath_t prev_math_mode;
+            CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(ctx.device), &prev_math_mode));
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), CUBLAS_DEFAULT_MATH));
             CUBLAS_CHECK(cublasGemmEx(ctx.cublas_handle(ctx.device), CUBLAS_OP_T, CUBLAS_OP_N,
                     k->ne[1], q->ne[1]*nrows, q->ne[0],
                     &alpha, k_data,       CUDA_R_16F, k->ne[0],
@@ -134,6 +139,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                     &beta,  kq.get(),     CUDA_R_16F, k->ne[1],
                     CUBLAS_COMPUTE_16F,
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), prev_math_mode));
 
             int nblocks = (k->ne[1] + k_block_size - 1)/k_block_size;
             dim3 grid(nrows, nblocks, 1);
@@ -213,11 +219,16 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
             const float alpha = 1.0f;
             const float beta = 0.0f;
             CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+            // TF32 math mode can conflict with F32 GEMM on Ampere
+            cublasMath_t prev_math_mode;
+            CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(ctx.device), &prev_math_mode));
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), CUBLAS_DEFAULT_MATH));
             CUBLAS_CHECK(cublasSgemm(ctx.cublas_handle(ctx.device), CUBLAS_OP_T, CUBLAS_OP_N,
                     k->ne[1], q->ne[1]*nrows, q->ne[0],
                     &alpha,     k_data,                k_ld,
                        (const float *)q_data, q->ne[0],
                     &beta,      kq.get(),     k->ne[1]));
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), prev_math_mode));
         }
         if (m->type == GGML_TYPE_F32) {
             k_fused_relu_mul_sum_rows<<<nrows, k_block_size, 0, ctx.stream()>>>(kq.get(), w_data, (const float *)m_data,
