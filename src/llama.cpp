@@ -4821,10 +4821,10 @@ static bool llm_load_tensors(
             double l_kv = (layer_actual[il] + kv_size)/1024./1024.;
             double l_kv_c = (layer_actual[il] + kv_size + compute_per_layer[il])/1024./1024.;
             if (!layer_buft[il].empty()) {
-                LLAMA_LOG_INFO("Layer %2d (%s): %9.2f MiB layer, %9.2f MiB KV cache, %9.2f MiB L+KV, %9.2f MiB Compute, %9.2f L+KV+C\n",
+                LLAMA_LOG_INFO("Layer %2d (%s): %8.2f MiB layer, %7.2f MiB KV cache, %8.2f MiB L+KV, %6.2f MiB Compute, %8.2f L+KV+C\n",
                     il, layer_buft[il].c_str(), layer_actual[il]/1024./1024., kv_size/1024./1024., l_kv, compute_per_layer[il]/1024./1024., l_kv_c);
             } else {
-                LLAMA_LOG_INFO("Layer %2d: %9.2f MiB layer, %9.2f MiB KV cache, %9.2f MiB L+KV, %9.2f MiB Compute, %9.2f L+KV+C\n",
+                LLAMA_LOG_INFO("Layer %2d: %8.2f MiB layer, %7.2f MiB KV cache, %8.2f MiB L+KV, %6.2f MiB Compute, %8.2f L+KV+C\n",
                     il, layer_actual[il]/1024./1024., kv_size/1024./1024., l_kv, compute_per_layer[il]/1024./1024., l_kv_c);
             }
             tot_model += layer_actual[il];
@@ -4837,10 +4837,10 @@ static bool llm_load_tensors(
         double last_l_kv = (layer_actual[n_layer] + output_size)/1024./1024.;
         double last_l_kv_c = (layer_actual[n_layer] + output_size + max_compute_val)/1024./1024.;
         if (!layer_buft[n_layer].empty()) {
-            LLAMA_LOG_INFO("Layer %2d (%s): %9.2f MiB ?, %9.2f MiB output, %9.2f MiB (? + output), %9.2f MiB (?+output+C)\n",
+            LLAMA_LOG_INFO("Layer %2d (%s): %8.2f MiB ?, %8.2f MiB output, %8.2f MiB (? + output), %8.2f MiB (?+output+C)\n",
                 n_layer, layer_buft[n_layer].c_str(), layer_actual[n_layer]/1024./1024., output_size/1024./1024., last_l_kv, last_l_kv_c);
         } else {
-            LLAMA_LOG_INFO("Layer %2d: %9.2f MiB ?, %9.2f MiB output, %9.2f MiB (? + output), %9.2f MiB (?+output+C)\n",
+            LLAMA_LOG_INFO("Layer %2d: %8.2f MiB ?, %8.2f MiB output, %8.2f MiB (? + output), %8.2f MiB (?+output+C)\n",
                 n_layer, layer_actual[n_layer]/1024./1024., output_size/1024./1024., last_l_kv, last_l_kv_c);
         }
         tot_cache += output_size;
@@ -4861,7 +4861,7 @@ static bool llm_load_tensors(
                 LLAMA_LOG_INFO("  %11s: %9.2f MiB\n", name.c_str(), size/1024./1024.);
             }
         }
-        LLAMA_LOG_INFO("Total Sizes: %9.2f MiB Model, %9.2f MiB Expected Cache, %9.2f MiB Expected Total\n", tot_model/1024./1024., tot_cache/1024./1024., (tot_model + tot_cache)/1024./1024.);
+        LLAMA_LOG_INFO("Total Sizes: %9.2f MiB Model, %8.2f MiB Expected Cache, %9.2f MiB Expected Total\n", tot_model/1024./1024., tot_cache/1024./1024., (tot_model + tot_cache)/1024./1024.);
     }
 
     // load tensor data
