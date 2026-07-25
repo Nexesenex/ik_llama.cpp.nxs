@@ -331,8 +331,13 @@ static void sgemm(ggml_backend_cuda_context & ctx, cublasOperation_t ta, cublasO
         int m, int n, int k, float alpha, const float * A, int lda,
         const float * B, int ldb, float beta, float * C, int ldc) {
     CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+    // TF32 math mode can conflict with F32 GEMM on Ampere
+    cublasMath_t prev_math_mode;
+    CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(ctx.device), &prev_math_mode));
+    CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), CUBLAS_DEFAULT_MATH));
     CUBLAS_CHECK(cublasSgemm(ctx.cublas_handle(ctx.device), ta, tb, m, n, k,
             &alpha, A, lda, B, ldb, &beta, C, ldc));
+    CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), prev_math_mode));
 }
 
 // f16-input GEMM with f32 accumulate into an f32 C.
@@ -340,9 +345,14 @@ static void hgemm_f32acc(ggml_backend_cuda_context & ctx, cublasOperation_t ta, 
         int m, int n, int k, float alpha, const half * A, int lda,
         const half * B, int ldb, float beta, float * C, int ldc) {
     CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+    // TF32 math mode can conflict with F16 GEMM on Ampere
+    cublasMath_t prev_math_mode;
+    CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(ctx.device), &prev_math_mode));
+    CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), CUBLAS_DEFAULT_MATH));
     CUBLAS_CHECK(cublasGemmEx(ctx.cublas_handle(ctx.device), ta, tb, m, n, k,
             &alpha, A, CUDA_R_16F, lda, B, CUDA_R_16F, ldb,
             &beta,  C, CUDA_R_32F, ldc, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+    CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), prev_math_mode));
 }
 
 static void sgemm_strided_batched(ggml_backend_cuda_context & ctx, cublasOperation_t ta, cublasOperation_t tb,
@@ -350,8 +360,13 @@ static void sgemm_strided_batched(ggml_backend_cuda_context & ctx, cublasOperati
         const float * B, int ldb, int64_t stride_b, float beta, float * C, int ldc,
         int64_t stride_c, int batch_count) {
     CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+    // TF32 math mode can conflict with F32 strided batched GEMM on Ampere
+    cublasMath_t prev_math_mode;
+    CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(ctx.device), &prev_math_mode));
+    CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), CUBLAS_DEFAULT_MATH));
     CUBLAS_CHECK(cublasSgemmStridedBatched(ctx.cublas_handle(ctx.device), ta, tb, m, n, k,
             &alpha, A, lda, stride_a, B, ldb, stride_b, &beta, C, ldc, stride_c, batch_count));
+    CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), prev_math_mode));
 }
 
 static void hgemm_f32acc_strided_batched(
@@ -360,10 +375,15 @@ static void hgemm_f32acc_strided_batched(
         const half * B, int ldb, int64_t stride_b, float beta, float * C, int ldc,
         int64_t stride_c, int batch_count) {
     CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+    // TF32 math mode can conflict with F16 strided batched GEMM on Ampere
+    cublasMath_t prev_math_mode;
+    CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(ctx.device), &prev_math_mode));
+    CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), CUBLAS_DEFAULT_MATH));
     CUBLAS_CHECK(cublasGemmStridedBatchedEx(ctx.cublas_handle(ctx.device), ta, tb, m, n, k,
             &alpha, A, CUDA_R_16F, lda, stride_a, B, CUDA_R_16F, ldb, stride_b,
             &beta, C, CUDA_R_32F, ldc, stride_c, batch_count,
             CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+    CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(ctx.device), prev_math_mode));
 }
 
 static void ggml_cuda_op_latent_attn_indexed(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
