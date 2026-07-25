@@ -4900,8 +4900,11 @@ static bool llm_load_tensors(
         }
         tot_cache += output_size;
         // Per-buffer subtotals with weights, KV, compute breakdown
+        // Compute buffer is shared across all layers on each device, so we charge
+        // max_compute once per device buffer rather than summing per-layer estimates.
         struct buf_breakdown { double w = 0, kv = 0, cmp = 0; };
         std::map<std::string, buf_breakdown> buft_bd;
+        std::set<std::string> compute_charged;
         for (int il = 0; il < n_layer; ++il) {
             auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn, (uint32_t) n_ubatch, swa_compress);
             if (layer_ovr[il].size > 0) {
@@ -4912,14 +4915,18 @@ static bool llm_load_tensors(
                     auto & b = buft_bd[layer_non_ovr[il].buft];
                     b.w    += layer_non_ovr[il].size;
                     b.kv   += kv_size;
-                    b.cmp  += compute_per_layer[il];
+                    if (compute_charged.insert(layer_non_ovr[il].buft).second) {
+                        b.cmp += max_compute_val;
+                    }
                 }
             } else {
                 if (!layer_non_ovr[il].buft.empty()) {
                     auto & b = buft_bd[layer_non_ovr[il].buft];
                     b.w    += layer_non_ovr[il].size;
                     b.kv   += kv_size;
-                    b.cmp  += compute_per_layer[il];
+                    if (compute_charged.insert(layer_non_ovr[il].buft).second) {
+                        b.cmp += max_compute_val;
+                    }
                 }
             }
         }
@@ -4927,7 +4934,9 @@ static bool llm_load_tensors(
             auto & b = buft_bd[layer_non_ovr[n_layer].buft];
             b.w    += layer_non_ovr[n_layer].size;
             b.kv   += output_size;
-            b.cmp  += max_compute_val;
+            if (compute_charged.insert(layer_non_ovr[n_layer].buft).second) {
+                b.cmp += max_compute_val;
+            }
         }
         if (!buft_bd.empty()) {
             LLAMA_LOG_INFO("Sizes per buffer (L+KV+C):\n");
