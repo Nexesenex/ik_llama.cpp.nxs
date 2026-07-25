@@ -2328,7 +2328,7 @@ static void ggml_cuda_op_mul_mat_cublas(
     }
 #endif
 
-    if (compute_capability >= CC_VOLTA && (src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 || ggml_is_quantized(src0->type)) && ggml_is_contiguous(src0) && row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT) {
+    if (compute_capability >= CC_VOLTA && (src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 || ggml_is_quantized(src0->type)) && ggml_is_contiguous(src0) && row_diff == src0->ne[1]) {
         // convert src0 and src1 to fp16, multiply as fp16, convert dst to fp32
         ggml_cuda_pool_alloc<half> src0_as_f16(ctx.pool(id));
         if (src0->type != GGML_TYPE_F16) {
@@ -2350,28 +2350,42 @@ static void ggml_cuda_op_mul_mat_cublas(
         }
         const half * src1_ptr = src1->type == GGML_TYPE_F16 ? (const half *) src1_ddf_i : src1_as_f16.get();
 
-        ggml_cuda_pool_alloc<half> dst_f16(ctx.pool(id), row_diff*src1_ncols);
-
-        const half alpha_f16 = 1.0f;
-        const half beta_f16 = 0.0f;
+        const bool prec_f32 = dst->op_params[0] == GGML_PREC_F32;
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
         // TF32 math mode can conflict with F16 GEMM on Ampere
         cublasMath_t prev_math_mode;
         CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(id), &prev_math_mode));
         CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), CUBLAS_DEFAULT_MATH));
-        CUBLAS_CHECK(
-            cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
-                    row_diff, src1_ncols, ne10,
-                    &alpha_f16, src0_ptr,       CUDA_R_16F, ne00,
-                                src1_ptr,       CUDA_R_16F, ne10,
-                    &beta_f16,   dst_f16.get(), CUDA_R_16F, ldc,
-                    CUBLAS_COMPUTE_16F,
-                    CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-        CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), prev_math_mode));
 
-        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
-        to_fp32_cuda(dst_f16.get(), dst_dd_i, row_diff, src1_ncols, stream);
+        if (prec_f32) {
+            const half alpha = 1.0f;
+            const half beta  = 0.0f;
+            CUBLAS_CHECK(
+                cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
+                        row_diff, src1_ncols, ne10,
+                        &alpha, src0_ptr,       CUDA_R_16F, ne00,
+                                src1_ptr,       CUDA_R_16F, ne10,
+                        &beta,  dst_dd_i,       CUDA_R_32F, ldc,
+                        CUBLAS_COMPUTE_32F,
+                        CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), prev_math_mode));
+        } else {
+            ggml_cuda_pool_alloc<half> dst_f16(ctx.pool(id), row_diff*src1_ncols);
+            const half alpha_f16 = 1.0f;
+            const half beta_f16  = 0.0f;
+            CUBLAS_CHECK(
+                cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
+                        row_diff, src1_ncols, ne10,
+                        &alpha_f16, src0_ptr,       CUDA_R_16F, ne00,
+                                    src1_ptr,       CUDA_R_16F, ne10,
+                        &beta_f16,   dst_f16.get(), CUDA_R_16F, ldc,
+                        CUBLAS_COMPUTE_16F,
+                        CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), prev_math_mode));
+            const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
+            to_fp32_cuda(dst_f16.get(), dst_dd_i, row_diff, src1_ncols, stream);
+        }
     } else {
         ggml_cuda_pool_alloc<float> src0_ddq_as_f32(ctx.pool(id));
         ggml_cuda_pool_alloc<float> src1_ddq_as_f32(ctx.pool(id));
