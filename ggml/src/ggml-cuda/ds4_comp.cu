@@ -4,12 +4,11 @@ static __global__ void k_ds4_comp(int ne0, int nblock, int ratio, int nidx,
         size_t state_stride, size_t score_stride,
         const float * __restrict__ state, const float * __restrict__ score, const int * __restrict__ idx, float * dst) {
 
-    int ii = blockIdx.x * blockDim.x + threadIdx.x;
-    int ib = ii / ne0;
-    if (ib >= nblock) {
+    int i0 = blockIdx.x * blockDim.x + threadIdx.x;
+    int ib = blockIdx.y;
+    if (i0 >= ne0 || ib >= nblock) {
         return;
     }
-    int i0 = ii % ne0;
 
     idx += ratio*ib;
     int row_p = idx[0];
@@ -44,12 +43,11 @@ static __global__ void k_ds4_comp_4(int ne0, int nblock, int nidx,
         size_t state_stride, size_t score_stride,
         const float * __restrict__ state, const float * __restrict__ score, const int * __restrict__ idx, float * dst) {
 
-    int ii = blockIdx.x * blockDim.x + threadIdx.x;
-    int ib = ii / ne0;
-    if (ib >= nblock) {
+    int i0 = blockIdx.x * blockDim.x + threadIdx.x;
+    int ib = blockIdx.y;
+    if (i0 >= ne0 || ib >= nblock) {
         return;
     }
-    int i0 = ii % ne0;
 
     idx += 4*ib;
 
@@ -81,12 +79,11 @@ static __global__ void k_ds4_comp_type1(int ne0, int nblock, int ratio,
         size_t state_stride, size_t score_stride,
         const float * __restrict__ state, const float * __restrict__ score, const int * __restrict__ idx, float * dst) {
 
-    int ii = blockIdx.x * blockDim.x + threadIdx.x;
-    int ib = ii / ne0;
-    if (ib >= nblock) {
+    int i0 = blockIdx.x * blockDim.x + threadIdx.x;
+    int ib = blockIdx.y;
+    if (i0 >= ne0 || ib >= nblock) {
         return;
     }
-    int i0 = ii % ne0;
 
     idx += ratio*ib;
     int row = idx[0];
@@ -132,15 +129,15 @@ void ggml_cuda_op_ds4_comp(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         GGML_ASSERT(idx->ne[0] % (2*ratio) == 0);
 
         int ne0 = dst->ne[0];
-        int nelem = ne0 * nblock;
-        int nb = (nelem + k_block_size - 1)/k_block_size;
+        dim3 block(k_block_size, 1, 1);
+        dim3 grid((ne0 + k_block_size - 1)/k_block_size, nblock, 1);
 
         if (ratio == 4) {
-            k_ds4_comp_4<<<nb, k_block_size, 0, ctx.stream()>>>(ne0, nblock, idx->ne[0]/2,
+            k_ds4_comp_4<<<grid, block, 0, ctx.stream()>>>(ne0, nblock, idx->ne[0]/2,
                     state->nb[1]/sizeof(float), score->nb[1]/sizeof(float),
                     (const float *)state->data, (const float *)score->data, (const int *)idx->data, (float *)dst->data);
         } else {
-            k_ds4_comp<<<nb, k_block_size, 0, ctx.stream()>>>(ne0, nblock, ratio, idx->ne[0]/2,
+            k_ds4_comp<<<grid, block, 0, ctx.stream()>>>(ne0, nblock, ratio, idx->ne[0]/2,
                     state->nb[1]/sizeof(float), score->nb[1]/sizeof(float),
                     (const float *)state->data, (const float *)score->data, (const int *)idx->data, (float *)dst->data);
         }
@@ -153,10 +150,10 @@ void ggml_cuda_op_ds4_comp(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         GGML_ASSERT(idx->ne[0] % ratio == 0);
 
         int ne0 = dst->ne[0];
-        int nelem = ne0 * nblock;
-        int nb = (nelem + k_block_size - 1)/k_block_size;
+        dim3 block(k_block_size, 1, 1);
+        dim3 grid((ne0 + k_block_size - 1)/k_block_size, nblock, 1);
 
-        k_ds4_comp_type1<<<nb, k_block_size, 0, ctx.stream()>>>(ne0, nblock, ratio,
+        k_ds4_comp_type1<<<grid, block, 0, ctx.stream()>>>(ne0, nblock, ratio,
                 state->nb[1]/sizeof(float), score->nb[1]/sizeof(float),
                 (const float *)state->data, (const float *)score->data, (const int *)idx->data, (float *)dst->data);
     }
