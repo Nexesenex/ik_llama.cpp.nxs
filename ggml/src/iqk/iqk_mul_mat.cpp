@@ -153,11 +153,25 @@ struct MulMat {
                 if (gate_b) {
                     auto b = gate_b + ix;
                     auto x = this_info.dst_row(ky);
-                    for (int j = 0; j < this_nrc_x; ++j) x[j] += b[j];
+                    int j = 0;
+#if defined(__AVX2__)
+                    for (; j + 7 < this_nrc_x; j += 8) {
+                        _mm256_storeu_ps(x + j, _mm256_add_ps(_mm256_loadu_ps(x + j), _mm256_loadu_ps(b + j)));
+                    }
+#endif
+                    for (; j < this_nrc_x; ++j) x[j] += b[j];
                 }
                 activate(op, this_nrc_x, this_info.dst_row(ky), tmp + ky*xstep);
                 if (limit > 1e-6f) {
-                    for (int j = 0; j < this_nrc_x; ++j) tmp[ky*xstep + j] = std::min(tmp[ky*xstep + j], limit);
+                    int j = 0;
+                    auto pt = tmp + ky*xstep;
+#if defined(__AVX2__)
+                    auto vlimit = _mm256_set1_ps(limit);
+                    for (; j + 7 < this_nrc_x; j += 8) {
+                        _mm256_storeu_ps(pt + j, _mm256_min_ps(_mm256_loadu_ps(pt + j), vlimit));
+                    }
+#endif
+                    for (; j < this_nrc_x; ++j) pt[j] = std::min(pt[j], limit);
                 }
             }
             func(n, (const void *)((const char *)vx_up + ix*bx), bx, this_info, this_nrc_x);
@@ -165,14 +179,40 @@ struct MulMat {
                 auto result = this_info.dst_row(ky);
                 if (up_b) {
                     auto b = up_b + ix;
-                    for (int j = 0; j < this_nrc_x; ++j) result[j] += b[j];
+                    int j = 0;
+#if defined(__AVX2__)
+                    for (; j + 7 < this_nrc_x; j += 8) {
+                        _mm256_storeu_ps(result + j, _mm256_add_ps(_mm256_loadu_ps(result + j), _mm256_loadu_ps(b + j)));
+                    }
+#endif
+                    for (; j < this_nrc_x; ++j) result[j] += b[j];
                 }
                 if (op == GGML_UNARY_OP_SWIGLU_OAI) {
                     clamp_oai(this_nrc_x, result);
                 } else if (limit > 1e-6f) {
-                    for (int j = 0; j < this_nrc_x; ++j) result[j] = std::max(-limit, std::min(limit, result[j]));
+                    int j = 0;
+#if defined(__AVX2__)
+                    auto vlimit = _mm256_set1_ps(limit);
+                    auto vneg_limit = _mm256_set1_ps(-limit);
+                    for (; j + 7 < this_nrc_x; j += 8) {
+                        auto v = _mm256_loadu_ps(result + j);
+                        v = _mm256_min_ps(v, vlimit);
+                        v = _mm256_max_ps(v, vneg_limit);
+                        _mm256_storeu_ps(result + j, v);
+                    }
+#endif
+                    for (; j < this_nrc_x; ++j) result[j] = std::max(-limit, std::min(limit, result[j]));
                 }
-                for (int j = 0; j < this_nrc_x; ++j) result[j] *= tmp[ky*xstep + j];
+                {
+                    auto pt = tmp + ky*xstep;
+                    int j = 0;
+#if defined(__AVX2__)
+                    for (; j + 7 < this_nrc_x; j += 8) {
+                        _mm256_storeu_ps(result + j, _mm256_mul_ps(_mm256_loadu_ps(result + j), _mm256_loadu_ps(pt + j)));
+                    }
+#endif
+                    for (; j < this_nrc_x; ++j) result[j] *= pt[j];
+                }
             }
         };
         if (func16 && nrc_y >= 16) {
