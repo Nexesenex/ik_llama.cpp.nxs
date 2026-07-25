@@ -1167,11 +1167,28 @@ void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth) {
             auto x = (const float *)((const char *)mask->data + mask->nb[1]*i1 + mask->nb[2]*i2 + mask->nb[3]*i3);
             auto y = (float *)((char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
             if (i1 < topk->ne[1]) {
-                for (int j = 0; j < n; ++j) y[j] = -INFINITY;
+                int j = 0;
+#if defined(__AVX2__)
+                auto vneg_inf = _mm256_set1_ps(-INFINITY);
+                for (; j + 7 < n; j += 8) _mm256_storeu_ps(y + j, vneg_inf);
+#endif
+                for (; j < n; ++j) y[j] = -INFINITY;
                 for (int j = 0; j < nidx; ++j) y[idx[j]] = 0.0f;
-                for (int j = 0; j < n; ++j) y[j] += x[j];
+                j = 0;
+#if defined(__AVX2__)
+                for (; j + 7 < n; j += 8) {
+                    _mm256_storeu_ps(y + j, _mm256_add_ps(_mm256_loadu_ps(y + j), _mm256_loadu_ps(x + j)));
+                }
+#endif
+                for (; j < n; ++j) y[j] += x[j];
             } else {
-                for (int j = 0; j < n; ++j) y[j] = x[j];
+                int j = 0;
+#if defined(__AVX2__)
+                for (; j + 7 < n; j += 8) {
+                    _mm256_storeu_ps(y + j, _mm256_loadu_ps(x + j));
+                }
+#endif
+                for (; j < n; ++j) y[j] = x[j];
             }
         }
     }
