@@ -4852,10 +4852,10 @@ static bool llm_load_tensors(
             if (layer_ovr[il].size > 0) {
                 double ffn_mib = layer_ovr[il].size/1024./1024.;
                 if (!layer_ovr[il].buft.empty()) {
-                    LLAMA_LOG_INFO("Layer %2d (%s): %8.2f MiB ffn_exps\n",
+                    LLAMA_LOG_INFO("Layer %2d (%s): %5.2f MiB ffn_exps\n",
                         il, layer_ovr[il].buft.c_str(), ffn_mib);
                 } else {
-                    LLAMA_LOG_INFO("Layer %2d: %8.2f MiB ffn_exps\n", il, ffn_mib);
+                    LLAMA_LOG_INFO("Layer %2d: %5.2f MiB ffn_exps\n", il, ffn_mib);
                 }
                 tot_model += layer_ovr[il].size;
 
@@ -4863,10 +4863,10 @@ static bool llm_load_tensors(
                 double attn_kv_mib = (layer_non_ovr[il].size + kv_size)/1024./1024.;
                 double attn_kv_c_mib = (layer_non_ovr[il].size + kv_size + compute_per_layer[il])/1024./1024.;
                 if (!layer_non_ovr[il].buft.empty()) {
-                    LLAMA_LOG_INFO("Layer %2d (%s): %8.2f MiB Attention, %7.2f MiB KV cache, %8.2f MiB Attn+KV, %6.2f MiB Compute, %8.2f Attn+KV+C\n",
+                    LLAMA_LOG_INFO("Layer %2d (%s): %5.2f MiB Attention, %5.2f MiB KV cache, %5.2f MiB Attn+KV, %5.2f MiB Compute, %5.2f Attn+KV+C\n",
                         il, layer_non_ovr[il].buft.c_str(), attn_mib, kv_mib, attn_kv_mib, cmp_mib, attn_kv_c_mib);
                 } else {
-                    LLAMA_LOG_INFO("Layer %2d: %8.2f MiB Attention, %7.2f MiB KV cache, %8.2f MiB Attn+KV, %6.2f MiB Compute, %8.2f Attn+KV+C\n",
+                    LLAMA_LOG_INFO("Layer %2d: %5.2f MiB Attention, %5.2f MiB KV cache, %5.2f MiB Attn+KV, %5.2f MiB Compute, %5.2f Attn+KV+C\n",
                         il, attn_mib, kv_mib, attn_kv_mib, cmp_mib, attn_kv_c_mib);
                 }
                 tot_model += layer_non_ovr[il].size;
@@ -4875,10 +4875,10 @@ static bool llm_load_tensors(
                 double l_kv_mib = (layer_non_ovr[il].size + kv_size)/1024./1024.;
                 double l_kv_c_mib = (layer_non_ovr[il].size + kv_size + compute_per_layer[il])/1024./1024.;
                 if (!layer_non_ovr[il].buft.empty()) {
-                    LLAMA_LOG_INFO("Layer %2d (%s): %8.2f MiB layer, %7.2f MiB KV cache, %8.2f MiB L+KV, %6.2f MiB Compute, %8.2f L+KV+C\n",
+                    LLAMA_LOG_INFO("Layer %2d (%s): %5.2f MiB layer, %5.2f MiB KV cache, %5.2f MiB L+KV, %5.2f MiB Compute, %5.2f L+KV+C\n",
                         il, layer_non_ovr[il].buft.c_str(), l_mib, kv_mib, l_kv_mib, cmp_mib, l_kv_c_mib);
                 } else {
-                    LLAMA_LOG_INFO("Layer %2d: %8.2f MiB layer, %7.2f MiB KV cache, %8.2f MiB L+KV, %6.2f MiB Compute, %8.2f L+KV+C\n",
+                    LLAMA_LOG_INFO("Layer %2d: %5.2f MiB layer, %5.2f MiB KV cache, %5.2f MiB L+KV, %5.2f MiB Compute, %5.2f L+KV+C\n",
                         il, l_mib, kv_mib, l_kv_mib, cmp_mib, l_kv_c_mib);
                 }
                 tot_model += layer_non_ovr[il].size;
@@ -4892,37 +4892,49 @@ static bool llm_load_tensors(
         double last_l_kv = (layer_non_ovr[n_layer].size + output_size)/1024./1024.;
         double last_l_kv_c = (layer_non_ovr[n_layer].size + output_size + max_compute_val)/1024./1024.;
         if (!layer_non_ovr[n_layer].buft.empty()) {
-            LLAMA_LOG_INFO("Layer %2d (%s): %8.2f MiB ?, %8.2f MiB output, %8.2f MiB (? + output), %8.2f MiB (?+output+C)\n",
+            LLAMA_LOG_INFO("Layer %2d (%s): %5.2f MiB ?, %5.2f MiB output, %5.2f MiB (? + output), %5.2f MiB (?+output+C)\n",
                 n_layer, layer_non_ovr[n_layer].buft.c_str(), layer_non_ovr[n_layer].size/1024./1024., output_size/1024./1024., last_l_kv, last_l_kv_c);
         } else {
-            LLAMA_LOG_INFO("Layer %2d: %8.2f MiB ?, %8.2f MiB output, %8.2f MiB (? + output), %8.2f MiB (?+output+C)\n",
+            LLAMA_LOG_INFO("Layer %2d: %5.2f MiB ?, %5.2f MiB output, %5.2f MiB (? + output), %5.2f MiB (?+output+C)\n",
                 n_layer, layer_non_ovr[n_layer].size/1024./1024., output_size/1024./1024., last_l_kv, last_l_kv_c);
         }
         tot_cache += output_size;
-        // Per-buffer subtotals using L+KV+C
-        std::map<std::string, double> buft_sums;
+        // Per-buffer subtotals with weights, KV, compute breakdown
+        struct buf_breakdown { double w = 0, kv = 0, cmp = 0; };
+        std::map<std::string, buf_breakdown> buft_bd;
         for (int il = 0; il < n_layer; ++il) {
             auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn, (uint32_t) n_ubatch, swa_compress);
             if (layer_ovr[il].size > 0) {
                 if (!layer_ovr[il].buft.empty()) {
-                    buft_sums[layer_ovr[il].buft] += layer_ovr[il].size;
+                    buft_bd[layer_ovr[il].buft].w += layer_ovr[il].size;
                 }
                 if (!layer_non_ovr[il].buft.empty()) {
-                    buft_sums[layer_non_ovr[il].buft] += layer_non_ovr[il].size + kv_size + compute_per_layer[il];
+                    auto & b = buft_bd[layer_non_ovr[il].buft];
+                    b.w    += layer_non_ovr[il].size;
+                    b.kv   += kv_size;
+                    b.cmp  += compute_per_layer[il];
                 }
             } else {
                 if (!layer_non_ovr[il].buft.empty()) {
-                    buft_sums[layer_non_ovr[il].buft] += layer_non_ovr[il].size + kv_size + compute_per_layer[il];
+                    auto & b = buft_bd[layer_non_ovr[il].buft];
+                    b.w    += layer_non_ovr[il].size;
+                    b.kv   += kv_size;
+                    b.cmp  += compute_per_layer[il];
                 }
             }
         }
         if (!layer_non_ovr[n_layer].buft.empty()) {
-            buft_sums[layer_non_ovr[n_layer].buft] += layer_non_ovr[n_layer].size + output_size + max_compute_val;
+            auto & b = buft_bd[layer_non_ovr[n_layer].buft];
+            b.w    += layer_non_ovr[n_layer].size;
+            b.kv   += output_size;
+            b.cmp  += max_compute_val;
         }
-        if (!buft_sums.empty()) {
+        if (!buft_bd.empty()) {
             LLAMA_LOG_INFO("Sizes per buffer (L+KV+C):\n");
-            for (auto & [name, size] : buft_sums) {
-                LLAMA_LOG_INFO("  %11s: %9.2f MiB\n", name.c_str(), size/1024./1024.);
+            for (auto & [name, b] : buft_bd) {
+                double total = b.w + b.kv + b.cmp;
+                LLAMA_LOG_INFO("  %11s: %9.2f MiB  (weights: %8.2f MiB, KV: %7.2f MiB, compute: %6.2f MiB)\n",
+                    name.c_str(), total/1024./1024., b.w/1024./1024., b.kv/1024./1024., b.cmp/1024./1024.);
             }
         }
         LLAMA_LOG_INFO("Total Sizes: %9.2f MiB Model, %8.2f MiB Expected Cache, %9.2f MiB Expected Total\n", tot_model/1024./1024., tot_cache/1024./1024., (tot_model + tot_cache)/1024./1024.);
