@@ -10139,8 +10139,7 @@ struct llama_data_read {
             uint32_t dsv4_single_stream;
             read_to(&dsv4_single_stream, sizeof(dsv4_single_stream));
 
-            int32_t dsv4_stream_idx;
-            read_to(&dsv4_stream_idx, sizeof(dsv4_stream_idx));
+            read(sizeof(int32_t)); // dsv4_stream_idx — not needed, dest seq_id is used instead
 
             uint32_t dsv4_n_stream;
             read_to(&dsv4_n_stream, sizeof(dsv4_n_stream));

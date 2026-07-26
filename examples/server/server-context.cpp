@@ -3633,7 +3633,6 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 if (n != checkpoint_size) {
                     SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float)checkpoint_size / 1024 / 1024);
                     do_reset = true;
-                    //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
                 } else {
                     pos_next = std::min(pos_next, it->pos_max);
                     slot.n_past = slot.cache_tokens.size_up_to_pos(pos_next);
@@ -4273,40 +4272,8 @@ void server_context::speculative_decoding_accept() {
         slot.n_decoded += ids.size();
         const int64_t t_current = ggml_time_us();
 
-        if (n_decoded_prev == 0) {
-            slot.t_start_generation = t_current;
-            slot.t_start_batch_100 = t_current;
-            slot.t_prompt_processing = (t_current - slot.t_start_process_prompt) / 1e3;
-            metrics.on_prompt_eval(slot);
-            const int32_t n_processed = slot.n_prompt_tokens_processed;
-            LOG_INFO("PP_OK", {
-                {"n_p",   slot.n_past},
-                {"n_ctx",    n_ctx},
-                {"n_tok", n_processed},
-                {"pp_ms",    std::round(slot.t_prompt_processing * 100) / 100},
-                {"TotCurPP t/s",    std::round(n_processed * 1e3 / slot.t_prompt_processing * 100) / 100},
-            });
-            if (params_base.do_checkpoint) {
-                create_checkpoint_at_interval(slot, params_base);
-            }
-        }
-
         if (slot.n_decoded > 1) {
             create_checkpoint_at_interval(slot, params_base);
-        }
-
-        if (n_decoded_prev / 100 != slot.n_decoded / 100) {
-            const int32_t last_n_tokens = slot.n_decoded - slot.n_decoded_at_batch_100;
-            const double tok_per_sec = last_n_tokens * 1e6 / (t_current - slot.t_start_batch_100);
-            slot.t_start_batch_100 = t_current;
-            slot.n_decoded_at_batch_100 = slot.n_decoded;
-            const double cur_tg_tok_per_sec = slot.n_decoded * 1e6 / (t_current - slot.t_start_generation);
-            LOG_INFO("TG", {
-                {"n_p",   slot.n_past},
-                {"Dec",    slot.n_decoded},
-                {"L" + std::to_string(last_n_tokens) + " t/s",    std::round(tok_per_sec * 100) / 100},
-                {"CurTG t/s",    std::round(cur_tg_tok_per_sec * 100) / 100},
-            });
         }
 
         slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
