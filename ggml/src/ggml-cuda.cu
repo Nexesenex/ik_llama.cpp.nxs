@@ -2274,6 +2274,9 @@ static void ggml_cuda_op_mul_mat(
                                     src1_ddq_i, id, src1_ddq_i_source, ctx.device, src1_ncols*src1_padded_col_size*q8_1_ts/q8_1_bs, stream));
                             }
                         } else {
+                            if (!src1->data) {
+                                GGML_ABORT("src1->data is NULL on device %d (OOM?)", ctx.device);
+                            }
                             float * src1_ddf_i_source = (float *) src1->data;
                             src1_ddf_i_source += (i0*ne11 + src1_col_0) * ne10;
                             CUDA_CHECK(cudaMemcpyPeerAsync(src1_ddf_i, id, src1_ddf_i_source, ctx.device,
