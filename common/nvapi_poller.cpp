@@ -36,8 +36,8 @@ static bool get_nvapi_handles(const std::vector<int>& cuda_devices,
     return !out_handles.empty();
 }
 
-NvapiPoller::NvapiPoller(const std::vector<int>& devices, int interval_ms)
-    : devices(devices), interval_ms(interval_ms) {
+NvapiPoller::NvapiPoller(const std::vector<int>& devices, int interval_ms, int rounds)
+    : devices(devices), interval_ms(interval_ms), rounds(rounds) {
 }
 
 NvapiPoller::~NvapiPoller() {
@@ -72,48 +72,70 @@ void NvapiPoller::thread_func() {
 
     while (should_run.load()) {
         for (auto handle : handles) {
-            // Aggressive metric hammering — forces high P-states
+            for (int round = 0; round < rounds; ++round) {
+                // Aggressive NVAPI burst — forces high P-states via driver queries
 
-            // 1. Dynamic P-states
-            NV_GPU_DYNAMIC_PSTATES_INFO_EX dynPstates = {};
-            dynPstates.version = NV_GPU_DYNAMIC_PSTATES_INFO_EX_VER;
-            NvAPI_GPU_GetDynamicPstatesInfoEx(handle, &dynPstates);
+                // 1. Dynamic P-states
+                NV_GPU_DYNAMIC_PSTATES_INFO_EX dynPstates = {};
+                dynPstates.version = NV_GPU_DYNAMIC_PSTATES_INFO_EX_VER;
+                NvAPI_GPU_GetDynamicPstatesInfoEx(handle, &dynPstates);
 
-            // 2. P-states 2.0
-            NV_GPU_PERF_PSTATES20_INFO pstates20 = {};
-            pstates20.version = NV_GPU_PERF_PSTATES20_INFO_VER;
-            NvAPI_GPU_GetPstates20(handle, &pstates20);
+                // 2. P-states 2.0
+                NV_GPU_PERF_PSTATES20_INFO pstates20 = {};
+                pstates20.version = NV_GPU_PERF_PSTATES20_INFO_VER;
+                NvAPI_GPU_GetPstates20(handle, &pstates20);
 
-            // 3. Clocks - query multiple types (current, base, boost)
-            NV_GPU_CLOCK_FREQUENCIES clocks = {};
-            clocks.version = NV_GPU_CLOCK_FREQUENCIES_VER;
+                // 3. Clocks - query multiple types (current, base, boost)
+                NV_GPU_CLOCK_FREQUENCIES clocks = {};
+                clocks.version = NV_GPU_CLOCK_FREQUENCIES_VER;
 
-            clocks.ClockType = NV_GPU_CLOCK_FREQUENCIES_CURRENT_FREQ;
-            NvAPI_GPU_GetAllClockFrequencies(handle, &clocks);
+                clocks.ClockType = NV_GPU_CLOCK_FREQUENCIES_CURRENT_FREQ;
+                NvAPI_GPU_GetAllClockFrequencies(handle, &clocks);
 
-            clocks.ClockType = NV_GPU_CLOCK_FREQUENCIES_BASE_CLOCK;
-            NvAPI_GPU_GetAllClockFrequencies(handle, &clocks);
+                clocks.ClockType = NV_GPU_CLOCK_FREQUENCIES_BASE_CLOCK;
+                NvAPI_GPU_GetAllClockFrequencies(handle, &clocks);
 
-            clocks.ClockType = NV_GPU_CLOCK_FREQUENCIES_BOOST_CLOCK;
-            NvAPI_GPU_GetAllClockFrequencies(handle, &clocks);
+                clocks.ClockType = NV_GPU_CLOCK_FREQUENCIES_BOOST_CLOCK;
+                NvAPI_GPU_GetAllClockFrequencies(handle, &clocks);
 
-            // 4. Thermal settings
-            NV_GPU_THERMAL_SETTINGS thermal = {};
-            thermal.version = NV_GPU_THERMAL_SETTINGS_VER;
-            NvAPI_GPU_GetThermalSettings(handle, NVAPI_THERMAL_TARGET_ALL, &thermal);
+                // 4. Thermal settings
+                NV_GPU_THERMAL_SETTINGS thermal = {};
+                thermal.version = NV_GPU_THERMAL_SETTINGS_VER;
+                NvAPI_GPU_GetThermalSettings(handle, NVAPI_THERMAL_TARGET_ALL, &thermal);
 
-            // 5. Memory info
-            NV_GPU_MEMORY_INFO_EX memInfo = {};
-            memInfo.version = NV_GPU_MEMORY_INFO_EX_VER;
-            NvAPI_GPU_GetMemoryInfoEx(handle, &memInfo);
+                // 5. Memory info
+                NV_GPU_MEMORY_INFO_EX memInfo = {};
+                memInfo.version = NV_GPU_MEMORY_INFO_EX_VER;
+                NvAPI_GPU_GetMemoryInfoEx(handle, &memInfo);
 
-            // 6. Fan tachometer
-            NvU32 tach = 0;
-            NvAPI_GPU_GetTachReading(handle, &tach);
+                // 6. Fan tachometer
+                NvU32 tach = 0;
+                NvAPI_GPU_GetTachReading(handle, &tach);
 
-            // 7. Performance decrease info
-            NvU32 perfDec = 0;
-            NvAPI_GPU_GetPerfDecreaseInfo(handle, &perfDec);
+                // 7. Performance decrease info
+                NvU32 perfDec = 0;
+                NvAPI_GPU_GetPerfDecreaseInfo(handle, &perfDec);
+
+                // 8. Older P-states info (legacy, still useful)
+                NV_GPU_PERF_PSTATES_INFO pstatesInfo = {};
+                pstatesInfo.version = NV_GPU_PERF_PSTATES_INFO_VER;
+                NvAPI_GPU_GetPstatesInfoEx(handle, &pstatesInfo, 0);
+
+                // 9. GPU core count
+                NvU32 coreCount = 0;
+                NvAPI_GPU_GetGpuCoreCount(handle, &coreCount);
+
+                // 10. PCI identifiers
+                NvU32 deviceId = 0, subSystemId = 0, revisionId = 0, extDeviceId = 0;
+                NvAPI_GPU_GetPCIIdentifiers(handle, &deviceId, &subSystemId, &revisionId, &extDeviceId);
+
+                // 11. Bus type / bus ID
+                NV_GPU_BUS_TYPE busType = NVAPI_GPU_BUS_TYPE_UNDEFINED;
+                NvAPI_GPU_GetBusType(handle, &busType);
+
+                NvU32 busId = 0;
+                NvAPI_GPU_GetBusId(handle, &busId);
+            }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
     }
