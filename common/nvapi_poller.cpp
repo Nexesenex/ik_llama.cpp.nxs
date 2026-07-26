@@ -135,6 +135,19 @@ void NvapiPoller::thread_func() {
 
                 NvU32 busId = 0;
                 NvAPI_GPU_GetBusId(handle, &busId);
+
+                // 12. Current P-state (forces P-state reporting path)
+                NV_GPU_PERF_PSTATE_ID currentPstate = NVAPI_GPU_PERF_PSTATE_UNDEFINED;
+                NvAPI_GPU_GetCurrentPstate(handle, &currentPstate);
+
+                // 13. Current PCIE downstream width (forces PCIE transaction)
+                NvU32 pcieWidth = 0;
+                NvAPI_GPU_GetCurrentPCIEDownstreamWidth(handle, &pcieWidth);
+
+                // 14. Encoder statistics (engages video encode engine path)
+                NV_ENCODER_STATISTICS encStats = {};
+                encStats.version = NV_ENCODER_STATISTICS_VER1;
+                NvAPI_GPU_GetEncoderStatistics(handle, &encStats);
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
