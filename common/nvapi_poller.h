@@ -14,7 +14,8 @@ class NvapiPoller {
 public:
     // devices: CUDA device indices to keep awake
     // interval_ms: polling interval (default 5)
-    explicit NvapiPoller(const std::vector<int>& devices, int interval_ms = 5);
+    // rounds: number of NVAPI query bursts per poll cycle (default 3, try 3-5)
+    explicit NvapiPoller(const std::vector<int>& devices, int interval_ms = 10, int rounds = 1);
     ~NvapiPoller();
 
     // Call from TG start / TG end (same places as shark_callback / heartbeat)
@@ -28,6 +29,7 @@ private:
 
     std::vector<int> devices;
     int interval_ms;
+    int rounds;
     std::atomic<bool> running{false};
     std::atomic<bool> should_run{false};
     std::thread worker;
