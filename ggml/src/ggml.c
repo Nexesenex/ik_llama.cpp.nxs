@@ -17263,6 +17263,26 @@ static void ggml_compute_forward_fill_f16(const struct ggml_compute_params * par
     }
 }
 
+static void ggml_compute_forward_fill_bf16(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const ggml_bf16_t c = GGML_FP32_TO_BF16(ggml_get_op_params_f32(dst, 0));
+
+    GGML_TENSOR_LOCALS(int64_t, ne, dst, ne);
+    GGML_TENSOR_LOCALS(size_t,  nb, dst, nb);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+    const int64_t nr = ne1*ne2*ne3;
+
+    for (int64_t ir = ith; ir < nr; ir += nth) {
+        const int64_t i03 = ir/(ne2*ne1);
+        const int64_t i02 = (ir - i03*ne2*ne1)/ne1;
+        const int64_t i01 = ir - i03*ne2*ne1 - i02*ne1;
+
+        ggml_bf16_t * dst_ptr = (ggml_bf16_t *) ((char *) dst->data + i03*nb3 + i02*nb2 + i01*nb1);
+        ggml_vec_set_bf16(ne0, dst_ptr, c);
+    }
+}
+
 static void ggml_compute_forward_fill(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     // const struct ggml_tensor * src0 = dst->src[0];
     
@@ -17273,6 +17293,9 @@ static void ggml_compute_forward_fill(const struct ggml_compute_params * params,
             break;
         case GGML_TYPE_F16:
             ggml_compute_forward_fill_f16(params, dst);
+            break;
+        case GGML_TYPE_BF16:
+            ggml_compute_forward_fill_bf16(params, dst);
             break;
         default:
             GGML_ABORT("unsupported type for ggml_fill: %s", ggml_type_name(dst->type));
