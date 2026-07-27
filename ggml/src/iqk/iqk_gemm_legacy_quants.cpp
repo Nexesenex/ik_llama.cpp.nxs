@@ -1375,7 +1375,18 @@ inline __m256i accum_mxfp4_quants(const __m256i * v, const int8_t * qs) {
     auto y4h = _mm_loadu_si128((const __m128i*)qs+1);
     auto yl  = MM256_SET1_M128I(y4l);
     auto yh  = MM256_SET1_M128I(y4h);
-#ifdef HAVE_VNNI256
+#if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+#if defined(HAVE_VNNIINT8)
+    auto sumi = _mm256_setzero_si256();
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[0], _mm256_shuffle_epi32(yl, 0x00));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[1], _mm256_shuffle_epi32(yl, 0x55));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[2], _mm256_shuffle_epi32(yl, 0xaa));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[3], _mm256_shuffle_epi32(yl, 0xff));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[4], _mm256_shuffle_epi32(yh, 0x00));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[5], _mm256_shuffle_epi32(yh, 0x55));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[6], _mm256_shuffle_epi32(yh, 0xaa));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[7], _mm256_shuffle_epi32(yh, 0xff));
+#else
     auto sumi = _mm256_setzero_si256();
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[0], _mm256_shuffle_epi32(yl, 0x00));
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[1], _mm256_shuffle_epi32(yl, 0x55));
@@ -1385,6 +1396,7 @@ inline __m256i accum_mxfp4_quants(const __m256i * v, const int8_t * qs) {
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[5], _mm256_shuffle_epi32(yh, 0x55));
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[6], _mm256_shuffle_epi32(yh, 0xaa));
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[7], _mm256_shuffle_epi32(yh, 0xff));
+#endif
 #else
     auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(v[0], _mm256_shuffle_epi32(yl, 0x00)),
                                   _mm256_maddubs_epi16(v[1], _mm256_shuffle_epi32(yl, 0x55)));
@@ -1418,7 +1430,9 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
     int nb = n / QK_MXFP4;
     auto table128 = _mm_loadu_si128((const __m128i *)kvalues_mxfp4);
     auto table = MM256_SET1_M128I(table128);
+#ifndef HAVE_VNNIINT8
     table = _mm256_add_epi8(table, _mm256_set1_epi8(12));
+#endif
     __m256i v[8];
     if constexpr (nrc_y == 1) {
         union { __m256 vec; float val[8]; } helper;
@@ -1447,7 +1461,9 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
                 acc1 = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc1);
                 acc2 = _mm256_fmadd_ps(scales, _mm256_set1_ps(m8), acc2);
             }
+#ifndef HAVE_VNNIINT8
             acc1 = _mm256_fmadd_ps(acc2, _mm256_set1_ps(-12.f), acc1);
+#endif
             info.store(ix, 0, acc1);
         }
     }
