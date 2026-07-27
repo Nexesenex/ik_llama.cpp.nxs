@@ -1481,6 +1481,7 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
                     for (int iy = 0; iy < nrc_y; ++iy) {
                         auto scales = convert_scales((const uint16_t *)q8.y[iy][ib4].d);
                         _mm256_storeu_ps(d8 + 8*iy, scales);
+#ifndef HAVE_VNNIINT8
                         auto m4 = _mm256_extractf128_ps(scales, 1);
                         auto m8 = _mm256_set_m128(m4, m4);
                         auto sumf = _mm256_mul_ps(d4[0], _mm256_shuffle_ps(m8, m8, 0x00));
@@ -1488,6 +1489,7 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
                         sumf = _mm256_fmadd_ps(d4[2], _mm256_shuffle_ps(m8, m8, 0xaa), sumf);
                         sumf = _mm256_fmadd_ps(d4[3], _mm256_shuffle_ps(m8, m8, 0xff), sumf);
                         acc[iy] = _mm256_fmadd_ps(sumf, _mm256_set1_ps(-12.f), acc[iy]);
+#endif
                     }
                 }
                 for (int k = 0; k < 4; ++k) {
@@ -1502,7 +1504,9 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
             }
             for (int ib = 4*(nb/4); ib < nb; ++ib) {
                 auto scales = convert_mxfp4_scales(iq4[ib].e);
+#ifndef HAVE_VNNIINT8
                 auto scales_m = _mm256_mul_ps(scales, _mm256_set1_ps(-12.f));
+#endif
                 prepare_mxfp4_quants_avx2(iq4[ib].qs, v, m4, table);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto qy = (const block_q8_2 *)q8.y[iy];
@@ -1510,7 +1514,9 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
                     auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
                     auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
                     acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
+#ifndef HAVE_VNNIINT8
                     acc[iy] = _mm256_fmadd_ps(scales_m, _mm256_set1_ps(m8), acc[iy]);
+#endif
                 }
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
