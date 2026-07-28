@@ -592,6 +592,7 @@ struct gpt_params {
     int32_t ctx_checkpoints_n = 32;           // max number of context checkpoints per slot
     int32_t ctx_checkpoints_interval = n_batch * 3;   // minimum number of tokens between each context checkpoints
     int32_t ctx_checkpoints_minimal_interval = 0; // minimum pos_max gap between consecutive checkpoints (0 = disabled)
+    bool ctx_checkpoints_interval_progressive = false; // use progressive interval scaling based on checkpoint count
     int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint
     common_checkpoint_eviction ctx_checkpoint_eviction = COMMON_CHECKPOINT_EVICTION_VARIANCE;
     bool ctx_checkpoints_interval_gating = false;
