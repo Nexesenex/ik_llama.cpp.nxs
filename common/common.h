@@ -600,6 +600,8 @@ struct gpt_params {
     std::string ctx_checkpoint_spill_dir = ""; // disk dir for checkpoint spill (empty = disabled, behavior unchanged)
     int32_t ctx_checkpoint_ram_live = 2;      // max checkpoints with resident data when spill is on
     int32_t ctx_checkpoints_interval = n_batch * 4;   // minimum number of tokens between each context checkpoints
+    int32_t ctx_checkpoints_minimal_interval = n_batch / 4; // minimum pos_max gap between consecutive checkpoints (0 = disabled)
+    bool ctx_checkpoints_interval_progressive = false; // use progressive interval scaling based on checkpoint count
     int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint
     common_checkpoint_eviction ctx_checkpoint_eviction = COMMON_CHECKPOINT_EVICTION_VARIANCE;
     bool ctx_checkpoints_interval_gating = false;
