@@ -19,6 +19,8 @@
 #include <regex>
 #include <exception>
 
+static bool is_multiple_of_eight(int32_t n);
+
 // DFlash/DSpark (draft model family) and MTP stages work with multimodal
 static bool server_speculative_multimodal_supported(const common_params_speculative & params) {
     const auto stages = params.get_resolved_stages();
@@ -1955,6 +1957,18 @@ bool server_context::l_s_w_t(server_slot& slot, server_task& task) {
             params_base.has_mtp = false;
             llama_spec_ckpt_discard(slot.ctx);
             LLAMA_LOG_WARN("banned strings cannot be used together with speculative decoding with recurrent model, speculative decoding will be disabled.\n");
+        }
+
+        // Safety check for progressive interval mode: ctx_checkpoints_n must be a multiple of eight
+        if (params_base.ctx_checkpoints_interval_progressive) {
+            if (!is_multiple_of_eight(params_base.ctx_checkpoints_n)) {
+                LLAMA_LOG_WARN("--ctx-checkpoints-interval-progressive requires --ctx-checkpoints N to be a multiple of eight (got %d). Disabling progressive mode.\n",
+                    params_base.ctx_checkpoints_n);
+                params_base.ctx_checkpoints_interval_progressive = false;
+            } else {
+                LLAMA_LOG_INFO("--ctx-checkpoints-interval-progressive enabled with --ctx-checkpoints %d (multiple of eight).\n",
+                    params_base.ctx_checkpoints_n);
+            }
         }
     }
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
@@ -3906,6 +3920,10 @@ static bool verify_restored_checkpoint(
     return true;
 }
 
+static bool is_multiple_of_eight(int32_t n) {
+    return n > 0 && n % 8 == 0;
+}
+
 void server_context::create_checkpoint_at_interval(server_slot & slot) {
     if (!this->params_base.do_checkpoint) {
         return;
@@ -3914,7 +3932,34 @@ void server_context::create_checkpoint_at_interval(server_slot & slot) {
         return;
     }
     auto pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
-    if (slot.checkpoint_pos + this->params_base.ctx_checkpoints_interval <= pos) {
+    int32_t interval = this->params_base.ctx_checkpoints_interval;
+
+    // Progressive interval: scale based on which eighth of checkpoints we're in
+    if (this->params_base.ctx_checkpoints_interval_progressive && interval > 0) {
+        const size_t n_checkpoints = slot.server_cached_prompt.checkpoints.size();
+        const size_t n_max = (size_t)params_base.ctx_checkpoints_n;
+        const size_t eighth = n_max / 8;
+
+        if (n_checkpoints < eighth) {
+            interval = std::max(1, interval * 50 / 100);
+        } else if (n_checkpoints < eighth * 2) {
+            interval = std::max(1, interval * 75 / 100);
+        } else if (n_checkpoints < eighth * 3) {
+            // 100% - normal interval
+        } else if (n_checkpoints < eighth * 4) {
+            // 100% - normal interval
+        } else if (n_checkpoints < eighth * 5) {
+            // 100% - normal interval
+        } else if (n_checkpoints < eighth * 6) {
+            // 100% - normal interval
+        } else if (n_checkpoints < eighth * 7) {
+            interval = interval * 125 / 100;
+        } else {
+            interval = interval * 150 / 100;
+        }
+    }
+
+    if (slot.checkpoint_pos + interval <= pos) {
         bool created = create_checkpoint(slot);
         if (created) {
             slot.checkpoint_pos = pos;
