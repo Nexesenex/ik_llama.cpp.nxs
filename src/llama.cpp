@@ -951,6 +951,14 @@ llama_context::~llama_context() {
     free_dsv4_cache_tensors();
     ggml_backend_sched_free(sched);
 
+#ifdef GGML_USE_THREADPOOL
+    if (threadpool_owned) {
+        ggml_threadpool_free(threadpool);
+        threadpool       = nullptr;
+        threadpool_batch = nullptr;
+    }
+#endif
+
     for (ggml_backend_t backend : backends) {
         ggml_backend_free(backend);
     }
@@ -8975,6 +8983,22 @@ struct llama_context * llama_init_from_model(
     cparams.n_seq_max        = std::max(1u, params.n_seq_max);
     cparams.n_threads        = params.n_threads;
     cparams.n_threads_batch  = params.n_threads_batch;
+#ifdef GGML_USE_THREADPOOL
+    {
+        uint32_t n_tp = std::max(params.n_threads, params.n_threads_batch);
+        if (n_tp > 0) {
+            struct ggml_threadpool_params tpp = ggml_threadpool_params_default((int)n_tp);
+            ctx->threadpool = ggml_threadpool_new(&tpp);
+            if (ctx->threadpool) {
+                ctx->threadpool_batch = ctx->threadpool;
+                ctx->threadpool_owned = true;
+                LLAMA_LOG_INFO("%s: created threadpool with %u threads\n", __func__, n_tp);
+            } else {
+                LLAMA_LOG_WARN("%s: failed to create threadpool, falling back to OpenMP\n", __func__);
+            }
+        }
+    }
+#endif
     cparams.yarn_ext_factor  = params.yarn_ext_factor >= 0.0f ? params.yarn_ext_factor : hparams.yarn_ext_factor;
     cparams.yarn_attn_factor = params.yarn_attn_factor >= 0.0f ? params.yarn_attn_factor : hparams.yarn_attn_factor;
     cparams.yarn_beta_fast   = params.yarn_beta_fast >= 0.0f ? params.yarn_beta_fast : hparams.yarn_beta_fast;
@@ -13220,13 +13244,21 @@ uint32_t llama_n_threads_batch(struct llama_context * ctx) {
 
 #ifdef GGML_USE_THREADPOOL
 void llama_attach_threadpool(struct llama_context * ctx, ggml_threadpool_t threadpool, ggml_threadpool_t threadpool_batch) {
+    if (ctx->threadpool_owned) {
+        ggml_threadpool_free(ctx->threadpool);
+    }
     ctx->threadpool       = threadpool;
     ctx->threadpool_batch = threadpool_batch;
+    ctx->threadpool_owned = false;
 }
 
 void llama_detach_threadpool(struct llama_context * ctx) {
+    if (ctx->threadpool_owned) {
+        ggml_threadpool_free(ctx->threadpool);
+    }
     ctx->threadpool       = nullptr;
     ctx->threadpool_batch = nullptr;
+    ctx->threadpool_owned = false;
 }
 #endif
 
