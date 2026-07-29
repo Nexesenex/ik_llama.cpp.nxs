@@ -5238,18 +5238,34 @@ static thread_ret_t ggml_threadpool_worker(void * data) {
         ((uint8_t *)state - offsetof(struct ggml_threadpool, workers[state->ith - 1]));
     int my_gen = 0;
 
-    mtx_lock(&tp->mutex);
-    while (true) {
+    for (;;) {
+        // Polling: spin without mutex to reduce wake-up latency
+        if (tp->params.polling > 0) {
+            for (uint32_t p = 0; p < tp->params.polling; p++) {
+                if (atomic_load(&tp->generation) != my_gen || atomic_load(&tp->stop)) {
+                    goto acquire;
+                }
+#if defined(__SSE3__)
+                _mm_pause();
+#elif defined(__ARM_NEON)
+                __asm__ __volatile__("isb\n");
+#endif
+            }
+        }
+acquire:
+        mtx_lock(&tp->mutex);
         // Wait until generation changes (new work), stop, or unpause
         while (tp->generation == my_gen && !atomic_load(&tp->stop) && !atomic_load(&tp->pause_flag)) {
             cnd_wait(&tp->cv_work, &tp->mutex);
         }
         if (atomic_load(&tp->stop)) {
+            mtx_unlock(&tp->mutex);
             break;
         }
         // Woken by unpause or new work. If still paused (spurious wake), sync gen and wait again.
         if (atomic_load(&tp->pause_flag)) {
             my_gen = tp->generation;
+            mtx_unlock(&tp->mutex);
             continue;
         }
         my_gen = tp->generation;
@@ -5264,8 +5280,8 @@ static thread_ret_t ggml_threadpool_worker(void * data) {
         if (tp->n_working == 0) {
             cnd_signal(&tp->cv_idle);
         }
+        mtx_unlock(&tp->mutex);
     }
-    mtx_unlock(&tp->mutex);
 
     return 0;
 }
