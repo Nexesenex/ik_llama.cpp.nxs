@@ -5205,7 +5205,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data);
 
 struct ggml_threadpool {
     // Worker threads [1..n_threads_max-1]
-    ggml_thread_t threads[GGML_MAX_N_THREADS - 1];
+    pthread_t threads[GGML_MAX_N_THREADS - 1];
 
     int n_threads_max;
     int n_threads_cur;
@@ -5337,13 +5337,13 @@ struct ggml_threadpool * ggml_threadpool_new(struct ggml_threadpool_params * par
         tp->workers[i - 1].ith    = i;
         tp->workers[i - 1].shared = NULL;
 
-        int rc = ggml_thread_create(&tp->threads[i - 1], NULL, ggml_threadpool_worker, &tp->workers[i - 1]);
+        int rc = pthread_create(&tp->threads[i - 1], NULL, ggml_threadpool_worker, &tp->workers[i - 1]);
         if (rc != 0) {
             // Cleanup already created threads
             atomic_store(&tp->stop, true);
             cnd_broadcast(&tp->cv_work);
             for (int j = 1; j < i; j++) {
-                ggml_thread_join(tp->threads[j - 1], NULL);
+                pthread_join(tp->threads[j - 1], NULL);
             }
             mtx_destroy(&tp->mutex);
             cnd_destroy(&tp->cv_work);
@@ -5409,7 +5409,7 @@ void ggml_threadpool_free(struct ggml_threadpool * tp) {
     mtx_unlock(&tp->mutex);
 
     for (int i = 1; i < tp->n_threads_max; i++) {
-        ggml_thread_join(tp->threads[i - 1], NULL);
+        pthread_join(tp->threads[i - 1], NULL);
     }
 
     mtx_destroy(&tp->mutex);
