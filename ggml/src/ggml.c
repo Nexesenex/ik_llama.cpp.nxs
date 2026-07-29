@@ -5027,12 +5027,17 @@ static thread_ret_t ggml_threadpool_worker(void * data) {
 
     mtx_lock(&tp->mutex);
     while (true) {
-        // Wait until generation changes (new work) or stop
-        while (tp->generation == my_gen && !atomic_load(&tp->stop)) {
+        // Wait until generation changes (new work), stop, or unpause
+        while (tp->generation == my_gen && !atomic_load(&tp->stop) && !atomic_load(&tp->pause_flag)) {
             cnd_wait(&tp->cv_work, &tp->mutex);
         }
         if (atomic_load(&tp->stop)) {
             break;
+        }
+        // Woken by unpause or new work. If still paused (spurious wake), sync gen and wait again.
+        if (atomic_load(&tp->pause_flag)) {
+            my_gen = tp->generation;
+            continue;
         }
         my_gen = tp->generation;
         mtx_unlock(&tp->mutex);
@@ -5148,6 +5153,9 @@ void ggml_threadpool_pause(struct ggml_threadpool * tp) {
 
 void ggml_threadpool_resume(struct ggml_threadpool * tp) {
     atomic_store(&tp->pause_flag, 0);
+    mtx_lock(&tp->mutex);
+    cnd_broadcast(&tp->cv_work);
+    mtx_unlock(&tp->mutex);
 }
 
 #endif // GGML_USE_THREADPOOL
@@ -31865,7 +31873,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     };
 
 #ifdef GGML_USE_THREADPOOL
-    if (cplan->threadpool) {
+    if (cplan->threadpool && !atomic_load(&cplan->threadpool->pause_flag)) {
         struct ggml_threadpool * tp = cplan->threadpool;
 
         tp->n_threads_cur = n_threads;
