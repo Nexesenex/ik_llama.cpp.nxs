@@ -4947,6 +4947,47 @@ struct ggml_threadpool * ggml_threadpool_new(struct ggml_threadpool_params * par
             free(tp);
             return NULL;
         }
+
+        // Apply cpumask: pin thread i to CPU i if cpumask[i] is true
+        if (params->cpumask[i]) {
+#if defined(_MSC_VER) || defined(__MINGW32__)
+            SetThreadAffinityMask(tp->threads[i - 1], (DWORD_PTR)1ULL << (i % 64));
+#elif defined(__gnu_linux__)
+            cpu_set_t cpuset;
+            CPU_ZERO(&cpuset);
+            CPU_SET(i % CPU_SETSIZE, &cpuset);
+            int arv = pthread_setaffinity_np(tp->threads[i - 1], sizeof(cpu_set_t), &cpuset);
+            if (arv != 0) {
+                fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(arv));
+            }
+#endif
+        }
+
+        // Apply thread priority
+        if (params->prio != GGML_SCHED_PRIORITY_NORMAL) {
+#if defined(_MSC_VER) || defined(__MINGW32__)
+            int win_prio = THREAD_PRIORITY_NORMAL;
+            switch (params->prio) {
+                case GGML_SCHED_PRIORITY_MEDIUM:  win_prio = THREAD_PRIORITY_ABOVE_NORMAL;   break;
+                case GGML_SCHED_PRIORITY_HIGH:    win_prio = THREAD_PRIORITY_HIGHEST;         break;
+                case GGML_SCHED_PRIORITY_REALTIME:win_prio = THREAD_PRIORITY_TIME_CRITICAL;   break;
+                default: break;
+            }
+            SetThreadPriority(tp->threads[i - 1], win_prio);
+#elif defined(__gnu_linux__)
+            struct sched_param param;
+            param.sched_priority = 0;
+            int policy = SCHED_OTHER;
+            if (params->prio == GGML_SCHED_PRIORITY_REALTIME) {
+                policy = SCHED_RR;
+                param.sched_priority = 1;
+            }
+            int prv = pthread_setschedparam(tp->threads[i - 1], policy, &param);
+            if (prv != 0) {
+                fprintf(stderr, "warning: pthread_setschedparam() failed: %s\n", strerror(prv));
+            }
+#endif
+        }
     }
 
     return tp;
