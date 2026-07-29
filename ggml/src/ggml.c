@@ -5269,6 +5269,11 @@ acquire:
             continue;
         }
         my_gen = tp->generation;
+        // Excess worker (ith >= n_threads_cur): skip compute, go back to sleep
+        if (state->ith >= tp->n_threads_cur) {
+            mtx_unlock(&tp->mutex);
+            continue;
+        }
         mtx_unlock(&tp->mutex);
 
         // Run the graph computation
@@ -31696,8 +31701,6 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     if (cplan->threadpool && !atomic_load(&cplan->threadpool->pause_flag)) {
         struct ggml_threadpool * tp = cplan->threadpool;
 
-        tp->n_threads_cur = n_threads;
-
         // Set the shared state for all workers
         tp->shared = &state_shared;
         state_shared.use_threadpool = true;
@@ -31705,8 +31708,9 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
             tp->workers[i - 1].shared = &state_shared;
         }
 
-        // Dispatch workers
+        // Dispatch workers (n_threads_cur set under mutex for worker visibility)
         mtx_lock(&tp->mutex);
+        tp->n_threads_cur = n_threads;
         tp->n_working = n_threads - 1;
         tp->generation++;
         cnd_broadcast(&tp->cv_work);
