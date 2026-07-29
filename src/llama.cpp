@@ -9131,9 +9131,9 @@ struct llama_context * llama_init_from_model(
             if (ctx->threadpool) {
                 ctx->threadpool_batch = ctx->threadpool;
                 ctx->threadpool_owned = true;
-                LLAMA_LOG_INFO("%s: created threadpool with %u threads\n", __func__, n_tp);
+                LLAMA_LOG_INFO("%s: ggml_threadpool: ON (pool=%u, n_threads=%u, n_threads_batch=%u)\n", __func__, n_tp, params.n_threads, params.n_threads_batch);
             } else {
-                LLAMA_LOG_WARN("%s: failed to create threadpool, falling back to OpenMP\n", __func__);
+                LLAMA_LOG_WARN("%s: ggml_threadpool: FAILED, falling back to OpenMP\n", __func__);
             }
         }
     }
