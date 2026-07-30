@@ -1157,7 +1157,7 @@ static bool llama_kv_cache_init(
     cache.ring_parts.clear();
     if (cache.swa_ring) {
         GGML_ASSERT(cache.ring_w > 0 && cache.ring_w * ctx->cparams.n_seq_max == cache.size_swa);
-        cache.ring_occ.assign(cache.size_swa, -1);
+        cache.ring_occ.assign(cache.size_swa, UINT32_MAX);
         cache.ring_parts.reserve(2*ctx->cparams.n_seq_max);
     }
 
@@ -1685,7 +1685,7 @@ static bool llama_kv_cache_find_slot(
             } else {
                 parts.push_back({i, 1, row});
             }
-            cache.ring_occ[row] = (int32_t) (cache.head + i);
+            cache.ring_occ[row] = cache.head + i;
         }
     }
 
@@ -2220,7 +2220,7 @@ static bool llama_kv_cache_seq_rm(
                 if (cell.pos < 0 || cell.pos >= p0) continue;
                 if (seq_id >= 0 && !cell.has_seq_id(seq_id)) continue;
                 if (p0 - cell.pos <= (llama_pos) cache.ring_n_swa &&
-                    cache.ring_occ[cache.ring_row_of_cell(i)] != (int32_t) i) {
+                    cache.ring_occ[cache.ring_row_of_cell(i)] != i) {
                     return false;
                 }
             }
@@ -5191,8 +5191,8 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                     const llama_pos q_lo = pos >= (llama_pos) n_swa_eff ? pos - (llama_pos) n_swa_eff + 1 : 0;
                     for (llama_pos q = q_lo; q <= pos; ++q) {
                         const int64_t r = r_lo + (q % Wseq);
-                        const int32_t c = mask_kv_self.ring_occ[r];
-                        if (c < 0) {
+                        const uint32_t c = mask_kv_self.ring_occ[r];
+                        if (c == UINT32_MAX) {
                             continue;
                         }
                         const auto & cell = mask_kv_self.cells[c];
@@ -5230,7 +5230,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                         if (cell.pos > pos_max[s]) continue;
                         const uint32_t row = mask_kv_self.ring_row((llama_seq_id) s, cell.pos);
                         if (pos_min[s] - cell.pos < (int32_t) n_swa_eff &&
-                            mask_kv_self.ring_occ[row] != (int32_t) i) {
+                            mask_kv_self.ring_occ[row] != i) {
                             GGML_ABORT("SWA ring KV: cell %d (seq %u, pos %d) inside the attention window "
                                     "[%d, %d] was overwritten: row %u now holds cell %d; run without --swa-compress",
                                     (int) i, s, cell.pos, pos_min[s], pos_max[s], row, mask_kv_self.ring_occ[row]);
@@ -5514,8 +5514,9 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
-            if (kv_self.swa_ring && lctx.inp_KQ_mask_swa) {
-                GGML_ABORT("SWA ring KV: non-causal SWA mask path is not supported; run without --swa-compress");
+            if (kv_self.swa_ring && lctx.inp_KQ_mask_swa && (!hparams.causal_attn || lctx.is_encoding)) {
+                GGML_ABORT("SWA ring KV: the SWA mask path only supports causal non-encoding mode; "
+                        "run without --swa-compress");
             }
             if (lctx.inp_KQ_mask_swa) {
                 GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask_swa->buffer));
@@ -7917,6 +7918,8 @@ static bool llama_kv_ring_audit_graph(struct llama_context & lctx, const struct 
                 }
                 break;
             default:
+                LLAMA_LOG_WARN("%s: unrecognised op %s (%d); the SWA ring audit may miss this attention node\n",
+                    __func__, ggml_op_name(node->op), node->op);
                 continue;
         }
         if (!k) {
@@ -7957,7 +7960,8 @@ static bool llama_kv_ring_audit_graph(struct llama_context & lctx, const struct 
         }
         if (!seen[il]) {
             LLAMA_LOG_ERROR("%s: layer %u holds SWA ring rows that no attention node in the graph "
-                    "reads -- its window comes from somewhere the ring does not manage\n", __func__, il);
+                    "reads -- either a new/unrecognised attention op, or its window comes from "
+                    "somewhere the ring does not manage\n", __func__, il);
             return false;
         }
         ++n_audited;
@@ -8333,11 +8337,10 @@ struct llama_context * llama_init_from_model(
             cparams.defrag_thold = -1.0f;
         }
         {
-            const uint32_t pad    = std::max<uint32_t>(llama_kv_cache_get_padding(cparams), 256u);
-            const uint32_t ring_w = GGML_PAD(hparams.n_swa + cparams.n_ubatch, pad);
-            kv_size_swa = ring_w * cparams.n_seq_max;
-            if (kv_size_swa >= kv_size) {
-                kv_size_swa = 0; // window does not undercut the full context; dense is not larger
+            const uint32_t ring_w  = llama_kv_ring_win(hparams.n_swa, cparams.n_ubatch, cparams.flash_attn);
+            kv_size_swa = llama_kv_ring_size(hparams.n_swa, cparams.n_ubatch, kv_size, cparams.n_seq_max, cparams.flash_attn);
+            if (kv_size_swa == 0) {
+                // window does not undercut the full context; dense is not larger
             } else {
                 LLAMA_LOG_INFO("%s: SWA ring KV: n_swa = %u -> ring size %u cells (%u per sequence x %u sequences, full context %u); omit --swa-compress to disable\n",
                         __func__, hparams.n_swa, kv_size_swa, ring_w, cparams.n_seq_max, kv_size);
@@ -10498,7 +10501,7 @@ struct llama_data_read {
 
                 for (uint32_t i = 0; i < cell_count; ++i) {
                     const uint32_t c = kv_self.head + i;
-                    kv_self.ring_occ[kv_self.ring_row_of_cell(c)] = (int32_t) c;
+                    kv_self.ring_occ[kv_self.ring_row_of_cell(c)] = c;
                 }
             }
         }
@@ -10665,7 +10668,7 @@ struct llama_data_read {
 
                 if (llama_kv_ring_layer(kv_self, hparams, il)) {
                     if (kv_self.v_l[il]->extra) {
-                        throw std::runtime_error("Transposed V cache is not sypported with split mode 'graph'");
+                        throw std::runtime_error("Transposed V cache is not supported with split mode 'graph'");
                     }
                     read_ring_elems(kv_self.v_l[il], ring_base, ring_first, ring_rows, kv_self.ring_w,
                             kv_self.size_swa, n_embd_v_gqa, (uint32_t) ggml_type_size(kv_self.v_l[il]->type));
@@ -10675,7 +10678,7 @@ struct llama_data_read {
                 if (cell_count) {
                     const size_t v_size_el = ggml_type_size(kv_self.v_l[il]->type);
                     if (kv_self.v_l[il]->extra) {
-                        throw std::runtime_error("Transposed V cache is not sypported with split mode 'graph'");
+                        throw std::runtime_error("Transposed V cache is not supported with split mode 'graph'");
                     }
                     // For each row in the transposed matrix, read the values for the whole cell range
                     for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {

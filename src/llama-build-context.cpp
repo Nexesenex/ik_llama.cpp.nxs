@@ -900,11 +900,8 @@ void llm_build_context::llm_build_kv_store(
     const int64_t n_embd_head_k = hparams.n_embd_head_k(il);
 
     const bool    ring      = kv.swa_ring && hparams.swa_layers[il];
-    std::vector<llama_kv_cache::ring_part> parts_reserve;
-    if (ring && kv.ring_parts.empty()) {
-        parts_reserve.push_back({0, (uint32_t) n_tokens, 0});
-    }
-    const auto &  parts     = parts_reserve.empty() ? kv.ring_parts : parts_reserve;
+    GGML_ASSERT(!ring || !kv.ring_parts.empty());
+    const auto &  parts     = kv.ring_parts;
     const bool    multi     = ring;
     const int64_t kv_size_l = ring ? kv.size_swa : kv.size;
     const int32_t kv_head_l = kv_head;   // only used when !multi, i.e. never on the ring path
@@ -3167,11 +3164,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 GGML_ASSERT(kv_self.size == cparams.n_ctx);
 
                 const bool    ring      = kv_self.swa_ring && hparams.swa_layers[il];
-                std::vector<llama_kv_cache::ring_part> parts_reserve;
-                if (ring && kv_self.ring_parts.empty()) {
-                    parts_reserve.push_back({0, (uint32_t) n_tokens, 0});
-                }
-                const auto &  parts     = parts_reserve.empty() ? kv_self.ring_parts : parts_reserve;
+                GGML_ASSERT(!ring || !kv_self.ring_parts.empty());
+                const auto &  parts     = kv_self.ring_parts;
                 const bool    multi     = ring;
                 const int64_t kv_size_l = ring ? kv_self.size_swa : kv_self.size;
                 const int32_t kv_head_l = kv_head; // only used when !multi, i.e. never on the ring path

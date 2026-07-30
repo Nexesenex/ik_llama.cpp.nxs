@@ -83,7 +83,7 @@ struct llama_kv_cache {
     uint32_t size_swa = 0; // total ring rows = n_seq_ring * ring_w
     uint32_t ring_w   = 0; // rows per sequence (the padded window)
     uint32_t ring_n_swa = 0; // hparams.n_swa, needed by seq_rm rewind-safety check
-    std::vector<int32_t> ring_occ;
+    std::vector<uint32_t> ring_occ;
 
     struct ring_part {
         uint32_t src_off;
@@ -93,12 +93,14 @@ struct llama_kv_cache {
     std::vector<ring_part> ring_parts;
 
     uint32_t ring_row(llama_seq_id s, llama_pos p) const {
+        GGML_ASSERT(s >= 0 && (uint32_t)s * ring_w < size_swa);
         return (uint32_t) s * ring_w + (uint32_t) (p % (llama_pos) ring_w);
     }
 
     uint32_t ring_row_of_cell(uint32_t c) const {
         const auto & cell = cells[c];
-        return ring_row(cell.seq_id.empty() ? 0 : *cell.seq_id.begin(), cell.pos);
+        GGML_ASSERT(!cell.seq_id.empty());
+        return ring_row(*cell.seq_id.begin(), cell.pos);
     }
 
     ggml_type type_k = GGML_TYPE_F16;

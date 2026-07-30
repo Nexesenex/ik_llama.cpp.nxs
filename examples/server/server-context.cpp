@@ -4545,6 +4545,7 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
         llama_kv_cache_seq_rm(slot.ctx, slot.id, -1, -1);
         slot.cache_tokens.keep_first(0);
         slot.n_past = 0;
+        n_keep_buffer = 0;
     }
 
     // Truncate buffer
