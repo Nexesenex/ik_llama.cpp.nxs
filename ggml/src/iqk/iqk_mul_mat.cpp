@@ -2238,9 +2238,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
             iqk_bucket_topk(k->ne[1], n_top_k, score, sorted, idx_inf, k_n_bucket, counts, idx_aux);
             std::memcpy((char *)dst->data + dst->nb[1]*iq, sorted, n_top_k*sizeof(int32_t));
         }
-        if (iq + 1 < q->ne[2]) {
-            barrier(barrier_data);
-        }
+        barrier(barrier_data);
     }
 
     return true;
