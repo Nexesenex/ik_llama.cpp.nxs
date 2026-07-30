@@ -1812,7 +1812,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     } while (false);
     slot.allow_ruless_prev = slot.allow_ruless;
 
-    if (llama_model_supports_state_checkpoints(llama_get_model(slot.ctx))) {
+    if (llama_model_has_recurrent(llama_get_model(slot.ctx)) || llama_model_is_deepseek4(llama_get_model(slot.ctx))) {
         if (!params_base.ignore_recurrent_model) {
             bool do_checkpoint = params_base.ctx_checkpoints_n > 0;
             // make checkpoints only for completion tasks
@@ -4386,7 +4386,7 @@ void server_context::speculative_decoding_accept() {
         }
 
         if (slot.n_decoded > 1) {
-            create_checkpoint_at_interval(slot, params_base);
+            create_checkpoint_at_interval(slot);
         }
 
         if (n_decoded_prev / 100 != slot.n_decoded / 100) {
