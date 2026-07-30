@@ -2042,15 +2042,7 @@ static inline int server_decode(llama_context * ctx, const llama_batch & batch) 
 #endif
 }
 
-bool server_context::system_prompt_disable(const char * reason) {
-    LOG_ERROR("system prompt disabled", {{"reason", reason}});
-    system_prompt.clear();
-    system_tokens.clear();
-    system_need_update = false;
-    return false;
-}
-
-bool server_context::system_prompt_update() {
+void server_context::system_prompt_update() {
     LOG_VERBOSE("system prompt update", {
         {"system_prompt", system_prompt},
         });
@@ -2075,40 +2067,22 @@ bool server_context::system_prompt_update() {
 
             if (server_decode(ctx, batch) != 0) {
                 LOG_ERROR("llama_decode() failed", {});
-                return system_prompt_disable("the system prompt could not be encoded");
+                return;
             }
         }
 
-        const bool countable = !llama_model_is_recurrent(model) && params_base.n_parallel > 0;
-        const int32_t n_before = countable ? llama_get_kv_cache_token_count(ctx) : 0;
-
-        for (int32_t i = 1; i < params_base.n_parallel; ++i) {
+        // assign the system KV cache to all parallel sequences
+        for (int32_t i = 1; i <= params_base.n_parallel; ++i) {
             llama_kv_cache_seq_cp(ctx, 0, i, -1, -1);
-        }
-
-        if (countable) {
-            const int32_t n_after    = llama_get_kv_cache_token_count(ctx);
-            const int32_t n_expected = n_before * params_base.n_parallel;
-            if (n_after != n_expected) {
-                LOG_ERROR("system prompt fan-out did not reach every slot", {
-                    {"n_parallel",   params_base.n_parallel},
-                    {"n_cells_seq0", n_before},
-                    {"n_cells_after", n_after},
-                    {"n_cells_expected", n_expected},
-                    });
-                return system_prompt_disable("the system prompt could not be copied to every slot");
-            }
         }
     }
 
     system_need_update = false;
-    return true;
 }
 
-bool server_context::system_prompt_set(const std::string& sys_prompt, std::string & why_not) {
+bool server_context::system_prompt_set(const std::string& sys_prompt) {
     if (!sys_prompt.empty() && model != nullptr && std::strcmp(llama_model_arch_string(model), "deepseek4") == 0) {
-        why_not = "DeepSeek4 server system prompts are unsupported because seq_cp does not copy private cache state";
-        LOG_ERROR("server system prompt refused", {{"reason", why_not}});
+        LOG_ERROR("DeepSeek4 server system prompts are unsupported because seq_cp does not copy private cache state", {});
         return false;
     }
 
@@ -2838,9 +2812,8 @@ void server_context::process_single_task(server_task&& task) {
 
         if (task.data.contains("system_prompt")) {
             std::string sys_prompt = json_value(task.data, "system_prompt", std::string());
-            std::string why_not;
-            if (!system_prompt_set(sys_prompt, why_not)) {
-                send_error(task, why_not, ERROR_TYPE_INVALID_REQUEST);
+            if (!system_prompt_set(sys_prompt)) {
+                send_error(task, "DeepSeek4 server system prompts are unsupported", ERROR_TYPE_INVALID_REQUEST);
                 break;
             }
 
@@ -3543,9 +3516,7 @@ void server_context::add_sampled_tokens() {
                 : slot.cache_tokens.get_text_tokens();
 
             auto & params_spec = slot.params.speculative;
-            const llama_pos draft_base_pos = slot.uses_mtp()
-                ? (llama_pos) system_tokens.size() + slot.cache_tokens.pos_next()
-                : -1;
+            const llama_pos draft_base_pos = slot.uses_mtp() ? slot.cache_tokens.pos_next() : -1;
             common_speculative_draft_result draft_result = common_speculative_draft_ex(
                 slot.spec,
                 ctx,
@@ -3571,7 +3542,7 @@ void server_context::add_sampled_tokens() {
 
             // add the sampled token to the batch
             slot.i_batch_dft.push_back(batch.n_tokens);
-            common_batch_add(batch, slot.sampled, (llama_pos) system_tokens.size() + slot.cache_tokens.pos_next(), { slot.id }, true);
+            common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
             slot.cache_tokens.push_back(slot.sampled);
 
             const int min_usable_draft = slot.params.speculative.get_min_usable_stage_n_min();
@@ -3597,7 +3568,7 @@ void server_context::add_sampled_tokens() {
                 // add all drafted tokens to the batch
                 for (size_t i = 0; i < draft.size(); i++) {
                     slot.i_batch_dft.push_back(batch.n_tokens);
-                    common_batch_add(batch, draft[i], (llama_pos) system_tokens.size() + slot.cache_tokens.pos_next(), { slot.id }, true);
+                    common_batch_add(batch, draft[i], slot.cache_tokens.pos_next(), { slot.id }, true);
                     slot.cache_tokens.push_back(draft[i]);
                 }
                 slot.drafted = std::move(draft);
@@ -3607,7 +3578,7 @@ void server_context::add_sampled_tokens() {
             // no speculative decoding
             slot.i_batch = batch.n_tokens;
 
-            common_batch_add(batch, slot.sampled, (llama_pos) system_tokens.size() + slot.cache_tokens.pos_next(), { slot.id }, true);
+            common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
 
             slot.cache_tokens.push_back(slot.sampled);
 
@@ -4015,6 +3986,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
 
                     p0 = (int)system_tokens.size();
                     if (p0 != 0) {
+                        // copy over the system prompt when there is one
                         llama_kv_cache_seq_cp(ctx, 0, slot.id, -1, -1);
                     }
 
@@ -4493,13 +4465,8 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     slot.cache_tokens.keep_first(n_keep_cache);
     slot.n_past = slot.cache_tokens.n_tokens();
 
-    if (!llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1)) {
-        LLAMA_LOG_WARN("rewind to pos %d is deeper than the resident SWA ring window; clearing the sequence and reprocessing\n",
-            ban_pos);
-        llama_kv_cache_seq_rm(slot.ctx, slot.id, -1, -1);
-        slot.cache_tokens.keep_first(0);
-        slot.n_past = 0;
-    }
+    // Remove from KV cache
+    llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
 
     // Truncate buffer
     slot.token_buffer.resize(n_keep_buffer);

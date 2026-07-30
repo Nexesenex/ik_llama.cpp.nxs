@@ -15,12 +15,6 @@ static const std::map<llama_rope_scaling_type, const char *> LLAMA_ROPE_SCALING_
     { LLAMA_ROPE_SCALING_TYPE_YARN,   "yarn"   },
 };
 
-static void llama_hparams_set_swa_layers_periodic(llama_hparams & hparams, uint32_t pattern) {
-    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-        hparams.swa_layers[i] = (i % pattern) < (pattern - 1);
-    }
-}
-
 static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::string & name) {
     for (const auto & kv : LLAMA_ROPE_SCALING_TYPES) {
         if (kv.second == name) {
@@ -755,9 +749,6 @@ void llm_load_hparams(
                 if (!found_swa && hparams.n_swa == 0) {
                     throw std::runtime_error("invalid value for sliding_window");
                 }
-                if (hparams.n_swa > 0) {
-                    std::fill(hparams.swa_layers.begin(), hparams.swa_layers.begin() + hparams.n_layer, true);
-                }
             } break;
         case LLM_ARCH_PLAMO:
             {
@@ -824,8 +815,6 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping, false);
                 hparams.attn_soft_cap = true;
 
-                llama_hparams_set_swa_layers_periodic(hparams, 2);
-
                 switch (hparams.n_layer) {
                     case 26: model.type = e_model::MODEL_2B; break;
                     case 42: model.type = e_model::MODEL_9B; break;
@@ -842,8 +831,6 @@ void llm_load_hparams(
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-
-                llama_hparams_set_swa_layers_periodic(hparams, hparams.n_swa_pattern);
 
                 switch (hparams.n_layer) {
                     case 26: model.type = e_model::MODEL_2B; break;
@@ -1361,7 +1348,6 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
                 ml.get_key(LLM_KV_LOGIT_SCALE, hparams.f_logit_scale);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
-                llama_hparams_set_swa_layers_periodic(hparams, hparams.n_swa_pattern);
                 switch (hparams.n_layer) {
                     case 32: model.type = e_model::MODEL_8B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
@@ -1461,11 +1447,7 @@ void llm_load_hparams(
 
                 //TODO OAI_MOE: SWA
                 //hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-
-                if (hparams.n_swa > 0) {
-                    hparams.n_swa_pattern = 2;
-                    llama_hparams_set_swa_layers_periodic(hparams, hparams.n_swa_pattern);
-                }
+                //hparams.set_swa_pattern(2);
 
                 // TODO: switch (hparams.n_layer)
 

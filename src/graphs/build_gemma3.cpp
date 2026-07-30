@@ -26,7 +26,7 @@ ggml_cgraph * llm_build_context::build_gemma3() {
 
     // "5-to-1 interleaved attention"
     // 5 layers of local attention followed by 1 layer of global attention
-    const int sliding_window_pattern = hparams.n_swa_pattern;
+    static const int sliding_window_pattern = 6;
 
     ggml_tensor * rope_cache   = nullptr;
     ggml_tensor * rope_cache_l = nullptr;

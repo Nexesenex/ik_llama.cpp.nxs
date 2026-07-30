@@ -20,7 +20,7 @@ ggml_cgraph * llm_build_context::build_openai_moe() {
     struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa();
     const float kq_scale = 1.0f / sqrtf(float(n_rot));
 
-    const int sliding_window_pattern = hparams.n_swa_pattern;
+    const int sliding_window_pattern = 2;
 
     for (int il = 0; il < n_layer; ++il) {
         const bool is_sliding = il % sliding_window_pattern < (sliding_window_pattern - 1);
