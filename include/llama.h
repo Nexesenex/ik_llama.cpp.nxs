@@ -382,6 +382,7 @@ extern "C" {
         uint32_t max_ctx_size;
         int32_t  n_seq_max;
         int32_t  n_ubatch;
+        bool     swa_compress; // mirrors llama_context_params.swa_compress; needed by the --fit KV-size estimator
         int32_t  amb;
         int32_t  fit_margin;
         bool     fit;
@@ -491,6 +492,7 @@ extern "C" {
         bool fused_mmad;        // whether to use fused mul+multi_add op [EXPERIMENTAL]
         bool rope_cache;        // whether to use RoPE cache [EXPERIMENTAL]
         bool graph_reuse;       // whether to reuse graphs when possible [EXPERIMENTAL]
+        bool swa_compress;      // opt-in: window-sized SWA ring KV cache for sliding-window layers (default: dense) [EXPERIMENTAL]
         bool dsa;               // enable GLM DSA sparse attention (off by default) [EXPERIMENTAL]
         bool fused_idx_topk;    // enable the fused indexer topk op (off by default) [EXPERIMENTAL]
         int  dsa_top_k;         // DSA top-k override (<0 => model's configured indexer_top_k) [EXPERIMENTAL]
@@ -867,6 +869,8 @@ extern "C" {
                     llama_seq_id   seq_id,
                        llama_pos   p0,
                        llama_pos   p1);
+
+    LLAMA_API bool llama_kv_self_is_swa_ring(const struct llama_context * ctx);
 
     // Copy all tokens that belong to the specified sequence to another sequence
     // Note that this does not allocate extra KV cache memory - it simply assigns the tokens to the new sequence

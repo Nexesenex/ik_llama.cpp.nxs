@@ -2246,8 +2246,18 @@ llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int i
     return LLM_TENSOR_UNKNOWN;
 }
 
-size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const {
+bool llama_model::supports_swa_ring() const {
+    return hparams.n_swa > 0 && arch != LLM_ARCH_LLAMA4 && arch != LLM_ARCH_OPENPANGU
+        && arch != LLM_ARCH_DEEPSEEK4 && arch != LLM_ARCH_DFLASH_DRAFT;
+}
+
+size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn, uint32_t n_ubatch, bool swa_compress) const {
     if (il < 0 || il >= hparams.n_layer) return 0;
+    if (swa_compress && supports_swa_ring() && hparams.swa_layers[il]) {
+        const uint32_t pad = std::max<uint32_t>(llama_kv_pad_granularity(flash_attn), 256u);
+        const uint32_t w   = (uint32_t) GGML_PAD(hparams.n_swa + n_ubatch, pad);
+        kv_size = std::min(kv_size, w * (uint32_t) std::max(1, n_seq_max));
+    }
     if (hparams.recurrent_layer_arr[il]) {
         auto state_sots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);
         return hparams.n_embd_v_s() * state_sots * sizeof(float);
