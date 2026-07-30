@@ -588,6 +588,7 @@ struct gpt_params {
     int32_t ctx_checkpoints_interval = n_batch * 4;   // minimum number of tokens between each context checkpoints
     int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint
     common_checkpoint_eviction ctx_checkpoint_eviction = COMMON_CHECKPOINT_EVICTION_VARIANCE;
+    bool ctx_checkpoints_interval_gating = false;
     int32_t cache_ram_mib = 8192;   // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
     int32_t cache_ram_n_min = 0;     // min number of tokens required to save in the ram
     float cache_ram_similarity = 0.5f; // similarity of tokens to cached tokens
