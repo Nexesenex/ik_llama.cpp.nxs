@@ -79,6 +79,28 @@ struct llama_kv_cache {
     // computed before each graph build
     uint32_t n = 0;
 
+    bool     swa_ring = false;
+    uint32_t size_swa = 0; // total ring rows = n_seq_ring * ring_w
+    uint32_t ring_w   = 0; // rows per sequence (the padded window)
+    uint32_t ring_n_swa = 0; // hparams.n_swa, needed by seq_rm rewind-safety check
+    std::vector<int32_t> ring_occ;
+
+    struct ring_part {
+        uint32_t src_off;
+        uint32_t n;
+        uint32_t row;
+    };
+    std::vector<ring_part> ring_parts;
+
+    uint32_t ring_row(llama_seq_id s, llama_pos p) const {
+        return (uint32_t) s * ring_w + (uint32_t) (p % (llama_pos) ring_w);
+    }
+
+    uint32_t ring_row_of_cell(uint32_t c) const {
+        const auto & cell = cells[c];
+        return ring_row(cell.seq_id.empty() ? 0 : *cell.seq_id.begin(), cell.pos);
+    }
+
     ggml_type type_k = GGML_TYPE_F16;
     ggml_type type_v = GGML_TYPE_F16;
 
@@ -618,6 +640,14 @@ struct llama_context {
         size_t        step = 0;
     };
     std::vector<CacheCopy> cache_copies;
+
+    struct RingCopy {
+        ggml_tensor * cpy = nullptr;
+        size_t        step = 0;
+        uint32_t      n    = 0;
+    };
+    std::vector<std::vector<RingCopy>> ring_copies;
+    uint64_t n_graph_rebuilds = 0;
     // GLM-DSA lightning indexer: the indexer-key cache (kr_l) write is a separate ggml_cpy that
     // the K/V cache_copies fixup does NOT cover. Under graph reuse (FA pads KV to 256, so n_kv
     // stays constant across consecutive decode ubatches and the graph IS reused) its view_offs
@@ -644,3 +674,5 @@ struct llama_context {
 
     int max_nodes(int n_tokens, int n_kv) const;
 };
+
+uint64_t llama_context_n_graph_rebuilds(const llama_context * ctx);

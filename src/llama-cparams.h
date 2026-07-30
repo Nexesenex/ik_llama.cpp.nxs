@@ -4,6 +4,10 @@
 
 #include <cstdint>
 
+inline uint32_t llama_kv_pad_granularity(bool flash_attn) {
+    return flash_attn ? 256u : 32u;
+}
+
 struct llama_cparams {
     uint32_t n_ctx;           // context size used during inference
     uint32_t n_batch;
@@ -39,6 +43,7 @@ struct llama_cparams {
     bool fused_mmad;
     bool rope_cache;
     bool graph_reuse;
+    bool swa_compress;
     bool prefetch_experts;
     bool k_cache_hadamard;
     bool v_cache_hadamard;
