@@ -306,6 +306,7 @@ void server_context::init() {
         slot.mctx = mctx;
         slot.cache_tokens.has_mtmd = mctx != nullptr;
         slot.params.think_tokens = params_base.think_tokens;
+        slot.ctx_checkpoints_interval_gating = params_base.ctx_checkpoints_interval_gating;
         if (params_base.think_tokens.exclude) {
             SRV_WRN("Exclude reasoning tokens when selecting slot based on similarity: start: %s, end: %s\nuse `--reasoning-tokens none` to disable.\n", params_base.think_tokens.begin.c_str(), params_base.think_tokens.end.c_str() );
         }
@@ -509,7 +510,9 @@ void server_slot::reset() {
     rewind_status = false;
 
     generated_token_probs.clear();
-    checkpoint_pos = -1;
+    if (!ctx_checkpoints_interval_gating) {
+        checkpoint_pos = -1;
+    }
     image_just_processed = false;
     do_checkpoint = false;
     if (spec != nullptr) {
@@ -4534,7 +4537,11 @@ bool server_context::accept_special_token(const server_slot& slot, const  llama_
 void server_context::release_slot_after_final_response(server_slot & slot) {
     slot.print_timings();
     if (params_base.do_checkpoint) {
-        create_checkpoint(slot);
+        if (params_base.ctx_checkpoints_interval_gating) {
+            create_checkpoint_at_interval(slot);
+        } else {
+            create_checkpoint(slot);
+        }
     }
     slot.release();
     slot.released = true;
@@ -4918,7 +4925,11 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 // save checkpoint during prompt processing
                 if (slot.command == SLOT_COMMAND_LOAD_PROMPT) {
                     if (slot.do_checkpoint) {
-                        create_checkpoint(slot);
+                        if (params_base.ctx_checkpoints_interval_gating) {
+                            create_checkpoint_at_interval(slot);
+                        } else {
+                            create_checkpoint(slot);
+                        }
                     } else {
                         create_checkpoint_at_interval(slot);
                     }
@@ -5000,7 +5011,11 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                     });
                 // create checkpoint after prompt processing ends
                 if (params_base.ctx_checkpoints_tolerance<=0 && params_base.do_checkpoint) {
-                    create_checkpoint(slot);
+                    if (params_base.ctx_checkpoints_interval_gating) {
+                        create_checkpoint_at_interval(slot);
+                    } else {
+                        create_checkpoint(slot);
+                    }
                 }
             }
 
