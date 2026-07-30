@@ -138,7 +138,8 @@ enum common_webui {
 enum common_checkpoint_eviction {
     COMMON_CHECKPOINT_EVICTION_AUTO,
     COMMON_CHECKPOINT_EVICTION_FIFO,
-    COMMON_CHECKPOINT_EVICTION_VARIANCE
+    COMMON_CHECKPOINT_EVICTION_VARIANCE,
+    COMMON_CHECKPOINT_EVICTION_STREAMLINED
 };
 
 common_webui common_webui_from_name(const std::string& format);
