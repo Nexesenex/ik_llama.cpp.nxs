@@ -129,6 +129,7 @@ struct server_slot {
     llama_pos checkpoint_pos = -1;
     bool do_checkpoint = false;
     bool image_just_processed = false;
+    bool ctx_checkpoints_interval_gating = false;
 
     // sampling
     llama_token sampled; // in speculative mode, this is the last accepted token
