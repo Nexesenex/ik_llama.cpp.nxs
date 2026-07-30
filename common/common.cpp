@@ -550,6 +550,8 @@ common_checkpoint_eviction common_checkpoint_eviction_from_name(const std::strin
         return COMMON_CHECKPOINT_EVICTION_FIFO;
     } else if (format == "variance") {
         return COMMON_CHECKPOINT_EVICTION_VARIANCE;
+    } else if (format == "streamlined") {
+        return COMMON_CHECKPOINT_EVICTION_STREAMLINED;
     } else {
         return COMMON_CHECKPOINT_EVICTION_AUTO;
     }
@@ -3204,7 +3206,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-ctx-ckpt N, --ctx-checkpoints N",           "max number of context checkpoints to create per slot (default: %d)",params.ctx_checkpoints_n});
     options.push_back({ "*",           "-ctx-ckpt-i N, --ctx-checkpoints-interval N",  "minimum number of tokens between each context checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_interval});
     options.push_back({ "*",           "-ctx-ckpt-t N, --ctx-checkpoints-tolerance N", "the number of tokens before the full prompt to create the checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_tolerance});
-    options.push_back({ "*",           "-ctx-ckpt-e NAME, --ctx-checkpoints-eviction NAME", "Eviction strategy for checkpoint. Accepts fifo, variance and auto. Auto defaults to variance. Variance preserves coverage and maintains uniform interval.  (default: variance)" });
+    options.push_back({ "*",           "-ctx-ckpt-e NAME, --ctx-checkpoints-eviction NAME", "Eviction strategy for checkpoint. Accepts fifo, variance, streamlined and auto. Auto defaults to variance. Variance preserves coverage and maintains uniform interval. Streamlined evicts the checkpoint in the tightest cluster.  (default: variance)" });
     options.push_back({ "*",           "-ctx-ckpt-ig, --ctx-checkpoints-interval-gating", "Gate ALL checkpoint creation paths (PP-end, release, tolerance) through the interval check. Prevents checkpoint bursts from short follow-up tasks. (default: disabled)" });
     options.push_back({ "*",           "-cram, --cache-ram N",          "set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)",params.cache_ram_mib });
     options.push_back({ "*",           "-crs,  --cache-ram-similarity N",           "max of similarity of prompt tokens to cache tokens that triggers prompt cache (default: %.2f).",params.cache_ram_similarity });
