@@ -3772,6 +3772,42 @@ void server_context::apply_checkpoint(server_slot & slot) {
     }
 }
 
+static std::list<server_prompt_checkpoint>::iterator evict_checkpoint_by_streamlined(server_slot & slot, std::list<server_prompt_checkpoint> & ckpts) {
+    auto it = ckpts.begin();
+    if (ckpts.size() < 3) {
+        return it;
+    } else if (ckpts.size() == 3) {
+        std::advance(it, 1);
+        return it;
+    }
+    std::vector<int64_t> tokens;
+    tokens.reserve(ckpts.size());
+    for (const auto & ckpt : ckpts) {
+        tokens.push_back(int64_t(ckpt.pos_max));
+    }
+    // Evict the interior checkpoint in the tightest cluster:
+    // find the one with the smallest gap to either neighbor.
+    // This keeps coverage wide by clearing out dense pairs.
+    size_t best_idx = 1;
+    const size_t n = tokens.size();
+    {
+        int64_t l = tokens[1] - tokens[0];
+        int64_t r = tokens[2] - tokens[1];
+        int64_t best_gap = l < r ? l : r;
+        for (size_t i = 2; i < n - 1; i++) {
+            l = tokens[i] - tokens[i - 1];
+            r = tokens[i + 1] - tokens[i];
+            int64_t adj = l < r ? l : r;
+            if (adj < best_gap) {
+                best_gap = adj;
+                best_idx = i;
+            }
+        }
+    }
+    std::advance(it, best_idx);
+    return it;
+}
+
 static std::list<server_prompt_checkpoint>::iterator evict_checkpoint_by_variance(server_slot & slot, std::list<server_prompt_checkpoint> & ckpts) {
     auto it = ckpts.begin();
     if (ckpts.size() < 3) {
@@ -3836,7 +3872,9 @@ bool server_context::create_checkpoint(server_slot & slot) {
             if (params_base.ctx_checkpoint_eviction == COMMON_CHECKPOINT_EVICTION_VARIANCE ||
                 params_base.ctx_checkpoint_eviction == COMMON_CHECKPOINT_EVICTION_AUTO) {
                 it = evict_checkpoint_by_variance(slot, slot.server_cached_prompt.checkpoints);
-            } 
+            } else if (params_base.ctx_checkpoint_eviction == COMMON_CHECKPOINT_EVICTION_STREAMLINED) {
+                it = evict_checkpoint_by_streamlined(slot, slot.server_cached_prompt.checkpoints);
+            }
             const auto & cur = *it;
             SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                 cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024);
