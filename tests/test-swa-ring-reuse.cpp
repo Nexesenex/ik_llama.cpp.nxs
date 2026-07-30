@@ -1,5 +1,13 @@
 
 
+#include "llama.h"
+#include <cstdio>
+#include <cstdlib>
+#include <random>   // llama-context.h -> llama-sampling.h needs std::mt19937
+#include <vector>
+#include "llama-model.h"
+#include "llama-context.h"
+#include "get-model.h"
 
 static int g_fails = 0;
 

@@ -1,4 +1,12 @@
 
+#include "llama.h"
+#include "llama-model.h"
+#include "get-model.h"
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
 
 static int g_fails = 0;
 
