@@ -3864,6 +3864,11 @@ bool server_context::create_checkpoint(server_slot & slot) {
     // no need to create checkpoints that are too close together
     do_checkpoint = do_checkpoint && (slot.server_cached_prompt.checkpoints.empty() || slot.cache_tokens.n_tokens() > slot.server_cached_prompt.checkpoints.back().n_tokens);
 
+    // enforce a minimum pos_max gap from the last checkpoint
+    if (do_checkpoint && params_base.ctx_checkpoints_minimal_interval > 0 && !slot.server_cached_prompt.checkpoints.empty()) {
+        do_checkpoint = do_checkpoint && (pos_max >= slot.server_cached_prompt.checkpoints.back().pos_max + params_base.ctx_checkpoints_minimal_interval);
+    }
+
     if (do_checkpoint) {
         const int64_t t_start = ggml_time_us();
         while (slot.server_cached_prompt.checkpoints.size() >= (size_t)params_base.ctx_checkpoints_n) {
