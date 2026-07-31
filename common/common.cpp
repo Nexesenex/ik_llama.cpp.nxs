@@ -3054,22 +3054,22 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.ignore_recurrent_model = true;
         return true;
     }
-    if (arg == "-ctx-ck" || arg == "--ctx-checkpoints") {
+    if (arg == "-ctx-chk" || arg == "--ctx-checkpoints") {
         CHECK_ARG
         params.ctx_checkpoints_n = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "-ctx-ck-i" || arg == "--ctx-checkpoints-interval") {
+    if (arg == "-ctx-chk-i" || arg == "--ctx-checkpoints-interval") {
         CHECK_ARG
         params.ctx_checkpoints_interval = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "-ctx-ck-t" || arg == "--ctx-checkpoints-tolerance") {
+    if (arg == "-ctx-chk-t" || arg == "--ctx-checkpoints-tolerance") {
         CHECK_ARG
         params.ctx_checkpoints_tolerance = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "-ctx-ck-e" || arg == "--ctx-checkpoints-eviction") {
+    if (arg == "-ctx-chk-e" || arg == "--ctx-checkpoints-eviction") {
         CHECK_ARG
         params.ctx_checkpoint_eviction= common_checkpoint_eviction_from_name(std::string(argv[i]));
         return true;
@@ -3290,10 +3290,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-cd,   --ctx-size-draft N",     "size of the prompt context for the draft model (default: %d, 0 = loaded from model)", params.speculative.n_ctx });
 
     options.push_back({ "*",           "-igrm, --ignore-recurrent-model",       "disable recurrent model checkpoint behavior, treat as non-recurrent"});
-    options.push_back({ "*",           "-ctx-ck N, --ctx-checkpoints N",           "max number of context checkpoints to create per slot (default: %d)",params.ctx_checkpoints_n});
-    options.push_back({ "*",           "-ctx-ck-i N, --ctx-checkpoints-interval N",  "minimum number of tokens between each context checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_interval});
-    options.push_back({ "*",           "-ctx-ck-t N, --ctx-checkpoints-tolerance N", "the number of tokens before the full prompt to create the checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_tolerance});
-    options.push_back({ "*",           "-ctx-ck-e NAME, --ctx-checkpoints-eviction NAME", "Eviction strategy for checkpoint. Accepts fifo, variance and auto. Auto defaults to variance. Variance preserves coverage and maintains uniform interval.  (default: variance)" });
+    options.push_back({ "*",           "-ctx-chk N, --ctx-checkpoints N",           "max number of context checkpoints to create per slot (default: %d)",params.ctx_checkpoints_n});
+    options.push_back({ "*",           "-ctx-chk-i N, --ctx-checkpoints-interval N",  "minimum number of tokens between each context checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_interval});
+    options.push_back({ "*",           "-ctx-chk-t N, --ctx-checkpoints-tolerance N", "the number of tokens before the full prompt to create the checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_tolerance});
+    options.push_back({ "*",           "-ctx-chk-e NAME, --ctx-checkpoints-eviction NAME", "Eviction strategy for checkpoint. Accepts fifo, variance and auto. Auto defaults to variance. Variance preserves coverage and maintains uniform interval.  (default: variance)" });
     options.push_back({ "*",           "-cram, --cache-ram N",          "set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)",params.cache_ram_mib });
     options.push_back({ "*",           "-crs,  --cache-ram-similarity N",           "max of similarity of prompt tokens to cache tokens that triggers prompt cache (default: %.2f).",params.cache_ram_similarity });
     options.push_back({ "*",           "-cram-n-min --cache-ram-n-min N",           "minimum number of the cached tokens that triggers prompt cache (default: %d).", params.cache_ram_n_min });
