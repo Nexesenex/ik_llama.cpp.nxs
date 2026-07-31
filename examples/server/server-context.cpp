@@ -3782,13 +3782,18 @@ void server_context::apply_checkpoint(server_slot & slot) {
 
     {
         // erase checkpoints whose data extends at or past the next write position
-        for (auto it = slot.server_cached_prompt.checkpoints.begin(); it != slot.server_cached_prompt.checkpoints.end();) {
-            const auto & cur = *it;
-            if (cur.pos_max > pos_min_thold) {
-                SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024);
-                it = slot.server_cached_prompt.checkpoints.erase(it);
-            } else {
-                ++it;
+        {
+            int32_t n_erased = 0;
+            for (auto it = slot.server_cached_prompt.checkpoints.begin(); it != slot.server_cached_prompt.checkpoints.end();) {
+                const auto & cur = *it;
+                if (cur.pos_max > pos_min_thold) {
+                    ++n_erased;
+                    SLT_WRN(slot, "erased invalidated context checkpoint %d of %d (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
+                        n_erased, params_base.ctx_checkpoints_n, cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024);
+                    it = slot.server_cached_prompt.checkpoints.erase(it);
+                } else {
+                    ++it;
+                }
             }
         }
     }
