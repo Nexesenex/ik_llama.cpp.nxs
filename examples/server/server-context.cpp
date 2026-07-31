@@ -4092,9 +4092,12 @@ void server_context::apply_checkpoint(server_slot & slot) {
 
     {
         // Never spill invalidated checkpoints.
+        int32_t n_erased = 0;
         for (auto it = slot.server_cached_prompt.checkpoints.begin(); it != slot.server_cached_prompt.checkpoints.end();) {
             if (it->pos_max >= pos_next) {
-                SLT_WRN(slot, "dropping invalidated context checkpoint (pos_min = %d, pos_max = %d)\n", it->pos_min, it->pos_max);
+                ++n_erased;
+                SLT_WRN(slot, "dropping invalidated context checkpoint %d of %d (pos_min = %d, pos_max = %d)\n",
+                    n_erased, params_base.ctx_checkpoints_n, it->pos_min, it->pos_max);
                 it = drop_checkpoint_entry(slot.server_cached_prompt.checkpoints, it);
             } else {
                 ++it;
