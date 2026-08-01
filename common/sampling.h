@@ -148,6 +148,7 @@ typedef struct common_params_sampling {
     int32_t     n_probs               = 0;                  // if greater than 0, output the probabilities of top n_probs tokens.
     int32_t     total_context_size    = 16840;
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
+    float       eos_token_probability = 1.0f;               // scale factor for the probability of the EOS/EOG tokens (1.0 = no change, 0.0 = EOG tokens effectively disabled)
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
     uint64_t    user_sampling_config  = 0;                  // bitmask of fields the user set explicitly (common_params_sampling_config)
 
