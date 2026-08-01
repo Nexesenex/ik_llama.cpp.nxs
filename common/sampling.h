@@ -149,6 +149,7 @@ typedef struct common_params_sampling {
     int32_t     total_context_size    = 16840;
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
     float       eos_token_probability = 1.0f;               // scale factor for the probability of the EOS/EOG tokens (1.0 = no change, 0.0 = EOG tokens effectively disabled)
+    std::vector<std::string> special_eosg_tokens;          // if non-empty, the first occurrence of any of these strings in the generated text stops generation like an EOG/EOS token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
     uint64_t    user_sampling_config  = 0;                  // bitmask of fields the user set explicitly (common_params_sampling_config)
 
@@ -275,6 +276,10 @@ struct common_sampler {
     std::mt19937 speculative_rng;
 
     std::vector<float>* server_biases;
+
+    std::string  special_eosg_text;                        // accumulated generated text for the special EOG string check
+    bool         special_eosg_hit = false;                 // the special EOG string was found in the generated text
+    llama_token  eosg_token = LLAMA_TOKEN_NULL;            // EOG token to emit when the special EOG string is hit
 
     // expiring logit bias
     struct elb_state {
