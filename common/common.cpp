@@ -1500,6 +1500,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.eos_token_probability = std::max(0.0f, std::stof(argv[i]));
         return true;
     }
+    if (arg == "-seosgt" || arg == "--special-eosg-token") {
+        CHECK_ARG
+        for (const auto & token : string_split<std::string>(argv[i], ',')) {
+            if (!token.empty()) {
+                sparams.special_eosg_tokens.push_back(token);
+            }
+        }
+        return true;
+    }
 
     if (arg == "--dry-multiplier") {
         CHECK_ARG
@@ -3237,6 +3246,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "simplified sequence for samplers that will be used (default: %s)", sampler_type_chars.c_str() });
     options.push_back({ "*",           "       --ignore-eos",           "ignore end of stream token and continue generating (implies --logit-bias EOS-inf)" });
     options.push_back({ "*",           "       --eos-token-probability N", "scales the probability of the EOS/EOG tokens (default: %.1f, 1.0 = no change, 0.0 = EOG tokens effectively disabled)", (double)sparams.eos_token_probability });
+    options.push_back({ "*",           "       --special-eosg-token STR",  "stop generation when STR is found in the generated text (acts like an EOG/EOS token; comma-separated list, e.g. -seosgt '<,[,('; can be repeated)" });
     options.push_back({ "*",           "       --penalize-nl",          "penalize newline tokens (default: %s)", sparams.penalize_nl ? "true" : "false" });
     options.push_back({ "*",           "       --temp N",               "temperature (default: %.1f)", (double)sparams.temp });
     options.push_back({ "*",           "       --top-k N",              "top-k sampling (default: %d, 0 = disabled)", sparams.top_k });
@@ -5459,6 +5469,10 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "dry_penalty_last_n: %d # default: -1 (0 = disable, -1 = context size)\n", sparams.dry_penalty_last_n);
     fprintf(stream, "escape: %s # default: false\n", params.escape ? "true" : "false");
     fprintf(stream, "eos_token_probability: %f # default: 1.0\n", sparams.eos_token_probability);
+    fprintf(stream, "special_eosg_token: %s # default: \n", sparams.special_eosg_tokens.empty() ? "\"\"" : sparams.special_eosg_tokens.front().c_str());
+    for (size_t i = 1; i < sparams.special_eosg_tokens.size(); i++) {
+        fprintf(stream, "  - %s\n", sparams.special_eosg_tokens[i].c_str());
+    }
     fprintf(stream, "file: # never logged, see prompt instead. Can still be specified for input.\n");
     fprintf(stream, "frequency_penalty: %f # default: 0.0 \n", sparams.penalty_freq);
     yaml_dump_string_multiline(stream, "grammar", sparams.grammar.grammar.c_str());
