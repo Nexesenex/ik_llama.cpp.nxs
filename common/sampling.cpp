@@ -650,6 +650,24 @@ static llama_token_data_array llama_sampling_prepare_impl(
         common_expiring_logit_bias_apply(ctx_sampling, logits);
     }
 
+    if (params.eos_token_probability != 1.0f) {
+        const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx_main));
+        if (params.eos_token_probability == 0.0f) {
+            for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+                if (llama_vocab_is_eog(vocab, token_id)) {
+                    logits[token_id] = -INFINITY;
+                }
+            }
+        } else {
+            const float logp = std::log(params.eos_token_probability);
+            for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+                if (llama_vocab_is_eog(vocab, token_id)) {
+                    logits[token_id] += logp;
+                }
+            }
+        }
+    }
+
     cur.resize(n_vocab);
 
     if ((ctx_sampling->server_biases != nullptr) && (ctx_sampling->server_biases->size() == n_vocab)) {
