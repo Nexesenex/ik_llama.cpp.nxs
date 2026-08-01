@@ -256,6 +256,7 @@ struct common_sampler {
 
     std::string  special_eosg_text;                        // accumulated generated text for the special EOG string check
     bool         special_eosg_hit = false;                 // the special EOG string was found in the generated text
+    std::string  special_eosg_matched;                     // the special EOG string that was found (if any)
     llama_token  eosg_token = LLAMA_TOKEN_NULL;            // EOG token to emit when the special EOG string is hit
 
     // expiring logit bias
