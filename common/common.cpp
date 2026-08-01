@@ -1495,6 +1495,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.top_n_sigma = std::stof(argv[i]);
         return true;
     }
+    if (arg == "-eostp" || arg == "--eos-token-probability") {
+        CHECK_ARG
+        sparams.eos_token_probability = std::max(0.0f, std::stof(argv[i]));
+        return true;
+    }
 
     if (arg == "--dry-multiplier") {
         CHECK_ARG
@@ -3231,6 +3236,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --sampling-seq SEQUENCE",
                                                                         "simplified sequence for samplers that will be used (default: %s)", sampler_type_chars.c_str() });
     options.push_back({ "*",           "       --ignore-eos",           "ignore end of stream token and continue generating (implies --logit-bias EOS-inf)" });
+    options.push_back({ "*",           "       --eos-token-probability N", "scales the probability of the EOS/EOG tokens (default: %.1f, 1.0 = no change, 0.0 = EOG tokens effectively disabled)", (double)sparams.eos_token_probability });
     options.push_back({ "*",           "       --penalize-nl",          "penalize newline tokens (default: %s)", sparams.penalize_nl ? "true" : "false" });
     options.push_back({ "*",           "       --temp N",               "temperature (default: %.1f)", (double)sparams.temp });
     options.push_back({ "*",           "       --top-k N",              "top-k sampling (default: %d, 0 = disabled)", sparams.top_k });
@@ -5452,6 +5458,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "dry_multiplier: %.1f # default: 0.0\n", sparams.dry_multiplier);
     fprintf(stream, "dry_penalty_last_n: %d # default: -1 (0 = disable, -1 = context size)\n", sparams.dry_penalty_last_n);
     fprintf(stream, "escape: %s # default: false\n", params.escape ? "true" : "false");
+    fprintf(stream, "eos_token_probability: %f # default: 1.0\n", sparams.eos_token_probability);
     fprintf(stream, "file: # never logged, see prompt instead. Can still be specified for input.\n");
     fprintf(stream, "frequency_penalty: %f # default: 0.0 \n", sparams.penalty_freq);
     yaml_dump_string_multiline(stream, "grammar", sparams.grammar.grammar.c_str());
