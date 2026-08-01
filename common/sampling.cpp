@@ -245,6 +245,7 @@ void common_sampler_reset(common_sampler * ctx) {
     ctx->speculative_rng.seed(ctx->speculative_seed);
     ctx->special_eosg_text.clear();
     ctx->special_eosg_hit = false;
+    ctx->special_eosg_matched.clear();
 }
 
 void common_sampler_review(common_sampler * ctx, const size_t n_unsent, const bool rewind_status) {
@@ -273,6 +274,7 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
     dst->server_biases = src->server_biases;
     dst->special_eosg_text = src->special_eosg_text;
     dst->special_eosg_hit = src->special_eosg_hit;
+    dst->special_eosg_matched = src->special_eosg_matched;
     dst->eosg_token = src->eosg_token;
 
     if (dst->grammar) {
@@ -540,6 +542,7 @@ static llama_token llama_sampling_check_special_eog(
     for (const auto & token : tokens) {
         if (text.find(token) != std::string::npos) {
             ctx_sampling->special_eosg_hit = true;
+            ctx_sampling->special_eosg_matched = token;
             LOG("%s: special EOG string '%s' found in generated text, stopping generation\n", __func__, token.c_str());
             return ctx_sampling->eosg_token;
         }

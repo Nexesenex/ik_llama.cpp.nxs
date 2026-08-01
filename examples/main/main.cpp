@@ -1377,7 +1377,11 @@ int main(int argc, char ** argv) {
 
         // end of generation
         if (emitted_hit_eog && !(params.interactive)) {
-            LOG_TEE(" [end of text]\n");
+            if (ctx_sampling->special_eosg_hit) {
+                LOG_TEE(" [end of text: special EOG string '%s' found]\n", ctx_sampling->special_eosg_matched.c_str());
+            } else {
+                LOG_TEE(" [end of text]\n");
+            }
             break;
         }
 
@@ -1386,6 +1390,15 @@ int main(int argc, char ** argv) {
         if (params.interactive && n_remain <= 0 && params.n_predict >= 0) {
             n_remain = params.n_predict;
             is_interacting = true;
+        }
+    }
+
+    // end of generation - log the stop reason in normal inference mode
+    if (!params.interactive && !emitted_hit_eog && params.n_predict != -2) {
+        if (is_antiprompt) {
+            LOG_TEE("\nmain: generation stopped: reverse prompt found\n");
+        } else if (n_remain == 0) {
+            LOG_TEE("\nmain: generation stopped: reached the maximum number of tokens (n_predict = %d)\n", params.n_predict);
         }
     }
 
