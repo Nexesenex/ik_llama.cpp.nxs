@@ -2658,10 +2658,15 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
             o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, get_input_tensor_sm_graph(ctx, cur, id)));
             cb(o.back(), "output", id);
         }
-        if (o.size() == 1) cur = o.front();
-        cur = ggml_concat(ctx, o[0], o[1], 0);
-        for (int id = 2; id < int(o.size()); ++id) {
-            cur = ggml_concat(ctx, cur, o[id], 0);
+        GGML_ASSERT(!o.empty());
+        if (o.size() == 1) {
+            cur = o.front();
+        }
+        else {
+            cur = ggml_concat(ctx, o[0], o[1], 0);
+            for (int id = 2; id < int(o.size()); ++id) {
+                cur = ggml_concat(ctx, cur, o[id], 0);
+            }
         }
     } else {
         cur = llm_build_context::llm_build_lora_mm(lctx, ctx, output, cur);
