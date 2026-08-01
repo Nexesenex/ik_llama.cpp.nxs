@@ -181,6 +181,23 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     result->elb_idx = 0;
     result->elb_search_pos = 0;
 
+    // find an EOG token to emit when one of the special EOG strings is hit
+    if (!params.special_eosg_tokens.empty()) {
+        result->eosg_token = llama_vocab_eos(vocab);
+        if (result->eosg_token == LLAMA_TOKEN_NULL) {
+            const int n_vocab = llama_vocab_n_tokens(vocab);
+            for (llama_token id = 0; id < n_vocab; ++id) {
+                if (llama_vocab_is_eog(vocab, id)) {
+                    result->eosg_token = id;
+                    break;
+                }
+            }
+        }
+        if (result->eosg_token == LLAMA_TOKEN_NULL) {
+            LOG_ERR("%s: no EOG token found, special EOG strings will be disabled\n", __func__);
+        }
+    }
+
     return result;
 }
 
@@ -226,6 +243,8 @@ void common_sampler_reset(common_sampler * ctx) {
     llama_free_adaptive_p(ctx->adapt_p_ctx);
     ctx->adapt_p_ctx = llama_init_adaptive_p(ctx->params.adaptive_target, ctx->params.adaptive_decay, ctx->params.adaptive_updt_w_cur, ctx->rng());
     ctx->speculative_rng.seed(ctx->speculative_seed);
+    ctx->special_eosg_text.clear();
+    ctx->special_eosg_hit = false;
 }
 
 void common_sampler_review(common_sampler * ctx, const size_t n_unsent, const bool rewind_status) {
@@ -252,6 +271,9 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
     dst->speculative_seed = src->speculative_seed;
     dst->speculative_rng = src->speculative_rng;
     dst->server_biases = src->server_biases;
+    dst->special_eosg_text = src->special_eosg_text;
+    dst->special_eosg_hit = src->special_eosg_hit;
+    dst->eosg_token = src->eosg_token;
 
     if (dst->grammar) {
         llama_grammar_free(dst->grammar);
@@ -506,6 +528,25 @@ static bool grammar_should_apply(struct common_sampler * gsmpl) {
     return true;
 }
 
+static llama_token llama_sampling_check_special_eog(
+        struct common_sampler * ctx_sampling,
+        struct llama_context * ctx_main,
+        llama_token id) {
+    const auto & tokens = ctx_sampling->params.special_eosg_tokens;
+    if (tokens.empty() || ctx_sampling->special_eosg_hit || ctx_sampling->eosg_token == LLAMA_TOKEN_NULL) {
+        return id;
+    }
+    const std::string text = ctx_sampling->special_eosg_text + common_token_to_piece(ctx_main, id);
+    for (const auto & token : tokens) {
+        if (text.find(token) != std::string::npos) {
+            ctx_sampling->special_eosg_hit = true;
+            LOG("%s: special EOG string '%s' found in generated text, stopping generation\n", __func__, token.c_str());
+            return ctx_sampling->eosg_token;
+        }
+    }
+    return id;
+}
+
 static llama_token llama_sampling_sample_impl(
                   struct common_sampler * ctx_sampling,
                   struct llama_context * ctx_main,
@@ -576,7 +617,7 @@ static llama_token llama_sampling_sample_impl(
     }
 
     if (grammar_first || !grammar_should_apply(ctx_sampling)) {
-        return id;
+        return llama_sampling_check_special_eog(ctx_sampling, ctx_main, id);
     }
 
     if (ctx_sampling->grammar != NULL && !grammar_first && grammar_should_apply(ctx_sampling)) {
@@ -605,7 +646,7 @@ static llama_token llama_sampling_sample_impl(
     }
     ctx_sampling->n_valid = temp == 0.0f ? 0 : cur_p.size;
 
-    return id;
+    return llama_sampling_check_special_eog(ctx_sampling, ctx_main, id);
 }
 
 static llama_token_data_array llama_sampling_prepare_impl(
@@ -770,6 +811,20 @@ void common_sampler_accept(
     }
     if (ctx_sampling->smpl) {
         llama_sampler_dry_accept(ctx_sampling->smpl, token);
+    }
+
+    // track generated text for the special EOG string check
+    if (is_generated && !ctx_sampling->params.special_eosg_tokens.empty() && !ctx_sampling->special_eosg_hit) {
+        ctx_sampling->special_eosg_text += common_token_to_piece(ctx_main, token);
+        // only the tail is needed to detect the (short) markers
+        size_t cap = 0;
+        for (const auto & t : ctx_sampling->params.special_eosg_tokens) {
+            cap = std::max(cap, t.size());
+        }
+        cap += 1024;
+        if (ctx_sampling->special_eosg_text.size() > cap) {
+            ctx_sampling->special_eosg_text.erase(0, ctx_sampling->special_eosg_text.size() - cap);
+        }
     }
 
     if (ctx_sampling->elb_states.size() > ctx_sampling->elb_idx) {
