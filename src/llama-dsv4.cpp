@@ -18,7 +18,11 @@
 #include <type_traits>
 #include <unordered_set>
 
-static bool dsv4_cache_type_supported(ggml_type type) {
+static bool dsv4_main_k_cache_type_supported(ggml_type type) {
+    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0;
+}
+
+static bool dsv4_indexer_k_cache_type_supported(ggml_type type) {
     return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0;
 }
 
@@ -26,8 +30,9 @@ static bool dsv4_cache_type_supported(ggml_type type) {
 // TODO: Expand to a larger number
 static constexpr int DSV4_PER_STEP_MAX_STATE_ROWS = 8;
 
-static bool dsv4_validate_cache_type(ggml_type type, int64_t width, const char * name) {
-    if (!dsv4_cache_type_supported(type)) {
+static bool dsv4_validate_cache_type(ggml_type type, int64_t width, const char * name, bool is_indexer) {
+    const bool supported = is_indexer ? dsv4_indexer_k_cache_type_supported(type) : dsv4_main_k_cache_type_supported(type);
+    if (!supported) {
         LLAMA_LOG_ERROR("%s: unsupported DSV4 %s cache type %s\n", __func__, name, ggml_type_name(type));
         return false;
     }
@@ -888,8 +893,8 @@ bool llama_context::ensure_dsv4_cache_tensors() {
     const uint32_t csa_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, dsv4_runtime::CSA_RATIO), 256u);
     const uint32_t hca_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, dsv4_runtime::HCA_RATIO), 256u);
 
-    if (!dsv4_validate_cache_type(kv_self.type_k, n_embd_head, "raw/CSA/HCA") ||
-        !dsv4_validate_cache_type(cparams.idx_type_k, n_indexer_head, "LID")) {
+    if (!dsv4_validate_cache_type(kv_self.type_k, n_embd_head, "raw/CSA/HCA", false) ||
+        !dsv4_validate_cache_type(cparams.idx_type_k, n_indexer_head, "LID", true)) {
         return false;
     }
 
