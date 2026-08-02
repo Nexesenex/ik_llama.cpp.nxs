@@ -23,7 +23,7 @@ static bool dsv4_main_k_cache_type_supported(ggml_type type) {
 }
 
 static bool dsv4_indexer_k_cache_type_supported(ggml_type type) {
-    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0;
+    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q6_1;
 }
 
 // Per-step capture is limited to the eight-row CSA/LID ring.
