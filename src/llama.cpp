@@ -9699,8 +9699,8 @@ struct llama_context * llama_init_from_model(
     }
 
     if (llm_arch_is_dsv4(model->arch) &&
-            params.type_k != GGML_TYPE_F16 && params.type_k != GGML_TYPE_BF16 && params.type_k != GGML_TYPE_Q8_0) {
-        LLAMA_LOG_ERROR("%s: DeepSeek4 K-cache supports only F16, BF16, and Q8_0 (requested %s)\n",
+            params.type_k != GGML_TYPE_F16 && params.type_k != GGML_TYPE_BF16 && params.type_k != GGML_TYPE_Q8_0 && params.type_k != GGML_TYPE_Q6_0) {
+        LLAMA_LOG_ERROR("%s: DeepSeek4 K-cache supports only F16, BF16, Q8_0, and Q6_0 (requested %s)\n",
                         __func__, ggml_type_name(params.type_k));
         return nullptr;
     }
