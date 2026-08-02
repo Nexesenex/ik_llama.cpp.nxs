@@ -497,6 +497,8 @@ extern "C" {
         bool dsa;               // enable GLM DSA sparse attention (off by default) [EXPERIMENTAL]
         bool fused_idx_topk;    // enable the fused indexer topk op (off by default) [EXPERIMENTAL]
         bool swa_compress;      // allocate sliding-window layers at window size instead of n_ctx (off by default) [EXPERIMENTAL]
+        bool dsv4_cache_cpu;    // keep the DeepSeek-V4 compressed-attention K caches (CSA/HCA) in host memory [EXPERIMENTAL]
+        bool dsv4_lid_cache_cpu; // also keep the DeepSeek-V4 indexer (LID) K cache in host memory [EXPERIMENTAL]
         int  dsa_top_k;         // DSA top-k override (<0 => model's configured indexer_top_k) [EXPERIMENTAL]
         int  min_experts;
         float thresh_experts;
