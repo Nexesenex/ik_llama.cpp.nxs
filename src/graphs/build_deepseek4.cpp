@@ -479,22 +479,38 @@ static ggml_tensor * dsv4_raw_cpy_k(
     return write;
 }
 
+static ggml_tensor * dsv4_comp_get_k_typed(
+        ggml_context * ctx,
+        ggml_tensor  * cache,
+        const llama_context::dsv4_runtime::comp_context & comp,
+        int64_t        n_embd_head,
+        int64_t        kv_size,
+        bool           cast_to_f32) {
+    const int64_t n_kv = comp.n_kv;
+    if (cache == nullptr || n_kv <= 0) {
+        return nullptr;
+    }
+
+    ggml_tensor * base;
+    if (comp.sinfo.n_stream() == 0) {
+        base = ggml_reshape_4d(ctx, dsv4_cache_view_3d(ctx, cache, n_embd_head, n_kv), n_embd_head, 1, n_kv, 1);
+    } else {
+        base = dsv4_cache_stream_view_4d(ctx, cache, n_embd_head, n_kv, kv_size, comp.sinfo.s0, (int64_t) comp.sinfo.n_stream());
+    }
+
+    if (cast_to_f32) {
+        return dsv4_cache_read_f32(ctx, base);
+    }
+    return base;
+}
+
 static ggml_tensor * dsv4_comp_get_k(
         ggml_context * ctx,
         ggml_tensor  * cache,
         const llama_context::dsv4_runtime::comp_context & comp,
         int64_t        n_embd_head,
         int64_t        kv_size) {
-    const int64_t n_kv = comp.n_kv;
-    if (cache == nullptr || n_kv <= 0) {
-        return nullptr;
-    }
-
-    if (comp.sinfo.n_stream() == 0) {
-        return dsv4_cache_read_f32(ctx, ggml_reshape_4d(ctx, dsv4_cache_view_3d(ctx, cache, n_embd_head, n_kv), n_embd_head, 1, n_kv, 1));
-    }
-
-    return dsv4_cache_read_f32(ctx, dsv4_cache_stream_view_4d(ctx, cache, n_embd_head, n_kv, kv_size, comp.sinfo.s0, (int64_t) comp.sinfo.n_stream()));
+    return dsv4_comp_get_k_typed(ctx, cache, comp, n_embd_head, kv_size, true);
 }
 
 static ggml_tensor * dsv4_comp_cpy_k(
@@ -870,11 +886,12 @@ static ggml_tensor * dsv4_build_lid_top_k(
     llm.cb(indexer_weights, "lid_weights", il);
     indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / std::sqrt(float(n_embd_indexer_head * n_indexer_head)));
 
-    ggml_tensor * indexer_k = dsv4_comp_get_k(ctx0,
+    ggml_tensor * indexer_k = dsv4_comp_get_k_typed(ctx0,
             llm.lctx.dsv4.cache.lid_k[il],
             llm.lctx.dsv4.lid_ctx,
             n_embd_indexer_head,
-            llm.lctx.dsv4.cache.lid_k[il]->ne[1]/std::max<uint32_t>(1, llm.lctx.dsv4.cache.n_stream));
+            llm.lctx.dsv4.cache.lid_k[il]->ne[1]/std::max<uint32_t>(1, llm.lctx.dsv4.cache.n_stream),
+            false);
     llm.cb(indexer_k, "lid_k", il);
 
     const int64_t n_stream = std::max<int64_t>(1, indexer_k->ne[3]);
