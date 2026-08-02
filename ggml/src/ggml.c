@@ -13494,6 +13494,33 @@ static void ggml_compute_forward_dup_f32(
         return;
     }
 
+    if (ggml_is_quantized(dst->type)) {
+        // dst is a non-contiguous (strided-view) quantized tensor, as produced when writing
+        // F32 rows into a row-strided quantized cache (e.g. the DSA indexer-key cache or a
+        // q8_0 K cache). Each src row maps 1:1 onto a dst row of block-packed bytes at stride nb1.
+        GGML_ASSERT(dst->ne[0] == src0->ne[0]);
+        GGML_ASSERT(dst->ne[1] == src0->ne[1]);
+        GGML_ASSERT(dst->ne[2] == src0->ne[2]);
+        GGML_ASSERT(dst->ne[3] == src0->ne[3]);
+        GGML_ASSERT(nb00 == sizeof(float));
+        GGML_ASSERT(nb0 == 1);
+        GGML_ASSERT(ne0 % ggml_blck_size(dst->type) == 0);
+
+        ggml_from_float_t const quantize_row_q = type_traits[dst->type].from_float;
+        GGML_ASSERT(quantize_row_q != NULL);
+
+        for (int64_t i03 = 0; i03 < ne03; i03++) {
+            for (int64_t i02 = 0; i02 < ne02; i02++) {
+                for (int64_t i01 = ir0; i01 < ir1; i01 += n_packed) {
+                    const float * src0_ptr = (const float *)((char *)src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                    char * dst_ptr = (char *)dst->data + i01*nb1 + i02*nb2 + i03*nb3;
+                    quantize_row_q(src0_ptr, dst_ptr, ne00*n_packed);
+                }
+            }
+        }
+        return;
+    }
+
     // dst counters
 
     int64_t i10 = 0;
@@ -13848,6 +13875,31 @@ static void ggml_compute_forward_dup_q(
         dst->nb[0] == ggml_type_size(dst->type)) {
         ggml_compute_forward_dup_bytes(params, dst);
         return;
+    }
+
+    if (dst->src[0]->type == dst->type &&
+            ggml_are_same_shape(dst, dst->src[0]) &&
+            ggml_is_quantized(dst->type)) {
+        // Non-contiguous quantized -> quantized copy where both tensors are row-packed at
+        // nb[1] == row_size (e.g. moving rows of a quantized K/indexer cache during defrag).
+        // Blocks are byte-identical, so a per-row copy is exact. The transposed Q8_0 layout
+        // (nb[1] == sizeof(block_q8_0)) is NOT row-packed and falls through to the path below.
+        const size_t row_size = ggml_row_size(dst->type, dst->ne[0]);
+        if (dst->nb[1] == row_size && dst->src[0]->nb[1] == row_size) {
+            int64_t n_per_thread = (nrows + nth - 1)/nth;
+            int64_t first_row = ith*n_per_thread;
+            if (first_row >= nrows) return;
+            int64_t last_row = MIN(first_row + n_per_thread, nrows);
+            for (int64_t ir = first_row; ir < last_row; ++ir) {
+                int64_t i3 = ir/(dst->ne[1]*dst->ne[2]);
+                int64_t i2 = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+                int64_t i1 = ir - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+                const char * src0 = (const char *)dst->src[0]->data + i1*dst->src[0]->nb[1] + i2*dst->src[0]->nb[2] + i3*dst->src[0]->nb[3];
+                char * dstp = (char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3];
+                memcpy(dstp, src0, row_size);
+            }
+            return;
+        }
     }
 
     if (dst->type == GGML_TYPE_Q8_0 && dst->src[0]->type == GGML_TYPE_Q8_0 &&
