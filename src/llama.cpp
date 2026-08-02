@@ -1145,11 +1145,11 @@ static bool llama_openpangu_validate_latent_cache_types(
 }
 
 static inline bool llama_openpangu_indexer_cache_type_supported(ggml_type type) {
-    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0;
+    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0;
 }
 
 static std::string llama_openpangu_indexer_cache_type_error(ggml_type type) {
-    return format("OpenPangu indexer K cache supports only f32, f16, bf16, and q8_0 (requested %s); use -ictk q8_0",
+    return format("OpenPangu indexer K cache supports only f32, f16, bf16, q8_0, and q6_0 (requested %s); use -ictk q8_0",
             ggml_type_name(type));
 }
 
