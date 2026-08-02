@@ -379,9 +379,10 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
 
             ggml_tensor * k_all_idx = ggml_view_2d(ctx0, idx_cache, d_idx, n_kv, idx_cache->nb[1], 0);
             // The fused ggml_indexer_topk CUDA op only supports F16, F32, and quantized K. F32
-            // hits its cublasSgemm fallback, which faults. Route an F32 indexer cache through the
-            // proven F16 branch (the non-fused mul_mat/top_k paths below accept F16 too).
-            if (k_all_idx->type == GGML_TYPE_F32) {
+            // hits its cublasSgemm fallback, which faults, and BF16 is not accepted at all
+            // (asserts). Route any non-F16/non-quantized indexer cache through the proven F16
+            // branch (the non-fused mul_mat/top_k paths below accept F16 too).
+            if (!ggml_is_quantized(k_all_idx->type) && k_all_idx->type != GGML_TYPE_F16) {
                 k_all_idx = ggml_cast(ctx0, k_all_idx, GGML_TYPE_F16);
             }
             ggml_tensor * w_idx = ggml_mul_mat(ctx0, layer.indexer_proj, x_normed);  // [n_ihead, T]
