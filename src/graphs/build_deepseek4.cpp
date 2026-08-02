@@ -880,6 +880,12 @@ static ggml_tensor * dsv4_build_lid_top_k(
             llm.lctx.dsv4.lid_ctx,
             n_embd_indexer_head,
             llm.lctx.dsv4.cache.lid_k[il]->ne[1]/std::max<uint32_t>(1, llm.lctx.dsv4.cache.n_stream));
+    // ggml_indexer_topk's CUDA impl handles F16 and quantized K natively; the
+    // F32 fallback and BF16 are unsupported. Route any other cache type through
+    // the proven F16 branch.
+    if (!ggml_is_quantized(indexer_k->type) && indexer_k->type != GGML_TYPE_F16) {
+        indexer_k = ggml_cast(ctx0, indexer_k, GGML_TYPE_F16);
+    }
     llm.cb(indexer_k, "lid_k", il);
 
     const int64_t n_stream = std::max<int64_t>(1, indexer_k->ne[3]);
