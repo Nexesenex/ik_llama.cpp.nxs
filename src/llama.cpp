@@ -1137,7 +1137,7 @@ static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const 
 }
 
 static inline bool llama_openpangu_latent_k_cache_type_supported(ggml_type type) {
-    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_Q8_0;
+    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0;
 }
 
 static inline bool llama_openpangu_latent_v_cache_type_supported(ggml_type type) {
@@ -1145,7 +1145,7 @@ static inline bool llama_openpangu_latent_v_cache_type_supported(ggml_type type)
 }
 
 static std::string llama_openpangu_latent_cache_type_error(ggml_type type_k, ggml_type type_v) {
-    return format("OpenPangu latent K cache supports only f32, f16, and q8_0; latent V cache supports only f32 and f16 (requested %s/%s); use -ctk q8_0 -ctv f16",
+    return format("OpenPangu latent K cache supports only f32, f16, q8_0, and q6_0; latent V cache supports only f32 and f16 (requested %s/%s); use -ctk q8_0 -ctv f16",
             ggml_type_name(type_k), ggml_type_name(type_v));
 }
 
