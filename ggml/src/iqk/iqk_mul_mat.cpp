@@ -2254,13 +2254,29 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
                 iqk_f16_to_f32(n_this_thread, (const ggml_fp16_t *)this_m + first, score_th);
             }
             auto kq_i = kq_th;
-            for (int i = 0; i < int(q->ne[1]); ++i) {
-                float wi = this_w[i];
-                for (int j = 0; j < n_this_thread; ++j) {
-                    float relu = kq_i[j] > 0.0f ? kq_i[j] : 0.0f;
-                    score_th[j] += wi * relu;
+#ifdef __AVX2__
+            if (n_this_thread % 8 == 0) {
+                auto vzero = _mm256_setzero_ps();
+                for (int i = 0; i < int(q->ne[1]); ++i) {
+                    auto vw = _mm256_set1_ps(this_w[i]);
+                    for (int j = 0; j < n_this_thread; j += 8) {
+                        auto relu = _mm256_max_ps(vzero, _mm256_loadu_ps(kq_i + j));
+                        auto acc  = _mm256_fmadd_ps(vw, relu, _mm256_loadu_ps(score_th + j));
+                        _mm256_storeu_ps(score_th + j, acc);
+                    }
+                    kq_i += n_this_thread;
                 }
-                kq_i += n_this_thread;
+            } else
+#endif
+            {
+                for (int i = 0; i < int(q->ne[1]); ++i) {
+                    float wi = this_w[i];
+                    for (int j = 0; j < n_this_thread; ++j) {
+                        float relu = kq_i[j] > 0.0f ? kq_i[j] : 0.0f;
+                        score_th[j] += wi * relu;
+                    }
+                    kq_i += n_this_thread;
+                }
             }
         }
         barrier(barrier_data);
