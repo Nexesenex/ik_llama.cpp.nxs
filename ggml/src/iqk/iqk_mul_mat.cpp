@@ -1697,6 +1697,33 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
                 }
             }
 #else
+#ifdef __AVX2__
+            // v_prime = state^T*k and out_val = state^T*q are FP32 matvecs sharing the same state loads.
+            // Process a tile of 8 row-groups per column pass so the 8+8 accumulators fit in the 16 AVX
+            // registers (no spilling), while each state element is still read exactly once over all tiles.
+            const int n_groups = head_dim / 8;
+            for (int g0 = 0; g0 < n_groups; g0 += 8) {
+                const int ng = n_groups - g0 < 8 ? n_groups - g0 : 8;
+                __m256 vp_acc[8], ov_acc[8];
+                for (int gi = 0; gi < ng; ++gi) {
+                    vp_acc[gi] = _mm256_setzero_ps();
+                    ov_acc[gi] = _mm256_setzero_ps();
+                }
+                for (int col = 0; col < head_dim; ++col) {
+                    const __m256 vk = _mm256_set1_ps(k_t[col]);
+                    const __m256 vq = _mm256_set1_ps(q_t[col]);
+                    for (int gi = 0; gi < ng; ++gi) {
+                        const __m256 vs = _mm256_loadu_ps(state + g0*8 + 8*gi + col*head_dim);
+                        vp_acc[gi] = _mm256_fmadd_ps(vs, vk, vp_acc[gi]);
+                        ov_acc[gi] = _mm256_fmadd_ps(vs, vq, ov_acc[gi]);
+                    }
+                }
+                for (int gi = 0; gi < ng; ++gi) {
+                    _mm256_storeu_ps(v_prime + g0*8 + 8*gi, vp_acc[gi]);
+                    _mm256_storeu_ps(out_val  + g0*8 + 8*gi, ov_acc[gi]);
+                }
+            }
+#else
             std::memset(v_prime, 0, head_dim*sizeof(float));
             std::memset(out_val, 0, head_dim*sizeof(float));
             for (int col = 0; col < head_dim; ++col) {
@@ -1708,6 +1735,8 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
                     out_val[row] += s * q_col;
                 }
             }
+#endif
+#endif
             for (int row = 0; row < head_dim; ++row) {
                 const float v_new = v_t[row] * beta_val - v_prime[row] * beta_val * decay;
                 v_new_buf[row] = v_new;
@@ -1740,7 +1769,6 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
                     state[row + col * head_dim] = fminf(fmaxf(s, -1e6f), 1e6f);
                 }
             }
-#endif
 #endif
 
             if (saved_steps && t + 1 < n_tokens) {
