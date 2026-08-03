@@ -1619,9 +1619,7 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
         const int out_token_stride = head_dim * n_heads;
 
         float * state = state_out + state_head_offset;
-        for (int i = 0; i < head_dim * head_dim; ++i) {
-            state[i] = state_in[state_head_offset + i];
-        }
+        std::memcpy(state, state_in + state_head_offset, head_dim*head_dim*sizeof(float));
 
         for (int t = 0; t < n_tokens; ++t) {
             const float * q_t = q_data + qkv_head_offset_kq + t * qkv_token_stride;
@@ -1737,11 +1735,27 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
             }
 #endif
 #endif
+#ifdef __AVX2__
+            auto c1 = _mm256_set1_ps(beta_val);
+            auto c2 = _mm256_set1_ps(beta_val*decay);
+            auto c3 = _mm256_set1_ps(decay*scale);
+            auto c4 = _mm256_set1_ps(attn_score);
+            for (int row = 0; row < head_dim; row += 8) {
+                auto v   = _mm256_loadu_ps(v_t + row);
+                auto vp  = _mm256_loadu_ps(v_prime + row);
+                auto vn  = _mm256_sub_ps(_mm256_mul_ps(v, c1), _mm256_mul_ps(vp, c2));
+                _mm256_storeu_ps(v_new_buf + row, vn);
+                auto ov   = _mm256_loadu_ps(out_val + row);
+                auto oval = _mm256_fmadd_ps(vn, c4, _mm256_mul_ps(ov, c3));
+                _mm256_storeu_ps(out_t + row, oval);
+            }
+#else
             for (int row = 0; row < head_dim; ++row) {
                 const float v_new = v_t[row] * beta_val - v_prime[row] * beta_val * decay;
                 v_new_buf[row] = v_new;
                 out_t[row] = out_val[row] * decay * scale + v_new * attn_score;
             }
+#endif
 
 #ifdef __AVX2__
             auto vd = _mm256_set1_ps(decay);
