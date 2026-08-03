@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <type_traits>
 //#include <thread>
 
 #ifdef __ARM_NEON
@@ -578,7 +579,22 @@ void fast_ht(int n, T * values) {
     float scale = 1;
     for (int h = 1; h < n; h <<= 1) {
         for (int i = 0; i < n; i += 2*h) {
-            for (int j = i; j < i + h; ++j) {
+            int j = i;
+#ifdef __AVX2__
+            if constexpr (std::is_same_v<T, float>) {
+                // 8-wide butterfly: only valid once h >= 8 so both 8-lane
+                // loads stay inside the [i, i+2h) block.
+                if (h >= 8) {
+                    for (; j + 7 < i + h; j += 8) {
+                        auto vx = _mm256_loadu_ps(values + j);
+                        auto vy = _mm256_loadu_ps(values + j + h);
+                        _mm256_storeu_ps(values + j,     _mm256_add_ps(vx, vy));
+                        _mm256_storeu_ps(values + j + h, _mm256_sub_ps(vx, vy));
+                    }
+                }
+            }
+#endif
+            for (; j < i + h; ++j) {
                 T x = values[j], y = values[j + h];
                 values[j+0] = x + y;
                 values[j+h] = x - y;
