@@ -2684,12 +2684,36 @@ void dequantize_row_iq3_k(const block_iq3_k * x, float * y, int64_t k) {
             extra >>= 2;
             int shift_l = 2*(ib32%4);
             int shift_h = ib32%8;
+#ifdef __AVX2__
+            // out[j] = dl1*V1[idx], out[j+16] = dl2*V2[idx], idx = (ql>>s_l)&3|(qh>>s_h)<<2
+            // (8-entry int8 LUTs replicated from 8B, no table over-read; variable
+            // shifts via count register, srli+and exact; single mul rounding)
+            auto lut1 = _mm_set_epi64x(*(const int64_t *)values1, *(const int64_t *)values1);
+            auto lut2 = _mm_set_epi64x(*(const int64_t *)values2, *(const int64_t *)values2);
+            auto cnt_l = _mm_cvtsi32_si128(shift_l);
+            auto cnt_h = _mm_cvtsi32_si128(shift_h);
+            auto idx = _mm_or_si128(_mm_and_si128(_mm_srl_epi16(_mm_loadu_si128((const __m128i *)qs), cnt_l), _mm_set1_epi8(3)),
+                                      _mm_slli_epi16(_mm_and_si128(_mm_srl_epi16(_mm_loadu_si128((const __m128i *)qh), cnt_h), _mm_set1_epi8(1)), 2));
+            auto idx2 = _mm_or_si128(_mm_and_si128(_mm_srl_epi16(_mm_loadu_si128((const __m128i *)(qs + 16)), cnt_l), _mm_set1_epi8(3)),
+                                      _mm_slli_epi16(_mm_and_si128(_mm_srl_epi16(_mm_loadu_si128((const __m128i *)(qh + 16)), cnt_h), _mm_set1_epi8(1)), 2));
+            auto r = _mm_shuffle_epi8(lut1, idx);
+            auto R = _mm_shuffle_epi8(lut2, idx2);
+            auto vd1 = _mm256_set1_ps(dl1);
+            auto vd2 = _mm256_set1_ps(dl2);
+            _mm256_storeu_ps(y +  0, _mm256_mul_ps(vd1, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(r))));
+            _mm256_storeu_ps(y +  8, _mm256_mul_ps(vd1, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(r, 8)))));
+            _mm256_storeu_ps(y + 16, _mm256_mul_ps(vd2, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(R))));
+            _mm256_storeu_ps(y + 24, _mm256_mul_ps(vd2, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(R, 8)))));
+            y += 32;
+            if (shift_l == 6) qs += 32;
+#else
             for (int j = 0; j < 16; ++j) {
                 y[j+ 0] = dl1 * values1[((qs[j+ 0] >> shift_l) & 3) | (((qh[j+ 0] >> shift_h) & 1) << 2)];
                 y[j+16] = dl2 * values2[((qs[j+16] >> shift_l) & 3) | (((qh[j+16] >> shift_h) & 1) << 2)];
             }
             y += 32;
             if (shift_l == 6) qs += 32;
+#endif
         }
 
     }
@@ -2945,12 +2969,32 @@ void dequantize_row_iq3_ks(const block_iq3_ks * x, float * y, int64_t k) {
         for (int i128 = 0; i128 < QK_K/128; ++i128) {
             for (int ib = 0; ib < 4; ++ib) {
                 const int8_t * values = iq3nl_values + ((x[ibl].extra >> (8 + (4*i128+ib)) & 1) << 3);
+#ifdef __AVX2__
+                // out[j] = dl * LUT[((qs[j]>>2*ib)&3) | ((qh[j]>>(4*i128+ib))&1)<<2]
+                // (8-entry int8 LUT replicated from 8B; variable shifts via count
+                // register; srli+and exact for these ranges; single mul rounding)
+                auto lut = _mm_set_epi64x(*(const int64_t *)values, *(const int64_t *)values);
+                auto cnt_q = _mm_cvtsi32_si128(2*ib);
+                auto cnt_h = _mm_cvtsi32_si128(4*i128+ib);
+                auto vd = _mm256_set1_ps(dl[4*i128 + ib]);
+                for (int h = 0; h < 2; ++h) {
+                    auto W = _mm_loadu_si128((const __m128i *)(qs + 16*h));
+                    auto H = _mm_loadu_si128((const __m128i *)(qh + 16*h));
+                    auto idx = _mm_or_si128(_mm_and_si128(_mm_srl_epi16(W, cnt_q), _mm_set1_epi8(3)),
+                                            _mm_slli_epi16(_mm_and_si128(_mm_srl_epi16(H, cnt_h), _mm_set1_epi8(1)), 2));
+                    auto r = _mm_shuffle_epi8(lut, idx);
+                    _mm256_storeu_ps(y +  8*h, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(r))));
+                    _mm256_storeu_ps(y +  8*h + 8, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(r, 8)))));
+                }
+                y += 32;
+#else
                 for (int j = 0; j < kBlockSize; ++j) {
                     y[j] = dl[4*i128 + ib] * values[((qs[j] >> 2*ib) & 3) | (((qh[j] >> (4*i128+ib)) & 1) << 2)];
                 }
                 y += kBlockSize;
+#endif
+                qs += kBlockSize;
             }
-            qs += kBlockSize;
         }
     }
 }
@@ -3246,12 +3290,28 @@ void dequantize_row_iq4_k(const block_iq4_k * x, float * y, int64_t k) {
             const int8_t * values1 = extra & 1 ? iq4k_values + 16 : iq4k_values;
             const int8_t * values2 = extra & 2 ? iq4k_values + 16 : iq4k_values;
             extra >>= 2;
+#ifdef __AVX2__
+            // out[j] = dl1 * LUT1[qs[j] & 0xf], out[j+16] = dl2 * LUT2[qs[j] >> 4]
+            // (16-entry int8 LUTs, table picked per ib; streaming stores)
+            auto v = _mm_loadu_si128((const __m128i *)qs);
+            auto rlo = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)values1), _mm_and_si128(v, _mm_set1_epi8(0xf)));
+            auto rhi = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)values2), _mm_and_si128(_mm_srli_epi16(v, 4), _mm_set1_epi8(0xf)));
+            auto vd1 = _mm256_set1_ps(dl1);
+            auto vd2 = _mm256_set1_ps(dl2);
+            _mm256_storeu_ps(y +  0, _mm256_mul_ps(vd1, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(rlo))));
+            _mm256_storeu_ps(y +  8, _mm256_mul_ps(vd1, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(rlo, 8)))));
+            _mm256_storeu_ps(y + 16, _mm256_mul_ps(vd2, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(rhi))));
+            _mm256_storeu_ps(y + 24, _mm256_mul_ps(vd2, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(rhi, 8)))));
+            y  += 32;
+            qs += 16;
+#else
             for (int j = 0; j < 16; ++j) {
                 y[j+ 0] = dl1 * values1[qs[j] & 0xf];
                 y[j+16] = dl2 * values2[qs[j] >>  4];
             }
             y  += 32;
             qs += 16;
+#endif
         }
     }
 }
@@ -3648,6 +3708,45 @@ void dequantize_row_iq5_k(const block_iq5_k * x, float * y, int64_t k) {
             const int8_t * values2 = iq5nl_values + ((extra & 2) << 4);
             const int8_t * values3 = iq5nl_values + ((extra & 4) << 3);
             const int8_t * values4 = iq5nl_values + ((extra & 8) << 2);
+#ifdef __AVX2__
+                // 4x16 outputs: chunk c (qs/qh[16*c..+15]) gives out[16*c] from
+                // nibble-lo + qh bit s, and out[16*c+32] from nibble-hi + bit s+1
+                // (qh shifts via count register, srli+and exact for s<=7;
+                // 5-bit index needs hi-half LUT blend; single mul rounding)
+                auto cnt_lo = _mm_cvtsi32_si128(shift);
+                auto cnt_hi = _mm_cvtsi32_si128(shift + 1);
+                auto m0f = _mm_set1_epi8(0xf);
+                auto m10 = _mm_set1_epi8(0x10);
+                auto one = _mm_set1_epi8(1);
+                for (int c = 0; c < 2; ++c) {
+                    auto v = _mm_loadu_si128((const __m128i *)(qs + 16*c));
+                    auto h = _mm_loadu_si128((const __m128i *)(qh + 16*c));
+                    auto nlo = _mm_and_si128(v, m0f);
+                    auto nhi = _mm_and_si128(_mm_srli_epi16(v, 4), m0f);
+                    auto blo = _mm_slli_epi16(_mm_and_si128(_mm_srl_epi16(h, cnt_lo), one), 4);
+                    auto bhi = _mm_slli_epi16(_mm_and_si128(_mm_srl_epi16(h, cnt_hi), one), 4);
+                    auto la = c == 0 ? values1 : values2;
+                    auto lb = c == 0 ? values3 : values4;
+                    auto dla = c == 0 ? dl1 : dl2;
+                    auto dlb = c == 0 ? dl3 : dl4;
+                    auto ila = _mm_or_si128(nlo, blo);
+                    auto iha = _mm_or_si128(nhi, bhi);
+                    auto sla = _mm_cmpeq_epi8(_mm_and_si128(ila, m10), m10);
+                    auto sha = _mm_cmpeq_epi8(_mm_and_si128(iha, m10), m10);
+                    auto rla = _mm_blendv_epi8(_mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)la), ila),
+                                               _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(la + 16)), ila), sla);
+                    auto rha = _mm_blendv_epi8(_mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)lb), iha),
+                                               _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(lb + 16)), iha), sha);
+                    auto vdla = _mm256_set1_ps(dla);
+                    auto vdlb = _mm256_set1_ps(dlb);
+                    _mm256_storeu_ps(y + 16*c,      _mm256_mul_ps(vdla, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(rla))));
+                    _mm256_storeu_ps(y + 16*c + 8,  _mm256_mul_ps(vdla, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(rla, 8)))));
+                    _mm256_storeu_ps(y + 16*c + 32, _mm256_mul_ps(vdlb, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(rha))));
+                    _mm256_storeu_ps(y + 16*c + 40, _mm256_mul_ps(vdlb, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(rha, 8)))));
+                }
+                y  += 64;
+                qs += 32;
+#else
             for (int j = 0; j < 16; ++j) {
                 y[j+ 0] = dl1 * values1[(qs[j+ 0] & 0xf) | (((qh[j+ 0] >> shift) & 1) << 4)];
                 y[j+16] = dl2 * values2[(qs[j+16] & 0xf) | (((qh[j+16] >> shift) & 1) << 4)];
@@ -3656,6 +3755,7 @@ void dequantize_row_iq5_k(const block_iq5_k * x, float * y, int64_t k) {
             }
             y  += 64;
             qs += 32;
+#endif
             extra >>= 4;
             shift += 2;
             if (shift == 8) { qh += 32; shift = 0; }
@@ -4802,11 +4902,26 @@ void dequantize_row_mxfp4(const block_mxfp4 * x, float * y, int64_t k) {
     int nblock = k/kBlockSize;
     for (int ib = 0; ib < nblock; ++ib) {
         float d = GGML_E8M0_TO_FP32_HALF(x[ib].e);
+#ifdef __AVX2__
+        // out[j] = d * LUT[qs[j] & 0xf], out[j+16] = d * LUT[qs[j] >> 4] (int8 LUT)
+        auto v = _mm_loadu_si128((const __m128i *)x[ib].qs);
+        auto lut = _mm_loadu_si128((const __m128i *)kvalues_mxfp4);
+        auto m0f = _mm_set1_epi8(0xf);
+        auto lo = _mm_shuffle_epi8(lut, _mm_and_si128(v, m0f));
+        auto hi = _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(v, 4), m0f));
+        auto vd = _mm256_set1_ps(d);
+        _mm256_storeu_ps(y +  0, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(lo))));
+        _mm256_storeu_ps(y +  8, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(lo, 8)))));
+        _mm256_storeu_ps(y + 16, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(hi))));
+        _mm256_storeu_ps(y + 24, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(hi, 8)))));
+        y += kBlockSize;
+#else
         for (int j = 0; j < kBlockSize/2; ++j) {
             y[j             ] = d * kvalues_mxfp4[x[ib].qs[j] & 0xf];
             y[j+kBlockSize/2] = d * kvalues_mxfp4[x[ib].qs[j] >>  4];
         }
         y  += kBlockSize;
+#endif
     }
 }
 
@@ -4916,12 +5031,28 @@ void dequantize_row_mxfp4_r8(const block_mxfp4_r8 * x, float * y, int64_t k) {
         auto qs = (const uint32_t *)x[ib].qs;
         for (int j = 0; j < kBlockSize/8; ++j) {
             for (int k = 0; k < 8; ++k) {
+#ifdef __AVX2__
+                // out[4*j+i] = d[k] * LUT[lo(qs[8*j+k] dword)], out[+16] = hi (int8 LUT)
+                auto w = _mm_set1_epi32(qs[8*j+k]);
+                auto lo = _mm_and_si128(w, _mm_set1_epi32(0x0f0f0f0f));
+                auto hi = _mm_and_si128(_mm_srli_epi32(w, 4), _mm_set1_epi32(0x0f0f0f0f));
+                // collect nibbles at bytes {0,4,8,12} into idx bytes [0..3] (0x80 zeroes the rest)
+                auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+                auto idx8 = _mm_or_si128(_mm_shuffle_epi8(lo, shuf4), _mm_slli_si128(_mm_shuffle_epi8(hi, shuf4), 4));
+                auto lut = _mm_loadu_si128((const __m128i *)kvalues_mxfp4);
+                auto vd = _mm256_set1_ps(d[k]);
+                auto f = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(lut, idx8))));
+                float * out = y8[k] + kBlockSize*ib + 4*j;
+                _mm_storeu_ps(out +  0, _mm256_castps256_ps128(f));
+                _mm_storeu_ps(out + 16, _mm256_extractf128_ps(f, 1));
+#else
                 aux32[0] = qs[8*j+k] & 0x0f0f0f0f;
                 aux32[1] = (qs[8*j+k] >> 4) & 0x0f0f0f0f;
                 for (int i = 0; i < 4; ++i) {
                     y8[k][kBlockSize*ib + 4*j + i               ] = d[k] * kvalues_mxfp4[aux8[i+0]];
                     y8[k][kBlockSize*ib + 4*j + i + kBlockSize/2] = d[k] * kvalues_mxfp4[aux8[i+4]];
                 }
+#endif
             }
         }
     }
@@ -5161,12 +5292,29 @@ void dequantize_row_iq4_ks(const block_iq4_ks * x, float * y, int64_t k) {
         for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
             float dl = d * ((int)(x[ibl].scales[ib] & 254) - 127);
             const int8_t * values = iq4k_values + ((x[ibl].scales[ib] & 1) << 4);
+#ifdef __AVX2__
+            // out[j] = dl * LUT[qs[j] & 0xf], out[j+16] = dl * LUT[qs[j] >> 4]
+            // (16-entry int8 LUT, table picked per ib; streaming stores)
+            auto v = _mm_loadu_si128((const __m128i *)qs);
+            auto lut = _mm_loadu_si128((const __m128i *)values);
+            auto m0f = _mm_set1_epi8(0xf);
+            auto lo = _mm_shuffle_epi8(lut, _mm_and_si128(v, m0f));
+            auto hi = _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(v, 4), m0f));
+            auto vd = _mm256_set1_ps(dl);
+            _mm256_storeu_ps(y +  0, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(lo))));
+            _mm256_storeu_ps(y +  8, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(lo, 8)))));
+            _mm256_storeu_ps(y + 16, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(hi))));
+            _mm256_storeu_ps(y + 24, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(hi, 8)))));
+            y  += kBlockSize;
+            qs += kBlockSize/2;
+#else
             for (int j = 0; j < kBlockSize/2; ++j) {
                 y[j             ] = dl * values[qs[j] & 0xf];
                 y[j+kBlockSize/2] = dl * values[qs[j] >>  4];
             }
             y  += kBlockSize;
             qs += kBlockSize/2;
+#endif
         }
     }
 }
@@ -5425,12 +5573,47 @@ void dequantize_row_iq5_ks(const block_iq5_ks * x, float * y, int64_t k) {
             float dl2 = d * ((int)(x[ibl].scales[2*ib64+1] & 254) - 127);
             const int8_t * values1 = iq5nl_values + ((x[ibl].scales[2*ib64+0] & 1) << 5);
             const int8_t * values2 = iq5nl_values + ((x[ibl].scales[2*ib64+1] & 1) << 5);
+#ifdef __AVX2__
+            // out[j] = dl1*V1[lo|bit], out[j+32] = dl2*V2[hi|bit] (qh shifts
+            // 2*ib64/+1 via count register, srli+and exact; 5-bit index needs
+            // hi-half blend; single mul rounding; same qs/qh bytes all ib64)
+            auto cnt_lo = _mm_cvtsi32_si128(2*ib64);
+            auto cnt_hi = _mm_cvtsi32_si128(2*ib64 + 1);
+            auto m0f = _mm_set1_epi8(0xf);
+            auto m10 = _mm_set1_epi8(0x10);
+            auto one = _mm_set1_epi8(1);
+            auto v = _mm256_loadu_si256((const __m256i *)qs);
+            auto h = _mm256_loadu_si256((const __m256i *)qh);
+            auto nlo = _mm256_and_si256(v, _mm256_set1_epi8(0xf));
+            auto nhi = _mm256_and_si256(_mm256_srli_epi16(v, 4), _mm256_set1_epi8(0xf));
+            auto blo = _mm256_slli_epi16(_mm256_and_si256(_mm256_srl_epi16(h, cnt_lo), _mm256_set1_epi8(1)), 4);
+            auto bhi = _mm256_slli_epi16(_mm256_and_si256(_mm256_srl_epi16(h, cnt_hi), _mm256_set1_epi8(1)), 4);
+            auto idx_lo = _mm256_or_si256(nlo, blo);
+            auto idx_hi = _mm256_or_si256(nhi, bhi);
+            auto sel_lo = _mm256_cmpeq_epi8(_mm256_and_si256(idx_lo, _mm256_set1_epi8(0x10)), _mm256_set1_epi8(0x10));
+            auto sel_hi = _mm256_cmpeq_epi8(_mm256_and_si256(idx_hi, _mm256_set1_epi8(0x10)), _mm256_set1_epi8(0x10));
+            auto rlo = _mm256_blendv_epi8(_mm256_shuffle_epi8(_mm256_loadu_si256((const __m256i *)values1), idx_lo),
+                                          _mm256_shuffle_epi8(_mm256_loadu_si256((const __m256i *)(values1 + 16)), idx_lo), sel_lo);
+            auto rhi = _mm256_blendv_epi8(_mm256_shuffle_epi8(_mm256_loadu_si256((const __m256i *)values2), idx_hi),
+                                          _mm256_shuffle_epi8(_mm256_loadu_si256((const __m256i *)(values2 + 16)), idx_hi), sel_hi);
+                auto vd1 = _mm256_set1_ps(dl1);
+                auto vd2 = _mm256_set1_ps(dl2);
+                _mm256_storeu_ps(y +  0, _mm256_mul_ps(vd1, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm256_castsi256_si128(rlo)))));
+                _mm256_storeu_ps(y +  8, _mm256_mul_ps(vd1, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(_mm256_castsi256_si128(rlo), 8)))));
+                _mm256_storeu_ps(y + 16, _mm256_mul_ps(vd1, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm256_extracti128_si256(rlo, 1)))));
+                _mm256_storeu_ps(y + 24, _mm256_mul_ps(vd1, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(_mm256_extracti128_si256(rlo, 1), 8)))));
+                _mm256_storeu_ps(y + 32, _mm256_mul_ps(vd2, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm256_castsi256_si128(rhi)))));
+                _mm256_storeu_ps(y + 40, _mm256_mul_ps(vd2, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(_mm256_castsi256_si128(rhi), 8)))));
+                _mm256_storeu_ps(y + 48, _mm256_mul_ps(vd2, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm256_extracti128_si256(rhi, 1)))));
+                _mm256_storeu_ps(y + 56, _mm256_mul_ps(vd2, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(_mm256_extracti128_si256(rhi, 1), 8)))));
+                y += 2*kBlockSize;
+#else
             for (int j = 0; j < kBlockSize; ++j) {
                 y[j           ] = dl1 * values1[(qs[j] & 0xf) | (((qh[j] >> (2*ib64+0)) & 1) << 4)];
                 y[j+kBlockSize] = dl2 * values2[(qs[j] >>  4) | (((qh[j] >> (2*ib64+1)) & 1) << 4)];
             }
             y  += 2*kBlockSize;
-            qs += kBlockSize;
+#endif
         }
     }
 }
@@ -5792,12 +5975,29 @@ void dequantize_row_iq4_kss(const block_iq4_kss * x, float * y, int64_t k) {
             }
             const int8_t * values = iq4k_values + ((ls & 1) << 4);
             float dl = d * ((ls & 254) - 127);
+#ifdef __AVX2__
+            // out[j] = dl * LUT[aux8[j] & 0xf], out[j+16] = dl * LUT[aux8[j] >> 4]
+            // (16 gray bytes, 16-entry int8 LUT; streaming stores)
+            auto v = _mm_loadu_si128((const __m128i *)aux8);
+            auto lut = _mm_loadu_si128((const __m128i *)values);
+            auto m0f = _mm_set1_epi8(0xf);
+            auto lo = _mm_shuffle_epi8(lut, _mm_and_si128(v, m0f));
+            auto hi = _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(v, 4), m0f));
+            auto vd = _mm256_set1_ps(dl);
+            _mm256_storeu_ps(y +  0, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(lo))));
+            _mm256_storeu_ps(y +  8, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(lo, 8)))));
+            _mm256_storeu_ps(y + 16, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(hi))));
+            _mm256_storeu_ps(y + 24, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(hi, 8)))));
+            y  += 32;
+            qs += 8;
+#else
             for (int j = 0; j < 16; ++j) {
                 y[j+ 0] = dl * values[aux8[j] & 0xf];
                 y[j+16] = dl * values[aux8[j] >>  4];
             }
             y  += 32;
             qs += 8;
+#endif
         }
     }
 }
@@ -5884,6 +6084,26 @@ void dequantize_row_iq4_nl_r4(const block_iq4_nl_r4 * x, float * y, int64_t k) {
     for (int ib = 0; ib < nb; ++ib) {
         for (int k = 0; k < 4; ++k) {
             float scale = GGML_FP16_TO_FP32(x[ib].d[k]);
+#ifdef __AVX2__
+            // out[i+{0,8,16,24}] = scale*LUT[lo/hi(qs[4*k+i+{0,16}])]
+            // out[i+{4,12,20,28}] = scale*LUT[lo/hi(qs[4*k+i+{32,48}])]  (int8 LUT)
+            auto v = r4_gather_16(x[ib].qs, k);
+            auto lut = _mm_loadu_si128((const __m128i *)iq4k_values);
+            auto m0f = _mm_set1_epi8(0xf);
+            auto lo16 = _mm_shuffle_epi8(lut, _mm_and_si128(v, m0f));
+            auto hi16 = _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(v, 4), m0f));
+            auto vd = _mm256_set1_ps(scale);
+            auto A = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(lo16));
+            auto B = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(lo16, 8)));
+            auto C = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(hi16));
+            auto D = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(hi16, 8)));
+            float * out = yk[k] + QK4_NL*ib;
+            // scalar order: +0=L0,+8=H0,+16=L1,+24=H1,+4=L2,+12=H2,+20=L3,+28=H3
+            _mm256_storeu_ps(out +  0, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_castps256_ps128(B), _mm256_castps256_ps128(A))));
+            _mm256_storeu_ps(out +  8, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_castps256_ps128(D), _mm256_castps256_ps128(C))));
+            _mm256_storeu_ps(out + 16, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_extractf128_ps(B, 1), _mm256_extractf128_ps(A, 1))));
+            _mm256_storeu_ps(out + 24, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_extractf128_ps(D, 1), _mm256_extractf128_ps(C, 1))));
+#else
             for (int i = 0; i < 4; ++i) {
                 yk[k][QK4_NL*ib+i+ 0] = scale * iq4k_values[x[ib].qs[4*k+i+ 0] & 0xf];
                 yk[k][QK4_NL*ib+i+ 8] = scale * iq4k_values[x[ib].qs[4*k+i+ 0] >>  4];
@@ -5894,6 +6114,7 @@ void dequantize_row_iq4_nl_r4(const block_iq4_nl_r4 * x, float * y, int64_t k) {
                 yk[k][QK4_NL*ib+i+20] = scale * iq4k_values[x[ib].qs[4*k+i+48] & 0xf];
                 yk[k][QK4_NL*ib+i+28] = scale * iq4k_values[x[ib].qs[4*k+i+48] >>  4];
             }
+#endif
         }
     }
 }
@@ -6033,12 +6254,26 @@ void dequantize_row_q4_0_r8(const block_iq4_nl_r8 * x, float * y, int64_t k) {
     for (int ib = 0; ib < nb; ++ib) {
         for (int k = 0; k < 8; ++k) {
             float scale = GGML_FP16_TO_FP32(x[ib].d[k]);
+#ifdef __AVX2__
+            // out[4*l+i+ 0] = scale*((qs[32*l+4*k+i] & 0xf) - 8)   low nibbles
+            // out[4*l+i+16] = scale*((qs[32*l+4*k+i] >> 4) - 8)   high nibbles
+            __m128i s0 = r8_gather_lmajor_16(x[ib].qs, k);
+            __m256i a0 = _mm256_cvtepu8_epi32(s0);
+            __m256i a1 = _mm256_cvtepu8_epi32(_mm_srli_si128(s0, 8));
+            __m256 vscale = _mm256_set1_ps(scale);
+            float * out = yk[k] + QK4_0*ib;
+            _mm256_storeu_ps(out +  0, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_and_si256(a0, _mm256_set1_epi32(0xf)), _mm256_set1_epi32(8)))));
+            _mm256_storeu_ps(out +  8, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_and_si256(a1, _mm256_set1_epi32(0xf)), _mm256_set1_epi32(8)))));
+            _mm256_storeu_ps(out + 16, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_srli_epi32(a0, 4), _mm256_set1_epi32(8)))));
+            _mm256_storeu_ps(out + 24, _mm256_mul_ps(vscale, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_srli_epi32(a1, 4), _mm256_set1_epi32(8)))));
+#else
             for (int l = 0; l < 4; ++l) {
                 for (int i = 0; i < 4; ++i) {
                     yk[k][QK4_0*ib+4*l+i+ 0] = scale * ((x[ib].qs[32*l+4*k+i] & 0xf) - 8);
                     yk[k][QK4_0*ib+4*l+i+16] = scale * ((x[ib].qs[32*l+4*k+i] >>  4) - 8);
                 }
             }
+#endif
         }
     }
 }
@@ -6142,10 +6377,18 @@ void dequantize_row_q8_0_r8(const block_q8_0_r8 * x, float * y, int64_t k) {
     for (int ib = 0; ib < nb; ++ib) {
         for (int k = 0; k < 8; ++k) {
             float scale = GGML_FP16_TO_FP32(x[ib].d[k]);
+#ifdef __AVX2__
+            // out[4*l+i+0]   = scale*qs[32*l+4*k+i]      (16 bytes, l-major)
+            // out[4*l+i+16]  = scale*qs[32*l+4*k+i+128]  (16 bytes, l-major)
+            float * out = yk[k] + QK8_0*ib;
+            dequant_r8_i8_16(x[ib].qs, k, scale, out);
+            dequant_r8_i8_16(x[ib].qs + 128, k, scale, out + 16);
+#else
             for (int l = 0; l < 4; ++l) for (int i = 0; i < 4; ++i) {
                 yk[k][QK8_0*ib+4*l+i+ 0] = scale * x[ib].qs[32*l+4*k+i+  0];
                 yk[k][QK8_0*ib+4*l+i+16] = scale * x[ib].qs[32*l+4*k+i+128];
             }
+#endif
         }
     }
 }
@@ -6247,12 +6490,35 @@ void dequantize_row_q5_0_r4(const block_q5_0_r4 * x, float * y, int64_t k) {
         for (int k = 0; k < 4; ++k) {
             float d = GGML_FP16_TO_FP32(x[ib].d[k]);
             float m = -16*d;
+#ifdef __AVX2__
+            // out[i+ll+0] = d * ((qs[4*k+i+16*l] & 0xf) | bit_l(qh[4*k+i])<<4) + m
+            // out[i+ll+8] = d * ((qs[...] >> 4) | bit_{l+4}(qh)<<4) + m, ll = 16*(l%2)+4*(l/2)
+            // (mul+add kept separate for bit-exactness with scalar, no FMA contraction)
+            auto vd = _mm256_set1_ps(d);
+            auto vm = _mm_set1_ps(m);
+            auto qh4 = _mm_set1_epi32(*(const uint32_t *)(x[ib].qh + 4*k));
+            auto one = _mm_set1_epi16(1);
+            auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+            for (int l = 0; l < 4; ++l) {
+                int ll = 16*(l%2) + 4*(l/2);
+                auto w = _mm_set1_epi32(*(const uint32_t *)(x[ib].qs + 4*k + 16*l));
+                auto lo = _mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(w, _mm_set1_epi32(0x0f0f0f0f)), shuf4),
+                                       _mm_slli_epi16(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi16(qh4, l), one), shuf4), 4));
+                auto hi = _mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(w, 4), _mm_set1_epi32(0x0f0f0f0f)), shuf4),
+                                       _mm_slli_epi16(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi16(qh4, l+4), one), shuf4), 4));
+                float * out = yk[k] + QK4_0*ib + ll;
+                auto vlo = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(lo)));
+                auto vhi = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(hi)));
+                _mm_storeu_ps(out + 0, _mm_add_ps(_mm256_castps256_ps128(vlo), vm));
+                _mm_storeu_ps(out + 8, _mm_add_ps(_mm256_castps256_ps128(vhi), vm));
+#else
             for (int l = 0; l < 4; ++l) {
                 int ll = 16*(l%2) + 4*(l/2);
                 for (int i = 0; i < 4; ++i) {
                     yk[k][QK4_0*ib+i+ll+0] = d * ((x[ib].qs[4*k+i+16*l] & 0xf) | (((x[ib].qh[4*k+i] >> (l+0)) & 1) << 4)) + m;
                     yk[k][QK4_0*ib+i+ll+8] = d * ((x[ib].qs[4*k+i+16*l] >>  4) | (((x[ib].qh[4*k+i] >> (l+4)) & 1) << 4)) + m;
                 }
+#endif
             }
         }
     }
@@ -6356,6 +6622,30 @@ void dequantize_row_q6_0_r4(const block_q6_0_r4 * x, float * y, int64_t k) {
         for (int k = 0; k < 4; ++k) {
             float d = GGML_FP16_TO_FP32(x[ib].d[k]);
             float m = -32*d;
+#ifdef __AVX2__
+            // out[i+ll+0] = d * ((qs[4*k+i+16*l] & 0xf) | bits(qh[4*k+i+16*(l%2)],2*(l/2))<<4) + m
+            // out[i+ll+8] = d * ((qs[...] >> 4) | bits(...+4)<<4) + m, ll = 16*(l%2)+4*(l/2)
+            // (mul+add kept separate for bit-exactness with scalar, no FMA contraction)
+            auto vd = _mm256_set1_ps(d);
+            auto vm = _mm_set1_ps(m);
+            auto one3 = _mm_set1_epi16(3);
+            auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+            for (int l = 0; l < 4; ++l) {
+                int ll = 16*(l%2) + 4*(l/2);
+                auto w = _mm_set1_epi32(*(const uint32_t *)(x[ib].qs + 4*k + 16*l));
+                auto qh4 = _mm_set1_epi32(*(const uint32_t *)(x[ib].qh + 4*k + 16*(l%2)));
+                int s = 2*(l/2);
+                auto lo = _mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(w, _mm_set1_epi32(0x0f0f0f0f)), shuf4),
+                                       _mm_slli_epi16(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi16(qh4, s), one3), shuf4), 4));
+                auto hi = _mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(w, 4), _mm_set1_epi32(0x0f0f0f0f)), shuf4),
+                                       _mm_slli_epi16(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi16(qh4, s+4), one3), shuf4), 4));
+                float * out = yk[k] + QK4_0*ib + ll;
+                auto vlo = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(lo)));
+                auto vhi = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(hi)));
+                _mm_storeu_ps(out + 0, _mm_add_ps(_mm256_castps256_ps128(vlo), vm));
+                _mm_storeu_ps(out + 8, _mm_add_ps(_mm256_castps256_ps128(vhi), vm));
+            }
+#else
             for (int l = 0; l < 4; ++l) {
                 int ll = 16*(l%2) + 4*(l/2);
                 for (int i = 0; i < 4; ++i) {
@@ -6363,6 +6653,7 @@ void dequantize_row_q6_0_r4(const block_q6_0_r4 * x, float * y, int64_t k) {
                     yk[k][QK4_0*ib+i+ll+8] = d * ((x[ib].qs[4*k+i+16*l] >>  4) | (((x[ib].qh[4*k+i+16*(l%2)] >> (2*(l/2)+4)) & 3) << 4)) + m;
                 }
             }
+#endif
         }
     }
 }
@@ -6451,10 +6742,30 @@ void dequantize_row_iq4_xs_r8(const block_iq4_xs_r8 * x, float * y, int64_t k) {
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 int is = 8*ib + k;
                 float dl = d * ((((x[ibl].scales_l[is%32] >> 4*(is/32)) & 0xf) | (((x[ibl].scales_h[is%16] >> 2*(is/16)) & 3) << 4)) - 32);
+#ifdef __AVX2__
+                // out[32*ib+8*l+i+0] = dl * LUT[lo(qs[128*ib+4*k+i+32*l])]
+                // out[32*ib+8*l+i+4] = dl * LUT[hi(...)]   (l-major, int8 LUT)
+                auto v = r8_gather_lmajor_16(x[ibl].qs + 128*ib, k);
+                auto lut = _mm_loadu_si128((const __m128i *)iq4k_values);
+                auto m0f = _mm_set1_epi8(0xf);
+                auto lo16 = _mm_shuffle_epi8(lut, _mm_and_si128(v, m0f));
+                auto hi16 = _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(v, 4), m0f));
+                auto vd = _mm256_set1_ps(dl);
+                auto A = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(lo16));
+                auto B = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(lo16, 8)));
+                auto C = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(hi16));
+                auto D = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(hi16, 8)));
+                float * out = y8[k] + QK_K*ibl + 32*ib;
+                _mm256_storeu_ps(out +  0, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_castps256_ps128(C), _mm256_castps256_ps128(A))));
+                _mm256_storeu_ps(out +  8, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_extractf128_ps(C, 1), _mm256_extractf128_ps(A, 1))));
+                _mm256_storeu_ps(out + 16, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_castps256_ps128(D), _mm256_castps256_ps128(B))));
+                _mm256_storeu_ps(out + 24, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_extractf128_ps(D, 1), _mm256_extractf128_ps(B, 1))));
+#else
                 for (int l = 0; l < 4; ++l) for (int i = 0; i < 4; ++i) {
                     y8[k][QK_K*ibl+32*ib+8*l+i+0] = dl * iq4k_values[x[ibl].qs[128*ib+4*k+i+32*l] & 0xf];
                     y8[k][QK_K*ibl+32*ib+8*l+i+4] = dl * iq4k_values[x[ibl].qs[128*ib+4*k+i+32*l] >>  4];
                 }
+#endif
             }
         }
     }
@@ -6547,6 +6858,26 @@ void dequantize_row_iq4_ks_r4(const block_iq4_ks_r4 * x, float * y, int64_t k) {
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 float dl = d * ((x[ibl].scales[4*ib + k] & 254) - 127);
                 auto values = iq4k_values + ((x[ibl].scales[4*ib + k] & 1) << 4);
+#ifdef __AVX2__
+                // out[32*ib+i+{0,8,16,24,4,12,20,28}] = dl*LUT[lo/hi nibbles]
+                // (qs dwords at 64*ib+4*k+{0,16,32,48}, int8 LUT picked per ib)
+                auto v = r4_gather_16(x[ibl].qs + 64*ib, k);
+                auto lut = _mm_loadu_si128((const __m128i *)values);
+                auto m0f = _mm_set1_epi8(0xf);
+                auto lo16 = _mm_shuffle_epi8(lut, _mm_and_si128(v, m0f));
+                auto hi16 = _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(v, 4), m0f));
+                auto vd = _mm256_set1_ps(dl);
+                auto A = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(lo16));
+                auto B = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(lo16, 8)));
+                auto C = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(hi16));
+                auto D = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(hi16, 8)));
+                float * out = y4[k] + QK_K*ibl + 32*ib;
+                // scalar order: +0=L0,+8=H0,+16=L1,+24=H1,+4=L2,+12=H2,+20=L3,+28=H3
+                _mm256_storeu_ps(out +  0, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_castps256_ps128(B), _mm256_castps256_ps128(A))));
+                _mm256_storeu_ps(out +  8, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_castps256_ps128(D), _mm256_castps256_ps128(C))));
+                _mm256_storeu_ps(out + 16, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_extractf128_ps(B, 1), _mm256_extractf128_ps(A, 1))));
+                _mm256_storeu_ps(out + 24, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_extractf128_ps(D, 1), _mm256_extractf128_ps(C, 1))));
+#else
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl * values[x[ibl].qs[64*ib+4*k+i+ 0] & 0xf];
                     y4[k][QK_K*ibl+32*ib+i+ 8] = dl * values[x[ibl].qs[64*ib+4*k+i+ 0] >>  4];
@@ -6557,6 +6888,7 @@ void dequantize_row_iq4_ks_r4(const block_iq4_ks_r4 * x, float * y, int64_t k) {
                     y4[k][QK_K*ibl+32*ib+i+20] = dl * values[x[ibl].qs[64*ib+4*k+i+48] & 0xf];
                     y4[k][QK_K*ibl+32*ib+i+28] = dl * values[x[ibl].qs[64*ib+4*k+i+48] >>  4];
                 }
+#endif
             }
         }
     }
@@ -6688,6 +7020,24 @@ void dequantize_row_iq4_ks_r16(const block_iq4_ks_r16 * x, float * y, int64_t k)
             const float d = dptr[k];
             float dl = d * ((x[ib].scales[k] & 254) - 127);
             auto values = iq4k_values + ((x[ib].scales[k] & 1) << 4);
+#ifdef __AVX2__
+            // out[QK8_0*ib+i+{0,16,4,20,8,24,12,28}] = dl * LUT[lo/hi nibbles]
+            // (qs dwords at 4*k+{0,64,128,192}; R4 regroup halves [g0,g2],[g1,g3])
+            const uint32_t * q32 = (const uint32_t *)(x[ib].qs + 4*k);
+            auto v = _mm_set_epi32(q32[48], q32[32], q32[16], q32[0]);
+            auto lut = _mm_loadu_si128((const __m128i *)values);
+            auto m0f = _mm_set1_epi8(0xf);
+            auto lo = _mm_shuffle_epi8(lut, _mm_and_si128(v, m0f));
+            auto hi = _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(v, 4), m0f));
+            auto sh02 = _mm_setr_epi8(0, 1, 2, 3, 8, 9, 10, 11, -1, -1, -1, -1, -1, -1, -1, -1);
+            auto sh13 = _mm_setr_epi8(4, 5, 6, 7, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1);
+            auto vd = _mm256_set1_ps(dl);
+            float * out = y16[k] + QK8_0*ib;
+            _mm256_storeu_ps(out +  0, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(lo, sh02)))));
+            _mm256_storeu_ps(out +  8, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(hi, sh02)))));
+            _mm256_storeu_ps(out + 16, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(lo, sh13)))));
+            _mm256_storeu_ps(out + 24, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(hi, sh13)))));
+#else
             for (int i = 0; i < 4; ++i) {
                 y16[k][QK8_0*ib+i+ 0] = dl * values[x[ib].qs[4*k+i+  0] & 0xf];
                 y16[k][QK8_0*ib+i+16] = dl * values[x[ib].qs[4*k+i+  0] >>  4];
@@ -6698,6 +7048,7 @@ void dequantize_row_iq4_ks_r16(const block_iq4_ks_r16 * x, float * y, int64_t k)
                 y16[k][QK8_0*ib+i+12] = dl * values[x[ib].qs[4*k+i+192] & 0xf];
                 y16[k][QK8_0*ib+i+28] = dl * values[x[ib].qs[4*k+i+192] >>  4];
             }
+#endif
         }
     }
 }
@@ -6813,6 +7164,24 @@ void dequantize_row_iq2_bn_r4(const block_iq2_bn * x, float * y, int64_t k) {
     int nblock = n_per_row/QK_IQ1BN;
     for (int ib = 0; ib < nblock; ++ib) {
         for (int k = 0; k < 4; ++k) {
+#ifdef __AVX2__
+            // out[16*l+i+{0,4,8,12}] = d4[k] * (((q>>{0,2,4,6}) & 3) - 1), q = qx[4*k+i+16*l]
+            // (sub in signed domain: u32 wrap == signed -1, reinterpreted by cvt)
+            auto vd = _mm256_set1_ps(d4[k]);
+            auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+            auto m3 = _mm_set1_epi32(0x03030303);
+            for (int l = 0; l < 4; ++l) {
+                auto W = _mm_set1_epi32(((const uint32_t *)(qx + 4*k))[4*l]);
+                auto f = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(W, m3), shuf4),
+                                                  _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 2), m3), shuf4), 4)),
+                                      _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 4), m3), shuf4), 8),
+                                                  _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 6), m3), shuf4), 12)));
+                auto v = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_cvtepu8_epi32(f), _mm256_set1_epi32(1))));
+                float * out = y4[k] + 64*ib + 16*l;
+                _mm_storeu_ps(out + 0, _mm256_castps256_ps128(v));
+                _mm_storeu_ps(out + 8, _mm256_extractf128_ps(v, 1));
+            }
+#else
             for (int l = 0; l < 4; ++l) for (int i = 0; i < 4; ++i) {
                 uint8_t q = qx[4*k + i + 16*l];
                 y4[k][64*ib + 16*l + i +  0] = d4[k] * (((q >> 0) & 3) - 1);
@@ -6820,6 +7189,7 @@ void dequantize_row_iq2_bn_r4(const block_iq2_bn * x, float * y, int64_t k) {
                 y4[k][64*ib + 16*l + i +  8] = d4[k] * (((q >> 4) & 3) - 1);
                 y4[k][64*ib + 16*l + i + 12] = d4[k] * (((q >> 6) & 3) - 1);
             }
+#endif
         }
         qx += 64;
     }
@@ -6926,6 +7296,26 @@ void dequantize_row_q4_k_r4(const block_q4_k_r4 * x, float * y, int64_t k) {
                 int is = 4*ib + k;
                 float dl = d * ((x[ibl].scales_l[is] & 0xf) | (((x[ibl].scales_h[is%16] >> 4*(is/16)) & 0x03) << 4));
                 float ml = m * ((x[ibl].scales_l[is] >>  4) | (((x[ibl].scales_h[is%16] >> 4*(is/16)) & 0x0c) << 2));
+#ifdef __AVX2__
+                // out[32*ib+i+{0,8,16,24,4,12,20,28}] = dl*nibble - ml
+                // (qs dwords at 64*ib+4*k+{0,16,32,48}; mul+sub separate, bit-exact)
+                auto v = r4_gather_16(x[ibl].qs + 64*ib, k);
+                auto m0f = _mm_set1_epi8(0xf);
+                auto lo16 = _mm_and_si128(v, m0f);
+                auto hi16 = _mm_and_si128(_mm_srli_epi16(v, 4), m0f);
+                auto vd = _mm256_set1_ps(dl);
+                auto vm = _mm256_set1_ps(ml);
+                auto A = _mm256_sub_ps(_mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(lo16))), vm);
+                auto B = _mm256_sub_ps(_mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_srli_si128(lo16, 8)))), vm);
+                auto C = _mm256_sub_ps(_mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(hi16))), vm);
+                auto D = _mm256_sub_ps(_mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_srli_si128(hi16, 8)))), vm);
+                float * out = y4[k] + QK_K*ibl + 32*ib;
+                // scalar order: +0=L0,+8=H0,+16=L1,+24=H1,+4=L2,+12=H2,+20=L3,+28=H3
+                _mm256_storeu_ps(out +  0, MM256_SET_M128(_mm256_castps256_ps128(B), _mm256_castps256_ps128(A)));
+                _mm256_storeu_ps(out +  8, MM256_SET_M128(_mm256_castps256_ps128(D), _mm256_castps256_ps128(C)));
+                _mm256_storeu_ps(out + 16, MM256_SET_M128(_mm256_extractf128_ps(B, 1), _mm256_extractf128_ps(A, 1)));
+                _mm256_storeu_ps(out + 24, MM256_SET_M128(_mm256_extractf128_ps(D, 1), _mm256_extractf128_ps(C, 1)));
+#else
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl * (x[ibl].qs[64*ib+4*k+i+ 0] & 0xf) - ml;
                     y4[k][QK_K*ibl+32*ib+i+ 8] = dl * (x[ibl].qs[64*ib+4*k+i+ 0] >>  4) - ml;
@@ -6936,6 +7326,7 @@ void dequantize_row_q4_k_r4(const block_q4_k_r4 * x, float * y, int64_t k) {
                     y4[k][QK_K*ibl+32*ib+i+20] = dl * (x[ibl].qs[64*ib+4*k+i+48] & 0xf) - ml;
                     y4[k][QK_K*ibl+32*ib+i+28] = dl * (x[ibl].qs[64*ib+4*k+i+48] >>  4) - ml;
                 }
+#endif
             }
         }
     }
@@ -7037,6 +7428,18 @@ void dequantize_row_q6_k_r4(const block_q6_k_r4 * x, float * y, int64_t k) {
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 float dl1 = d * x[ibl].scales[8*ib+k+0];
                 float dl2 = d * x[ibl].scales[8*ib+k+4];
+#ifdef __AVX2__
+                // out[32*ib+i+{0,8,16,24,4,12,20,28}] = dl{1,2} * (6-bit val - 32)
+                // 6-bit val = ql nibble | qh 2-bit field<<4 (groups g0..g3, recenter in
+                // signed domain, mul bit-exact with scalar)
+                // g0: ql[4*k], qh bits <<{4,2}, dl1 | g1: ql[+16], qh[+16] <<{4,2}, dl2
+                // g2: ql[+32], qh bits >>{0,2}, dl1 | g3: ql[+48], qh[+16] >>{0,2}, dl2
+                float * out = y4[k] + QK_K*ibl + 32*ib;
+                dequant_r4_q6_group<true, 4, 2>(ql + 4*k,      qh + 4*k,      dl1, out + 0,  out + 8);
+                dequant_r4_q6_group<true, 4, 2>(ql + 4*k + 16, qh + 4*k + 16, dl2, out + 16, out + 24);
+                dequant_r4_q6_group<false, 0, 2>(ql + 4*k + 32, qh + 4*k,     dl1, out + 4,  out + 12);
+                dequant_r4_q6_group<false, 0, 2>(ql + 4*k + 48, qh + 4*k + 16, dl2, out + 20, out + 28);
+#else
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl1 * (((ql[4*k+i+ 0] & 0xf) | ((qh[4*k+i+ 0] << 4) & 0x30)) - 32);
                     y4[k][QK_K*ibl+32*ib+i+ 8] = dl1 * (((ql[4*k+i+ 0] >>  4) | ((qh[4*k+i+ 0] << 2) & 0x30)) - 32);
@@ -7047,6 +7450,7 @@ void dequantize_row_q6_k_r4(const block_q6_k_r4 * x, float * y, int64_t k) {
                     y4[k][QK_K*ibl+32*ib+i+20] = dl2 * (((ql[4*k+i+48] & 0xf) | ((qh[4*k+i+16] >> 0) & 0x30)) - 32);
                     y4[k][QK_K*ibl+32*ib+i+28] = dl2 * (((ql[4*k+i+48] >>  4) | ((qh[4*k+i+16] >> 2) & 0x30)) - 32);
                 }
+#endif
                 ql += 64;
                 qh += 32;
             }
@@ -7152,6 +7556,16 @@ void dequantize_row_q5_k_r4(const block_q5_k_r4 * x, float * y, int64_t k) {
                 int is = 4*ib + k;
                 float dl = d * ((x[ibl].scales_l[is] & 0xf) | (((x[ibl].scales_h[is%16] >> 4*(is/16)) & 0x03) << 4));
                 float ml = m * ((x[ibl].scales_l[is] >>  4) | (((x[ibl].scales_h[is%16] >> 4*(is/16)) & 0x0c) << 2));
+#ifdef __AVX2__
+                // out[32*ib+i+{0,8,16,24,4,12,20,28}] = dl*(5-bit val) - ml
+                // g0: ql[4*k], qh bits <<{4,3} | g1: ql[+16], qh bits >>{0,1}
+                // g2: ql[+32], qh bits <<{2,1} | g3: ql[+48], qh bits >>{2,3}
+                float * out = y4[k] + QK_K*ibl + 32*ib;
+                dequant_r4_q5_group<true, 4, 3>(ql + 4*k,      qh + 4*k, dl, ml, out + 0,  out + 8);
+                dequant_r4_q5_group<false, 0, 1>(ql + 4*k + 16, qh + 4*k, dl, ml, out + 16, out + 24);
+                dequant_r4_q5_group<true, 2, 1>(ql + 4*k + 32, qh + 4*k, dl, ml, out + 4,  out + 12);
+                dequant_r4_q5_group<false, 2, 3>(ql + 4*k + 48, qh + 4*k, dl, ml, out + 20, out + 28);
+#else
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl * ((ql[4*k+i+ 0] & 0xf) | ((qh[4*k+i] << 4) & 0x10)) - ml;
                     y4[k][QK_K*ibl+32*ib+i+ 8] = dl * ((ql[4*k+i+ 0] >>  4) | ((qh[4*k+i] << 3) & 0x10)) - ml;
@@ -7162,6 +7576,7 @@ void dequantize_row_q5_k_r4(const block_q5_k_r4 * x, float * y, int64_t k) {
                     y4[k][QK_K*ibl+32*ib+i+20] = dl * ((ql[4*k+i+48] & 0xf) | ((qh[4*k+i] >> 2) & 0x10)) - ml;
                     y4[k][QK_K*ibl+32*ib+i+28] = dl * ((ql[4*k+i+48] >>  4) | ((qh[4*k+i] >> 3) & 0x10)) - ml;
                 }
+#endif
                 ql += 64;
                 qh += 16;
             }
@@ -7283,6 +7698,48 @@ void dequantize_row_q3_k_r4(const block_q3_k_r4 * x, float * y, int64_t k) {
                 float dl1 = d * ((((x[ibl].scales_l[is%32] >> 4*(is/32)) & 0xf) | (((x[ibl].scales_h[is%16] >> 2*(is/16)) & 0x03) << 4)) - 32);
                 is += 4;
                 float dl2 = d * ((((x[ibl].scales_l[is%32] >> 4*(is/32)) & 0xf) | (((x[ibl].scales_h[is%16] >> 2*(is/16)) & 0x03) << 4)) - 32);
+#ifdef __AVX2__
+                // out[32*ib+i+{0..28 step 4/8}] = dl{1,2} * (3-bit val - 4)
+                // 3-bit val = (ql 2-bit field) | qh bit<<2; recenter in signed
+                // domain, mul bit-exact with scalar. Halves are sequential.
+                auto m03 = _mm_set1_epi32(0x03030303);
+                auto m04 = _mm_set1_epi32(0x04040404);
+                auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+                auto c4 = _mm256_set1_epi32(4);
+                float * out = y4[k] + QK_K*ibl + 32*ib;
+                {
+                    auto W = _mm_set1_epi32(*(const uint32_t *)(ql + 4*k));
+                    auto H = _mm_set1_epi32(*(const uint32_t *)(qh + 4*k));
+                    auto fq = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(W, m03), shuf4),
+                                                        _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 2), m03), shuf4), 4)),
+                                           _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 4), m03), shuf4), 8),
+                                                        _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 6), m03), shuf4), 12)));
+                    auto bq = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_slli_epi32(H, 2), m04), shuf4),
+                                                        _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_slli_epi32(H, 1), m04), shuf4), 4)),
+                                           _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(H, m04), shuf4), 8),
+                                                        _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(H, 1), m04), shuf4), 12)));
+                    auto vdl = _mm256_set1_ps(dl1);
+                    auto v0 = _mm256_mul_ps(vdl, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_cvtepu8_epi32(_mm_or_si128(fq, bq)), c4)));
+                    _mm_storeu_ps(out + 0, _mm256_castps256_ps128(v0));
+                    _mm_storeu_ps(out + 8, _mm256_extractf128_ps(v0, 1));
+                }
+                {
+                    auto W = _mm_set1_epi32(*(const uint32_t *)(ql + 4*k + 16));
+                    auto H = _mm_set1_epi32(*(const uint32_t *)(qh + 4*k));
+                    auto fq = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(W, m03), shuf4),
+                                                        _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 2), m03), shuf4), 4)),
+                                           _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 4), m03), shuf4), 8),
+                                                        _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 6), m03), shuf4), 12)));
+                    auto bq = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(H, 2), m04), shuf4),
+                                                        _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(H, 3), m04), shuf4), 4)),
+                                           _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(H, 4), m04), shuf4), 8),
+                                                        _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(H, 5), m04), shuf4), 12)));
+                    auto vdl = _mm256_set1_ps(dl2);
+                    auto v0 = _mm256_mul_ps(vdl, _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_cvtepu8_epi32(_mm_or_si128(fq, bq)), c4)));
+                    _mm_storeu_ps(out + 16, _mm256_castps256_ps128(v0));
+                    _mm_storeu_ps(out + 24, _mm256_extractf128_ps(v0, 1));
+                }
+#else
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl1 * ((((ql[4*k+i+ 0] >> 0) & 3) | ((qh[4*k+i] << 2) & 4)) - 4);
                     y4[k][QK_K*ibl+32*ib+i+ 4] = dl1 * ((((ql[4*k+i+ 0] >> 2) & 3) | ((qh[4*k+i] << 1) & 4)) - 4);
@@ -7293,6 +7750,7 @@ void dequantize_row_q3_k_r4(const block_q3_k_r4 * x, float * y, int64_t k) {
                     y4[k][QK_K*ibl+32*ib+i+24] = dl2 * ((((ql[4*k+i+16] >> 4) & 3) | ((qh[4*k+i] >> 4) & 4)) - 4);
                     y4[k][QK_K*ibl+32*ib+i+28] = dl2 * ((((ql[4*k+i+16] >> 6) & 3) | ((qh[4*k+i] >> 5) & 4)) - 4);
                 }
+#endif
                 ql += 32;
                 qh += 16;
             }
@@ -7394,6 +7852,36 @@ void dequantize_row_q2_k_r4(const block_q2_k_r4 * x, float * y, int64_t k) {
                 float ml1 = m * (x[ibl].scales[8*ib + k + 0] >>  4);
                 float dl2 = d * (x[ibl].scales[8*ib + k + 4] & 0xf);
                 float ml2 = m * (x[ibl].scales[8*ib + k + 4] >>  4);
+#ifdef __AVX2__
+                // out[32*ib+i+{0..28 step 4}] = dl{1,2} * field - ml{1,2}, 2-bit fields
+                // at shifts {0,2,4,6} (srli+and exact); halved scales; mul+sub
+                // separate for bit-exactness. Halves are sequential.
+                auto m03 = _mm_set1_epi32(0x03030303);
+                auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+                float * out = y4[k] + QK_K*ibl + 32*ib;
+                {
+                    auto W = _mm_set1_epi32(*(const uint32_t *)(ql + 4*k));
+                    auto f = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(W, m03), shuf4),
+                                                       _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 2), m03), shuf4), 4)),
+                                          _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 4), m03), shuf4), 8),
+                                                       _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 6), m03), shuf4), 12)));
+                    auto v0 = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(dl1), _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(f))), _mm256_set1_ps(ml1));
+                    auto v1 = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(dl1), _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_srli_si128(f, 8)))), _mm256_set1_ps(ml1));
+                    _mm256_storeu_ps(out + 0, v0);
+                    _mm256_storeu_ps(out + 8, v1);
+                }
+                {
+                    auto W = _mm_set1_epi32(*(const uint32_t *)(ql + 4*k + 16));
+                    auto f = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(W, m03), shuf4),
+                                                       _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 2), m03), shuf4), 4)),
+                                          _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 4), m03), shuf4), 8),
+                                                       _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 6), m03), shuf4), 12)));
+                    auto v0 = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(dl2), _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(f))), _mm256_set1_ps(ml2));
+                    auto v1 = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(dl2), _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_srli_si128(f, 8)))), _mm256_set1_ps(ml2));
+                    _mm256_storeu_ps(out + 16, v0);
+                    _mm256_storeu_ps(out + 24, v1);
+                }
+#else
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl1 * ((ql[4*k+i+ 0] >> 0) & 3) - ml1;
                     y4[k][QK_K*ibl+32*ib+i+ 4] = dl1 * ((ql[4*k+i+ 0] >> 2) & 3) - ml1;
@@ -7404,6 +7892,7 @@ void dequantize_row_q2_k_r4(const block_q2_k_r4 * x, float * y, int64_t k) {
                     y4[k][QK_K*ibl+32*ib+i+24] = dl2 * ((ql[4*k+i+16] >> 4) & 3) - ml2;
                     y4[k][QK_K*ibl+32*ib+i+28] = dl2 * ((ql[4*k+i+16] >> 6) & 3) - ml2;
                 }
+#endif
                 ql += 32;
             }
         }
@@ -7510,6 +7999,27 @@ void dequantize_row_iq4_k_r4(const block_iq4_k_r4 * x, float * y, int64_t k) {
                 float dl2 = d * ((((x[ibl].scales_l[is%32] >> 4*(is/32)) & 0xf) | (((x[ibl].scales_h[is%16] >> 2*(is/16)) & 3) << 4)) - 32);
                 auto values1 = iq4k_values + (x[ibl].extra[k+0] & (1 << ib) ? 16 : 0);
                 auto values2 = iq4k_values + (x[ibl].extra[k+4] & (1 << ib) ? 16 : 0);
+#ifdef __AVX2__
+                // out[32*ib+i+{0,8,16,24,4,12,20,28}] = dl{1,2} * LUT{1,2}[nibble]
+                // (R4 regroup: halves are [g0,g2] and [g1,g3]; LUT picked per half)
+                auto v = r4_gather_16(x[ibl].qs + 64*ib, k);
+                auto lut1 = _mm_loadu_si128((const __m128i *)values1);
+                auto lut2 = _mm_loadu_si128((const __m128i *)values2);
+                auto m0f = _mm_set1_epi8(0xf);
+                auto lo = _mm_and_si128(v, m0f);
+                auto hi = _mm_and_si128(_mm_srli_epi16(v, 4), m0f);
+                auto r1lo = _mm_shuffle_epi8(lut1, lo);
+                auto r1hi = _mm_shuffle_epi8(lut1, hi);
+                auto r2lo = _mm_shuffle_epi8(lut2, lo);
+                auto r2hi = _mm_shuffle_epi8(lut2, hi);
+                auto sh02 = _mm_setr_epi8(0, 1, 2, 3, 8, 9, 10, 11, -1, -1, -1, -1, -1, -1, -1, -1);
+                auto sh13 = _mm_setr_epi8(4, 5, 6, 7, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1);
+                float * out = y4[k] + QK_K*ibl + 32*ib;
+                _mm256_storeu_ps(out +  0, _mm256_mul_ps(_mm256_set1_ps(dl1), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r1lo, sh02)))));
+                _mm256_storeu_ps(out +  8, _mm256_mul_ps(_mm256_set1_ps(dl1), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r1hi, sh02)))));
+                _mm256_storeu_ps(out + 16, _mm256_mul_ps(_mm256_set1_ps(dl2), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r2lo, sh13)))));
+                _mm256_storeu_ps(out + 24, _mm256_mul_ps(_mm256_set1_ps(dl2), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r2hi, sh13)))));
+#else
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl1 * values1[x[ibl].qs[64*ib+4*k+i+ 0] & 0xf];
                     y4[k][QK_K*ibl+32*ib+i+ 8] = dl1 * values1[x[ibl].qs[64*ib+4*k+i+ 0] >>  4];
@@ -7520,6 +8030,7 @@ void dequantize_row_iq4_k_r4(const block_iq4_k_r4 * x, float * y, int64_t k) {
                     y4[k][QK_K*ibl+32*ib+i+20] = dl2 * values2[x[ibl].qs[64*ib+4*k+i+48] & 0xf];
                     y4[k][QK_K*ibl+32*ib+i+28] = dl2 * values2[x[ibl].qs[64*ib+4*k+i+48] >>  4];
                 }
+#endif
             }
         }
     }
@@ -7648,6 +8159,48 @@ void dequantize_row_iq5_k_r4(const block_iq5_k_r4 * x, float * y, int64_t k) {
                 float dl2 = d * ((((x[ibl].scales_l[is%32] >> 4*(is/32)) & 0xf) | (((x[ibl].scales_h[is%16] >> 2*(is/16)) & 3) << 4)) - 32);
                 auto values1 = iq5nl_values + (x[ibl].extra[k+0] & (1 << ib) ? 32 : 0);
                 auto values2 = iq5nl_values + (x[ibl].extra[k+4] & (1 << ib) ? 32 : 0);
+#ifdef __AVX2__
+                // out[32*ib+i+{0,8,16,24,4,12,20,28}] = dl{1,2} * LUT{1,2}[nibble|bit<<4]
+                // (R4 regroup: halves [g0,g2],[g1,g3]; LUT picked per half, 32 entries)
+                auto v = r4_gather_16(x[ibl].qs + 64*ib, k);
+                auto lut1 = _mm_loadu_si128((const __m128i *)values1);
+                auto lut2 = _mm_loadu_si128((const __m128i *)values2);
+                auto lut1b = _mm_loadu_si128((const __m128i *)(values1 + 16));
+                auto lut2b = _mm_loadu_si128((const __m128i *)(values2 + 16));
+                auto m10 = _mm_set1_epi8(0x10);
+                auto m0f = _mm_set1_epi8(0xf);
+                auto nlo = _mm_and_si128(v, m0f);
+                auto nhi = _mm_and_si128(_mm_srli_epi16(v, 4), m0f);
+                auto H = _mm_set1_epi32(*(const uint32_t *)(x[ibl].qh + 16*ib + 4*k));
+                auto one = _mm_set1_epi16(1);
+                auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+                auto b0 = _mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(H, one), 4), shuf4);
+                auto b1 = _mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 2), one), 4), shuf4);
+                auto b2 = _mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 4), one), 4), shuf4);
+                auto b3 = _mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 6), one), 4), shuf4);
+                auto blo = _mm_or_si128(_mm_or_si128(b0, _mm_slli_si128(b1, 4)), _mm_or_si128(_mm_slli_si128(b2, 8), _mm_slli_si128(b3, 12)));
+                auto B0 = _mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 1), one), 4), shuf4);
+                auto B1 = _mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 3), one), 4), shuf4);
+                auto B2 = _mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 5), one), 4), shuf4);
+                auto B3 = _mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 7), one), 4), shuf4);
+                auto bhi = _mm_or_si128(_mm_or_si128(B0, _mm_slli_si128(B1, 4)), _mm_or_si128(_mm_slli_si128(B2, 8), _mm_slli_si128(B3, 12)));
+                auto idx_lo = _mm_or_si128(nlo, blo);
+                auto idx_hi = _mm_or_si128(nhi, bhi);
+                auto sh02 = _mm_setr_epi8(0, 1, 2, 3, 8, 9, 10, 11, -1, -1, -1, -1, -1, -1, -1, -1);
+                auto sh13 = _mm_setr_epi8(4, 5, 6, 7, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1);
+                // 5-bit index: pshufb covers entries 0..15, blend in 16..31 by bit 4
+                auto sel_lo = _mm_cmpeq_epi8(_mm_and_si128(idx_lo, m10), m10);
+                auto sel_hi = _mm_cmpeq_epi8(_mm_and_si128(idx_hi, m10), m10);
+                auto r1lo = _mm_blendv_epi8(_mm_shuffle_epi8(lut1, idx_lo), _mm_shuffle_epi8(lut1b, idx_lo), sel_lo);
+                auto r1hi = _mm_blendv_epi8(_mm_shuffle_epi8(lut1, idx_hi), _mm_shuffle_epi8(lut1b, idx_hi), sel_hi);
+                auto r2lo = _mm_blendv_epi8(_mm_shuffle_epi8(lut2, idx_lo), _mm_shuffle_epi8(lut2b, idx_lo), sel_lo);
+                auto r2hi = _mm_blendv_epi8(_mm_shuffle_epi8(lut2, idx_hi), _mm_shuffle_epi8(lut2b, idx_hi), sel_hi);
+                float * out = y4[k] + QK_K*ibl + 32*ib;
+                _mm256_storeu_ps(out +  0, _mm256_mul_ps(_mm256_set1_ps(dl1), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r1lo, sh02)))));
+                _mm256_storeu_ps(out +  8, _mm256_mul_ps(_mm256_set1_ps(dl1), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r1hi, sh02)))));
+                _mm256_storeu_ps(out + 16, _mm256_mul_ps(_mm256_set1_ps(dl2), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r2lo, sh13)))));
+                _mm256_storeu_ps(out + 24, _mm256_mul_ps(_mm256_set1_ps(dl2), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r2hi, sh13)))));
+#else
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl1 * values1[(x[ibl].qs[64*ib+4*k+i+ 0] & 0xf) | (((x[ibl].qh[16*ib+4*k+i] >> 0) & 1) << 4)];
                     y4[k][QK_K*ibl+32*ib+i+ 8] = dl1 * values1[(x[ibl].qs[64*ib+4*k+i+ 0] >>  4) | (((x[ibl].qh[16*ib+4*k+i] >> 1) & 1) << 4)];
@@ -7658,6 +8211,7 @@ void dequantize_row_iq5_k_r4(const block_iq5_k_r4 * x, float * y, int64_t k) {
                     y4[k][QK_K*ibl+32*ib+i+20] = dl2 * values2[(x[ibl].qs[64*ib+4*k+i+48] & 0xf) | (((x[ibl].qh[16*ib+4*k+i] >> 6) & 1) << 4)];
                     y4[k][QK_K*ibl+32*ib+i+28] = dl2 * values2[(x[ibl].qs[64*ib+4*k+i+48] >>  4) | (((x[ibl].qh[16*ib+4*k+i] >> 7) & 1) << 4)];
                 }
+#endif
             }
         }
     }
@@ -7762,6 +8316,43 @@ void dequantize_row_iq5_ks_r4(const block_iq5_ks_r4 * x, float * y, int64_t k) {
                 //    printf("Oops: dl = %g for ibl = %d, k = %d, ib = %d, d = %g, sc = %u\n", dl, ibl, k, ib, d, sc); exit(1);
                 //}
                 auto values = iq5nl_values + ((sc & 1) << 5);
+#ifdef __AVX2__
+                // out[32*ib+i+{0,8,16,24,4,12,20,28}] = dl * LUT[nibble|bit<<4]
+                // (single per-ib LUT, qh shifts 0..7; 5-bit index needs hi-half
+                // blend; R4 regroup halves [g0,g2],[g1,g3])
+                auto v = r4_gather_16(x[ibl].qs + 64*ib, k);
+                auto lut = _mm_loadu_si128((const __m128i *)values);
+                auto lutb = _mm_loadu_si128((const __m128i *)(values + 16));
+                auto m0f = _mm_set1_epi8(0xf);
+                auto m10 = _mm_set1_epi8(0x10);
+                auto nlo = _mm_and_si128(v, m0f);
+                auto nhi = _mm_and_si128(_mm_srli_epi16(v, 4), m0f);
+                auto H = _mm_set1_epi32(*(const uint32_t *)(x[ibl].qh + 16*ib + 4*k));
+                auto one = _mm_set1_epi16(1);
+                auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+                auto blo = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(H, one), 4), shuf4),
+                                                     _mm_slli_si128(_mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 2), one), 4), shuf4), 4)),
+                                        _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 4), one), 4), shuf4), 8),
+                                                     _mm_slli_si128(_mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 6), one), 4), shuf4), 12)));
+                auto bhi = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 1), one), 4), shuf4),
+                                                     _mm_slli_si128(_mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 3), one), 4), shuf4), 4)),
+                                        _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 5), one), 4), shuf4), 8),
+                                                     _mm_slli_si128(_mm_shuffle_epi8(_mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(H, 7), one), 4), shuf4), 12)));
+                auto idx_lo = _mm_or_si128(nlo, blo);
+                auto idx_hi = _mm_or_si128(nhi, bhi);
+                auto sel_lo = _mm_cmpeq_epi8(_mm_and_si128(idx_lo, m10), m10);
+                auto sel_hi = _mm_cmpeq_epi8(_mm_and_si128(idx_hi, m10), m10);
+                auto rlo = _mm_blendv_epi8(_mm_shuffle_epi8(lut, idx_lo), _mm_shuffle_epi8(lutb, idx_lo), sel_lo);
+                auto rhi = _mm_blendv_epi8(_mm_shuffle_epi8(lut, idx_hi), _mm_shuffle_epi8(lutb, idx_hi), sel_hi);
+                auto sh02 = _mm_setr_epi8(0, 1, 2, 3, 8, 9, 10, 11, -1, -1, -1, -1, -1, -1, -1, -1);
+                auto sh13 = _mm_setr_epi8(4, 5, 6, 7, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1);
+                auto vd = _mm256_set1_ps(dl);
+                float * out = y4[k] + QK_K*ibl + 32*ib;
+                _mm256_storeu_ps(out +  0, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(rlo, sh02)))));
+                _mm256_storeu_ps(out +  8, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(rhi, sh02)))));
+                _mm256_storeu_ps(out + 16, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(rlo, sh13)))));
+                _mm256_storeu_ps(out + 24, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(rhi, sh13)))));
+#else
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl * values[(x[ibl].qs[64*ib+4*k+i+ 0] & 0xf) | (((x[ibl].qh[16*ib+4*k+i] >> 0) & 1) << 4)];
                     y4[k][QK_K*ibl+32*ib+i+ 8] = dl * values[(x[ibl].qs[64*ib+4*k+i+ 0] >>  4) | (((x[ibl].qh[16*ib+4*k+i] >> 1) & 1) << 4)];
@@ -7772,6 +8363,7 @@ void dequantize_row_iq5_ks_r4(const block_iq5_ks_r4 * x, float * y, int64_t k) {
                     y4[k][QK_K*ibl+32*ib+i+20] = dl * values[(x[ibl].qs[64*ib+4*k+i+48] & 0xf) | (((x[ibl].qh[16*ib+4*k+i] >> 6) & 1) << 4)];
                     y4[k][QK_K*ibl+32*ib+i+28] = dl * values[(x[ibl].qs[64*ib+4*k+i+48] >>  4) | (((x[ibl].qh[16*ib+4*k+i] >> 7) & 1) << 4)];
                 }
+#endif
                 //for (int i = 0; i < 32; ++i) {
                 //    if (!isfinite(y4[k][QK_K*ibl+32*ib+i])) {
                 //        printf("Oops: y4[%d][%d, %d, %d] = %g\n", k, ibl, ib, i, y4[k][QK_K*ibl+32*ib+i]);
@@ -7874,11 +8466,18 @@ void dequantize_row_q8_k_r8(const block_q8_k_r8 * x, float * y, int64_t k) {
     for (int ibl = 0; ibl < nblock; ++ibl) {
         for (int k = 0; k < 8; ++k) {
             const float d = GGML_FP16_TO_FP32(x[ibl].d[k]);
+#ifdef __AVX2__
+            // out[4*ib+i] = d * qs[32*ib+4*k+i] (l-major, int8); 4 ib per helper call
+            for (int ib = 0; ib < QK_K/4; ib += 4) {
+                dequant_r8_i8_16(x[ibl].qs + 32*ib, k, d, y8[k] + QK_K*ibl + 4*ib);
+            }
+#else
             for (int ib = 0; ib < QK_K/4; ++ib) {
                 for (int i = 0; i < 4; ++i) {
                     y8[k][QK_K*ibl+4*ib+i] = d * x[ibl].qs[32*ib+4*k+i];
                 }
             }
+#endif
         }
     }
 }
@@ -8108,9 +8707,14 @@ void dequantize_row_q8_KV_r8(const void * vx, float * y, int64_t k) {
     auto q8 = (const int8_t *)(dptr + 8);
     for (int ib = 0; ib < n_per_row/16; ++ib) {
         for (int k = 0; k < 8; ++k) {
+#ifdef __AVX2__
+            // out[4*l+i] = dptr[k] * q8[128*ib+32*l+4*k+i] (l-major, int8)
+            dequant_r8_i8_16(q8 + 128*ib, k, dptr[k], y8[k] + 16*ib);
+#else
             for (int l = 0; l < 4; ++l) {
                 for (int i = 0; i < 4; ++i) y8[k][16*ib + 4*l + i] = dptr[k] * q8[128*ib + 32*l + 4*k + i];
             }
+#endif
         }
     }
 }
@@ -8272,6 +8876,42 @@ void dequantize_row_iq3_k_r4(const block_iq3_k_r4 * x, float * y, int64_t k) {
                 float dl2 = d * (2*((x[ibl].scales_l[is%32] >> 4*(is/32)) & 0xf) + 1) * ((x[ibl].scales_h[is%8] >> (is/8)) & 1 ? -1 : 1);
                 auto values1 = iq3nl_values + (x[ibl].extra[k+0] & (1 << ib) ? 8 : 0);
                 auto values2 = iq3nl_values + (x[ibl].extra[k+4] & (1 << ib) ? 8 : 0);
+#ifdef __AVX2__
+                // out[32*ib+i+{0,8,16,24,4,12,20,28}] = dl{1,2} * LUT{1,2}[2-bit|bit<<2]
+                // (R4 regroup halves [g0,g2],[g1,g3]; 8-entry LUTs; qh shifts exact:
+                // srli contamination lands above kept bits for s<=5, mask-first
+                // form for s=6,7; slli always exact. Single mul rounding.)
+                auto v = r4_gather_16(ql + 64*ib, k);
+                auto lut1 = _mm_loadu_si128((const __m128i *)values1);
+                auto lut2 = _mm_loadu_si128((const __m128i *)values2);
+                auto m03 = _mm_set1_epi32(0x03030303);
+                auto m04 = _mm_set1_epi32(0x04040404);
+                auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+                auto nlo = _mm_and_si128(v, m03);
+                auto nhi = _mm_and_si128(_mm_srli_epi32(v, 4), m03);
+                auto H = _mm_set1_epi32(*(const uint32_t *)(qh + 4*k));
+                auto blo = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_slli_epi32(H, 2), m04), shuf4),
+                                                     _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_slli_epi32(H, 1), m04), shuf4), 4)),
+                                        _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(H, m04), shuf4), 8),
+                                                     _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(H, 1), m04), shuf4), 12)));
+                auto bhi = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(H, 2), m04), shuf4),
+                                                     _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(H, 3), m04), shuf4), 4)),
+                                        _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(H, 4), m04), shuf4), 8),
+                                                     _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_and_si128(_mm_srli_epi32(H, 6), _mm_set1_epi32(0xc0c0c0c0)), m04), shuf4), 12)));
+                auto idx_lo = _mm_or_si128(nlo, blo);
+                auto idx_hi = _mm_or_si128(nhi, bhi);
+                auto r1lo = _mm_shuffle_epi8(lut1, idx_lo);
+                auto r1hi = _mm_shuffle_epi8(lut1, idx_hi);
+                auto r2lo = _mm_shuffle_epi8(lut2, idx_lo);
+                auto r2hi = _mm_shuffle_epi8(lut2, idx_hi);
+                auto sh02 = _mm_setr_epi8(0, 1, 2, 3, 8, 9, 10, 11, -1, -1, -1, -1, -1, -1, -1, -1);
+                auto sh13 = _mm_setr_epi8(4, 5, 6, 7, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1);
+                float * out = y4[k] + QK_K*ibl + 32*ib;
+                _mm256_storeu_ps(out +  0, _mm256_mul_ps(_mm256_set1_ps(dl1), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r1lo, sh02)))));
+                _mm256_storeu_ps(out +  8, _mm256_mul_ps(_mm256_set1_ps(dl1), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r1hi, sh02)))));
+                _mm256_storeu_ps(out + 16, _mm256_mul_ps(_mm256_set1_ps(dl2), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r2lo, sh13)))));
+                _mm256_storeu_ps(out + 24, _mm256_mul_ps(_mm256_set1_ps(dl2), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_shuffle_epi8(r2hi, sh13)))));
+#else
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl1 * values1[((ql[4*k+i+ 0] >> 0) & 3) | ((qh[4*k+i] << 2) & 4)];
                     y4[k][QK_K*ibl+32*ib+i+ 4] = dl1 * values1[((ql[4*k+i+ 0] >> 2) & 3) | ((qh[4*k+i] << 1) & 4)];
@@ -8282,6 +8922,7 @@ void dequantize_row_iq3_k_r4(const block_iq3_k_r4 * x, float * y, int64_t k) {
                     y4[k][QK_K*ibl+32*ib+i+24] = dl2 * values2[((ql[4*k+i+16] >> 4) & 3) | ((qh[4*k+i] >> 4) & 4)];
                     y4[k][QK_K*ibl+32*ib+i+28] = dl2 * values2[((ql[4*k+i+16] >> 6) & 3) | ((qh[4*k+i] >> 5) & 4)];
                 }
+#endif
                 ql += 32;
                 qh += 16;
             }
@@ -8397,6 +9038,40 @@ void dequantize_row_iq2_k_r4(const block_iq2_k_r4 * x, float * y, int64_t k) {
                 float dl2 = d * (((x[ibl].scales[is%32] >> 4*(is/32)) & 0xf) - 8);
                 auto values1 = iq2nl_values + (x[ibl].extra[k+0] & (1 << ib) ? 4 : 0);
                 auto values2 = iq2nl_values + (x[ibl].extra[k+4] & (1 << ib) ? 4 : 0);
+#ifdef __AVX2__
+                // out[32*ib+i+{0..28 step 4}] = dl{1,2} * LUT{1,2}[(ql>>{0,2,4,6})&3]
+                // (4-entry int8 LUT broadcast from 4B load, no over-read;
+                // srli+and exact for s<=6; single mul rounding; halves sequential)
+                auto m03 = _mm_set1_epi32(0x03030303);
+                auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+                float * out = y4[k] + QK_K*ibl + 32*ib;
+                {
+                    auto W = _mm_set1_epi32(*(const uint32_t *)(ql + 4*k));
+                    auto f = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(W, m03), shuf4),
+                                                           _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 2), m03), shuf4), 4)),
+                                          _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 4), m03), shuf4), 8),
+                                                       _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 6), m03), shuf4), 12)));
+                    auto lut = _mm_set1_epi32(*(const uint32_t *)values1);
+                    auto r = _mm_shuffle_epi8(lut, f);
+                    auto v0 = _mm256_mul_ps(_mm256_set1_ps(dl1), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(r)));
+                    auto v1 = _mm256_mul_ps(_mm256_set1_ps(dl1), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(r, 8))));
+                    _mm256_storeu_ps(out + 0, v0);
+                    _mm256_storeu_ps(out + 8, v1);
+                }
+                {
+                    auto W = _mm_set1_epi32(*(const uint32_t *)(ql + 4*k + 16));
+                    auto f = _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(_mm_and_si128(W, m03), shuf4),
+                                                       _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 2), m03), shuf4), 4)),
+                                          _mm_or_si128(_mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 4), m03), shuf4), 8),
+                                                       _mm_slli_si128(_mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(W, 6), m03), shuf4), 12)));
+                    auto lut = _mm_set1_epi32(*(const uint32_t *)values2);
+                    auto r = _mm_shuffle_epi8(lut, f);
+                    auto v0 = _mm256_mul_ps(_mm256_set1_ps(dl2), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(r)));
+                    auto v1 = _mm256_mul_ps(_mm256_set1_ps(dl2), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(r, 8))));
+                    _mm256_storeu_ps(out + 16, v0);
+                    _mm256_storeu_ps(out + 24, v1);
+                }
+#else
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl1 * values1[(ql[4*k+i+ 0] >> 0) & 3];
                     y4[k][QK_K*ibl+32*ib+i+ 4] = dl1 * values1[(ql[4*k+i+ 0] >> 2) & 3];
@@ -8407,6 +9082,7 @@ void dequantize_row_iq2_k_r4(const block_iq2_k_r4 * x, float * y, int64_t k) {
                     y4[k][QK_K*ibl+32*ib+i+24] = dl2 * values2[(ql[4*k+i+16] >> 4) & 3];
                     y4[k][QK_K*ibl+32*ib+i+28] = dl2 * values2[(ql[4*k+i+16] >> 6) & 3];
                 }
+#endif
                 ql += 32;
             }
         }
@@ -9199,7 +9875,17 @@ void dequantize_row_q8_KV(const void * x, float * y, int64_t k) {
     auto dptr = (const float *)x;
     float d = dptr[0];
     auto q8 = (const int8_t *)(dptr + 2);
+#ifdef __AVX2__
+    // out[j] = d * q8[j] (int8 direct, 8-wide + scalar tail)
+    int j = 0;
+    auto vd = _mm256_set1_ps(d);
+    for (; j + 7 < k; j += 8) {
+        _mm256_storeu_ps(y + j, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)(q8 + j))))));
+    }
+    for (; j < k; ++j) y[j] = d * q8[j];
+#else
     for (int j = 0; j < k; ++j) y[j] = d * q8[j];
+#endif
 }
 
 void vec_dot_q8_KV_q8_KV(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
@@ -11402,11 +12088,24 @@ void dequantize_row_q1_0_g128(const block_q1_0_g128  * x, float * y, int64_t k) 
     int nb = k / QK1_0_G128;
     for (int ib = 0; ib < nb; ++ib) {
         float d = GGML_FP16_TO_FP32(x[ib].d);
+#ifdef __AVX2__
+        // 8 outputs per qs byte: bit j set ? d : -d (blendv selected)
+        auto vpos = _mm256_set1_ps(d);
+        auto vneg = _mm256_set1_ps(-d);
+        auto bits = _mm_setr_epi8(1, 2, 4, 8, 16, 32, 64, -128, 0, 0, 0, 0, 0, 0, 0, 0);
+        for (int i = 0; i < QK1_0_G128/8; ++i) {
+            auto m = _mm_cmpeq_epi8(_mm_and_si128(_mm_set1_epi8(x[ib].qs[i]), bits), bits);
+            auto f = _mm256_blendv_ps(vneg, vpos, _mm256_castsi256_ps(_mm256_cvtepi8_epi32(m)));
+            _mm256_storeu_ps(y, f);
+            y += 8;
+        }
+#else
         for (int i = 0; i < QK1_0_G128/8; ++i) {
             for (int j = 0; j < 8; ++j) {
                 *y++ = x[ib].qs[i] & k_mask[j] ? d : -d;
             }
         }
+#endif
     }
 }
 
@@ -11578,12 +12277,25 @@ void dequantize_row_q1_0_g128_r8(const block_q1_0_g128_r8 * x, float * y, int64_
                 for (int i = 0; i < 4; ++i) {
                     uint8_t mask1 = 1 << (2*i+0);
                     uint8_t mask2 = 1 << (2*i+1);
+#ifdef __AVX2__
+                    // out[8*i+j+0] = (qx[4*r+j] & mask1) ? d : -d  (j in 0..3)
+                    // out[8*i+j+4] = (qx[4*r+j] & mask2) ? d : -d
+                    auto b = _mm_set1_epi32(*(const uint32_t *)(qx + 4*r));
+                    auto c1 = _mm_cmpeq_epi8(_mm_and_si128(b, _mm_set1_epi8(mask1)), _mm_set1_epi8(mask1));
+                    auto c2 = _mm_cmpeq_epi8(_mm_and_si128(b, _mm_set1_epi8(mask2)), _mm_set1_epi8(mask2));
+                    auto vpos = _mm_set1_ps(d);
+                    auto vneg = _mm_set1_ps(-d);
+                    float * out = yr + (int64_t)ib*QK1_0_G128 + 32*l + 8*i;
+                    _mm_storeu_ps(out + 0, _mm_blendv_ps(vneg, vpos, _mm_castsi128_ps(_mm_cvtepi8_epi32(c1))));
+                    _mm_storeu_ps(out + 4, _mm_blendv_ps(vneg, vpos, _mm_castsi128_ps(_mm_cvtepi8_epi32(c2))));
+#else
                     for (int j = 0; j < 4; ++j) {
                         yr[(int64_t)ib*QK1_0_G128 + 32*l + 8*i + j + 0] = qx[4*r + j] & mask1 ? d : -d;
                     }
                     for (int j = 0; j < 4; ++j) {
                         yr[(int64_t)ib*QK1_0_G128 + 32*l + 8*i + j + 4] = qx[4*r + j] & mask2 ? d : -d;
                     }
+#endif
                 }
             }
         }
@@ -11783,11 +12495,21 @@ void dequantize_row_ptq1_0_r8(const block_ptq1_0_r8 * x, float * GGML_RESTRICT y
         for (int k = 0; k < QK_PTQ1_0_R8_ROWS; ++k) {
             float d = GGML_FP16_TO_FP32(x[ib].d[k]);
             float * yr = y + (int64_t)k*n_per_row + ib*QK_PTQ1_0;
+#ifdef __AVX2__
+            // yr[4*j+i] = d * ftmp[32*j+4*k+i] (QK_PTQ1_0/4 is even: 2 j per 8-wide store)
+            auto vd = _mm256_set1_ps(d);
+            for (int j = 0; j < QK_PTQ1_0/4; j += 2) {
+                auto a = _mm_loadu_ps(ftmp + 32*j + 4*k);
+                auto b = _mm_loadu_ps(ftmp + 32*j + 32 + 4*k);
+                _mm256_storeu_ps(yr + 4*j, _mm256_mul_ps(vd, MM256_SET_M128(b, a)));
+            }
+#else
             for (int j = 0; j < QK_PTQ1_0/4; ++j) {
                 for (int i = 0; i < 4; ++i) {
                     yr[4*j + i] = d * ftmp[32*j + 4*k + i];
                 }
             }
+#endif
         }
     }
 }

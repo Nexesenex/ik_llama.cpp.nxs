@@ -91,6 +91,97 @@ struct Perf {
 #define MM256_SRLI128_M128I(x,n) _mm256_blend_epi32(MM256_SET1_M128I(x), _mm256_srli_epi16(MM256_SET1_M128I(x), n), 0xF0)
 #define MM256_SLLI128_M128I(x,n) _mm256_blend_epi32(_mm256_slli_epi16(MM256_SET1_M128I(x), n), MM256_SET1_M128I(x), 0xF0)
 #define MM256_MULH_M128(x,y)     _mm256_blend_ps(MM256_SET1_M128(x), _mm256_mul_ps(MM256_SET1_M128(x), MM256_SET1_M128(y)), 0xF0)
+
+// R8 l-major int8 row (fijam-fashion shared dequant helper): the 16 signed bytes
+// for output row k live in 4 dwords at qs[4*k + {0,32,64,96}]. Collect them in
+// output order (no shuffle) and dequantize to 16 floats (scale * int8).
+// Used by the dequantize_row_*_r8 AVX2 ports (q8_k_r8, q8_KV_r8; same shape as
+// the hand-rolled q8_0_r8/q4_0_r8/iq4_xs_r8 gathers).
+static inline void dequant_r8_i8_16(const int8_t * qs, int k, float scale, float * out) {
+    const uint32_t * q32 = (const uint32_t *)(qs + 4*k);
+    auto v = _mm_set_epi32(q32[24], q32[16], q32[8], q32[0]);
+    auto vd = _mm256_set1_ps(scale);
+    _mm256_storeu_ps(out + 0, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(v))));
+    _mm256_storeu_ps(out + 8, _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(v, 8)))));
+}
+
+// R8 l-major 16-byte gather for the nibble/LUT dequant ports (q4_0_r8,
+// iq4_xs_r8): the 16 bytes for output row k live in 4 dwords at
+// qs[4*k + {0,32,64,96}]. Collect them into output order (no shuffle);
+// the caller does its own nibble split / table lookup.
+static inline __m128i r8_gather_lmajor_16(const uint8_t * qs, int k) {
+    const uint32_t * q32 = (const uint32_t *)(qs + 4*k);
+    return _mm_set_epi32(q32[24], q32[16], q32[8], q32[0]);
+}
+
+// R4 16-byte gather for the 4-row nibble dequant ports (q4_k_r4 et al):
+// the 16 bytes for output row k live in 4 dwords at qs[4*k + {0,16,32,48}].
+// Collect them into output order (no shuffle); the caller does its own
+// nibble split / scale handling.
+static inline __m128i r4_gather_16(const uint8_t * qs, int k) {
+    const uint32_t * q32 = (const uint32_t *)(qs + 4*k);
+    return _mm_set_epi32(q32[12], q32[8], q32[4], q32[0]);
+}
+
+// One 4-byte group of an R4 6-bit layout (q6_k_r4): 4 qs bytes + 4 qh bytes
+// -> 8 floats [lo(4), hi(4)] at out_lo/out_hi.
+// val = dl * ((nibble | (qhfield << 4)) - 32); qhfield extracted with a left
+// shift (qh_shl=true, Q6_K-style <<{4,2}) or right shift (false, >>{0,2}).
+// Shifts are template immediates; the srli+and extraction is exact for these
+// shifts (contamination lands above the kept bits). Mul bit-exact w/ scalar.
+template <bool qh_shl, int sh_lo, int sh_hi>
+static inline void dequant_r4_q6_group(const uint8_t * ql4, const uint8_t * qh4,
+        float dl, float * out_lo, float * out_hi) {
+    auto w = _mm_set1_epi32(*(const uint32_t *)ql4);
+    auto h = _mm_set1_epi32(*(const uint32_t *)qh4);
+    auto m0f = _mm_set1_epi32(0x0f0f0f0f);
+    auto m30 = _mm_set1_epi32(0x30303030);
+    auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    auto nlo = _mm_shuffle_epi8(_mm_and_si128(w, m0f), shuf4);
+    auto nhi = _mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(w, 4), m0f), shuf4);
+    __m128i blo, bhi;
+    if constexpr (qh_shl) {
+        blo = _mm_shuffle_epi8(_mm_and_si128(_mm_slli_epi32(h, sh_lo), m30), shuf4);
+        bhi = _mm_shuffle_epi8(_mm_and_si128(_mm_slli_epi32(h, sh_hi), m30), shuf4);
+    } else {
+        blo = _mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(h, sh_lo), m30), shuf4);
+        bhi = _mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(h, sh_hi), m30), shuf4);
+    }
+    auto vdl = _mm_set1_ps(dl);
+    auto c32 = _mm_set1_epi32(32);
+    _mm_storeu_ps(out_lo, _mm_mul_ps(vdl, _mm_cvtepi32_ps(_mm_sub_epi32(_mm_cvtepu8_epi32(_mm_or_si128(nlo, blo)), c32))));
+    _mm_storeu_ps(out_hi, _mm_mul_ps(vdl, _mm_cvtepi32_ps(_mm_sub_epi32(_mm_cvtepu8_epi32(_mm_or_si128(nhi, bhi)), c32))));
+}
+
+// One 4-byte group of an R4 5-bit layout (q5_k_r4): 4 qs bytes + shared 4 qh
+// bytes -> 8 floats [lo(4), hi(4)] at out_lo/out_hi.
+// val = dl * (nibble | (qhbit << 4)) - ml with qhbit a single bit; qh_shl
+// selects left (<<) vs right (>>) extraction at template shifts. The srli+and
+// extraction is exact for shifts <= 3 (contamination lands above bit 4);
+// mul+sub kept separate for bit-exactness with scalar (no FMA contraction).
+template <bool qh_shl, int sh_lo, int sh_hi>
+static inline void dequant_r4_q5_group(const uint8_t * ql4, const uint8_t * qh4,
+        float dl, float ml, float * out_lo, float * out_hi) {
+    auto w = _mm_set1_epi32(*(const uint32_t *)ql4);
+    auto h = _mm_set1_epi32(*(const uint32_t *)qh4);
+    auto m0f = _mm_set1_epi32(0x0f0f0f0f);
+    auto m10 = _mm_set1_epi32(0x10101010);
+    auto shuf4 = _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    auto nlo = _mm_shuffle_epi8(_mm_and_si128(w, m0f), shuf4);
+    auto nhi = _mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(w, 4), m0f), shuf4);
+    __m128i blo, bhi;
+    if constexpr (qh_shl) {
+        blo = _mm_shuffle_epi8(_mm_and_si128(_mm_slli_epi32(h, sh_lo), m10), shuf4);
+        bhi = _mm_shuffle_epi8(_mm_and_si128(_mm_slli_epi32(h, sh_hi), m10), shuf4);
+    } else {
+        blo = _mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(h, sh_lo), m10), shuf4);
+        bhi = _mm_shuffle_epi8(_mm_and_si128(_mm_srli_epi32(h, sh_hi), m10), shuf4);
+    }
+    auto vdl = _mm_set1_ps(dl);
+    auto vml = _mm_set1_ps(ml);
+    _mm_storeu_ps(out_lo, _mm_sub_ps(_mm_mul_ps(vdl, _mm_cvtepi32_ps(_mm_cvtepu8_epi32(_mm_or_si128(nlo, blo)))), vml));
+    _mm_storeu_ps(out_hi, _mm_sub_ps(_mm_mul_ps(vdl, _mm_cvtepi32_ps(_mm_cvtepu8_epi32(_mm_or_si128(nhi, bhi)))), vml));
+}
 #endif
 
 typedef struct {
