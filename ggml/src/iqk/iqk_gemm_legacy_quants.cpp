@@ -1359,7 +1359,18 @@ inline __m256i accum_mxfp4_quants(const __m256i * v, const int8_t * qs) {
     auto y4h = _mm_loadu_si128((const __m128i*)qs+1);
     auto yl  = MM256_SET1_M128I(y4l);
     auto yh  = MM256_SET1_M128I(y4h);
-#ifdef HAVE_VNNI256
+#ifdef HAVE_VNNIINT8
+    // Signed dot directly: no +/-12 offset to correct (mirrors IQ4 family)
+    auto sumi = _mm256_setzero_si256();
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[0], _mm256_shuffle_epi32(yl, 0x00));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[1], _mm256_shuffle_epi32(yl, 0x55));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[2], _mm256_shuffle_epi32(yl, 0xaa));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[3], _mm256_shuffle_epi32(yl, 0xff));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[4], _mm256_shuffle_epi32(yh, 0x00));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[5], _mm256_shuffle_epi32(yh, 0x55));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[6], _mm256_shuffle_epi32(yh, 0xaa));
+    sumi = ggml_mm256_dpbssd_epi32(sumi, v[7], _mm256_shuffle_epi32(yh, 0xff));
+#elif defined(HAVE_VNNI256)
     auto sumi = _mm256_setzero_si256();
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[0], _mm256_shuffle_epi32(yl, 0x00));
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[1], _mm256_shuffle_epi32(yl, 0x55));
@@ -1399,10 +1410,16 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
     GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_2_x4> q8(info);
     auto m4 = _mm256_set1_epi8(0xf);
+    // VNNI-INT8 uses a signed dot, so no +/-12 offset to correct (mirrors IQ4 family)
+#if defined(HAVE_VNNIINT8)
+    constexpr bool k_mxfp4_signed_vnni = true;
+#else
+    constexpr bool k_mxfp4_signed_vnni = false;
+#endif
     int nb = n / QK_MXFP4;
     auto table128 = _mm_loadu_si128((const __m128i *)kvalues_mxfp4);
     auto table = MM256_SET1_M128I(table128);
-    table = _mm256_add_epi8(table, _mm256_set1_epi8(12));
+    if constexpr (!k_mxfp4_signed_vnni) table = _mm256_add_epi8(table, _mm256_set1_epi8(12));
     __m256i v[8];
     if constexpr (nrc_y == 1) {
         union { __m256 vec; float val[8]; } helper;
@@ -1410,6 +1427,7 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
             auto * iq4 = (const block_mxfp4_r8 *)((const char *)vx + ix*bx);
             auto acc1 = _mm256_setzero_ps();
             auto acc2 = _mm256_setzero_ps();
+            (void)acc2;
             for (int ib4 = 0; ib4 < nb/4; ++ib4) {
                 helper.vec = convert_scales((const uint16_t *)q8.y[0][ib4].d);
                 for (int k = 0; k < 4; ++k) {
@@ -1418,7 +1436,9 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
                     auto sumi = accum_mxfp4_quants(v, q8.y[0][ib4].qs+32*k);
                     auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(helper.val[k]));
                     acc1 = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc1);
-                    acc2 = _mm256_fmadd_ps(scales, _mm256_set1_ps(helper.val[k+4]), acc2);
+                    if constexpr (!k_mxfp4_signed_vnni) {
+                        acc2 = _mm256_fmadd_ps(scales, _mm256_set1_ps(helper.val[k+4]), acc2);
+                    }
                 }
             }
             for (int ib = 4*(nb/4); ib < nb; ++ib) {
@@ -1426,12 +1446,20 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
                 auto scales = convert_mxfp4_scales(iq4[ib].e);
                 prepare_mxfp4_quants_avx2(iq4[ib].qs, v, m4, table);
                 auto sumi = accum_mxfp4_quants(v, qy[ib].qs);
-                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
-                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
-                acc1 = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc1);
-                acc2 = _mm256_fmadd_ps(scales, _mm256_set1_ps(m8), acc2);
+                if constexpr (k_mxfp4_signed_vnni) {
+                    auto d8 = ScaleHelperQ8_2::prepare1(qy + ib).first;
+                    auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
+                    acc1 = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc1);
+                } else {
+                    auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                    auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
+                    acc1 = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc1);
+                    acc2 = _mm256_fmadd_ps(scales, _mm256_set1_ps(m8), acc2);
+                }
             }
-            acc1 = _mm256_fmadd_ps(acc2, _mm256_set1_ps(-12.f), acc1);
+            if constexpr (!k_mxfp4_signed_vnni) {
+                acc1 = _mm256_fmadd_ps(acc2, _mm256_set1_ps(-12.f), acc1);
+            }
             info.store(ix, 0, acc1);
         }
     }
@@ -1449,13 +1477,15 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
                     for (int iy = 0; iy < nrc_y; ++iy) {
                         auto scales = convert_scales((const uint16_t *)q8.y[iy][ib4].d);
                         _mm256_storeu_ps(d8 + 8*iy, scales);
-                        auto m4 = _mm256_extractf128_ps(scales, 1);
-                        auto m8 = _mm256_set_m128(m4, m4);
-                        auto sumf = _mm256_mul_ps(d4[0], _mm256_shuffle_ps(m8, m8, 0x00));
-                        sumf = _mm256_fmadd_ps(d4[1], _mm256_shuffle_ps(m8, m8, 0x55), sumf);
-                        sumf = _mm256_fmadd_ps(d4[2], _mm256_shuffle_ps(m8, m8, 0xaa), sumf);
-                        sumf = _mm256_fmadd_ps(d4[3], _mm256_shuffle_ps(m8, m8, 0xff), sumf);
-                        acc[iy] = _mm256_fmadd_ps(sumf, _mm256_set1_ps(-12.f), acc[iy]);
+                        if constexpr (!k_mxfp4_signed_vnni) {
+                            auto m4 = _mm256_extractf128_ps(scales, 1);
+                            auto m8 = _mm256_set_m128(m4, m4);
+                            auto sumf = _mm256_mul_ps(d4[0], _mm256_shuffle_ps(m8, m8, 0x00));
+                            sumf = _mm256_fmadd_ps(d4[1], _mm256_shuffle_ps(m8, m8, 0x55), sumf);
+                            sumf = _mm256_fmadd_ps(d4[2], _mm256_shuffle_ps(m8, m8, 0xaa), sumf);
+                            sumf = _mm256_fmadd_ps(d4[3], _mm256_shuffle_ps(m8, m8, 0xff), sumf);
+                            acc[iy] = _mm256_fmadd_ps(sumf, _mm256_set1_ps(-12.f), acc[iy]);
+                        }
                     }
                 }
                 for (int k = 0; k < 4; ++k) {
@@ -1470,15 +1500,25 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
             }
             for (int ib = 4*(nb/4); ib < nb; ++ib) {
                 auto scales = convert_mxfp4_scales(iq4[ib].e);
-                auto scales_m = _mm256_mul_ps(scales, _mm256_set1_ps(-12.f));
+                __m256 scales_m;
+                if constexpr (!k_mxfp4_signed_vnni) {
+                    scales_m = _mm256_mul_ps(scales, _mm256_set1_ps(-12.f));
+                }
+                (void)scales_m;
                 prepare_mxfp4_quants_avx2(iq4[ib].qs, v, m4, table);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto qy = (const block_q8_2 *)q8.y[iy];
                     auto sumi = accum_mxfp4_quants(v, qy[ib].qs);
-                    auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
-                    auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
-                    acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
-                    acc[iy] = _mm256_fmadd_ps(scales_m, _mm256_set1_ps(m8), acc[iy]);
+                    if constexpr (k_mxfp4_signed_vnni) {
+                        auto d8 = ScaleHelperQ8_2::prepare1(qy + ib).first;
+                        auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
+                        acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
+                    } else {
+                        auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                        auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
+                        acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
+                        acc[iy] = _mm256_fmadd_ps(scales_m, _mm256_set1_ps(m8), acc[iy]);
+                    }
                 }
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
