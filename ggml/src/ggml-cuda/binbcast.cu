@@ -1668,6 +1668,15 @@ static __global__ void k_mul_fast(int ne0, int nelem, const float * x, const flo
     z[i] = x[i] * y[i1];
 }
 
+static __global__ void k_mul_fast_bf16(int ne0, int nelem, const float * x, const nv_bfloat16 * y, float * z, const uint3 ne0_fd) {
+    int i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= nelem) {
+        return;
+    }
+    const int i1 = fastdiv((uint32_t)i, ne0_fd);
+    z[i] = x[i] * __bfloat162float(y[i1]);
+}
+
 void ggml_cuda_op_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     // The scalar fast-path reads src0 and writes dst as flat/contiguous buffers, so it is only
     // valid when both are contiguous. A non-contiguous (e.g. row-gapped view) src0 must fall
@@ -1680,13 +1689,18 @@ void ggml_cuda_op_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     auto src0 = dst->src[0];
     auto src1 = dst->src[1];
     if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
-        src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+        src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+        ((src1->type == GGML_TYPE_F32) || (src1->type == GGML_TYPE_BF16)) &&
         src1->ne[0] == 1 && src0->ne[1] == src1->ne[1] && src0->ne[2] == src1->ne[2] && src0->ne[3] == src1->ne[3]) {
         constexpr int kBlockSize = 256;
         int nelem = ggml_nelements(src0);
         int nblock = (nelem + kBlockSize - 1)/kBlockSize;
         const uint3 ne0_fd = init_fastdiv_values((uint32_t)src0->ne[0]);
-        k_mul_fast<<<nblock, kBlockSize, 0, ctx.stream()>>>(src0->ne[0], nelem, (const float *)src0->data, (const float *)src1->data, (float *)dst->data, ne0_fd);
+        if (src1->type == GGML_TYPE_BF16) {
+            k_mul_fast_bf16<<<nblock, kBlockSize, 0, ctx.stream()>>>(src0->ne[0], nelem, (const float *)src0->data, (const nv_bfloat16 *)src1->data, (float *)dst->data, ne0_fd);
+        } else {
+            k_mul_fast<<<nblock, kBlockSize, 0, ctx.stream()>>>(src0->ne[0], nelem, (const float *)src0->data, (const float *)src1->data, (float *)dst->data, ne0_fd);
+        }
         return;
     }
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_mul>>(src0, src1, dst, src0->data, src1->data, dst->data, ctx.stream());
