@@ -1010,7 +1010,11 @@ struct ggml_backend_cuda_context {
     cublasHandle_t cublas_handle(int device) {
         if (cublas_handles[device] == nullptr) {
             ggml_cuda_set_device(device);
+            fprintf(stderr, "[DBG] cublas_handle create-start log=%d phys=%d\n", device, ggml_cuda_get_device());
+            fflush(stderr);
             CUBLAS_CHECK(cublasCreate(&cublas_handles[device]));
+            fprintf(stderr, "[DBG] cublas_handle create-ok log=%d phys=%d handle=%p\n", device, ggml_cuda_get_device(), (void*)cublas_handles[device]);
+            fflush(stderr);
             CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device], CUBLAS_TF32_TENSOR_OP_MATH));
         }
         return cublas_handles[device];

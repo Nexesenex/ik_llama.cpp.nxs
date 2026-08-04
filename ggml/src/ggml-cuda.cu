@@ -712,6 +712,9 @@ ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * mo
     }
 
     ggml_cuda_set_device(device);
+    // Pre-create the cuBLAS handle for this logical device during context init,
+    // so it is never lazily created in the middle of a capture/compute pass.
+    (void) cublas_handle(device);
     CUDA_CHECK(cudaEventCreate(&watchdog.event));
     watchdog.thread = std::thread(ggml_cuda_watchdog_thread_proc, this);
 }
@@ -815,7 +818,7 @@ GGML_CALL static void ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer_t
         size_t original_size = ggml_nbytes(tensor);
         size_t padded_size = ggml_backend_buft_get_alloc_size(buffer->buft, tensor);
 
-        if (padded_size > original_size) {
+if (padded_size > original_size) {
             ggml_cuda_set_device(ctx->device);
             CUDA_CHECK(cudaMemset((char *)tensor->data + original_size, 0, padded_size - original_size));
         }
@@ -841,9 +844,21 @@ GGML_CALL static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t 
 GGML_CALL static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
+    cudaPointerAttributes attr;
+    memset(&attr, 0, sizeof(attr));
+    cudaError_t pae = cudaPointerGetAttributes(&attr, (const char *)tensor->data + offset);
+    int cur_dev = -1;
+    cudaGetDevice(&cur_dev);
+    cudaPointerAttributes adst;
+    memset(&adst, 0, sizeof(adst));
+    cudaError_t ade = cudaPointerGetAttributes(&adst, data);
+    fprintf(stderr, "[DBG] gt name=%s curdev=%d dst=%p dsttype=%d dste=%d dstdev=%d size=%zu src=%p\n",
+            tensor->name, cur_dev,
+            data, (int)adst.type, (int)ade, (int)adst.device, size, (const void*)tensor->data);
+
     ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaMemcpyAsync(data, (const char *)tensor->data + offset, size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
-    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+    CUDA_CHECK(cudaMemcpyAsync(data, (const char *)tensor->data + offset, size, cudaMemcpyDeviceToHost, ((cudaStream_t)0x2)));
+    CUDA_CHECK(cudaStreamSynchronize(((cudaStream_t)0x2)));
 }
 
 GGML_CALL static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
@@ -2245,6 +2260,16 @@ static void ggml_cuda_op_mul_mat_cublas(
 
     const int compute_capability = ggml_cuda_info().devices[id].cc;
 
+    static int cdbg = 0;
+    if (id == ctx.device && cdbg < 6) {
+        fprintf(stderr, "[DBG] cublas dev%d phys=%d handle=%p cc=%d type=%s ne00=%lld ne10=%lld row_diff=%lld ncols=%lld ldc=%lld\n",
+                ctx.device, ggml_cuda_get_device(), (void*)ctx.cublas_handle(id), compute_capability,
+                ggml_type_name(src0->type), (long long)ne00, (long long)ne10, (long long)row_diff,
+                (long long)src1_ncols, (long long)ldc);
+        fflush(stderr);
+        ++cdbg;
+    }
+
     if (src0->type == GGML_TYPE_BF16 && ggml_is_contiguous(src0) && row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT) {
 
         ggml_cuda_pool_alloc<nv_bfloat16> src1_as_bf16(ctx.pool(id));
@@ -2359,6 +2384,14 @@ static void ggml_cuda_op_mul_mat_cublas(
         cublasMath_t prev_math_mode;
         CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(id), &prev_math_mode));
         CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), CUBLAS_DEFAULT_MATH));
+        if (cdbg <= 8) {
+            cudaPointerAttributes a0; memset(&a0,0,sizeof(a0)); cudaError_t e0 = cudaPointerGetAttributes(&a0, src0_ptr);
+            cudaPointerAttributes a1; memset(&a1,0,sizeof(a1)); cudaError_t e1 = cudaPointerGetAttributes(&a1, src1_ptr);
+            fprintf(stderr, "[DBG] cublas F16 gemm-start ctxdev=%d phys=%d name=%s src0=%p(src0dev=%d/src0type=%d/e=%d) src1=%p(src1dev=%d/src1type=%d/e=%d) dst=%p\n",
+                ctx.device, ggml_cuda_get_device(), src0->name, (void*)src0_ptr, (int)a0.device, (int)a0.type, (int)e0,
+                (void*)src1_ptr, (int)a1.device, (int)a1.type, (int)e1, (void*)dst_f16.get());
+            fflush(stderr);
+        }
         CUBLAS_CHECK(
             cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                     row_diff, src1_ncols, ne10,
@@ -2367,6 +2400,7 @@ static void ggml_cuda_op_mul_mat_cublas(
                     &beta_f16,   dst_f16.get(), CUDA_R_16F, ldc,
                     CUBLAS_COMPUTE_16F,
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+        if (cdbg <= 8) { fprintf(stderr, "[DBG] cublas F16 gemm-ok\n"); fflush(stderr); }
         CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), prev_math_mode));
 
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
@@ -3042,10 +3076,22 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
         quantized_size += get_mmq_x_max_host(ggml_cuda_info().devices[ctx.device].cc)*sizeof(block_q8_1_mmq);
     }
     ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool(), quantized_size);
+    static int dbg_cnt = 0;
     if (is_gemv) {
+        if (ggml_cuda_get_device() == ctx.device && dbg_cnt < 8) {
+            fprintf(stderr, "[DBG] mmq_gemv phys%d log%d entry%d src0=%p src1=%p ne0src=%lld ne1src=%lld qpool=%p type=%s\n",
+                    ggml_cuda_get_device(), ctx.device, dbg_cnt, (void*)src0->data, (void*)src1->data,
+                    (long long)src0->ne[0], (long long)src0->ne[1], (void*)src1_quantized.get(), ggml_type_name(src0->type));
+            fflush(stderr);
+            ++dbg_cnt;
+        }
         quantize_row_q8_1_cuda((const float *)src1->data, (void *)src1_quantized.get(), src1->ne[0], src1->ne[1], src1->ne[2], ne10_padded,
                 src0->type, stream);
         CUDA_CHECK(cudaGetLastError());
+        if (ggml_cuda_get_device() == ctx.device && dbg_cnt < 8) {
+            fprintf(stderr, "[DBG] mmq_gemv physdev=%d after-quantize ok\n", ggml_cuda_get_device());
+            fflush(stderr);
+        }
 
         // The code below handles the case when Q, K, V have a bias applied after the respective matrix multiplication.
         // In that case the graph contains mul_mat(Q) -> mul_mat(K) -> mul_mat(V) -> add(Q) -> add(K) -> add(V)
@@ -3080,9 +3126,17 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
                  0, dst->src[0]->ne[1], src1->ne[1], ne10_padded, stream);
             ++node_n;
         } else {
+            if (ggml_cuda_get_device() == ctx.device && dbg_cnt <= 8) {
+                fprintf(stderr, "[DBG] mmq_gemv launching mul_mat_vec_q\n");
+                fflush(stderr);
+            }
             ggml_cuda_op_mul_mat_vec_q(ctx, src0, src1, dst, (const char *)src0->data, nullptr, src1_quantized.get(), (float *)dst->data,
                     0, src0->ne[1], src1->ne[1], ne10_padded, stream);
             CUDA_CHECK(cudaGetLastError());
+            if (ggml_cuda_get_device() == ctx.device && dbg_cnt <= 8) {
+                fprintf(stderr, "[DBG] mmq_gemv after mul_mat_vec_q ok\n");
+                fflush(stderr);
+            }
         }
     } else {
         quantize_mmq_q8_1_cuda((const float *)src1->data, src1_quantized.get(), src1->ne[0], src1->ne[1], 1, ne10_padded, src0->type, stream);
@@ -3186,6 +3240,17 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
         && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
     bool              use_mul_mat_q =  ggml_is_quantized(src0->type) && !bad_padding_clear
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
+
+    static int mmdbg = 0;
+    if (ggml_cuda_get_device() == ctx.device && mmdbg < 6) {
+        fprintf(stderr, "[DBG] mul_mat dev%d name=%s src0type=%s ne=(%lld,%lld,%lld,%lld) src1ne1=%lld ne2=%lld ne3=%lld dmmv=%d mmvq=%d mmq=%d badpad=%d\n",
+                ctx.device, dst->name, ggml_type_name(src0->type),
+                (long long)src0->ne[0], (long long)src0->ne[1], (long long)src0->ne[2], (long long)src0->ne[3],
+                (long long)src1->ne[1], (long long)src1->ne[2], (long long)src1->ne[3],
+                (int)use_dequantize_mul_mat_vec, (int)use_mul_mat_vec_q, (int)use_mul_mat_q, (int)bad_padding_clear);
+        fflush(stderr);
+        ++mmdbg;
+    }
 
     // if mmvq is available it's a better choice than dmmv:
 #ifndef GGML_CUDA_FORCE_DMMV
@@ -5149,6 +5214,21 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 ggml_tensor * node = cgraph->nodes[i];
 
                 if (ggml_is_noop(node)) continue;
+
+                if (true) {
+                    const ggml_tensor * s0 = node->src[0];
+                    const ggml_tensor * s1 = node->src[1];
+                    int d0 = s0 && s0->buffer && s0->buffer->buft && ggml_backend_buft_is_cuda(s0->buffer->buft)
+                             ? ((ggml_backend_cuda_buffer_type_context *)s0->buffer->buft->context)->device : -1;
+                    int d1 = s1 && s1->buffer && s1->buffer->buft && ggml_backend_buft_is_cuda(s1->buffer->buft)
+                             ? ((ggml_backend_cuda_buffer_type_context *)s1->buffer->buft->context)->device : -1;
+                    fprintf(stderr, "[DBG] cudaop phys%d log%d i=%d op=%s name=%s src0=%p(bufd=%d) src1=%p(bufd=%d) dst=%p ne0=%lld ne1=%lld\n",
+                            ggml_cuda_get_device(), cuda_ctx->device, i, ggml_op_name(node->op), node->name,
+                            s0 ? (void*)s0->data : NULL, d0,
+                            s1 ? (void*)s1->data : NULL, d1,
+                            (void*)node->data, (long long)node->ne[0], (long long)node->ne[1]);
+                    fflush(stderr);
+                }
 
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, cgraph, i);
                 if (!ok) {
