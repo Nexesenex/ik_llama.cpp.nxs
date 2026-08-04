@@ -685,6 +685,16 @@ class Model:
                 ):
                     data_qtype = gguf.GGMLQuantizationType.Q8_0
 
+                # quantization (Q8_0 and below) is only valid when no dimension
+                # is smaller than the block size (32); float types are always
+                # valid, so keep small-dimension tensors in float
+                if data_qtype not in (
+                    gguf.GGMLQuantizationType.F32,
+                    gguf.GGMLQuantizationType.F16,
+                    gguf.GGMLQuantizationType.BF16,
+                ) and min(data.shape, default=0) < 32:
+                    data_qtype = gguf.GGMLQuantizationType.F32
+
                 if self.no_bf16_to_f32 and old_dtype == torch.bfloat16 and data_qtype == gguf.GGMLQuantizationType.F32:
                     data_qtype = gguf.GGMLQuantizationType.BF16
 
