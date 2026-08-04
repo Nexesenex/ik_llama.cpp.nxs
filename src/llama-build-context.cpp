@@ -708,6 +708,11 @@ ggml_tensor * llm_build_context::build_mhc_weighted_sum(
     ggml_tensor * out = nullptr;
 
     if (weights->ne[3] == 1 && x->ne[3] == 1) {
+        // ggml_mul_multi_add requires F32 src0/src1 on CUDA (multiadd.cu asserts);
+        // upcast so BF16-kept inputs (e.g. hidden state) work like F32 ones
+        if (x->type != GGML_TYPE_F32) {
+            x = ggml_cast(ctx0, x, GGML_TYPE_F32);
+        }
         auto w = ggml_reshape_4d(ctx0, weights, 1, weights->ne[0], weights->ne[1], weights->ne[2]);
         return ggml_mul_multi_add(ctx0, x, w);
     }
