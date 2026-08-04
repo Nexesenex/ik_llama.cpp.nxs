@@ -182,6 +182,8 @@ class __Quant(ABC):
 
     @classmethod
     def can_quantize(cls, tensor: np.ndarray | LazyNumpyTensor) -> bool:
+        if tensor.ndim == 0:
+            return False
         return tensor.shape[-1] % cls.block_size == 0
 
     @classmethod
