@@ -74,12 +74,16 @@ class Model:
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False,
-                 target_model_dir: Path | None = None):
+                 target_model_dir: Path | None = None,
+                 moe_quant_type: gguf.GGMLQuantizationType | None = None,
+                 fni8: bool = False):
         if type(self) is Model:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
 
         self.dir_model = dir_model
         self.ftype = ftype
+        self.moe_quant_type = moe_quant_type
+        self.fni8 = fni8
         self.fname_out = fname_out
         self.is_big_endian = is_big_endian
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
@@ -411,6 +415,7 @@ class Model:
                     self.match_model_tensor_name(new_name, key, bid)
                     for key in (
                         gguf.MODEL_TENSOR.FFN_DOWN,
+                        gguf.MODEL_TENSOR.FFN_DOWN_EXP,
                     )
                 ):
                     if self.ftype in (
@@ -470,6 +475,7 @@ class Model:
                     self.match_model_tensor_name(new_name, key, bid)
                     for key in (
                         gguf.MODEL_TENSOR.FFN_GATE,
+                        gguf.MODEL_TENSOR.FFN_GATE_EXP,
                     )
                 ):
                     if self.ftype in (
@@ -491,6 +497,7 @@ class Model:
                     self.match_model_tensor_name(new_name, key, bid)
                     for key in (
                         gguf.MODEL_TENSOR.FFN_UP,
+                        gguf.MODEL_TENSOR.FFN_UP_EXP,
                     )
                 ):
                     if self.ftype in (
@@ -647,6 +654,24 @@ class Model:
                         data_qtype = gguf.GGMLQuantizationType.Q8_0
                     else:
                         raise ValueError(f"Unknown file type: {self.ftype.name}")
+
+                if self.moe_quant_type is not None and data_qtype != gguf.GGMLQuantizationType.F32 and not any(
+                    self.match_model_tensor_name(new_name, key, bid)
+                    for key in (
+                        gguf.MODEL_TENSOR.FFN_GATE_EXP,
+                        gguf.MODEL_TENSOR.FFN_DOWN_EXP,
+                        gguf.MODEL_TENSOR.FFN_UP_EXP,
+                    )
+                ):
+                    data_qtype = self.moe_quant_type
+
+                if self.fni8 and any(
+                    self.match_model_tensor_name(new_name, key, bid)
+                    for key in (
+                        gguf.MODEL_TENSOR.FFN_GATE_INP,
+                    )
+                ):
+                    data_qtype = gguf.GGMLQuantizationType.Q8_0
 
                 try:
                     data = gguf.quants.quantize(data, data_qtype)
@@ -6739,6 +6764,18 @@ def parse_args() -> argparse.Namespace:
         "--mtp", action="store_true",
         help="export a standalone DeepSeek-V4 MTP predictor companion",
     )
+    parser.add_argument(
+        "--moe6", action="store_true",
+        help="MoE fancier quantization: routed experts keep the FTYPE scheme, but all other tensors (attn, shexp, etc.) are converted to Q6_0",
+    )
+    parser.add_argument(
+        "--moe8", action="store_true",
+        help="MoE fancier quantization: routed experts keep the FTYPE scheme, but all other tensors (attn, shexp, etc.) are converted to Q8_0",
+    )
+    parser.add_argument(
+        "--fni8", action="store_true",
+        help="force the FFN_GATE_INP (router) tensor to Q8_0 when it exists, instead of the default F32",
+    )
 
     return parser.parse_args()
 
@@ -6864,6 +6901,15 @@ def main() -> None:
                 raise ValueError(f"Architecture {model_architecture!r} does not support standalone MTP export")
             model_class.mtp_only = True
 
+        if args.moe6 and args.moe8:
+            logger.error("Error: --moe6 and --moe8 are mutually exclusive")
+            sys.exit(1)
+        moe_quant_type = (
+            gguf.GGMLQuantizationType.Q6_0 if args.moe6 else
+            gguf.GGMLQuantizationType.Q8_0 if args.moe8 else
+            None
+        )
+
         model_instance = model_class(dir_model=dir_model, ftype=output_type, fname_out=fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
                                      eager=args.no_lazy,
@@ -6871,7 +6917,9 @@ def main() -> None:
                                      split_max_tensors=args.split_max_tensors,
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
                                      small_first_shard=args.no_tensor_first_split,
-                                     target_model_dir=args.target_model_dir)
+                                     target_model_dir=args.target_model_dir,
+                                     moe_quant_type=moe_quant_type,
+                                     fni8=args.fni8)
 
         if args.vocab_only:
             logger.info("Exporting model vocab...")
