@@ -323,18 +323,217 @@ class Model:
                         gguf.MODEL_TENSOR.TOKEN_EMBD,
                         gguf.MODEL_TENSOR.OUTPUT,
                         gguf.MODEL_TENSOR.ATTN_V,
-                        gguf.MODEL_TENSOR.ATTN_K,
                         gguf.MODEL_TENSOR.ATTN_QKV,
                     )
                 ):
                     if self.ftype in (
-                        gguf.LlamaFileType.MOSTLY_Q4_0,
-                        gguf.LlamaFileType.MOSTLY_Q4_1,
+                        gguf.LlamaFileType.MOSTLY_Q4_0_M,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_M,
+                        gguf.LlamaFileType.MOSTLY_Q4_0_L,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_L,
+                        gguf.LlamaFileType.MOSTLY_Q4_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XL,
+                        gguf.LlamaFileType.MOSTLY_Q4_0_XXL,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XXL,
                     ):
                         data_qtype = gguf.GGMLQuantizationType.Q5_0
                     elif self.ftype in (
-                        gguf.LlamaFileType.MOSTLY_Q5_0,
-                        gguf.LlamaFileType.MOSTLY_Q5_1,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_M,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_M,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_L,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_L,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XL,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XXL,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q6_0_M,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_L,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q8_0_M,
+                        gguf.LlamaFileType.MOSTLY_Q8_0_L,
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.F16
+
+                if data_qtype is False and any(
+                    self.match_model_tensor_name(new_name, key, bid)
+                    for key in (
+                        gguf.MODEL_TENSOR.ATTN_K,
+                        gguf.MODEL_TENSOR.FFN_DOWN_SHEXP,
+                        gguf.MODEL_TENSOR.FFN_GATE_SHEXP,
+                        gguf.MODEL_TENSOR.FFN_UP_SHEXP,
+                    )
+                ):
+                    if self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q4_0_L,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_L,
+                        gguf.LlamaFileType.MOSTLY_Q4_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XL,
+                        gguf.LlamaFileType.MOSTLY_Q4_0_XXL,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q5_0_L,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_L,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XL,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XXL,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q6_0_L,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q8_0_L,
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.F16
+
+                if data_qtype is False and any(
+                    self.match_model_tensor_name(new_name, key, bid)
+                    for key in (
+                        gguf.MODEL_TENSOR.FFN_DOWN,
+                    )
+                ):
+                    if self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q4_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XL,
+                        gguf.LlamaFileType.MOSTLY_Q4_0_XXL,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XL,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XXL,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XL,
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.F16
+
+                if data_qtype is False and any(
+                    self.match_model_tensor_name(new_name, key, bid)
+                    for key in (
+                        gguf.MODEL_TENSOR.ATTN_OUT,
+                    )
+                ):
+                    if self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q4_0_XXL,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XXL,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XXL,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.F16
+
+                if data_qtype is False and any(
+                    self.match_model_tensor_name(new_name, key, bid)
+                    for key in (
+                        gguf.MODEL_TENSOR.FFN_GATE,
+                    )
+                ):
+                    if self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XXS,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XXS,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q4_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XXS,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XXS,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XXS,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+
+                if data_qtype is False and any(
+                    self.match_model_tensor_name(new_name, key, bid)
+                    for key in (
+                        gguf.MODEL_TENSOR.FFN_UP,
+                    )
+                ):
+                    if self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XS,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XS,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XXS,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XXS,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q4_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XS,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XS,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XXS,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XXS,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XS,
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XXS,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+
+                if data_qtype is False and any(
+                    self.match_model_tensor_name(new_name, key, bid)
+                    for key in (
+                        gguf.MODEL_TENSOR.ATTN_Q,
+                    )
+                ):
+                    if self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q4_1_S,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_S,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XS,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XS,
+                        gguf.LlamaFileType.MOSTLY_Q4_1_XXS,
+                        gguf.LlamaFileType.MOSTLY_Q5_0_XXS,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q4_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q5_1_S,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_S,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XS,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XS,
+                        gguf.LlamaFileType.MOSTLY_Q5_1_XXS,
+                        gguf.LlamaFileType.MOSTLY_Q6_0_XXS,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q8_0_S,
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XS,
+                        gguf.LlamaFileType.MOSTLY_Q8_0_XXS,
                     ):
                         data_qtype = gguf.GGMLQuantizationType.Q6_0
 
@@ -357,6 +556,84 @@ class Model:
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0:
                         data_qtype = gguf.GGMLQuantizationType.Q6_0
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0:
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_0_M:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_1_M:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_0_M:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_1_M:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0_M:
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0_M:
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_0_L:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_1_L:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_0_L:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_1_L:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0_L:
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0_L:
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_0_XL:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_1_XL:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_0_XL:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_1_XL:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0_XL:
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0_XL:
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_0_XXL:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_1_XXL:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_0_XXL:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_1_XXL:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0_XXL:
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0_XXL:
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_1_S:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_0_S:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_1_S:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0_S:
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0_S:
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_1_XS:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_0_XS:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_1_XS:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0_XS:
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0_XS:
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_1_XXS:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_0_XXS:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_1_XXS:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0_XXS:
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0_XXS:
                         data_qtype = gguf.GGMLQuantizationType.Q8_0
                     else:
                         raise ValueError(f"Unknown file type: {self.ftype.name}")
@@ -431,10 +708,15 @@ class Model:
         self.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
 
         logger.info("***********************************************************************************************")
-        logger.info("** Converting to `q4_0`,`q4_1`,`q5_0`, `q5_1` or `q6_0` is not equiv to using `llama-quantize`!")
-        logger.info("** Ftype `q4_0`,`q4_1` are here converting embeddings, output, attn_k and attn_v/qkv in q5_0.")
-        logger.info("** Ftype `q5_0`,`q5_1` are here converting embeddings, output, attn_k and attn_v/qkv in q6_0.")
-        logger.info("** This, in order to create a small but viable conv. to then for example make an iMatrix file.")
+        logger.info("** quantizing to `Q4_0`,`Q4_1`,`Q5_0`,`Q5_1`,`q6_0` isn't equiv to using `llama-quantize`!")
+        logger.info("** This, in order to generate a small but reliable conversion to create an iMatrix file.")
+        logger.info("** _S Ftypes have attn_q tensors conv. to a lower quant (ex, q5_0 instead of q6_0).")
+        logger.info("** _XS FTypes have also FFN_up tensors converted to a lower quant.")
+        logger.info("** _XXS FTypes have also FFN_gate tensors converted to a lower quant.")
+        logger.info("** _M FTypes have embeddings, output, & attn_v tensors conv. to a higher quant.")
+        logger.info("** _L FTypes have also attn_k tensors conv. to a higher quant (ex, q6_0 instead of q5_0).")
+        logger.info("** _XL FTypes have also FFN_down tensors converted to a higher quant.")
+        logger.info("** _XXL FTypes have also attn_output tensors converted to a higher quant.")
         logger.info("***********************************************************************************************")
 
     def write(self):
@@ -6444,6 +6726,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "q6_0", "auto"], default="f16",
         help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, q4_0, q4_1, q5_0, q5_1, q6_0 for a smaller conversion to then create an iMatrix file for example, and auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type",
+        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "q6_0",
+                                        "q8_0_M", "q4_0_M", "q4_1_M", "q5_0_M", "q5_1_M", "q6_0_M",
+                                        "q8_0_L", "q4_0_L", "q4_1_L", "q5_0_L", "q5_1_L", "q6_0_L",
+                                        "q8_0_XL", "q4_0_XL", "q4_1_XL", "q5_0_XL", "q5_1_XL", "q6_0_XL",
+                                        "q8_0_XXL", "q4_0_XXL", "q4_1_XXL", "q5_0_XXL", "q5_1_XXL", "q6_0_XXL",
+                                        "q8_0_S", "q4_1_S", "q5_0_S", "q5_1_S", "q6_0_S",
+                                        "q8_0_XS", "q4_1_XS", "q5_0_XS", "q5_1_XS", "q6_0_XS",
+                                        "q8_0_XXS", "q4_1_XXS", "q5_0_XXS", "q5_1_XXS", "q6_0_XXS",
+                                        "auto"], default="f16",
+        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, q4_0, q4_1, q5_0, q5_1, q6_0 for a smaller conversion to then create an iMatrix file for example, and auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type. _s Ftypes have attn_q tensors conv. to a lower quant (ex, q5_0 instead of q6_0). _xs FTypes have also FFN_up tensors converted to a lower quant. _xxs FTypes have also FFN_gate tensors converted to a lower quant. _M FTypes have embeddings, output, & attn_v tensors conv. to a higher quant. _L FTypes have also attn_k tensors conv. to a higher quant (ex, q6_0 vs q5_0). _XL FTypes have also FFN_down tensors converted to a higher quant. _XXL FTypes have also attn_output tensors converted to a higher quant.",
     )
     parser.add_argument(
         "--bigendian", action="store_true",
@@ -6543,6 +6835,53 @@ def main() -> None:
         "q5_1": gguf.LlamaFileType.MOSTLY_Q5_1,
         "q6_0": gguf.LlamaFileType.MOSTLY_Q6_0,
         "q8_0": gguf.LlamaFileType.MOSTLY_Q8_0,
+
+        "q4_0_M": gguf.LlamaFileType.MOSTLY_Q4_0_M,
+        "q4_1_M": gguf.LlamaFileType.MOSTLY_Q4_1_M,
+        "q5_0_M": gguf.LlamaFileType.MOSTLY_Q5_0_M,
+        "q5_1_M": gguf.LlamaFileType.MOSTLY_Q5_1_M,
+        "q6_0_M": gguf.LlamaFileType.MOSTLY_Q6_0_M,
+        "q8_0_M": gguf.LlamaFileType.MOSTLY_Q8_0_M,
+
+        "q4_0_L": gguf.LlamaFileType.MOSTLY_Q4_0_L,
+        "q4_1_L": gguf.LlamaFileType.MOSTLY_Q4_1_L,
+        "q5_0_L": gguf.LlamaFileType.MOSTLY_Q5_0_L,
+        "q5_1_L": gguf.LlamaFileType.MOSTLY_Q5_1_L,
+        "q6_0_L": gguf.LlamaFileType.MOSTLY_Q6_0_L,
+        "q8_0_L": gguf.LlamaFileType.MOSTLY_Q8_0_L,
+
+        "q4_0_XL": gguf.LlamaFileType.MOSTLY_Q4_0_XL,
+        "q4_1_XL": gguf.LlamaFileType.MOSTLY_Q4_1_XL,
+        "q5_0_XL": gguf.LlamaFileType.MOSTLY_Q5_0_XL,
+        "q5_1_XL": gguf.LlamaFileType.MOSTLY_Q5_1_XL,
+        "q6_0_XL": gguf.LlamaFileType.MOSTLY_Q6_0_XL,
+        "q8_0_XL": gguf.LlamaFileType.MOSTLY_Q8_0_XL,
+
+        "q4_0_XXL": gguf.LlamaFileType.MOSTLY_Q4_0_XXL,
+        "q4_1_XXL": gguf.LlamaFileType.MOSTLY_Q4_1_XXL,
+        "q5_0_XXL": gguf.LlamaFileType.MOSTLY_Q5_0_XXL,
+        "q5_1_XXL": gguf.LlamaFileType.MOSTLY_Q5_1_XXL,
+        "q6_0_XXL": gguf.LlamaFileType.MOSTLY_Q6_0_XXL,
+        "q8_0_XXL": gguf.LlamaFileType.MOSTLY_Q8_0_XXL,
+
+        "q4_1_S": gguf.LlamaFileType.MOSTLY_Q4_1_S,
+        "q5_0_S": gguf.LlamaFileType.MOSTLY_Q5_0_S,
+        "q5_1_S": gguf.LlamaFileType.MOSTLY_Q5_1_S,
+        "q6_0_S": gguf.LlamaFileType.MOSTLY_Q6_0_S,
+        "q8_0_S": gguf.LlamaFileType.MOSTLY_Q8_0_S,
+
+        "q4_1_XS": gguf.LlamaFileType.MOSTLY_Q4_1_XS,
+        "q5_0_XS": gguf.LlamaFileType.MOSTLY_Q5_0_XS,
+        "q5_1_XS": gguf.LlamaFileType.MOSTLY_Q5_1_XS,
+        "q6_0_XS": gguf.LlamaFileType.MOSTLY_Q6_0_XS,
+        "q8_0_XS": gguf.LlamaFileType.MOSTLY_Q8_0_XS,
+
+        "q4_1_XXS": gguf.LlamaFileType.MOSTLY_Q4_1_XXS,
+        "q5_0_XXS": gguf.LlamaFileType.MOSTLY_Q5_0_XXS,
+        "q5_1_XXS": gguf.LlamaFileType.MOSTLY_Q5_1_XXS,
+        "q6_0_XXS": gguf.LlamaFileType.MOSTLY_Q6_0_XXS,
+        "q8_0_XXS": gguf.LlamaFileType.MOSTLY_Q8_0_XXS,
+
         "auto": gguf.LlamaFileType.GUESSED,
     }
 
