@@ -44,6 +44,13 @@ class SentencePieceTokenTypes(IntEnum):
 AnyModel = TypeVar("AnyModel", bound="type[Model]")
 
 
+def _model_tensor(*names: str) -> tuple[gguf.MODEL_TENSOR | None, ...]:
+    # resolve MODEL_TENSOR enum members by name; a missing member (e.g. a
+    # tensor not yet defined upstream) yields None instead of raising, so
+    # conversions never hard-fail on an unknown tensor.
+    return tuple(getattr(gguf.MODEL_TENSOR, n, None) for n in names)
+
+
 class Model:
     _model_classes: dict[str, type[Model]] = {}
     mtp_only = False
@@ -313,10 +320,14 @@ class Model:
                 if data_qtype is False and (
                     any(
                         self.match_model_tensor_name(new_name, key, bid)
-                        for key in (
-                            gguf.MODEL_TENSOR.FFN_GATE_INP,
-                            gguf.MODEL_TENSOR.POS_EMBD,
-                            gguf.MODEL_TENSOR.TOKEN_TYPES,
+                        for key in _model_tensor(
+                            "FFN_GATE_INP",
+                            "POS_EMBD",
+                            "TOKEN_TYPES",
+                            "INDEXER_K_NORM",
+                            "INDEXER_PROJ",
+                            "INDEXER_ATTN_K",
+                            "INDEXER_ATTN_Q_B",
                         )
                     )
                     or (not name.endswith(".weight") and not (
@@ -327,12 +338,12 @@ class Model:
 
                 if data_qtype is False and any(
                     self.match_model_tensor_name(new_name, key, bid)
-                    for key in (
-                        gguf.MODEL_TENSOR.TOKEN_EMBD,
-                        gguf.MODEL_TENSOR.OUTPUT,
-                        gguf.MODEL_TENSOR.ATTN_V,
-                        gguf.MODEL_TENSOR.ATTN_V_B,
-                        gguf.MODEL_TENSOR.ATTN_QKV,
+                    for key in _model_tensor(
+                        "TOKEN_EMBD",
+                        "OUTPUT",
+                        "ATTN_V",
+                        "ATTN_V_B",
+                        "ATTN_QKV",
                     )
                 ):
                     if self.ftype in (
@@ -374,14 +385,14 @@ class Model:
 
                 if data_qtype is False and any(
                     self.match_model_tensor_name(new_name, key, bid)
-                    for key in (
-                        gguf.MODEL_TENSOR.ATTN_K,
-                        gguf.MODEL_TENSOR.ATTN_K_B,
-                        gguf.MODEL_TENSOR.FFN_DOWN_SHEXP,
-                        gguf.MODEL_TENSOR.FFN_GATE_SHEXP,
-                        gguf.MODEL_TENSOR.FFN_UP_SHEXP,
-                        gguf.MODEL_TENSOR.SSM_ALPHA,
-                        gguf.MODEL_TENSOR.SSM_BETA,
+                    for key in _model_tensor(
+                        "ATTN_K",
+                        "ATTN_K_B",
+                        "FFN_DOWN_SHEXP",
+                        "FFN_GATE_SHEXP",
+                        "FFN_UP_SHEXP",
+                        "SSM_ALPHA",
+                        "SSM_BETA",
                     )
                 ):
                     if self.ftype in (
@@ -417,9 +428,9 @@ class Model:
 
                 if data_qtype is False and any(
                     self.match_model_tensor_name(new_name, key, bid)
-                    for key in (
-                        gguf.MODEL_TENSOR.FFN_DOWN,
-                        gguf.MODEL_TENSOR.FFN_DOWN_EXP,
+                    for key in _model_tensor(
+                        "FFN_DOWN",
+                        "FFN_DOWN_EXP",
                     )
                 ):
                     if self.ftype in (
@@ -449,11 +460,11 @@ class Model:
 
                 if data_qtype is False and any(
                     self.match_model_tensor_name(new_name, key, bid)
-                    for key in (
-                        gguf.MODEL_TENSOR.ATTN_OUT,
-                        gguf.MODEL_TENSOR.ATTN_OUT_A,
-                        gguf.MODEL_TENSOR.ATTN_OUT_B,
-                        gguf.MODEL_TENSOR.SSM_OUT,
+                    for key in _model_tensor(
+                        "ATTN_OUT",
+                        "ATTN_OUT_A",
+                        "ATTN_OUT_B",
+                        "SSM_OUT",
                     )
                 ):
                     if self.ftype in (
@@ -477,9 +488,9 @@ class Model:
 
                 if data_qtype is False and any(
                     self.match_model_tensor_name(new_name, key, bid)
-                    for key in (
-                        gguf.MODEL_TENSOR.FFN_GATE,
-                        gguf.MODEL_TENSOR.FFN_GATE_EXP,
+                    for key in _model_tensor(
+                        "FFN_GATE",
+                        "FFN_GATE_EXP",
                     )
                 ):
                     if self.ftype in (
@@ -499,9 +510,9 @@ class Model:
 
                 if data_qtype is False and any(
                     self.match_model_tensor_name(new_name, key, bid)
-                    for key in (
-                        gguf.MODEL_TENSOR.FFN_UP,
-                        gguf.MODEL_TENSOR.FFN_UP_EXP,
+                    for key in _model_tensor(
+                        "FFN_UP",
+                        "FFN_UP_EXP",
                     )
                 ):
                     if self.ftype in (
@@ -526,11 +537,10 @@ class Model:
 
                 if data_qtype is False and any(
                     self.match_model_tensor_name(new_name, key, bid)
-                    for key in (
-                        gguf.MODEL_TENSOR.ATTN_Q,
-                        gguf.MODEL_TENSOR.ATTN_Q_A,
-                        gguf.MODEL_TENSOR.ATTN_Q_B,
-                        gguf.MODEL_TENSOR.INDEXER_ATTN_Q_B,
+                    for key in _model_tensor(
+                        "ATTN_Q",
+                        "ATTN_Q_A",
+                        "ATTN_Q_B",
                     )
                 ):
                     if self.ftype in (
@@ -661,18 +671,18 @@ class Model:
 
                 if self.moe_quant_type is not None and data_qtype != gguf.GGMLQuantizationType.F32 and not any(
                     self.match_model_tensor_name(new_name, key, bid)
-                    for key in (
-                        gguf.MODEL_TENSOR.FFN_GATE_EXP,
-                        gguf.MODEL_TENSOR.FFN_DOWN_EXP,
-                        gguf.MODEL_TENSOR.FFN_UP_EXP,
+                    for key in _model_tensor(
+                        "FFN_GATE_EXP",
+                        "FFN_DOWN_EXP",
+                        "FFN_UP_EXP",
                     )
                 ):
                     data_qtype = self.moe_quant_type
 
                 if self.fni8 and any(
                     self.match_model_tensor_name(new_name, key, bid)
-                    for key in (
-                        gguf.MODEL_TENSOR.FFN_GATE_INP,
+                    for key in _model_tensor(
+                        "FFN_GATE_INP",
                     )
                 ):
                     data_qtype = gguf.GGMLQuantizationType.Q8_0
