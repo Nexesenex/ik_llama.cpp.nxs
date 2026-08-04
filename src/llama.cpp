@@ -3519,6 +3519,9 @@ static void llm_prepare_openpangu_param_sinks(llama_model & model) {
         if (source->buffer && !ggml_backend_buffer_is_host(source->buffer)) {
             const size_t nbytes = ggml_nbytes(source);
             GGML_ASSERT(buffer.size() >= nbytes);
+            LLAMA_LOG_INFO("[DBG] mht vec=%p cap=%zu size=%zu data=%p srcname=%s\n",
+                    (void*)&buffer, buffer.capacity(), buffer.size(), (void*)buffer.data(),
+                    source->name);
             ggml_backend_tensor_get(source, buffer.data(), 0, nbytes);
             result.data = buffer.data();
         }
@@ -3560,9 +3563,13 @@ static void llm_prepare_openpangu_param_sinks(llama_model & model) {
         GGML_ASSERT(l.param_sink_k_pe->ne[1] == n_sink);
         GGML_ASSERT(l.attn_kv_a_norm->ne[0] == l.param_sink_kv->ne[0]);
 
+        LLAMA_LOG_INFO("[DBG] il=%d layer start, sink_kv buf=%s\n", il, ggml_backend_buffer_name(l.param_sink_kv->buffer));
         auto param_sink_kv = make_host_tensor(l.param_sink_kv, kv_buffer);
+        LLAMA_LOG_INFO("[DBG] il=%d make_host_tensor kv ok\n", il);
         auto param_sink_k_pe = make_host_tensor(l.param_sink_k_pe, kpe_buffer);
+        LLAMA_LOG_INFO("[DBG] il=%d make_host_tensor k_pe ok\n", il);
         auto attn_kv_a_norm = make_host_tensor(l.attn_kv_a_norm, norm_buffer);
+        LLAMA_LOG_INFO("[DBG] il=%d make_host_tensor norm ok\n", il);
 
         char * ptr = tensor_data.data();
         char * const end = tensor_data.data() + tensor_data.size();
@@ -3590,12 +3597,15 @@ static void llm_prepare_openpangu_param_sinks(llama_model & model) {
 
         ggml_build_forward_expand(graph, sink_blk);
         ggml_build_forward_expand(graph, s_lat_t);
+        LLAMA_LOG_INFO("[DBG] il=%d graph built (nodes=%d)\n", il, graph->n_nodes);
 
         auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2, NULL);
         if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
         plan.work_data = work_data.data();
+        LLAMA_LOG_INFO("[DBG] il=%d plan ok, work_size=%zu\n", il, plan.work_size);
 
         auto status = ggml_graph_compute(graph, &plan);
+        LLAMA_LOG_INFO("[DBG] il=%d compute done, status=%d\n", il, (int)status);
         if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute openPangu param_sink tensors");
 
         auto buft = ggml_backend_buffer_get_type(l.param_sink_kv->buffer);
@@ -3603,7 +3613,9 @@ static void llm_prepare_openpangu_param_sinks(llama_model & model) {
         auto s_lat_t_name  = std::string{"blk."} + std::to_string(il) + ".attn_param_sink_lat_t";
 
         l.param_sink_blk = materialize(sink_blk, l.computed_param_sink_blk, buft, sink_blk_name);
+        LLAMA_LOG_INFO("[DBG] il=%d materialize sink_blk ok\n", il);
         l.param_sink_lat_t = materialize(s_lat_t, l.computed_param_sink_lat_t, buft, s_lat_t_name);
+        LLAMA_LOG_INFO("[DBG] il=%d materialize lat_t ok\n", il);
 
         LLAMA_LOG_INFO("Computed %s as %d x %d of type %s and stored in buffer %s\n",
                 sink_blk_name.c_str(), (int)sink_blk->ne[0], (int)sink_blk->ne[1],
