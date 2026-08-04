@@ -76,7 +76,8 @@ class Model:
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False,
                  target_model_dir: Path | None = None,
                  moe_quant_type: gguf.GGMLQuantizationType | None = None,
-                 fni8: bool = False):
+                 fni8: bool = False,
+                 no_bf16_to_f32: bool = False):
         if type(self) is Model:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
 
@@ -84,6 +85,7 @@ class Model:
         self.ftype = ftype
         self.moe_quant_type = moe_quant_type
         self.fni8 = fni8
+        self.no_bf16_to_f32 = no_bf16_to_f32
         self.fname_out = fname_out
         self.is_big_endian = is_big_endian
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
@@ -674,6 +676,9 @@ class Model:
                     )
                 ):
                     data_qtype = gguf.GGMLQuantizationType.Q8_0
+
+                if self.no_bf16_to_f32 and old_dtype == torch.bfloat16 and data_qtype == gguf.GGMLQuantizationType.F32:
+                    data_qtype = gguf.GGMLQuantizationType.BF16
 
                 try:
                     data = gguf.quants.quantize(data, data_qtype)
@@ -6776,6 +6781,10 @@ def parse_args() -> argparse.Namespace:
         "--fni8", action="store_true",
         help="force the FFN_GATE_INP (router) tensor to Q8_0 when it exists, instead of the default F32",
     )
+    parser.add_argument(
+        "--no-bf16-to-f32", action="store_true",
+        help="keep BF16 tensors that are not converted by the FTYPE scheme in BF16 instead of upcasting them to F32 (ik_llama.cpp supports BF16 inference)",
+    )
 
     return parser.parse_args()
 
@@ -6920,7 +6929,8 @@ def main() -> None:
                                      small_first_shard=args.no_tensor_first_split,
                                      target_model_dir=args.target_model_dir,
                                      moe_quant_type=moe_quant_type,
-                                     fni8=args.fni8)
+                                     fni8=args.fni8,
+                                     no_bf16_to_f32=args.no_bf16_to_f32)
 
         if args.vocab_only:
             logger.info("Exporting model vocab...")
