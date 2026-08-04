@@ -337,6 +337,12 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     cb(state, "state_predelta", il);
     ggml_build_forward_expand(gf, state);
 
+    // ssm_conv (src2 = conv1d weight) must be F32 on CPU (ggml.c) and CUDA (ssm-conv.cu);
+    // upcast so BF16-kept conv1d weights work like F32 ones
+    if (ssm_conv1d->type != GGML_TYPE_F32) {
+        ssm_conv1d = ggml_cast(ctx0, ssm_conv1d, GGML_TYPE_F32);
+    }
+
     ggml_tensor * conv_output_raw = ggml_ssm_conv(ctx0, conv_states, qkv_mixed, ssm_conv1d, inp_s_seq_qnext, per_step_conv);
     cb(conv_output_raw, "conv_output_raw", il);
 
