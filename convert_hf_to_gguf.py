@@ -325,6 +325,7 @@ class Model:
                         gguf.MODEL_TENSOR.TOKEN_EMBD,
                         gguf.MODEL_TENSOR.OUTPUT,
                         gguf.MODEL_TENSOR.ATTN_V,
+                        gguf.MODEL_TENSOR.ATTN_V_B,
                         gguf.MODEL_TENSOR.ATTN_QKV,
                     )
                 ):
@@ -369,9 +370,12 @@ class Model:
                     self.match_model_tensor_name(new_name, key, bid)
                     for key in (
                         gguf.MODEL_TENSOR.ATTN_K,
+                        gguf.MODEL_TENSOR.ATTN_K_B,
                         gguf.MODEL_TENSOR.FFN_DOWN_SHEXP,
                         gguf.MODEL_TENSOR.FFN_GATE_SHEXP,
                         gguf.MODEL_TENSOR.FFN_UP_SHEXP,
+                        gguf.MODEL_TENSOR.SSM_ALPHA,
+                        gguf.MODEL_TENSOR.SSM_BETA,
                     )
                 ):
                     if self.ftype in (
@@ -440,6 +444,9 @@ class Model:
                     self.match_model_tensor_name(new_name, key, bid)
                     for key in (
                         gguf.MODEL_TENSOR.ATTN_OUT,
+                        gguf.MODEL_TENSOR.ATTN_OUT_A,
+                        gguf.MODEL_TENSOR.ATTN_OUT_B,
+                        gguf.MODEL_TENSOR.SSM_OUT,
                     )
                 ):
                     if self.ftype in (
@@ -512,6 +519,9 @@ class Model:
                     self.match_model_tensor_name(new_name, key, bid)
                     for key in (
                         gguf.MODEL_TENSOR.ATTN_Q,
+                        gguf.MODEL_TENSOR.ATTN_Q_A,
+                        gguf.MODEL_TENSOR.ATTN_Q_B,
+                        gguf.MODEL_TENSOR.INDEXER_ATTN_Q_B,
                     )
                 ):
                     if self.ftype in (
