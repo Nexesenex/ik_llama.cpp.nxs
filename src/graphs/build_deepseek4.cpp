@@ -547,6 +547,11 @@ static ggml_tensor * dsv4_build_attn(
         int            il,
         int            n_compressed,
         ggml_cgraph  * gf) {
+    if (sinks && sinks->type != GGML_TYPE_F32) {
+        // ggml_soft_max_add_sinks / ggml_flash_attn_ext_add_sinks require F32 sinks
+        // (ggml.c asserts); upcast so BF16-kept attn_sinks weights work like F32 ones
+        sinks = ggml_cast(ctx, sinks, GGML_TYPE_F32);
+    }
     const bool v_trans = v->nb[1] > v->nb[2];
     const int64_t n_stream = k->ne[3];
 
