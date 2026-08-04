@@ -378,6 +378,7 @@ class MODEL_TENSOR(IntEnum):
     SSM_CONV1D_V         = auto()
     SSM_F_A              = auto()
     SSM_F_B              = auto()
+    SSM_ALPHA            = auto()
     SSM_BETA             = auto()
     SSM_RDA              = auto()
     SSM_G                = auto()
@@ -646,6 +647,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_CONV1D_V:         "blk.{bid}.ssm_conv1d_v",
     MODEL_TENSOR.SSM_F_A:              "blk.{bid}.ssm_f_a",
     MODEL_TENSOR.SSM_F_B:              "blk.{bid}.ssm_f_b",
+    MODEL_TENSOR.SSM_ALPHA:            "blk.{bid}.ssm_alpha",
     MODEL_TENSOR.SSM_BETA:             "blk.{bid}.ssm_beta",
     MODEL_TENSOR.SSM_RDA:              "blk.{bid}.ssm_rda",
     MODEL_TENSOR.SSM_G:                "blk.{bid}.ssm_g",
