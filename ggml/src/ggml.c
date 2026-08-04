@@ -18985,12 +18985,6 @@ static void ggml_compute_forward_fused_rms_norm_f32(
 
     const float * c = (float *) src1->data;
 
-    if (ith == 0) {
-        printf("[DBG] fused_f32 dst=%p src0t=%p src0=%p src1t=%p src1=%p ne00=%" PRId64 " nrows=%d nth=%d npt=%d\n",
-                (void*)dst->data, (void*)dst->src[0], (void*)src0->data, (void*)dst->src[1], (void*)src1->data,
-                ne00, nrows, nth, nrows_per_thread);
-    }
-
     for (int ir = first; ir < last; ++ir) {
         int i03 = ir/(ne01*ne02);
         int i02 = (ir - i03*ne01*ne02)/ne01;
@@ -31914,9 +31908,6 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
         if (ggml_is_noop(node)) continue;
-
-        printf("[DBG] node %d op=%s name=%s data=%p ne0=%" PRId64 " ne1=%" PRId64 "\n",
-                node_n, ggml_op_name(node->op), node->name, (void*)node->data, node->ne[0], node->ne[1]);
 
 #if IK_PRINT_TIMING
         int64_t tim1 = ggml_time_us();
