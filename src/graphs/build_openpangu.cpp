@@ -1200,9 +1200,14 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         if (!ggml_is_contiguous(Rin)) {
             Rin = ggml_cont(ctx0, Rin);
         }
+        // alpha (scale), beta (bias) must be F32 for ggml_hc_pre; gamma feeds the
+        // fused rms_norm gate which also requires F32, so upcast all three here.
+        auto to_f32 = [&](ggml_tensor * t) -> ggml_tensor * {
+            return t && t->type != GGML_TYPE_F32 ? ggml_cast(ctx0, t, GGML_TYPE_F32) : t;
+        };
         ggml_tensor * mixes = build_mhc_pre_projection(
-                Rin, phi, gamma, n_embd, S, hparams.f_norm_rms_eps, true); // [(S+2)*S, T]
-        ggml_tensor * all = ggml_hc_pre(ctx0, mixes, alpha, beta, (int) S, sink_iters, 0.0f);
+                Rin, phi, to_f32(gamma), n_embd, S, hparams.f_norm_rms_eps, true); // [(S+2)*S, T]
+        ggml_tensor * all = ggml_hc_pre(ctx0, mixes, to_f32(alpha), to_f32(beta), (int) S, sink_iters, 0.0f);
         ggml_tensor * h_pre  = ggml_view_2d(ctx0, all, S, n_tokens, S*sizeof(float), 0);
         ggml_tensor * h_post = ggml_view_2d(ctx0, all, S, n_tokens, S*sizeof(float), S*n_tokens*sizeof(float));
         ggml_tensor * h_res  = ggml_view_3d(ctx0, all, S, S, n_tokens,
