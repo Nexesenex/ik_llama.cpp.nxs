@@ -268,6 +268,10 @@ static void ggml_cuda_op_bin_bcast(
             op()(src0, src1, dst, (const half *) src0_dd, (const float *)src1_dd, (half *) dst_dd, stream);
         } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
             op()(src0, src1, dst, (const half *) src0_dd, (const float *)src1_dd, (float *)dst_dd, stream);
+        } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) {
+            op()(src0, src1, dst, (const nv_bfloat16 *) src0_dd, (const float *)src1_dd, (nv_bfloat16 *) dst_dd, stream);
+        } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_F32) {
+            op()(src0, src1, dst, (const nv_bfloat16 *) src0_dd, (const float *)src1_dd, (float *)dst_dd, stream);
         } else {
             fprintf(stderr, "%s: unsupported types: dst: %s, src0: %s, src1: %s\n", __func__,
                     ggml_type_name(dst->type), ggml_type_name(src0->type), ggml_type_name(src1->type));
@@ -281,6 +285,25 @@ static void ggml_cuda_op_bin_bcast(
             op()(src0, src1, dst, (const half *) src0_dd, (const half *)src1_dd, (half *) dst_dd, stream);
         } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
             op()(src0, src1, dst, (const half *) src0_dd, (const half *)src1_dd, (float *)dst_dd, stream);
+        } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_F32) {
+            op()(src0, src1, dst, (const nv_bfloat16 *) src0_dd, (const half *)src1_dd, (float *)dst_dd, stream);
+        } else {
+            fprintf(stderr, "%s: unsupported types: dst: %s, src0: %s, src1: %s\n", __func__,
+                    ggml_type_name(dst->type), ggml_type_name(src0->type), ggml_type_name(src1->type));
+            GGML_ABORT("fatal error");
+        }
+    }
+    else if (src1->type == GGML_TYPE_BF16) {
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            op()(src0, src1, dst, (const float *)src0_dd, (const nv_bfloat16 *)src1_dd, (float *)dst_dd, stream);
+        } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
+            op()(src0, src1, dst, (const half *) src0_dd, (const nv_bfloat16 *)src1_dd, (half *) dst_dd, stream);
+        } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
+            op()(src0, src1, dst, (const half *) src0_dd, (const nv_bfloat16 *)src1_dd, (float *)dst_dd, stream);
+        } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) {
+            op()(src0, src1, dst, (const nv_bfloat16 *) src0_dd, (const nv_bfloat16 *)src1_dd, (nv_bfloat16 *) dst_dd, stream);
+        } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_F32) {
+            op()(src0, src1, dst, (const nv_bfloat16 *) src0_dd, (const nv_bfloat16 *)src1_dd, (float *)dst_dd, stream);
         } else {
             fprintf(stderr, "%s: unsupported types: dst: %s, src0: %s, src1: %s\n", __func__,
                     ggml_type_name(dst->type), ggml_type_name(src0->type), ggml_type_name(src1->type));
