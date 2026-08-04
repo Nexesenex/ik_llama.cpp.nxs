@@ -1025,6 +1025,11 @@ ggml_tensor * llm_build_context::llm_build_norm(
          const llm_build_cb & cb, int il, float scale_eps) {
 
     if (type == LLM_NORM_RMS && mw) {
+        // fused rms_norm gate (mw) must be F32 on CUDA (ggml_cuda_op_fused_rms_norm);
+        // upcast BF16/F16 weights so BF16-kept files work like F32 ones
+        if (mw->type != GGML_TYPE_F32) {
+            mw = ggml_cast(ctx, mw, GGML_TYPE_F32);
+        }
         cur = ggml_fused_rms_norm(ctx, cur, mw, scale_eps * hparams.f_norm_rms_eps);
         if (mb) {
             cb(cur, "fused_norm", il);
@@ -1081,7 +1086,11 @@ ggml_tensor * llm_build_context::do_split_norm(ggml_context * ctx, ggml_tensor *
         auto norm = (ggml_split_tensor_t *)the_norm->extra;
         GGML_ASSERT(norm->splits[id]);
         if (is_norm) {
-            cur = ggml_fused_norm(ctx, cur, norm->splits[id], hparams.f_norm_eps);
+            auto split = norm->splits[id];
+            if (split->type != GGML_TYPE_F32) {
+                split = ggml_cast(ctx, split, GGML_TYPE_F32);
+            }
+            cur = ggml_fused_norm(ctx, cur, split, hparams.f_norm_eps);
         } else {
             cur = llm_build_context::llm_build_norm(ctx, cur, hparams, norm->splits[id], NULL, LLM_NORM_RMS, cb, il_cb);
         }
