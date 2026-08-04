@@ -353,6 +353,8 @@ class MODEL_TENSOR(IntEnum):
     SSM_A                = auto()
     SSM_D                = auto()
     SSM_OUT              = auto()
+    SSM_ALPHA            = auto()
+    SSM_BETA             = auto()
     ATTN_Q_A             = auto()
     ATTN_Q_B             = auto()
     ATTN_KV_A_MQA        = auto()
@@ -582,6 +584,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_A:                "blk.{bid}.ssm_a",
     MODEL_TENSOR.SSM_D:                "blk.{bid}.ssm_d",
     MODEL_TENSOR.SSM_OUT:              "blk.{bid}.ssm_out",
+    MODEL_TENSOR.SSM_ALPHA:            "blk.{bid}.ssm_alpha",
+    MODEL_TENSOR.SSM_BETA:             "blk.{bid}.ssm_beta",
     MODEL_TENSOR.ATTN_Q_A:             "blk.{bid}.attn_q_a",
     MODEL_TENSOR.ATTN_Q_B:             "blk.{bid}.attn_q_b",
     MODEL_TENSOR.ATTN_KV_A_MQA:        "blk.{bid}.attn_kv_a_mqa",
