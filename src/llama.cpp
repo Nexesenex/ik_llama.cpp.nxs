@@ -3601,7 +3601,8 @@ static void llm_prepare_openpangu_param_sinks(llama_model & model) {
         const size_t s_kpe_size   = n_kpe*n_sink*sizeof(float);
         const size_t sink_blk_size = (n_kv + n_kpe)*n_sink*sizeof(float);
         const size_t s_lat_t_size  = n_kv*n_sink*sizeof(float);
-        max_tensor_data = std::max(max_tensor_data, s_ckv_size + s_kpe_size + sink_blk_size + s_lat_t_size);
+        const size_t avn_f32_size = l.attn_kv_a_norm->type != GGML_TYPE_F32 ? n_kv*sizeof(float) : 0;
+        max_tensor_data = std::max(max_tensor_data, s_ckv_size + s_kpe_size + sink_blk_size + s_lat_t_size + avn_f32_size);
     }
     if (n_to_compute == 0) return;
 
@@ -3678,7 +3679,15 @@ static void llm_prepare_openpangu_param_sinks(llama_model & model) {
         char * ptr = tensor_data.data();
         char * const end = tensor_data.data() + tensor_data.size();
 
-        ggml_tensor * s_ckv = ggml_fused_rms_norm(ctx, &param_sink_kv, &attn_kv_a_norm, hparams.f_norm_rms_eps);
+        ggml_tensor * attn_kv_a_norm_f32 = &attn_kv_a_norm;
+        if (attn_kv_a_norm.type != GGML_TYPE_F32) {
+            // the fused rms_norm gate (src1) must be F32 (see ggml_compute_forward_fused_rms_norm_bf16)
+            attn_kv_a_norm_f32 = ggml_cast(ctx, &attn_kv_a_norm, GGML_TYPE_F32);
+            attn_kv_a_norm_f32->data = ptr;
+            ptr += ggml_nbytes(attn_kv_a_norm_f32);
+        }
+
+        ggml_tensor * s_ckv = ggml_fused_rms_norm(ctx, &param_sink_kv, attn_kv_a_norm_f32, hparams.f_norm_rms_eps);
         s_ckv->data = ptr;
         ptr += ggml_nbytes(s_ckv);
 
