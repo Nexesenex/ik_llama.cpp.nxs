@@ -84,7 +84,8 @@ class GGUFWriter:
 
     def __init__(
         self, path: os.PathLike[str] | str | None, arch: str, use_temp_file: bool = False, endianess: GGUFEndian = GGUFEndian.LITTLE,
-        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False
+        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False,
+        partial_reconv: bool = False
     ):
         self.fout = None
         self.path = Path(path) if path else None
@@ -99,6 +100,8 @@ class GGUFWriter:
         self.split_max_size = split_max_size
         self.dry_run = dry_run
         self.small_first_shard = small_first_shard
+        self.partial_reconv = partial_reconv
+        self.skipped_files: list[Path] = []
         logger.info("gguf: This GGUF file is for {0} Endian only".format(
             "Big" if self.endianess == GGUFEndian.BIG else "Little",
         ))
@@ -175,7 +178,14 @@ class GGUFWriter:
 
         if self.path is not None:
             filenames = self.print_plan()
-            self.fout = [open(filename, "wb") for filename in filenames]
+            self.fout = []
+            for filename in filenames:
+                if self.partial_reconv and filename.is_file():
+                    logger.info(f"gguf: {filename} already exists, skipping")
+                    self.skipped_files.append(filename)
+                    self.fout.append(None)
+                else:
+                    self.fout.append(open(filename, "wb"))
             self.state = WriterState.EMPTY
 
     def print_plan(self) -> list[Path]:
@@ -223,6 +233,8 @@ class GGUFWriter:
         self.add_shard_kv_data()
 
         for fout, tensors, kv_data in zip(self.fout, self.tensors, self.kv_data):
+            if fout is None:
+                continue
             fout.write(self._pack("<I", GGUF_MAGIC, skip_pack_prefix = True))
             fout.write(self._pack("I", GGUF_VERSION))
             fout.write(self._pack("Q", len(tensors)))
@@ -236,6 +248,8 @@ class GGUFWriter:
         assert self.fout is not None
 
         for fout, kv_data in zip(self.fout, self.kv_data):
+            if fout is None:
+                continue
             kv_bytes = bytearray()
 
             for key, val in kv_data.items():
@@ -253,6 +267,8 @@ class GGUFWriter:
         assert self.fout is not None
 
         for fout, tensors in zip(self.fout, self.tensors):
+            if fout is None:
+                continue
             ti_data = bytearray()
             offset_tensor = 0
 
@@ -428,7 +444,8 @@ class GGUFWriter:
         assert self.fout is not None
 
         for fout in self.fout:
-            self.write_padding(fout, fout.tell())
+            if fout is not None:
+                self.write_padding(fout, fout.tell())
 
         if self.temp_file is None:
             shard_bar = None
@@ -437,13 +454,16 @@ class GGUFWriter:
             if progress:
                 from tqdm import tqdm
 
-                total_bytes = sum(ti.nbytes for t in self.tensors for ti in t.values())
+                total_bytes = sum(ti.nbytes for fout, t in zip(self.fout, self.tensors) if fout is not None for ti in t.values())
 
                 if len(self.fout) > 1:
                     shard_bar = tqdm(desc=f"Shard (0/{len(self.fout)})", total=None, unit="byte", unit_scale=True)
                 bar = tqdm(desc="Writing", total=total_bytes, unit="byte", unit_scale=True)
 
             for i, (fout, tensors) in enumerate(zip(self.fout, self.tensors)):
+                if fout is None:
+                    continue
+
                 if shard_bar is not None:
                     shard_bar.set_description(f"Shard ({i + 1}/{len(self.fout)})")
                     total = sum(ti.nbytes for ti in tensors.values())
@@ -472,12 +492,14 @@ class GGUFWriter:
     def flush(self) -> None:
         assert self.fout is not None
         for fout in self.fout:
-            fout.flush()
+            if fout is not None:
+                fout.flush()
 
     def close(self) -> None:
         if self.fout is not None:
             for fout in self.fout:
-                fout.close()
+                if fout is not None:
+                    fout.close()
             self.fout = None
 
     def add_type(self, type_name: str) -> None:
