@@ -1900,7 +1900,14 @@ ggml_tensor * llm_build_context::build_deepseek4_tp_ffn(ggml_cgraph * gf, int il
         hc_residual[id] = residual;
     }
 
-    const bool replicated_ffn = split_wo_b->split_dim == -1;
+    // Sum the per-rank FFN partials only when the FFN weights are actually split.
+    // Routed experts kept whole (e.g. CPU-offloaded) make every rank compute the
+    // full MoE redundantly; reducing those identical outputs would multiply the
+    // result by n_device. Dense lead layers split their dense FFN under TP.
+    const bool ffn_split_active = is_dense
+            ? (split_ffn_down && split_ffn_down->split_dim != -1)
+            : (split_ffn_down_exps && split_ffn_down_exps->split_dim != -1);
+    const bool replicated_ffn = !ffn_split_active;
     ggml_tensor * ffn_combined = nullptr;
     if (!replicated_ffn) {
         ffn_combined = ggml_reduce(ctx0, ffn_partials.data(), n_device, GGML_OP_ADD);
