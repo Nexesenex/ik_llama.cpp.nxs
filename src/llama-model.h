@@ -239,6 +239,31 @@ struct llama_layer {
     llama_split_tensor split_attn_q_a_norm;
     llama_split_tensor split_attn_kv_a_norm;
 
+    // DS4 per-device shards (-sm graph for DEEPSEEK4). wq_b is row-split by
+    // group head-rows, wo_a along its group dim, wo_b row-split by group rows.
+    llama_split_tensor split_wo_a;
+    llama_split_tensor split_wo_b;
+
+    // DS4 replicated per-device weights (mHC, compressors, indexer).
+    llama_split_tensor split_hc_attn_fn;
+    llama_split_tensor split_hc_attn_scale;
+    llama_split_tensor split_hc_attn_base;
+    llama_split_tensor split_hc_ffn_fn;
+    llama_split_tensor split_hc_ffn_scale;
+    llama_split_tensor split_hc_ffn_base;
+    llama_split_tensor split_attn_comp_wkv;
+    llama_split_tensor split_attn_comp_wgate;
+    llama_split_tensor split_attn_comp_ape;
+    llama_split_tensor split_attn_comp_norm;
+    llama_split_tensor split_indexer_k_norm;
+    llama_split_tensor split_indexer_attn_k;
+    llama_split_tensor split_indexer_proj;
+    llama_split_tensor split_indexer_attn_q_b;
+    llama_split_tensor split_indexer_comp_wkv;
+    llama_split_tensor split_indexer_comp_wgate;
+    llama_split_tensor split_indexer_comp_ape;
+    llama_split_tensor split_indexer_comp_norm;
+
     llama_split_tensor split_ssm_wqkv;
     llama_split_tensor split_ssm_wqkv_gate;
     llama_split_tensor split_ssm_in;
@@ -339,6 +364,7 @@ struct llama_layer {
     llama_split_tensor split_ffn_up_b;
     llama_split_tensor split_ffn_act;
     llama_split_tensor split_ffn_exp_probs_b;
+    llama_split_tensor split_ffn_gate_tid2eid;
 
     // misc
     struct ggml_tensor * per_layer_inp_gate;

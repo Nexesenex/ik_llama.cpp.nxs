@@ -579,6 +579,24 @@ struct llama_context {
             std::vector<struct ggml_tensor *> lid_state_kv;
             std::vector<struct ggml_tensor *> lid_state_score;
 
+            // Per-device replicas of the DSV4 compressed caches and per-layer
+            // compressor state (-sm graph / -sm attn for DEEPSEEK4). The
+            // tensors in the vectors above are the logical parents; when a
+            // layer is split across devices, the parent carries a
+            // ggml_split_tensor_t (split_dim = -1) in `extra` whose `splits`
+            // are the per-device full-width replicas stored here. Entry i is
+            // index-aligned with the cache vectors above (valid for the layer's
+            // ratio kind only).
+            std::vector<llama_split_tensor> csa_k_split;
+            std::vector<llama_split_tensor> hca_k_split;
+            std::vector<llama_split_tensor> lid_k_split;
+            std::vector<llama_split_tensor> csa_state_kv_split;
+            std::vector<llama_split_tensor> csa_state_score_split;
+            std::vector<llama_split_tensor> hca_state_kv_split;
+            std::vector<llama_split_tensor> hca_state_score_split;
+            std::vector<llama_split_tensor> lid_state_kv_split;
+            std::vector<llama_split_tensor> lid_state_score_split;
+
             struct ggml_context * cache_ctx = nullptr;
             std::vector<ggml_backend_buffer_t> cache_bufs;
             uint32_t n_stream = 1;

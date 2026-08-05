@@ -1221,6 +1221,7 @@ static bool llama_kv_cache_init(
 
     bool split_cache   = false;
     bool replicate_mla = false;
+    bool replicate_dsv4_k = false;
     if ((model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && !is_mla_attn && offload && !is_dsv4_k_only) {
         cache.split_k_l.reserve(n_layer);
         cache.split_v_l.reserve(n_layer);
@@ -1233,8 +1234,18 @@ static bool llama_kv_cache_init(
         cache.replicated_k_l.reserve(n_layer);
         replicate_mla = true;
     }
+    // DeepSeek 4 keeps only a raw head-K cache (no V). Under tensor parallel /
+    // attention split, the cache is replicated in full on every device, exactly
+    // like the MLA compressed-latent cache, so each device's attention reads
+    // its local copy. Whether a layer actually gets replicas is decided
+    // per-layer below by the presence of `wo_b->extra` (set by the loader when
+    // the attention output tensors are split).
+    if ((model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && is_dsv4_k_only && offload) {
+        cache.replicated_k_l.reserve(n_layer);
+        replicate_dsv4_k = true;
+    }
 
-    if (cache.any_compacted() && (split_cache || replicate_mla)) {
+    if (cache.any_compacted() && (split_cache || replicate_mla || replicate_dsv4_k)) {
         LLAMA_LOG_ERROR("%s: --swa-compress is not supported with a split or replicated KV cache "
                         "(split mode graph/attn); run without --swa-compress or with a single device\n", __func__);
         return false;
@@ -1249,7 +1260,7 @@ static bool llama_kv_cache_init(
         const int64_t n_mtp_first = hparams.n_layer - hparams.nextn_predict_layers;
         for (int64_t i = 0; i < n_layer; ++i) {
             const bool is_mtp_tail = is_mtp && i >= n_mtp_first;
-            if ((split_cache || replicate_mla) && !is_mtp_tail) {
+            if ((split_cache || replicate_mla || replicate_dsv4_k) && !is_mtp_tail) {
                 buft_layer_count[model.buft_layer[i].buft_matrix]++;
                 if (model.buft_layer[i].buft != model.buft_layer[i].buft_matrix) {
                     buft_layer_count[model.buft_layer[i].buft]++;
@@ -1267,7 +1278,7 @@ static bool llama_kv_cache_init(
     for (auto & it : buft_layer_count) {
         int n_layers = it.second;
         size_t ctx_mem_size = 8u*n_layers*ggml_tensor_overhead();
-        if (split_cache || replicate_mla) ctx_mem_size += 4*model.splits.size()*n_layers*ggml_tensor_overhead();
+        if (split_cache || replicate_mla || replicate_dsv4_k) ctx_mem_size += 4*model.splits.size()*n_layers*ggml_tensor_overhead();
         struct ggml_init_params params = {
             /*.mem_size   =*/ ctx_mem_size,
             /*.mem_buffer =*/ NULL,
@@ -1355,7 +1366,7 @@ static bool llama_kv_cache_init(
                                         model.arch == LLM_ARCH_GLM_DSA) &&
                 hparams.nextn_predict_layers > 0 && i >= n_mtp_first_layer;
         //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
-        struct ggml_context * ctx = ((split_cache || replicate_mla) && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        struct ggml_context * ctx = ((split_cache || replicate_mla || replicate_dsv4_k) && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
@@ -1488,6 +1499,29 @@ static bool llama_kv_cache_init(
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_lat, cache.rows(i));
             } else if (is_dsv4_k_only) {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
+                // Per-device replicas of the raw head-K cache (n_device from wo_b's split).
+                // DEEPSEEK4 does not keep a V store: every device needs the full K to
+                // attend and to recompress the CSA/HCA keys, so the cache is replicated
+                // in full, mirroring the MLA replicated latent cache above.
+                if (replicate_dsv4_k && !is_mtp_tail_layer && model.layers[i].wo_b && model.layers[i].wo_b->extra) {
+                    auto wo_b = model.layers[i].wo_b;
+                    auto extra_wo = (const ggml_split_tensor_t *)wo_b->extra;
+                    int n_device = extra_wo->n_device;
+                    auto & repl_k_l = cache.replicated_k_l.emplace_back();
+                    repl_k_l.tensor_splits.resize(n_device, nullptr);
+                    for (int is = 0; is < n_device; ++is) {
+                        if (!extra_wo->splits[is]) continue;
+                        ggml_tensor * rkv = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
+                        auto split_name = std::string("cache_k_l") + std::to_string(i) + '.' + std::to_string(is);
+                        ggml_set_name(rkv, split_name.c_str());
+                        repl_k_l.tensor_splits[is] = rkv;
+                        mem_split[is] += ggml_nbytes(rkv);
+                    }
+                    repl_k_l.ggml.n_device  = n_device;
+                    repl_k_l.ggml.split_dim = -1;
+                    repl_k_l.ggml.splits    = repl_k_l.tensor_splits.data();
+                    k->extra = (void *)&repl_k_l.ggml;
+                }
             } else {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
                 v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
@@ -1590,9 +1624,9 @@ static bool llama_kv_cache_init(
             cache.bufs.push_back(buf);
         }
     }
-    if (split_cache || replicate_mla) {
+    if (split_cache || replicate_mla || replicate_dsv4_k) {
         LLAMA_LOG_INFO("%s: KV cache size per device%s:\n", __func__,
-                       replicate_mla ? " (MLA replicated)" : "");
+                       replicate_mla ? " (MLA replicated)" : replicate_dsv4_k ? " (DeepSeek4 raw-K replicated)" : "");
         for (int i = 0; i < int(mem_split.size()); ++i) LLAMA_LOG_INFO("    Device %d:  %g MiB\n", i, mem_split[i]/1024./1024.);
     }
 
@@ -3877,6 +3911,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_MISTRAL4,
         LLM_ARCH_MELLUM,
         LLM_ARCH_LAGUNA,
+        LLM_ARCH_DEEPSEEK4,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -9860,6 +9895,14 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
     return kv;
 }
 
+// True for replicated caches (split_dim == -1), e.g. the MLA compressed-latent
+// cache and the DeepSeek 4 raw head-K cache under split mode: every device holds
+// a full-width copy, so save/restore reads one copy and writes all of them.
+static inline bool tensor_is_replicated(const struct ggml_tensor * tensor) {
+    return tensor != nullptr && tensor->extra &&
+        ((const ggml_split_tensor_t *) tensor->extra)->split_dim == -1;
+}
+
 // Compute per-stream byte offset and size for a DSV4 cache tensor.
 // stream_idx >= 0 gives that stream's portion; use -1 for the full tensor.
 // Tensors are laid out as [ne0, ne1, ...] with ne1 = per_stream_rows * n_stream.
@@ -10499,6 +10542,16 @@ struct llama_data_read {
             }
             return;
         }
+        if (tensor_is_replicated(tensor)) {
+            // Replicated cache: every device holds a full-width copy of the data.
+            for (int id = 0; id < extra->n_device; ++id) {
+                auto split = extra->splits[id];
+                if (!split) continue;
+                GGML_ASSERT(split->type == tensor->type);
+                ggml_backend_tensor_set(split, data, head*row_size, nrows*row_size);
+            }
+            return;
+        }
         bool is_recurrent =  ctx->model.hparams.recurrent_layer_arr[il];
         auto kv = is_recurrent ? nullptr : get_kv_cache_split_tensor(tensor, ctx->model.layers[il]);
         auto kv_extra = kv ? (ggml_split_tensor_t *)kv->extra : nullptr;
@@ -11110,8 +11163,9 @@ struct llama_data_write_buffer : llama_data_write {
             throw std::runtime_error(std::string{"Split cache for type "} + ggml_type_name(tensor->type) + " is not supported");
         }
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
-        if (model.is_mla_model()) {
-            // For MLA models, the cache is replacated on all GPUs when using split mode tensor parallel, so it is
+        if (model.is_mla_model() || tensor_is_replicated(tensor)) {
+            // For MLA and other replicated caches (e.g. DeepSeek 4 raw K), the cache is
+            // replicated on all GPUs when using split mode tensor parallel, so it is
             // enough to get the data from the 1st device that has a copy
             auto extra = (const ggml_split_tensor_t *)tensor->extra;
             for (int id = 0; id < extra->n_device; ++id) {
@@ -11256,9 +11310,9 @@ struct llama_data_write_file : llama_data_write {
 
     void get_tensor_data_split(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) {
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
-        if (model.is_mla_model()) {
-            // MLA models have the cache replicated on all devices. Hence, it is enough to get it
-            // from the 1st device that has it.
+        if (model.is_mla_model() || tensor_is_replicated(tensor)) {
+            // MLA and other replicated caches (e.g. DeepSeek 4 raw K) are replicated on
+            // all devices. Hence, it is enough to get them from the 1st device that has it.
             auto extra = (ggml_split_tensor_t *)tensor->extra;
             for (int id = 0; id < extra->n_device; ++id) {
                 if (extra->splits[id]) {

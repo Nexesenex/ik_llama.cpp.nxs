@@ -4743,6 +4743,180 @@ static void distribute_mla_tensors_for_split_mode_tensor_parallel(
     }
 }
 
+// DS4 tensor distribution for -sm graph / -sm attn.
+// The DS4 attention head space (n_head*n_embd_head_k rows) is partitioned into
+// contiguous "groups" of o_group_dim rows each; wo_a is a per-group batched
+// down-projection and wo_b the corresponding group-blocked up-projection.
+// Each rank computes attention only for its groups' heads, so:
+//   - wq_b  is row-split along the head rows (split_dim 0, s*o_group_dim rows)
+//   - wo_a  is split along its group dim (split_dim 2 after folding the GGUF's
+//           [o_group_dim, o_lora_rank*n_groups] 2D layout back to 3D)
+//   - wo_b  is row-split along its group rows (split_dim 0, s*o_lora_rank rows)
+//   - partial wo_b outputs are all-reduced (ggml_reduce) after the per-rank loop.
+// Everything else the per-rank graph touches (mHC, compressors, indexer, norms,
+// wkv_latent) is replicated per device. `wo_b->extra` doubles as the per-layer
+// tensor-parallel gate for the KV-cache / DSV4-cache replication in llama.cpp.
+static void distribute_dsv4_tensors_for_split_mode_tensor_parallel(
+        llama_layer & layer,
+        const llama_hparams & hparams,
+        const std::vector<float> & cur_splits,
+        std::vector<size_t> & mem_used,
+        const std::vector<size_t> & vram_free,
+        const std::vector<size_t> & vram_total,
+        const std::vector<float> & split_vram_reserve_factor,
+        float split_tensor_split_factor,
+        float split_vram_free_factor,
+        float split_usage_penalty_factor,
+        ggml_context * ctx_split,
+        int il) {
+    const std::vector<int> mirror(cur_splits.size(), 1);
+
+    if (!layer.wq_b || !layer.wo_a || !layer.wo_b) {
+        return;
+    }
+
+    const int64_t n_head        = hparams.n_head(il);
+    const int64_t n_embd_head_k = hparams.n_embd_head_k(il);
+    const int64_t o_group_dim   = layer.wo_a->ne[0];
+    GGML_ASSERT(o_group_dim > 0 && (n_head * n_embd_head_k) % o_group_dim == 0);
+    const int64_t n_groups = hparams.dsv4_o_group_count != 0
+        ? hparams.dsv4_o_group_count
+        : (n_head * n_embd_head_k) / o_group_dim;
+    const int64_t o_lora_rank = hparams.dsv4_o_lora_rank != 0
+        ? hparams.dsv4_o_lora_rank
+        : layer.wo_b->ne[0] / n_groups;
+    GGML_ASSERT(n_groups > 0 && layer.wo_b->ne[0] % n_groups == 0);
+
+    if (n_groups < 2) {
+        // Degenerate single-group attention cannot be distributed: replicate the
+        // attention weights so every rank runs the full single-group path.
+        LLAMA_LOG_DEBUG("  DS4 layer %d: single output group, replicating attention\n", il);
+        prepare_split_tensors(-1, ctx_split, layer.wq_b, layer.split_wq_b, mirror, mem_used);
+        prepare_split_tensors(-1, ctx_split, layer.wo_a, layer.split_wo_a, mirror, mem_used);
+        prepare_split_tensors(-1, ctx_split, layer.wo_b, layer.split_wo_b, mirror, mem_used);
+    } else {
+        // Group-split across devices. Each group adds o_group_dim head-rows to wq_b
+        // and o_lora_rank rows to wo_b; keep those per-device row counts K-quant
+        // block aligned (256) when any of the attention weights is quantized.
+        int g = 1;
+        if (ggml_is_quantized(layer.wo_b->type) || ggml_is_quantized(layer.wq_b->type) || ggml_is_quantized(layer.wo_a->type)) {
+            for (int64_t cand = n_groups; cand > 1; --cand) {
+                if (n_groups % cand == 0 && (o_group_dim * cand) % 256 == 0 && (o_lora_rank * cand) % 256 == 0) {
+                    g = (int) cand;
+                    break;
+                }
+            }
+        }
+        auto split_groups = create_split(n_groups, g, cur_splits, mem_used, vram_free, vram_total,
+                ggml_nbytes(layer.wo_b), split_vram_reserve_factor,
+                split_tensor_split_factor, split_vram_free_factor, split_usage_penalty_factor);
+        auto split_wq_rows = split_groups;
+        for (auto & s : split_wq_rows) s *= o_group_dim;
+        auto split_wo_rows = split_groups;
+        for (auto & s : split_wo_rows) s *= o_lora_rank;
+
+        LLAMA_LOG_DEBUG("  DS4 layer %d split_groups:", il);
+        for ([[maybe_unused]] auto s : split_groups) LLAMA_LOG_DEBUG(" %d", s);
+        LLAMA_LOG_DEBUG("\n");
+
+        // wq_b: row-split by group head-rows.
+        prepare_split_tensors(0, ctx_split, layer.wq_b, layer.split_wq_b, split_wq_rows, mem_used);
+
+        // wo_a: the GGUF stores it folded as [o_group_dim, o_lora_rank*n_groups];
+        // fold the metadata back to 3D so the group blocks (contiguous in both
+        // layouts) split cleanly along dim 2.
+        if (layer.wo_a->ne[2] == 1 && layer.wo_a->ne[3] == 1) {
+            GGML_ASSERT(layer.wo_a->ne[1] % o_lora_rank == 0);
+            GGML_ASSERT(layer.wo_a->ne[1] / o_lora_rank == n_groups);
+            layer.wo_a->ne[1] = o_lora_rank;
+            layer.wo_a->ne[2] = n_groups;
+            layer.wo_a->nb[2] = layer.wo_a->nb[1] * o_lora_rank;
+            layer.wo_a->nb[3] = layer.wo_a->nb[2] * n_groups;
+        }
+        prepare_split_tensors(2, ctx_split, layer.wo_a, layer.split_wo_a, split_groups, mem_used);
+
+        // wo_b: row-split by group rows; partial outputs all-reduced after.
+        prepare_split_tensors(0, ctx_split, layer.wo_b, layer.split_wo_b, split_wo_rows, mem_used);
+    }
+
+    // Replicated per-device weights: everything else the per-rank graph touches.
+    if (layer.wq_a) {
+        prepare_split_tensors(-1, ctx_split, layer.wq_a, layer.split_wq_a, mirror, mem_used);
+    }
+    if (layer.attn_q_a_norm) {
+        prepare_split_tensors(-1, ctx_split, layer.attn_q_a_norm, layer.split_attn_q_a_norm, mirror, mem_used);
+    }
+    if (layer.wkv_latent) {
+        prepare_split_tensors(-1, ctx_split, layer.wkv_latent, layer.split_wkv_a_mqa, mirror, mem_used);
+    }
+    if (layer.attn_kv_a_norm) {
+        prepare_split_tensors(-1, ctx_split, layer.attn_kv_a_norm, layer.split_attn_kv_a_norm, mirror, mem_used);
+    }
+    if (layer.attn_sinks) {
+        prepare_split_tensors(-1, ctx_split, layer.attn_sinks, layer.split_attn_sinks, mirror, mem_used);
+    }
+
+    if (layer.hc_attn_base) {
+        prepare_split_tensors(-1, ctx_split, layer.hc_attn_base, layer.split_hc_attn_base, mirror, mem_used);
+    }
+    if (layer.hc_attn_fn) {
+        prepare_split_tensors(-1, ctx_split, layer.hc_attn_fn, layer.split_hc_attn_fn, mirror, mem_used);
+    }
+    if (layer.hc_attn_scale) {
+        prepare_split_tensors(-1, ctx_split, layer.hc_attn_scale, layer.split_hc_attn_scale, mirror, mem_used);
+    }
+    if (layer.hc_ffn_base) {
+        prepare_split_tensors(-1, ctx_split, layer.hc_ffn_base, layer.split_hc_ffn_base, mirror, mem_used);
+    }
+    if (layer.hc_ffn_fn) {
+        prepare_split_tensors(-1, ctx_split, layer.hc_ffn_fn, layer.split_hc_ffn_fn, mirror, mem_used);
+    }
+    if (layer.hc_ffn_scale) {
+        prepare_split_tensors(-1, ctx_split, layer.hc_ffn_scale, layer.split_hc_ffn_scale, mirror, mem_used);
+    }
+
+    if (layer.attn_comp_wkv) {
+        prepare_split_tensors(-1, ctx_split, layer.attn_comp_wkv, layer.split_attn_comp_wkv, mirror, mem_used);
+    }
+    if (layer.attn_comp_wgate) {
+        prepare_split_tensors(-1, ctx_split, layer.attn_comp_wgate, layer.split_attn_comp_wgate, mirror, mem_used);
+    }
+    if (layer.attn_comp_ape) {
+        prepare_split_tensors(-1, ctx_split, layer.attn_comp_ape, layer.split_attn_comp_ape, mirror, mem_used);
+    }
+    if (layer.attn_comp_norm) {
+        prepare_split_tensors(-1, ctx_split, layer.attn_comp_norm, layer.split_attn_comp_norm, mirror, mem_used);
+    }
+
+    if (layer.indexer_k_norm) {
+        prepare_split_tensors(-1, ctx_split, layer.indexer_k_norm, layer.split_indexer_k_norm, mirror, mem_used);
+    }
+    if (layer.indexer_attn_k) {
+        prepare_split_tensors(-1, ctx_split, layer.indexer_attn_k, layer.split_indexer_attn_k, mirror, mem_used);
+    }
+    if (layer.indexer_proj) {
+        prepare_split_tensors(-1, ctx_split, layer.indexer_proj, layer.split_indexer_proj, mirror, mem_used);
+    }
+    if (layer.indexer_attn_q_b) {
+        prepare_split_tensors(-1, ctx_split, layer.indexer_attn_q_b, layer.split_indexer_attn_q_b, mirror, mem_used);
+    }
+    if (layer.indexer_comp_wkv) {
+        prepare_split_tensors(-1, ctx_split, layer.indexer_comp_wkv, layer.split_indexer_comp_wkv, mirror, mem_used);
+    }
+    if (layer.indexer_comp_wgate) {
+        prepare_split_tensors(-1, ctx_split, layer.indexer_comp_wgate, layer.split_indexer_comp_wgate, mirror, mem_used);
+    }
+    if (layer.indexer_comp_ape) {
+        prepare_split_tensors(-1, ctx_split, layer.indexer_comp_ape, layer.split_indexer_comp_ape, mirror, mem_used);
+    }
+    if (layer.indexer_comp_norm) {
+        prepare_split_tensors(-1, ctx_split, layer.indexer_comp_norm, layer.split_indexer_comp_norm, mirror, mem_used);
+    }
+    if (layer.ffn_gate_tid2eid) {
+        prepare_split_tensors(-1, ctx_split, layer.ffn_gate_tid2eid, layer.split_ffn_gate_tid2eid, mirror, mem_used);
+    }
+}
+
 static void adjust_split(std::vector<float> & split, const std::vector<size_t> & mem_used, const std::vector<size_t> & vram_free, const std::vector<size_t> & vram_total, const std::vector<float> & split_vram_reserve_factor, int max_gpu_per_split, bool use_vram_aware) {
     if (max_gpu_per_split < 1 || max_gpu_per_split >= int(split.size()) || split.size() != mem_used.size()) {
         return;
@@ -5596,6 +5770,18 @@ bool create_tensors_helper::create_tensors() {
                  model.arch == LLM_ARCH_GLM_DSA ||
                  model.arch == LLM_ARCH_MISTRAL4)) {
                 distribute_mla_tensors_for_split_mode_tensor_parallel(
+                    layer, hparams, cur_splits, mem_used, vram_free, vram_total,
+                    model.split_vram_reserve_factor,
+                    model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor,
+                    ctx_split, il);
+            }
+
+            // DS4 tensor distribution (DEEPSEEK4). wq_b/wo_a/wo_b are group-split;
+            // mHC/indexer/compressor/norm weights are replicated per device. Sets
+            // wo_b->extra, which also gates the per-layer raw-K / DSV4-cache
+            // replication in llama_kv_cache_init / ensure_dsv4_cache_tensors.
+            if (model.arch == LLM_ARCH_DEEPSEEK4 && layer.wo_b) {
+                distribute_dsv4_tensors_for_split_mode_tensor_parallel(
                     layer, hparams, cur_splits, mem_used, vram_free, vram_total,
                     model.split_vram_reserve_factor,
                     model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor,

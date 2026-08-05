@@ -427,12 +427,13 @@ static ggml_tensor * dsv4_raw_cpy_k(
         ggml_cgraph   * gf,
         int64_t         n_embd_head,
         const llm_build_cb & cb,
-        int64_t         il) {
+        int64_t         il,
+        int             cc_idx) {
     if (cache == nullptr || k_cur == nullptr || raw_k_write_idxs == nullptr || raw_k_write_src_idxs == nullptr) {
         return nullptr;
     }
 
-    GGML_ASSERT(2*il + 1 < (int64_t) lctx->cache_copies.size());
+    GGML_ASSERT(cc_idx + 1 < (int64_t) lctx->cache_copies.size());
     GGML_ASSERT(k_cur->ne[1] == 1);
 
     ggml_tensor * cache_2d = dsv4_cache_view_2d(ctx, cache, n_embd_head, cache->ne[1]);
@@ -472,8 +473,8 @@ static ggml_tensor * dsv4_raw_cpy_k(
         }
     }
 
-    lctx->cache_copies[2*il + 0].cpy = write;
-    lctx->cache_copies[2*il + 0].step = ggml_row_size(cache->type, n_embd_head);
+    lctx->cache_copies[cc_idx + 0].cpy = write;
+    lctx->cache_copies[cc_idx + 0].step = ggml_row_size(cache->type, n_embd_head);
     ggml_build_forward_expand(gf, write);
 
     return write;
@@ -862,7 +863,10 @@ static ggml_tensor * dsv4_build_lid_top_k(
         ggml_tensor * qr,
         ggml_tensor * cur,
         ggml_tensor * inp_pos,
-        int il, ggml_cgraph * gf, const llm_build_cb & cb) {
+        int il, ggml_cgraph * gf, const llm_build_cb & cb,
+        ggml_tensor * indexer_attn_q_b = nullptr,
+        ggml_tensor * indexer_proj = nullptr,
+        ggml_tensor * lid_k = nullptr) {
     const auto & hparams = llm.hparams;
     const auto & layer = llm.model.layers[il];
     const int64_t n_embd_indexer_head = hparams.indexer_head_size;
@@ -877,7 +881,17 @@ static ggml_tensor * dsv4_build_lid_top_k(
     GGML_ASSERT(hadamard_block > 0);
     GGML_ASSERT(n_embd_indexer_head % hadamard_block == 0);
 
-    ggml_tensor * indexer_q = llm.llm_build_lora_mm(llm.lctx, ctx0, layer.indexer_attn_q_b, qr);
+    if (indexer_attn_q_b == nullptr) {
+        indexer_attn_q_b = layer.indexer_attn_q_b;
+    }
+    if (indexer_proj == nullptr) {
+        indexer_proj = layer.indexer_proj;
+    }
+    if (lid_k == nullptr) {
+        lid_k = llm.lctx.dsv4.cache.lid_k[il];
+    }
+
+    ggml_tensor * indexer_q = llm.llm_build_lora_mm(llm.lctx, ctx0, indexer_attn_q_b, qr);
     llm.cb(indexer_q, "lid_q", il);
     indexer_q = ggml_reshape_3d(ctx0, indexer_q, n_embd_indexer_head, n_indexer_head, n_tokens);
 
@@ -891,15 +905,15 @@ static ggml_tensor * dsv4_build_lid_top_k(
     indexer_q = ggml_hadamard(ctx0, indexer_q, hadamard_block);
     llm.cb(indexer_q, "lid_q_hadamard", il);
 
-    ggml_tensor * indexer_weights = llm.llm_build_lora_mm(llm.lctx, ctx0, layer.indexer_proj, cur);
+    ggml_tensor * indexer_weights = llm.llm_build_lora_mm(llm.lctx, ctx0, indexer_proj, cur);
     llm.cb(indexer_weights, "lid_weights", il);
     indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / std::sqrt(float(n_embd_indexer_head * n_indexer_head)));
 
     ggml_tensor * indexer_k = dsv4_comp_get_k_typed(ctx0,
-            llm.lctx.dsv4.cache.lid_k[il],
+            lid_k,
             llm.lctx.dsv4.lid_ctx,
             n_embd_indexer_head,
-            llm.lctx.dsv4.cache.lid_k[il]->ne[1]/std::max<uint32_t>(1, llm.lctx.dsv4.cache.n_stream),
+            lid_k->ne[1]/std::max<uint32_t>(1, llm.lctx.dsv4.cache.n_stream),
             false);
     // ggml_indexer_topk's CUDA impl handles F16 and quantized K natively; the
     // F32 fallback and BF16 are unsupported. Route any other cache type through
@@ -1138,7 +1152,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
     ggml_tensor * raw_k_write = nullptr;
     if (hparams.n_head_kv(il) == 1 && lctx.dsv4.inputs.raw_k_write_idxs != nullptr) {
         raw_k_write = dsv4_raw_cpy_k(&lctx, ctx0, kv_self.k_l[il], kv,
-                lctx.dsv4.inputs.raw_k_write_src_idxs, lctx.dsv4.inputs.raw_k_write_idxs, gf, n_embd_head, cb, il);
+                lctx.dsv4.inputs.raw_k_write_src_idxs, lctx.dsv4.inputs.raw_k_write_idxs, gf, n_embd_head, cb, il, 2*il);
         if (raw_k_write != nullptr) {
             cb(raw_k_write, "dsv4_raw_k_write", il);
         }
@@ -1321,10 +1335,604 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
 
 }
 
+// Per-rank DEEPSEEK4 attention under -sm graph / -sm attn. Runs the whole
+// attention redundantly per device against the replicated weights
+// (mHC/compressor/indexer/wkv_latent/norms), group-splits wq_b/wo_a/wo_b
+// across devices, all-reduces the wo_b partials (ggml_reduce is an in-place
+// all-reduce: every device's src buffer ends up holding the full sum), folds
+// hc_post per device (deduped cb ids 1000*(id+1)+il), and returns a turned-off
+// REDUCE split point (op_params[3] == 1) whose src[id] are the per-device
+// [n_embd, hc, n_tokens] hc_attn_post replicas. When wo_b was replicated
+// (split_dim == -1, single output group) each device already holds the full
+// attention output, so the summing barrier is skipped.
+ggml_tensor * llm_build_context::build_deepseek4_tp_attention(
+        ggml_cgraph * gf, int il, ggml_tensor * inpL,
+        ggml_tensor ** append_csa_state, ggml_tensor ** append_csa_score,
+        ggml_tensor ** append_lid_state, ggml_tensor ** append_lid_score,
+        ggml_tensor * inp_pos, ggml_tensor * KQ_mask) {
+
+    const auto & layer = model.layers[il];
+
+    auto split_wo_b = (const ggml_split_tensor_t *) layer.wo_b->extra;
+    GGML_ASSERT(split_wo_b);
+    const int n_device = split_wo_b->n_device;
+    GGML_ASSERT(n_device > 1);
+
+    const int64_t n_embd_head      = hparams.n_embd_head_k(0);
+    const int64_t n_embd_head_rope = hparams.n_rot;
+    const int64_t hc               = hparams.dsv4_hc_mult;
+    const int64_t n_tokens         = this->n_tokens;
+    const int64_t n_head           = this->n_head;
+    const int64_t n_kv             = this->n_kv;
+
+    const int64_t ratio = hparams.dsv4_compress_ratios[il];
+    const bool use_compress_rope = ratio != 0;
+    const float freq_base_l = use_compress_rope ? hparams.dsv4_compress_rope_base : freq_base;
+    const float freq_scale_l = use_compress_rope ? freq_scale : 1.0f;
+    const float ext_factor_l = use_compress_rope ? ext_factor : 0.0f;
+    const float attn_factor_l = dsv4_rope_attn_factor(freq_scale_l, ext_factor_l);
+    const float beta_fast_l = use_compress_rope ? beta_fast : 0.0f;
+    const float beta_slow_l = use_compress_rope ? beta_slow : 0.0f;
+    const int32_t n_ctx_orig_l = use_compress_rope ? n_ctx_orig : 0;
+    const float kq_scale = 1.0f / std::sqrt(float(n_embd_head));
+
+    const bool has_csa_comp = ratio == llama_context::dsv4_runtime::CSA_RATIO &&
+            lctx.dsv4.inputs.csa.state_pos != nullptr && lctx.dsv4.csa_plan.state_pos.size() > 0;
+    const bool has_hca_comp = ratio == llama_context::dsv4_runtime::HCA_RATIO &&
+            lctx.dsv4.inputs.hca.state_pos != nullptr && lctx.dsv4.hca_plan.state_pos.size() > 0;
+    const bool use_csa_topk = ratio == llama_context::dsv4_runtime::CSA_RATIO &&
+            lctx.dsv4.inputs.csa.kq_mask != nullptr && lctx.dsv4.csa_plan.n_kv > 0 &&
+            lctx.dsv4.lid_plan.n_kv > 0 && !cparams.k_cache_hadamard;
+    const bool use_hca_attn = ratio == llama_context::dsv4_runtime::HCA_RATIO &&
+            lctx.dsv4.inputs.hca.kq_mask != nullptr && lctx.dsv4.hca_plan.n_kv > 0 &&
+            std::any_of(lctx.dsv4.hca_plan.n_visible.begin(), lctx.dsv4.hca_plan.n_visible.end(),
+                [](int32_t n_visible) { return n_visible > 0; }) &&
+            !cparams.k_cache_hadamard;
+
+    auto ssplit = [&](ggml_tensor * t) -> const ggml_split_tensor_t * {
+        return t ? (const ggml_split_tensor_t *) t->extra : nullptr;
+    };
+
+    const ggml_split_tensor_t * split_hc_attn_fn    = ssplit(layer.hc_attn_fn);
+    const ggml_split_tensor_t * split_hc_attn_scale = ssplit(layer.hc_attn_scale);
+    const ggml_split_tensor_t * split_hc_attn_base  = ssplit(layer.hc_attn_base);
+    const ggml_split_tensor_t * split_attn_norm     = ssplit(layer.attn_norm);
+    const ggml_split_tensor_t * split_wq_a          = ssplit(layer.wq_a);
+    const ggml_split_tensor_t * split_attn_q_a_norm = ssplit(layer.attn_q_a_norm);
+    const ggml_split_tensor_t * split_wq_b          = ssplit(layer.wq_b);
+    const ggml_split_tensor_t * split_wkv_latent    = ssplit(layer.wkv_latent);
+    const ggml_split_tensor_t * split_attn_kv_norm  = ssplit(layer.attn_kv_norm);
+    const ggml_split_tensor_t * split_wo_a          = ssplit(layer.wo_a);
+    const ggml_split_tensor_t * split_attn_sinks    = ssplit(layer.attn_sinks);
+    const ggml_split_tensor_t * split_comp_wkv      = ssplit(layer.attn_comp_wkv);
+    const ggml_split_tensor_t * split_comp_wgate    = ssplit(layer.attn_comp_wgate);
+    const ggml_split_tensor_t * split_comp_ape      = ssplit(layer.attn_comp_ape);
+    const ggml_split_tensor_t * split_comp_norm     = ssplit(layer.attn_comp_norm);
+    const ggml_split_tensor_t * split_indexer_attn_q_b = ssplit(layer.indexer_attn_q_b);
+    const ggml_split_tensor_t * split_indexer_proj = ssplit(layer.indexer_proj);
+    const ggml_split_tensor_t * kv_repl = kv_self.k_l[il] ? (const ggml_split_tensor_t *) kv_self.k_l[il]->extra : nullptr;
+
+    // Per-device replicas of the DSV4 compressed caches/state (split_dim == -1).
+    auto cache_repl = [&](std::vector<llama_split_tensor> & v) -> const llama_split_tensor * {
+        return (size_t) il < v.size() && v[il].ggml.n_device > 0 ? &v[il] : nullptr;
+    };
+
+    std::vector<ggml_tensor *> attn_partials(n_device, nullptr);
+    std::vector<ggml_tensor *> hc_post(n_device, nullptr);
+    std::vector<ggml_tensor *> hc_comb(n_device, nullptr);
+    std::vector<ggml_tensor *> hc_residual(n_device, nullptr);
+
+    for (int id = 0; id < n_device; ++id) {
+        ggml_tensor * wq_b_split = split_wq_b ? split_wq_b->splits[id] : nullptr;
+        if (!wq_b_split) continue;
+        const int il_id = 1000*(id + 1) + il;
+
+        auto input = get_input_tensor_sm_graph(ctx0, inpL, id);
+        ggml_tensor * residual = input;
+
+        ggml_tensor * post = nullptr;
+        ggml_tensor * comb = nullptr;
+        ggml_tensor * cur = build_hc_pre(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps, input,
+                split_hc_attn_fn ? split_hc_attn_fn->splits[id] : layer.hc_attn_fn,
+                split_hc_attn_scale ? split_hc_attn_scale->splits[id] : layer.hc_attn_scale,
+                split_hc_attn_base  ? split_hc_attn_base->splits[id]  : layer.hc_attn_base,
+                &post, &comb, cb, il_id);
+        cb(cur, "hc_attn_pre", il_id);
+
+        cur = llm_build_norm(ctx0, cur, hparams,
+                split_attn_norm ? split_attn_norm->splits[id] : layer.attn_norm,
+                nullptr, LLM_NORM_RMS, cb, il_id);
+        cb(cur, "attn_norm", il_id);
+
+        ggml_tensor * qr = llm_build_lora_mm(lctx, ctx0, split_wq_a ? split_wq_a->splits[id] : layer.wq_a, cur);
+        cb(qr, "qr", il_id);
+        qr = llm_build_norm(ctx0, qr, hparams,
+                split_attn_q_a_norm ? split_attn_q_a_norm->splits[id] : layer.attn_q_a_norm,
+                nullptr, LLM_NORM_RMS, cb, il_id);
+        cb(qr, "qr_norm", il_id);
+
+        auto build_rope = [&] (int nhead, ggml_tensor * qin, ggml_tensor * wq, ggml_tensor * norm, const std::string & tag) {
+            auto q = llm_build_lora_mm(lctx, ctx0, wq, qin);
+            cb(q, (tag + "_b").c_str(), il_id);
+            q = ggml_reshape_2d(ctx0, q, n_embd_head, nhead * n_tokens);
+            q = llm_build_norm(ctx0, q, hparams, norm, nullptr, LLM_NORM_RMS, cb, il_id);
+            cb(q, (tag + "_norm").c_str(), il_id);
+            q = ggml_reshape_3d(ctx0, q, n_embd_head, nhead, n_tokens);
+            q = ggml_rope_ext_inplace(ctx0, q, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
+                    freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
+            q->op_params[15] = 1;
+            cb(q, (tag + "_rope").c_str(), il_id);
+            return q;
+        };
+
+        const int64_t n_head_local = wq_b_split->ne[0] / n_embd_head;
+        GGML_ASSERT(wq_b_split->ne[0] % n_embd_head == 0);
+        auto q = build_rope(n_head_local, qr, wq_b_split, nullptr, "q");
+        auto kv = build_rope(1, cur, split_wkv_latent ? split_wkv_latent->splits[id] : layer.wkv_latent,
+                split_attn_kv_norm ? split_attn_kv_norm->splits[id] : layer.attn_kv_norm, "kv");
+
+        if (cparams.k_cache_hadamard) {
+            if (int block_size = model.hadamard_size_k(il); block_size > 0) {
+                q = ggml_hadamard(ctx0, q, block_size);
+                kv = ggml_hadamard(ctx0, kv, block_size);
+                cb(q, "q_hadamard", il_id);
+                cb(kv, "kv_hadamard", il_id);
+            }
+        }
+
+        if (has_csa_comp) {
+            auto s_csa_kv   = cache_repl(lctx.dsv4.cache.csa_state_kv_split);
+            auto s_csa_score= cache_repl(lctx.dsv4.cache.csa_state_score_split);
+            auto s_csa_k    = cache_repl(lctx.dsv4.cache.csa_k_split);
+            auto s_lid_kv   = cache_repl(lctx.dsv4.cache.lid_state_kv_split);
+            auto s_lid_score= cache_repl(lctx.dsv4.cache.lid_state_score_split);
+            auto s_lid_k    = cache_repl(lctx.dsv4.cache.lid_k_split);
+            GGML_ASSERT(s_csa_kv && s_csa_score && s_csa_k && s_lid_kv && s_lid_score && s_lid_k);
+            ds4_build_comp(cur, *this, ctx0, lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan,
+                    split_comp_wkv ? split_comp_wkv->splits[id] : layer.attn_comp_wkv,
+                    split_comp_wgate ? split_comp_wgate->splits[id] : layer.attn_comp_wgate,
+                    split_comp_ape ? split_comp_ape->splits[id] : layer.attn_comp_ape,
+                    split_comp_norm ? split_comp_norm->splits[id] : layer.attn_comp_norm,
+                    s_csa_kv->tensor_splits[id], s_csa_score->tensor_splits[id], s_csa_k->tensor_splits[id],
+                    append_csa_state, append_csa_score,
+                    n_embd_head, il, false, "csa", gf, false);
+            ds4_build_comp(cur, *this, ctx0, lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan,
+                    split_comp_wkv ? split_comp_wkv->splits[id] : layer.attn_comp_wkv,
+                    split_comp_wgate ? split_comp_wgate->splits[id] : layer.attn_comp_wgate,
+                    split_comp_ape ? split_comp_ape->splits[id] : layer.attn_comp_ape,
+                    split_comp_norm ? split_comp_norm->splits[id] : layer.attn_comp_norm,
+                    s_lid_kv->tensor_splits[id], s_lid_score->tensor_splits[id], s_lid_k->tensor_splits[id],
+                    append_lid_state, append_lid_score,
+                    hparams.indexer_head_size, il, true, "lid", gf, false);
+        }
+        if (has_hca_comp) {
+            auto s_hca_kv   = cache_repl(lctx.dsv4.cache.hca_state_kv_split);
+            auto s_hca_score= cache_repl(lctx.dsv4.cache.hca_state_score_split);
+            auto s_hca_k    = cache_repl(lctx.dsv4.cache.hca_k_split);
+            GGML_ASSERT(s_hca_kv && s_hca_score && s_hca_k);
+            ds4_build_comp(cur, *this, ctx0, lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan,
+                    split_comp_wkv ? split_comp_wkv->splits[id] : layer.attn_comp_wkv,
+                    split_comp_wgate ? split_comp_wgate->splits[id] : layer.attn_comp_wgate,
+                    split_comp_ape ? split_comp_ape->splits[id] : layer.attn_comp_ape,
+                    split_comp_norm ? split_comp_norm->splits[id] : layer.attn_comp_norm,
+                    s_hca_kv->tensor_splits[id], s_hca_score->tensor_splits[id], s_hca_k->tensor_splits[id],
+                    nullptr, nullptr,
+                    n_embd_head, il, false, "hca", gf, true);
+        }
+
+        // raw head-K cache: per-device replica (kv_self.k_l[il]->extra, split_dim == -1)
+        ggml_tensor * kv_local = kv_self.k_l[il];
+        if (kv_repl) kv_local = kv_repl->splits[id] ? kv_repl->splits[id] : kv_local;
+
+        ggml_tensor * raw_k_write = nullptr;
+        if (hparams.n_head_kv(il) == 1 && lctx.dsv4.inputs.raw_k_write_idxs != nullptr) {
+            raw_k_write = dsv4_raw_cpy_k(&lctx, ctx0, kv_local, kv,
+                    lctx.dsv4.inputs.raw_k_write_src_idxs, lctx.dsv4.inputs.raw_k_write_idxs,
+                    gf, n_embd_head, cb, il, 2*(il*n_device + id));
+            if (raw_k_write != nullptr) {
+                cb(raw_k_write, "dsv4_raw_k_write", il_id);
+            }
+        }
+        if (raw_k_write == nullptr) {
+            llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, kv, nullptr, n_tokens, kv_head, cb, il);
+        }
+        if (il < (int64_t) kv_self.v_l.size() && kv_self.v_l[il] != nullptr) {
+            llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, nullptr, kv, n_tokens, kv_head, cb, il);
+        }
+
+        ggml_tensor * raw_k = nullptr;
+        if (hparams.n_head_kv(il) == 1 && lctx.dsv4.inputs.raw_k_read_idxs != nullptr) {
+            raw_k = dsv4_raw_get_k(&lctx, ctx0, kv_local, lctx.dsv4.inputs.raw_k_read_idxs, n_embd_head, cb, il);
+        }
+        if (raw_k == nullptr) {
+            raw_k = ggml_view_3d(ctx0, kv_local,
+                    n_embd_head, hparams.n_head_kv(il), n_kv,
+                    ggml_row_size(kv_local->type, n_embd_head),
+                    ggml_row_size(kv_local->type, n_embd_head) * hparams.n_head_kv(il), 0);
+        }
+        cb(raw_k, "raw_k", il_id);
+
+        const int64_t raw_kq_n_kv = raw_k != nullptr && lctx.dsv4.raw.n_kv > 0
+            ? lctx.dsv4.raw.n_kv
+            : (raw_k != nullptr ? raw_k->ne[2] * raw_k->ne[3] : n_kv);
+        const int64_t raw_attn_n_kv = raw_kq_n_kv > 0 ? std::max<int64_t>(256, GGML_PAD(raw_kq_n_kv, 256)) : raw_kq_n_kv;
+        if (raw_k != nullptr && raw_k->ne[3] == 1) {
+            raw_k = dsv4_pad_raw_k_to(ctx0, raw_k, raw_attn_n_kv);
+        }
+        ggml_tensor * raw_mask = dsv4_build_raw_mask_view(ctx0, KQ_mask,
+                lctx.dsv4.inputs.raw_k_read_idxs, raw_kq_n_kv, n_tokens, raw_k->ne[3], cb, il_id);
+        cb(raw_mask, "raw_mask_view", il_id);
+        raw_mask = dsv4_pad_mask_tokens(ctx0, raw_mask, n_tokens);
+        raw_mask = dsv4_pad_raw_mask_to(ctx0, raw_mask, raw_attn_n_kv, n_tokens);
+        cb(raw_mask, "dsv4_raw_mask_padded", il_id);
+        ggml_tensor * attn = nullptr;
+
+        if (hparams.n_swa > 0) {
+            constexpr int k_fa_chunk = 256;
+            int n_swa = hparams.n_swa;
+            int ntokens = std::max(k_fa_chunk, int(q->ne[2]));
+            int nton = k_fa_chunk*((ntokens + n_swa + k_fa_chunk - 1)/k_fa_chunk);
+            int first = raw_k->ne[2] - nton;
+            if (first > 0) {
+                raw_k = ggml_view_4d(ctx0, raw_k, raw_k->ne[0], raw_k->ne[1], nton, raw_k->ne[3],
+                        raw_k->nb[1], raw_k->nb[2], raw_k->nb[3], raw_k->nb[2]*first);
+                raw_mask = ggml_view_4d(ctx0, raw_mask, nton, raw_mask->ne[1], raw_mask->ne[2], raw_mask->ne[3],
+                        raw_mask->nb[1], raw_mask->nb[2], raw_mask->nb[3], raw_mask->nb[0]*first);
+            }
+        }
+
+        auto build_the_attn = [&] (ggml_tensor * raw_k, ggml_tensor * raw_mask, ggml_tensor * extra_mask,
+                ggml_tensor * cache, const auto & extra_ctx, const std::string & tag, int n_swa_eff) {
+            auto n_stream = std::max<uint32_t>(1, lctx.dsv4.cache.n_stream);
+            auto extra_k = cache;
+            if (extra_k->ne[1] > 1) {
+                extra_k = dsv4_comp_get_k(ctx0, cache, extra_ctx, n_embd_head, cache->ne[1]/n_stream);
+            }
+            if (extra_k->ne[3] > 1 && extra_mask != nullptr && extra_mask->ne[3] == 1) {
+                extra_mask = dsv4_build_mask_stream_view(ctx0, extra_mask, extra_k->ne[3], n_tokens);
+            }
+            if (cparams.flash_attn) {
+                extra_mask = dsv4_pad_mask_tokens(ctx0, extra_mask, n_tokens);
+            }
+            raw_k = dsv4_repeat_streams(ctx0, raw_k, extra_k->ne[3]);
+            if (!cparams.flash_attn) {
+                raw_mask = dsv4_build_raw_mask_view(ctx0, KQ_mask,
+                        lctx.dsv4.inputs.raw_k_read_idxs, raw_kq_n_kv, n_tokens, extra_k->ne[3], cb, il_id);
+                raw_mask = dsv4_pad_raw_mask_to(ctx0, raw_mask, raw_attn_n_kv, n_tokens);
+            }
+            if (cparams.flash_attn && extra_mask->type != GGML_TYPE_F16) {
+                extra_mask = ggml_cast(ctx0, extra_mask, GGML_TYPE_F16);
+            }
+            if (raw_mask->type != extra_mask->type) {
+                raw_mask = ggml_cast(ctx0, raw_mask, extra_mask->type);
+            }
+            if (raw_k->type != extra_k->type) {
+                extra_k = ggml_cast(ctx0, extra_k, raw_k->type);
+            }
+            ggml_tensor * k_all = dsv4_concat_kv(ctx0, raw_k, extra_k);
+            ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, extra_mask, 0);
+            cb(extra_k, (tag + "_k").c_str(), il_id);
+            cb(k_all, (tag + "_k_all").c_str(), il_id);
+            cb(kq_mask, (tag + "_kq_mask").c_str(), il_id);
+            auto attn = dsv4_build_attn(ctx0, hparams, cparams, q, k_all, k_all, kq_mask,
+                    split_attn_sinks ? split_attn_sinks->splits[id] : layer.attn_sinks, kq_scale, cb, il, n_swa_eff, gf);
+            return attn;
+        };
+
+        auto num_streams = [] (const auto & comp) {
+            int n_stream = comp.sinfo.n_stream();
+            return std::max(1, n_stream);
+        };
+
+        if (use_csa_topk) {
+            const llama_split_tensor * s_csa_k = cache_repl(lctx.dsv4.cache.csa_k_split);
+            ggml_tensor * csa_kv = s_csa_k ? s_csa_k->tensor_splits[id] : lctx.dsv4.cache.csa_k[il];
+            auto csa_mask = lctx.dsv4.inputs.csa.kq_mask;
+            if (hparams.indexer_top_k < lctx.dsv4.inputs.csa.kq_mask->ne[0]) {
+                auto top_k = dsv4_build_lid_top_k(ctx0, *this, qr, cur, inp_pos, il, gf, cb,
+                        split_indexer_attn_q_b ? split_indexer_attn_q_b->splits[id] : layer.indexer_attn_q_b,
+                        split_indexer_proj ? split_indexer_proj->splits[id] : layer.indexer_proj,
+                        (cache_repl(lctx.dsv4.cache.lid_k_split))
+                            ? cache_repl(lctx.dsv4.cache.lid_k_split)->tensor_splits[id] : lctx.dsv4.cache.lid_k[il]);
+                if (n_tokens == 1) {
+                    csa_kv = ggml_get_rows_ext(ctx0, csa_kv, top_k, true, false);
+                    csa_kv = ggml_reshape_3d(ctx0, csa_kv, csa_kv->ne[0], 1, csa_kv->ne[1]);
+                    csa_mask = ggml_get_rows_ext(ctx0, csa_mask, top_k, true, true);
+                } else {
+                    csa_mask = build_top_k_mask(ctx0, dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.csa.kq_mask, nullptr,
+                                lctx.dsv4.csa_plan.n_kv, n_tokens, num_streams(lctx.dsv4.csa_ctx), cb, il_id), top_k);
+                    cb(csa_mask, "csa_mask", il_id);
+                }
+            }
+            int n_csa = hparams.n_swa + hparams.indexer_top_k;
+            attn = build_the_attn(raw_k, raw_mask, csa_mask, csa_kv, lctx.dsv4.csa_ctx, "csa", n_csa);
+            cb(attn, "attn_csa", il_id);
+        } else if (use_hca_attn) {
+            const llama_split_tensor * s_hca_k = cache_repl(lctx.dsv4.cache.hca_k_split);
+            ggml_tensor * hca_kv = s_hca_k ? s_hca_k->tensor_splits[id] : lctx.dsv4.cache.hca_k[il];
+            ggml_tensor * hca_mask = dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.hca.kq_mask, nullptr,
+                    lctx.dsv4.hca_plan.n_kv, n_tokens, num_streams(lctx.dsv4.hca_ctx), cb, il_id);
+            int n_hca = hparams.n_swa + (n_kv + llama_context::dsv4_runtime::HCA_RATIO - 1)/llama_context::dsv4_runtime::HCA_RATIO;
+            attn = build_the_attn(raw_k, raw_mask, hca_mask, hca_kv, lctx.dsv4.hca_ctx, "hca", n_hca);
+            cb(attn, "attn_hca", il_id);
+        } else {
+            attn = dsv4_build_attn(ctx0, hparams, cparams, q, raw_k, raw_k, raw_mask,
+                    split_attn_sinks ? split_attn_sinks->splits[id] : layer.attn_sinks, kq_scale, cb, il, -1, gf);
+            cb(attn, "attn_raw", il_id);
+        }
+        ggml_build_forward_expand(gf, attn);
+
+        attn = ggml_reshape_3d(ctx0, attn, n_embd_head, n_head_local, n_tokens);
+        attn = ggml_rope_ext_inplace(ctx0, attn, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
+                freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
+        attn->op = GGML_OP_ROPE_BACK;
+        attn->op_params[15] = 1;
+        cb(attn, "attn", il_id);
+
+        GGML_ASSERT(split_wo_a && split_wo_a->splits[id]);
+        ggml_tensor * wo_a_local = split_wo_a->splits[id];
+        const int64_t o_group_dim   = wo_a_local->ne[0];
+        const int64_t n_groups_local = wo_a_local->ne[2];
+        const int64_t o_lora_rank   = split_wo_b->splits[id]->ne[0] / n_groups_local;
+
+        GGML_ASSERT((n_head_local * n_embd_head) % o_group_dim == 0);
+        GGML_ASSERT(split_wo_b->splits[id]->ne[0] % n_groups_local == 0);
+
+        attn = ggml_reshape_3d(ctx0, attn, o_group_dim, n_groups_local, n_tokens);
+        attn = ggml_permute(ctx0, attn, 0, 2, 1, 3);
+
+        ggml_tensor * oa = ggml_mul_mat(ctx0,
+                ggml_reshape_3d(ctx0, wo_a_local, wo_a_local->ne[0], o_lora_rank, n_groups_local),
+                attn);
+        cb(oa, "attn_wo_a", il_id);
+        oa = ggml_permute(ctx0, oa, 0, 2, 1, 3);
+        if (n_tokens == 1) {
+            oa = ggml_reshape_2d(ctx0, oa, o_lora_rank * n_groups_local, n_tokens);
+        } else {
+            oa = ggml_cont_2d(ctx0, oa, o_lora_rank * n_groups_local, n_tokens);
+        }
+
+        ggml_tensor * partial = llm_build_lora_mm(lctx, ctx0, split_wo_b->splits[id], oa);
+        cb(partial, "attn_out", il_id);
+        if (partial->ne[1] > 32 && cparams.reduce_type != GGML_TYPE_F32) {
+            partial = ggml_cast(ctx0, partial, cparams.reduce_type);
+        }
+        ggml_build_forward_expand(gf, partial);
+
+        attn_partials[id] = partial;
+        hc_post[id] = post;
+        hc_comb[id] = comb;
+        hc_residual[id] = residual;
+    }
+
+    const bool replicated_attn = split_wo_b->split_dim == -1;
+    ggml_tensor * attn_combined = nullptr;
+    if (!replicated_attn) {
+        attn_combined = ggml_reduce(ctx0, attn_partials.data(), n_device, GGML_OP_ADD);
+        ggml_build_forward_expand(gf, attn_combined);
+        cb(attn_combined, "attn_combined", il);
+    }
+
+    std::vector<ggml_tensor *> l_out(n_device, nullptr);
+    for (int id = 0; id < n_device; ++id) {
+        if (!attn_partials[id]) continue;
+        const int il_id = 1000*(id + 1) + il;
+        ggml_tensor * x = replicated_attn ? attn_partials[id] : attn_combined;
+        ggml_tensor * cur = build_mhc_post(x, hc_post[id], hc_residual[id], hc_comb[id], n_embd, hc, true);
+        cb(cur, "hc_attn_post", il_id);
+        cur = lctx.cvec.apply_to(ctx0, cur, il);
+        ggml_build_forward_expand(gf, cur);
+        l_out[id] = cur;
+    }
+
+    ggml_tensor * out = ggml_reduce(ctx0, l_out.data(), n_device, GGML_OP_ADD);
+    out->op_params[3] = 1; // turned-off reduce: split point, not a barrier
+    ggml_build_forward_expand(gf, out);
+    return out;
+}
+
+// Per-rank DEEPSEEK4 FFN under -sm graph / -sm attn. Consumes the attention
+// split point from build_deepseek4_tp_attention: every device already holds the
+// full hc_attn_post (the attention's real reduce was an in-place all-reduce),
+// so the FFN runs per device on the split expert weights with input =
+// attn_out->src[id]. The residual is NOT added via add_extra (that would sum
+// it n_device times inside the FFN reduce); instead it flows through
+// build_hc_post's residual parameter exactly like the single-device path.
+// Returns the next layer's input as a turned-off REDUCE split point.
+ggml_tensor * llm_build_context::build_deepseek4_tp_ffn(ggml_cgraph * gf, int il, ggml_tensor * attn_out) {
+    const auto & layer = model.layers[il];
+
+    auto split_wo_b = (const ggml_split_tensor_t *) layer.wo_b->extra;
+    GGML_ASSERT(split_wo_b);
+    const int n_device = split_wo_b->n_device;
+
+    auto ssplit = [&](ggml_tensor * t) -> const ggml_split_tensor_t * {
+        return t ? (const ggml_split_tensor_t *) t->extra : nullptr;
+    };
+
+    const ggml_split_tensor_t * split_hc_ffn_fn       = ssplit(layer.hc_ffn_fn);
+    const ggml_split_tensor_t * split_hc_ffn_scale    = ssplit(layer.hc_ffn_scale);
+    const ggml_split_tensor_t * split_hc_ffn_base     = ssplit(layer.hc_ffn_base);
+    const ggml_split_tensor_t * split_ffn_norm        = ssplit(layer.ffn_norm);
+    const ggml_split_tensor_t * split_ffn_up          = ssplit(layer.ffn_up);
+    const ggml_split_tensor_t * split_ffn_gate        = ssplit(layer.ffn_gate);
+    const ggml_split_tensor_t * split_ffn_down        = ssplit(layer.ffn_down);
+    const ggml_split_tensor_t * split_ffn_gate_inp    = ssplit(layer.ffn_gate_inp);
+    const ggml_split_tensor_t * split_ffn_up_exps     = ssplit(layer.ffn_up_exps);
+    const ggml_split_tensor_t * split_ffn_gate_exps   = ssplit(layer.ffn_gate_exps);
+    const ggml_split_tensor_t * split_ffn_down_exps   = ssplit(layer.ffn_down_exps);
+    const ggml_split_tensor_t * split_ffn_up_gate_exps= ssplit(layer.ffn_up_gate_exps);
+    const ggml_split_tensor_t * split_ffn_up_exps_b   = ssplit(layer.ffn_up_exps_b);
+    const ggml_split_tensor_t * split_ffn_gate_exps_b = ssplit(layer.ffn_gate_exps_b);
+    const ggml_split_tensor_t * split_ffn_down_exps_b = ssplit(layer.ffn_down_exps_b);
+    const ggml_split_tensor_t * split_ffn_up_gate_exps_b = ssplit(layer.ffn_up_gate_exps_b);
+    const ggml_split_tensor_t * split_ffn_exp_probs_b = ssplit(layer.ffn_exp_probs_b);
+    const ggml_split_tensor_t * split_ffn_up_shexp    = ssplit(layer.ffn_up_shexp);
+    const ggml_split_tensor_t * split_ffn_gate_shexp  = ssplit(layer.ffn_gate_shexp);
+    const ggml_split_tensor_t * split_ffn_down_shexp  = ssplit(layer.ffn_down_shexp);
+    const ggml_split_tensor_t * split_ffn_gate_tid2eid = ssplit(layer.ffn_gate_tid2eid);
+
+    const int64_t hc = hparams.dsv4_hc_mult;
+    const bool is_dense = (uint32_t) il < hparams.n_layer_dense_lead;
+
+    std::vector<ggml_tensor *> ffn_partials(n_device, nullptr);
+    std::vector<ggml_tensor *> hc_post(n_device, nullptr);
+    std::vector<ggml_tensor *> hc_comb(n_device, nullptr);
+    std::vector<ggml_tensor *> hc_residual(n_device, nullptr);
+
+    for (int id = 0; id < n_device; ++id) {
+        ggml_tensor * ffn_split = is_dense
+                ? (split_ffn_down ? split_ffn_down->splits[id] : layer.ffn_down)
+                : (split_ffn_down_exps ? split_ffn_down_exps->splits[id] : layer.ffn_down_exps);
+        if (!ffn_split) continue;
+        const int il_id = 1000*(id + 1) + il;
+
+        auto input = get_input_tensor_sm_graph(ctx0, attn_out, id);
+        ggml_tensor * residual = input;
+
+        ggml_tensor * post = nullptr;
+        ggml_tensor * comb = nullptr;
+        ggml_tensor * cur = build_hc_pre(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps, input,
+                split_hc_ffn_fn ? split_hc_ffn_fn->splits[id] : layer.hc_ffn_fn,
+                split_hc_ffn_scale ? split_hc_ffn_scale->splits[id] : layer.hc_ffn_scale,
+                split_hc_ffn_base ? split_hc_ffn_base->splits[id] : layer.hc_ffn_base,
+                &post, &comb, cb, il_id);
+        cb(cur, "hc_ffn_pre", il_id);
+
+        cur = do_split_norm(ctx0, cur, layer.ffn_norm, hparams, cb, id, il_id, false);
+        if (cur->op != GGML_OP_REDUCE) {
+            cur->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
+        }
+
+        ggml_tensor * ffn_out = nullptr;
+        if (is_dense) {
+            ffn_out = llm_build_ffn(ctx0, lctx, nullptr, cur,
+                    split_ffn_up ? split_ffn_up->splits[id] : layer.ffn_up, nullptr, nullptr,
+                    split_ffn_gate ? split_ffn_gate->splits[id] : layer.ffn_gate, nullptr, nullptr,
+                    split_ffn_down ? split_ffn_down->splits[id] : layer.ffn_down, nullptr, nullptr,
+                    nullptr,
+                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il_id, gf, false, false, nullptr);
+        } else {
+            ggml_tensor * selected_experts = nullptr;
+            ggml_tensor * exp_probs_b = layer.ffn_exp_probs_b;
+            if ((uint32_t) il < hparams.dsv4_hash_layer_count) {
+                selected_experts = ggml_get_rows(ctx0,
+                        split_ffn_gate_tid2eid ? split_ffn_gate_tid2eid->splits[id] : layer.ffn_gate_tid2eid,
+                        lctx.inp_tokens);
+                cb(selected_experts, "hashed_exps", il_id);
+                exp_probs_b = nullptr;
+            }
+            const int64_t moe_n_expert_used = selected_experts != nullptr
+                    ? selected_experts->ne[0]
+                    : n_expert_used;
+
+            const int64_t dsv4_n_stream = std::max<int64_t>(1, lctx.dsv4.csa_ctx.graph_n_stream);
+            constexpr int64_t dsv4_moe_max_tokens = 1024;
+
+            auto build_dsv4_moe = [&](ggml_tensor * moe_cur,
+                                      ggml_tensor * moe_exp_probs_b,
+                                      ggml_tensor * moe_selected_experts) {
+                return llm_build_moe_ffn(ctx0, lctx, moe_cur,
+                        split_ffn_gate_inp ? split_ffn_gate_inp->splits[id] : layer.ffn_gate_inp,
+                        nullptr,
+                        split_ffn_up_exps ? split_ffn_up_exps->splits[id] : layer.ffn_up_exps,
+                        split_ffn_up_exps_b ? split_ffn_up_exps_b->splits[id] : nullptr,
+                        split_ffn_gate_exps ? split_ffn_gate_exps->splits[id] : layer.ffn_gate_exps,
+                        split_ffn_gate_exps_b ? split_ffn_gate_exps_b->splits[id] : nullptr,
+                        split_ffn_down_exps ? split_ffn_down_exps->splits[id] : layer.ffn_down_exps,
+                        split_ffn_down_exps_b ? split_ffn_down_exps_b->splits[id] : nullptr,
+                        split_ffn_exp_probs_b ? split_ffn_exp_probs_b->splits[id] : moe_exp_probs_b,
+                        n_expert, moe_n_expert_used,
+                        LLM_FFN_SILU, hparams.expert_weights_norm,
+                        true, hparams.expert_weights_scale,
+                        (enum llm_expert_gating_func_type) hparams.expert_gating_func,
+                        cb, il_id, gf, false,
+                        split_ffn_up_gate_exps ? split_ffn_up_gate_exps->splits[id] : layer.ffn_up_gate_exps,
+                        split_ffn_up_gate_exps_b ? split_ffn_up_gate_exps_b->splits[id] : nullptr,
+                        nullptr, nullptr, moe_selected_experts);
+            };
+
+            ggml_tensor * moe_out = nullptr;
+            if (dsv4_n_stream > 1 && cur->ne[1] > dsv4_moe_max_tokens &&
+                    cur->ne[1] % dsv4_n_stream == 0) {
+                const int64_t n_tokens_stream = cur->ne[1]/dsv4_n_stream;
+                auto stream_view = [&](ggml_tensor * tensor, int64_t stream) {
+                    if (tensor == nullptr || tensor->ne[1] != cur->ne[1]) {
+                        return tensor;
+                    }
+                    return ggml_view_2d(ctx0, tensor, tensor->ne[0], n_tokens_stream,
+                            tensor->nb[1], stream*n_tokens_stream*tensor->nb[1]);
+                };
+                for (int64_t stream = 0; stream < dsv4_n_stream; ++stream) {
+                    ggml_tensor * stream_result = build_dsv4_moe(
+                            stream_view(cur, stream),
+                            stream_view(exp_probs_b, stream),
+                            stream_view(selected_experts, stream));
+                    moe_out = moe_out == nullptr ? stream_result : ggml_concat(ctx0, moe_out, stream_result, 1);
+                }
+            } else {
+                moe_out = build_dsv4_moe(cur, exp_probs_b, selected_experts);
+            }
+            ggml_build_forward_expand(gf, moe_out);
+            cb(moe_out, "ffn_moe_out", il_id);
+
+            ggml_tensor * ffn_shexp = nullptr;
+            if (split_ffn_up_shexp || layer.ffn_up_shexp) {
+                ffn_shexp = llm_build_ffn(ctx0, lctx, nullptr, cur,
+                        split_ffn_up_shexp ? split_ffn_up_shexp->splits[id] : layer.ffn_up_shexp, nullptr, nullptr,
+                        split_ffn_gate_shexp ? split_ffn_gate_shexp->splits[id] : layer.ffn_gate_shexp, nullptr, nullptr,
+                        split_ffn_down_shexp ? split_ffn_down_shexp->splits[id] : layer.ffn_down_shexp, nullptr, nullptr,
+                        nullptr,
+                        LLM_FFN_SILU, LLM_FFN_PAR, cb, il_id, gf, false, false, nullptr);
+                cb(ffn_shexp, "ffn_shexp", il_id);
+            }
+            ffn_out = ffn_shexp ? ggml_add(ctx0, moe_out, ffn_shexp) : moe_out;
+        }
+        cb(ffn_out, "ffn_out", il_id);
+        if (ffn_out->ne[1] > 32 && cparams.reduce_type != GGML_TYPE_F32) {
+            ffn_out = ggml_cast(ctx0, ffn_out, cparams.reduce_type);
+        }
+        ggml_build_forward_expand(gf, ffn_out);
+
+        ffn_partials[id] = ffn_out;
+        hc_post[id] = post;
+        hc_comb[id] = comb;
+        hc_residual[id] = residual;
+    }
+
+    const bool replicated_ffn = split_wo_b->split_dim == -1;
+    ggml_tensor * ffn_combined = nullptr;
+    if (!replicated_ffn) {
+        ffn_combined = ggml_reduce(ctx0, ffn_partials.data(), n_device, GGML_OP_ADD);
+        ggml_build_forward_expand(gf, ffn_combined);
+        cb(ffn_combined, "ffn_combined", il);
+    }
+
+    std::vector<ggml_tensor *> l_out(n_device, nullptr);
+    for (int id = 0; id < n_device; ++id) {
+        if (!ffn_partials[id]) continue;
+        const int il_id = 1000*(id + 1) + il;
+        ggml_tensor * x = replicated_ffn ? ffn_partials[id] : ffn_combined;
+        ggml_tensor * cur = build_mhc_post(x, hc_post[id], hc_residual[id], hc_comb[id], n_embd, hc, true);
+        cb(cur, "ffn_hc_post", il_id);
+        cur = lctx.cvec.apply_to(ctx0, cur, il);
+        ggml_build_forward_expand(gf, cur);
+        l_out[id] = cur;
+    }
+
+    ggml_tensor * out = ggml_reduce(ctx0, l_out.data(), n_device, GGML_OP_ADD);
+    out->op_params[3] = 1; // turned-off reduce: split point, not a barrier
+    ggml_build_forward_expand(gf, out);
+    return out;
+}
+
 ggml_cgraph * llm_build_context::build_deepseek4() {
     ggml_cgraph * gf = new_graph_custom();
 
     const bool is_mtp = lctx.cparams.mtp_op_type != MTP_OP_NONE;
+
+    const bool tp_mode = (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
+                          model.split_mode == LLAMA_SPLIT_MODE_ATTN);
 
     const int64_t n_embd_head = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_rope = hparams.n_rot;
@@ -1382,6 +1990,20 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
     const int n_layer_begin = is_mtp ? n_layer - hparams.nextn_predict_layers : 0;
     const int n_layer_end   = is_mtp ? n_layer : n_layer - hparams.nextn_predict_layers;
     for (int il = n_layer_begin; il < n_layer_end; ++il) {
+
+        // Per-layer tensor-parallel gate. wo_b->extra is set by the DS4
+        // distributor for every layer (replicated or group-split), and the
+        // raw-K / DSV4-cache replication in llama.cpp keys off the same flag.
+        const bool is_tp_layer = tp_mode && model.layers[il].wo_b && model.layers[il].wo_b->extra;
+        if (is_tp_layer) {
+            inpL = build_deepseek4_tp_attention(gf, il, inpL,
+                    &append_csa_state, &append_csa_score,
+                    &append_lid_state, &append_lid_score,
+                    inp_pos, KQ_mask);
+            inpL = build_deepseek4_tp_ffn(gf, il, inpL);
+            cb(inpL, "l_out", il);
+            continue;
+        }
 
         auto cur = ds4_attention(gf, ctx0, *this, inpL,
                              &append_csa_state, &append_csa_score,

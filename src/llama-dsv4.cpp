@@ -884,8 +884,19 @@ bool llama_context::ensure_dsv4_cache_tensors() {
 
     free_dsv4_cache_tensors();
 
+    // In tensor-parallel / attention-split mode the compressed caches and the
+    // per-layer compressor state are replicated in full on every device so each
+    // device attends and recompresses against its local copy. Host-memory
+    // caches have no per-device replicas, so the cpu cache options are not
+    // honored under split mode.
+    const bool tp_mode = (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
+                          model.split_mode == LLAMA_SPLIT_MODE_ATTN);
+
+    // Under split mode each cache tensor also gets a full-width replica per
+    // device, so budget context space for those tensor objects as well.
+    const size_t n_replica_overhead = (tp_mode ? 8 * model.splits.size() : 0);
     ggml_init_params params = {
-        /*.mem_size   =*/ (size_t) (16 * std::max(1, n_layer)) * ggml_tensor_overhead(),
+        /*.mem_size   =*/ (size_t) ((16 + n_replica_overhead) * std::max(1, n_layer)) * ggml_tensor_overhead(),
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
@@ -921,22 +932,62 @@ bool llama_context::ensure_dsv4_cache_tensors() {
         return true;
     };
 
-    // When the compressed-attention K caches live in host memory, only the
-    // context-sized K caches (CSA/HCA/LID K) are moved; the small per-layer
-    // compression state tensors stay next to the layer so ggml_ds4_comp can
-    // keep running on the layer's backend.
     const ggml_backend_buffer_type_t cpu_buft = (cparams.dsv4_cache_cpu || cparams.dsv4_lid_cache_cpu)
         ? llama_default_buffer_type_cpu(true) : nullptr;
+
+    if (tp_mode && (cparams.dsv4_cache_cpu || cparams.dsv4_lid_cache_cpu)) {
+        LLAMA_LOG_WARN("%s: dsv4_cache_cpu / dsv4_lid_cache_cpu are ignored under split mode graph/attn\n", __func__);
+    }
 
     for (int32_t il = 0; il < n_layer; ++il) {
         const uint32_t ratio = model.hparams.dsv4_compress_ratios[(size_t) il];
         ggml_backend_buffer_type_t buft = llama_dsv4_layer_buft(*this, il);
-        ggml_backend_buffer_type_t k_buft = cpu_buft != nullptr ? cpu_buft : buft;
+        // A layer participates in the split when the loader split its attention
+        // output tensors (wo_b) across devices; the number of replicas and the
+        // split buffer type are taken from that split.
+        const ggml_split_tensor_t * extra_wo = nullptr;
+        if (tp_mode && model.layers[il].wo_b && model.layers[il].wo_b->extra) {
+            extra_wo = (const ggml_split_tensor_t *) model.layers[il].wo_b->extra;
+        }
+        const bool tp_layer = extra_wo != nullptr;
+        const int n_device = tp_layer ? extra_wo->n_device : 0;
+        ggml_backend_buffer_type_t split_buft = model.buft_layer[il].buft_matrix;
+        if (tp_layer && split_buft == nullptr) {
+            split_buft = buft;
+        }
+        ggml_backend_buffer_type_t k_buft = tp_layer ? split_buft : (cpu_buft != nullptr ? cpu_buft : buft);
         // The LID/indexer K cache is small and is scanned by the indexer top-k
         // on every step - keep it on the layer's device unless explicitly
         // requested otherwise. The CSA/HCA K caches are the large ones and are
         // only read via sparse gathers, so they tolerate host memory well.
-        ggml_backend_buffer_type_t lid_buft = cparams.dsv4_lid_cache_cpu && cpu_buft != nullptr ? cpu_buft : buft;
+        ggml_backend_buffer_type_t lid_buft = tp_layer ? split_buft
+            : (cparams.dsv4_lid_cache_cpu && cpu_buft != nullptr ? cpu_buft : buft);
+
+        // Create a cache tensor plus, under split mode, a full-width replica on
+        // every device. The parent carries the ggml_split_tensor_t (split_dim =
+        // -1, replicated) in `extra`; allocation happens through the split
+        // buffer type, which gives each replica its own device memory.
+        auto alloc_replicated = [&](ggml_tensor * parent, const char * name,
+                std::vector<llama_split_tensor> & split_vec, ggml_backend_buffer_type_t alloc_buft) -> bool {
+            if (!tp_layer) {
+                return alloc_tensor(parent, alloc_buft);
+            }
+            auto & split = split_vec.emplace_back();
+            split.tensor_splits.resize(n_device, nullptr);
+            for (int is = 0; is < n_device; ++is) {
+                if (!extra_wo->splits[is]) continue;
+                ggml_tensor * replica = ggml_new_tensor_3d(cache.cache_ctx, parent->type,
+                        parent->ne[0], parent->ne[1], parent->ne[2]);
+                std::string replica_name = std::string(name) + '.' + std::to_string(is);
+                ggml_set_name(replica, replica_name.c_str());
+                split.tensor_splits[is] = replica;
+            }
+            split.ggml.n_device  = n_device;
+            split.ggml.split_dim = -1;
+            split.ggml.splits    = split.tensor_splits.data();
+            parent->extra = (void *) &split.ggml;
+            return alloc_tensor(parent, split_buft);
+        };
 
         if (ratio == dsv4_runtime::CSA_RATIO) {
             cache.csa_k[(size_t) il] = ggml_new_tensor_3d(cache.cache_ctx, kv_self.type_k, n_embd_head, csa_kv*n_stream, 1);
@@ -946,12 +997,12 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             cache.lid_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_indexer_head, 2*dsv4_runtime::CSA_RATIO*n_stream);
             cache.lid_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_indexer_head, 2*dsv4_runtime::CSA_RATIO*n_stream);
 
-            if (!alloc_tensor(cache.csa_k[(size_t) il], k_buft) ||
-                !alloc_tensor(cache.lid_k[(size_t) il], lid_buft) ||
-                !alloc_tensor(cache.csa_state_kv[(size_t) il], buft) ||
-                !alloc_tensor(cache.csa_state_score[(size_t) il], buft) ||
-                !alloc_tensor(cache.lid_state_kv[(size_t) il], buft) ||
-                !alloc_tensor(cache.lid_state_score[(size_t) il], buft)) {
+            if (!alloc_replicated(cache.csa_k[(size_t) il],      (std::string("dsv4_csa_k_l") + std::to_string(il)).c_str(),          cache.csa_k_split,          k_buft) ||
+                !alloc_replicated(cache.lid_k[(size_t) il],      (std::string("dsv4_lid_k_l") + std::to_string(il)).c_str(),          cache.lid_k_split,          lid_buft) ||
+                !alloc_replicated(cache.csa_state_kv[(size_t) il],    (std::string("dsv4_csa_state_kv_l") + std::to_string(il)).c_str(),    cache.csa_state_kv_split,    buft) ||
+                !alloc_replicated(cache.csa_state_score[(size_t) il],  (std::string("dsv4_csa_state_score_l") + std::to_string(il)).c_str(), cache.csa_state_score_split, buft) ||
+                !alloc_replicated(cache.lid_state_kv[(size_t) il],     (std::string("dsv4_lid_state_kv_l") + std::to_string(il)).c_str(),    cache.lid_state_kv_split,    buft) ||
+                !alloc_replicated(cache.lid_state_score[(size_t) il],  (std::string("dsv4_lid_state_score_l") + std::to_string(il)).c_str(), cache.lid_state_score_split, buft)) {
                 LLAMA_LOG_ERROR("%s: failed to allocate DSV4 CSA/LID buffers for layer %d\n", __func__, il);
                 free_dsv4_cache_tensors();
                 return false;
@@ -961,9 +1012,9 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             cache.hca_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, dsv4_runtime::HCA_RATIO*n_stream);
             cache.hca_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, dsv4_runtime::HCA_RATIO*n_stream);
 
-            if (!alloc_tensor(cache.hca_k[(size_t) il], k_buft) ||
-                !alloc_tensor(cache.hca_state_kv[(size_t) il], buft) ||
-                !alloc_tensor(cache.hca_state_score[(size_t) il], buft)) {
+            if (!alloc_replicated(cache.hca_k[(size_t) il],           (std::string("dsv4_hca_k_l") + std::to_string(il)).c_str(),           cache.hca_k_split,          k_buft) ||
+                !alloc_replicated(cache.hca_state_kv[(size_t) il],    (std::string("dsv4_hca_state_kv_l") + std::to_string(il)).c_str(),    cache.hca_state_kv_split,    buft) ||
+                !alloc_replicated(cache.hca_state_score[(size_t) il], (std::string("dsv4_hca_state_score_l") + std::to_string(il)).c_str(), cache.hca_state_score_split, buft)) {
                 LLAMA_LOG_ERROR("%s: failed to allocate DSV4 HCA buffers for layer %d\n", __func__, il);
                 free_dsv4_cache_tensors();
                 return false;
@@ -1024,6 +1075,15 @@ void llama_context::free_dsv4_cache_tensors() {
     release_vector(dsv4.cache.hca_state_score);
     release_vector(dsv4.cache.lid_state_kv);
     release_vector(dsv4.cache.lid_state_score);
+    release_vector(dsv4.cache.csa_k_split);
+    release_vector(dsv4.cache.hca_k_split);
+    release_vector(dsv4.cache.lid_k_split);
+    release_vector(dsv4.cache.csa_state_kv_split);
+    release_vector(dsv4.cache.csa_state_score_split);
+    release_vector(dsv4.cache.hca_state_kv_split);
+    release_vector(dsv4.cache.hca_state_score_split);
+    release_vector(dsv4.cache.lid_state_kv_split);
+    release_vector(dsv4.cache.lid_state_score_split);
     dsv4.cache.n_stream = 1;
     if (dsv4.cache.cache_ctx != nullptr) {
         ggml_free(dsv4.cache.cache_ctx);
@@ -1046,6 +1106,36 @@ void llama_reset_dsv4_state(llama_context * ctx, int32_t seq_id) {
         for (ggml_backend_buffer_t buf : ctx->dsv4.cache.cache_bufs) {
             ggml_backend_buffer_clear(buf, 0);
         }
+        // The split buffer's clear is a no-op (its per-tensor device memory is
+        // owned by the individual replicas), so also zero the replicated
+        // per-device copies explicitly under split mode.
+        auto zero_replicated = [](ggml_tensor * tensor) {
+            if (tensor == nullptr || !tensor->extra) {
+                return;
+            }
+            const auto extra = (const ggml_split_tensor_t *) tensor->extra;
+            GGML_ASSERT(extra->split_dim == -1);
+            std::vector<uint8_t> zeros;
+            for (int i = 0; i < extra->n_device; ++i) {
+                if (extra->splits[i] == nullptr) {
+                    continue;
+                }
+                const size_t nbytes = ggml_nbytes(extra->splits[i]);
+                if (zeros.size() < nbytes) {
+                    zeros.resize(nbytes);
+                }
+                ggml_backend_tensor_set(extra->splits[i], zeros.data(), 0, nbytes);
+            }
+        };
+        for (ggml_tensor * tensor : ctx->dsv4.cache.csa_k) zero_replicated(tensor);
+        for (ggml_tensor * tensor : ctx->dsv4.cache.hca_k) zero_replicated(tensor);
+        for (ggml_tensor * tensor : ctx->dsv4.cache.lid_k) zero_replicated(tensor);
+        for (ggml_tensor * tensor : ctx->dsv4.cache.csa_state_kv) zero_replicated(tensor);
+        for (ggml_tensor * tensor : ctx->dsv4.cache.csa_state_score) zero_replicated(tensor);
+        for (ggml_tensor * tensor : ctx->dsv4.cache.hca_state_kv) zero_replicated(tensor);
+        for (ggml_tensor * tensor : ctx->dsv4.cache.hca_state_score) zero_replicated(tensor);
+        for (ggml_tensor * tensor : ctx->dsv4.cache.lid_state_kv) zero_replicated(tensor);
+        for (ggml_tensor * tensor : ctx->dsv4.cache.lid_state_score) zero_replicated(tensor);
         return;
     }
 
@@ -1060,7 +1150,23 @@ void llama_reset_dsv4_state(llama_context * ctx, int32_t seq_id) {
         const size_t offset = (size_t) seq_id * rows_per_stream * row_bytes;
         const size_t bytes = rows_per_stream * row_bytes;
         std::vector<uint8_t> zeros(bytes, 0);
-        ggml_backend_tensor_set(tensor, zeros.data(), offset, bytes);
+        const auto clear_one = [&](ggml_tensor * t) {
+            ggml_backend_tensor_set(t, zeros.data(), offset, bytes);
+        };
+        // Replicated parents (split mode) hold full-width per-device copies;
+        // the split buffer's set_tensor only accepts whole-tensor writes, so
+        // clear each per-device replica at the stream offset instead.
+        if (tensor->extra) {
+            const auto extra = (const ggml_split_tensor_t *) tensor->extra;
+            GGML_ASSERT(extra->split_dim == -1);
+            for (int i = 0; i < extra->n_device; ++i) {
+                if (extra->splits[i]) {
+                    clear_one(extra->splits[i]);
+                }
+            }
+        } else {
+            clear_one(tensor);
+        }
     };
 
     for (ggml_tensor * tensor : ctx->dsv4.cache.csa_k) clear_tensor(tensor);
@@ -1078,7 +1184,21 @@ static std::vector<ggml_tensor *> dsv4_state_tensors(const llama_context & ctx) 
     std::vector<ggml_tensor *> tensors;
     const auto append = [&tensors](const std::vector<ggml_tensor *> & group) {
         for (ggml_tensor * tensor : group) {
-            if (tensor != nullptr) {
+            if (tensor == nullptr) {
+                continue;
+            }
+            // Under split mode the parent carries full-width per-device
+            // replicas in `extra`; expand them so checkpoint capture and
+            // restore cover every device.
+            if (tensor->extra) {
+                const auto extra = (const ggml_split_tensor_t *) tensor->extra;
+                GGML_ASSERT(extra->split_dim == -1);
+                for (int i = 0; i < extra->n_device; ++i) {
+                    if (extra->splits[i] != nullptr) {
+                        tensors.push_back(extra->splits[i]);
+                    }
+                }
+            } else {
                 tensors.push_back(tensor);
             }
         }
@@ -1254,37 +1374,55 @@ static bool dsv4_per_step_capture_group(
         return false;
     }
 
-    for (ggml_tensor * state : states) {
-        if (state == nullptr) {
+    for (ggml_tensor * parent : states) {
+        if (parent == nullptr) {
             continue;
         }
-        ggml_tensor * delta = llama_dsv4_spec_ckpt_delta(&ctx, state);
-        ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(ctx.sched, state);
-        if (delta == nullptr || backend == nullptr || delta->ne[0] != state->ne[0]) {
-            return false;
+        // Expand replicated parents (split mode) into their per-device replicas
+        // so every device's compressor state participates in the capture; the
+        // shadow/delta arrays are indexed over the expanded state tensor list.
+        std::vector<ggml_tensor *> state_list;
+        if (parent->extra) {
+            const auto extra = (const ggml_split_tensor_t *) parent->extra;
+            GGML_ASSERT(extra->split_dim == -1);
+            for (int i = 0; i < extra->n_device; ++i) {
+                if (extra->splits[i] != nullptr) {
+                    state_list.push_back(extra->splits[i]);
+                }
+            }
+        } else {
+            state_list.push_back(parent);
         }
 
-        for (size_t row = 0; row < plan.state_delta_src_idxs.size(); ++row) {
-            const int32_t src_idx = plan.state_delta_src_idxs[row];
-            const int32_t dst_idx = plan.state_delta_dst_idxs[row];
-            if (src_idx < 0 || (uint64_t) src_idx >= (uint64_t) delta->ne[1] ||
-                dst_idx < 0 || (uint64_t) dst_idx >= (uint64_t) state->ne[1]) {
+        for (ggml_tensor * state : state_list) {
+            ggml_tensor * delta = llama_dsv4_spec_ckpt_delta(&ctx, state);
+            ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(ctx.sched, state);
+            if (delta == nullptr || backend == nullptr || delta->ne[0] != state->ne[0]) {
                 return false;
             }
 
-            ggml_tensor src_view = *state;
-            ggml_tensor dst_view = *delta;
-            src_view.ne[1] = src_view.ne[2] = src_view.ne[3] = 1;
-            dst_view.ne[1] = dst_view.ne[2] = dst_view.ne[3] = 1;
-            src_view.nb[2] = src_view.nb[3] = src_view.nb[1];
-            dst_view.nb[2] = dst_view.nb[3] = dst_view.nb[1];
-            src_view.data = (char *) state->data + (size_t) dst_idx * state->nb[1];
-            dst_view.data = (char *) delta->data + (size_t) src_idx * delta->nb[1];
-            src_view.view_src = nullptr;
-            dst_view.view_src = nullptr;
-            src_view.view_offs = 0;
-            dst_view.view_offs = 0;
-            ggml_backend_tensor_copy_async(backend, backend, &src_view, &dst_view);
+            for (size_t row = 0; row < plan.state_delta_src_idxs.size(); ++row) {
+                const int32_t src_idx = plan.state_delta_src_idxs[row];
+                const int32_t dst_idx = plan.state_delta_dst_idxs[row];
+                if (src_idx < 0 || (uint64_t) src_idx >= (uint64_t) delta->ne[1] ||
+                    dst_idx < 0 || (uint64_t) dst_idx >= (uint64_t) state->ne[1]) {
+                    return false;
+                }
+
+                ggml_tensor src_view = *state;
+                ggml_tensor dst_view = *delta;
+                src_view.ne[1] = src_view.ne[2] = src_view.ne[3] = 1;
+                dst_view.ne[1] = dst_view.ne[2] = dst_view.ne[3] = 1;
+                src_view.nb[2] = src_view.nb[3] = src_view.nb[1];
+                dst_view.nb[2] = dst_view.nb[3] = dst_view.nb[1];
+                src_view.data = (char *) state->data + (size_t) dst_idx * state->nb[1];
+                dst_view.data = (char *) delta->data + (size_t) src_idx * delta->nb[1];
+                src_view.view_src = nullptr;
+                dst_view.view_src = nullptr;
+                src_view.view_offs = 0;
+                dst_view.view_offs = 0;
+                ggml_backend_tensor_copy_async(backend, backend, &src_view, &dst_view);
+            }
         }
     }
 
@@ -1552,7 +1690,20 @@ enum llama_spec_ckpt_restore_result llama_dsv4_spec_ckpt_restore(llama_context *
         const auto compact = [](const std::vector<ggml_tensor *> & source) {
             std::vector<ggml_tensor *> result;
             for (ggml_tensor * tensor : source) {
-                if (tensor != nullptr) {
+                if (tensor == nullptr) {
+                    continue;
+                }
+                // Keep the per-device replicas (index-aligned with the expanded
+                // shadow/delta arrays populated from dsv4_state_tensors()).
+                if (tensor->extra) {
+                    const auto extra = (const ggml_split_tensor_t *) tensor->extra;
+                    GGML_ASSERT(extra->split_dim == -1);
+                    for (int i = 0; i < extra->n_device; ++i) {
+                        if (extra->splits[i] != nullptr) {
+                            result.push_back(extra->splits[i]);
+                        }
+                    }
+                } else {
                     result.push_back(tensor);
                 }
             }

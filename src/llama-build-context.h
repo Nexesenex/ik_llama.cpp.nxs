@@ -289,6 +289,30 @@ struct llm_build_context {
 
     ggml_cgraph * build_deepseek2();
     ggml_cgraph * build_deepseek4();
+
+    // DEEPSEEK4 per-device attention under -sm graph / -sm attn. Runs the
+    // attention redundantly on every device against the per-device weight
+    // replicas (wq_a/wkv_latent/mHC/compressors/indexer), group-splits
+    // wq_b/wo_a/wo_b across devices, all-reduces the wo_b partials, then folds
+    // the per-device hc_post (the reduced partials are all-reduced in place, so
+    // every device already holds the full attention output). Returns a
+    // REDUCE-shaped tensor carrying the per-device [n_embd, hc, n_tokens]
+    // replicas with the reduce turned off (op_params[3] == 1), i.e. a split
+    // point, not a barrier.
+    ggml_tensor * build_deepseek4_tp_attention(
+            ggml_cgraph * gf, int il, ggml_tensor * inpL,
+            ggml_tensor ** append_csa_state, ggml_tensor ** append_csa_score,
+            ggml_tensor ** append_lid_state, ggml_tensor ** append_lid_score,
+            ggml_tensor * inp_pos, ggml_tensor * KQ_mask);
+
+    // DEEPSEEK4 per-device FFN under -sm graph / -sm attn. Consumes the
+    // attention split point from build_deepseek4_tp_attention, runs the dense /
+    // MoE FFN per device on the split expert weights, all-reduces the partials,
+    // folds hc_post + cvec per device, and returns the next layer's input as
+    // another turned-off REDUCE split point.
+    ggml_tensor * build_deepseek4_tp_ffn(
+            ggml_cgraph * gf, int il, ggml_tensor * attn_out);
+
     ggml_cgraph * build_openpangu();
 
     // openPangu attention sublayer body (shared by base layers and the NextN/MTP head):
