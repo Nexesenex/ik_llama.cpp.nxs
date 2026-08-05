@@ -84,7 +84,8 @@ class Model:
                  target_model_dir: Path | None = None,
                  moe_quant_type: gguf.GGMLQuantizationType | None = None,
                  fni8: bool = False,
-                 no_bf16_to_f32: bool = False):
+                 no_bf16_to_f32: bool = False,
+                 partial_reconv: bool = False):
         if type(self) is Model:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
 
@@ -93,6 +94,7 @@ class Model:
         self.moe_quant_type = moe_quant_type
         self.fni8 = fni8
         self.no_bf16_to_f32 = no_bf16_to_f32
+        self.partial_reconv = partial_reconv
         self.fname_out = fname_out
         self.is_big_endian = is_big_endian
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
@@ -128,7 +130,8 @@ class Model:
 
         # Configure GGUF Writer
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
-                                           split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
+                                           split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard,
+                                           partial_reconv=partial_reconv)
 
     @classmethod
     def __init_subclass__(cls):
@@ -6805,6 +6808,10 @@ def parse_args() -> argparse.Namespace:
         "--no-bf16-to-f32", action="store_true",
         help="keep BF16 tensors that are not converted by the FTYPE scheme in BF16 instead of upcasting them to F32 (ik_llama.cpp supports BF16 inference)",
     )
+    parser.add_argument(
+        "--partial-reconv", action="store_true",
+        help="only convert the shard files that are missing in the output directory; requires --split-max-tensors 1 (one tensor per shard). Use it to reconvert a few tensors by deleting their shard files in the destination directory.",
+    )
 
     return parser.parse_args()
 
@@ -6906,6 +6913,10 @@ def main() -> None:
         logger.error("Error: Cannot use temp file when splitting")
         sys.exit(1)
 
+    if args.partial_reconv and args.split_max_tensors != 1:
+        logger.error("Error: --partial-reconv requires --split-max-tensors 1 (one tensor per shard)")
+        sys.exit(1)
+
     if args.outfile is not None:
         fname_out = args.outfile
     else:
@@ -6949,7 +6960,8 @@ def main() -> None:
                                      target_model_dir=args.target_model_dir,
                                      moe_quant_type=moe_quant_type,
                                      fni8=args.fni8,
-                                     no_bf16_to_f32=args.no_bf16_to_f32)
+                                     no_bf16_to_f32=args.no_bf16_to_f32,
+                                     partial_reconv=args.partial_reconv)
 
         if args.vocab_only:
             logger.info("Exporting model vocab...")
