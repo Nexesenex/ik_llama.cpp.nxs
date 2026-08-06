@@ -129,14 +129,29 @@ Implemented as follows:
 
 ## 6. Validation harness
 
-- Unit-style test: fill pseudo-random + crafted edge buffers (all zero, single
-  outlier, ±max, denormals, ties at `.5` boundaries), quantize with
-  `quantize_row_q8_0_ref` (CPU) and `ggml_cuda_quantize_q8_0` (GPU),
-  `memcmp` the outputs.
-- End-to-end: `llama-quantize` twice on a small F32 model (`Q8_0`), once CPU,
-  once `--cuda-quantize`; `memcmp` the resulting tensor payloads (or
-  `gguf-hash` both files).
-- Extend the same harness to each newly added type from §3.1.
+`examples/unit_test_cuda` (target `unit_test_cuda`) verifies byte-for-byte
+parity. It compares three producers of Q8_0 GGUF bytes on identical input:
+
+1. **GPU:** `ggml_cuda_quantize_q8_0` (`ggml/src/ggml-cuda/quantize_gguf.cu`);
+2. **CPU:** `ggml_quantize_chunk` — the fork's real llama-quantize path
+   (`quantize_q8_0 -> quantize_row_q8_0_ref`);
+3. **REF:** a local copy of `quantize_row_q8_0_ref` (`ggml-quants.c:943`) with
+   the fp16 step done by `__float2half_rn`, no ggml internals.
+
+`gpu vs cpu` answers "is the kernel byte-exact?", `cpu vs ref` answers "is the
+fork's CPU path still the vanilla reference?", `gpu vs ref` ties the two
+together with an independent baseline. Fills cover all-zero, single outlier,
+±max, exact `.5` rounding ties, denormals, huge/tiny magnitudes and mixed
+signs; a `> 1<<20`-block tensor exercises the CUDA host wrapper's chunk loop.
+`test_slices` reproduces `do_quantize`'s `ne[2]` slicing exactly: the CUDA and
+CPU branches both quantize one expert slice at a time into consecutive slots,
+and both must equal a single whole-tensor call.
+
+End-to-end: `llama-quantize` twice on a small F32 model (`Q8_0`), once CPU,
+once `--cuda-quantize`; `memcmp` the resulting tensor payloads.
+
+Build: `cmake --build build --target unit_test_cuda -j`. Run:
+`unit_test_cuda [--seed N] [--device N] [--all-devices] [--big] [--huge] [--quick]`.
 
 ## 7. Known gaps / follow-ups
 
