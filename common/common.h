@@ -398,6 +398,10 @@ struct gpt_params {
     std::vector<std::string> shark_args; // additional arguments passed to the poller (e.g. --interval 15)
     int    shark_temp_limit        = 85;   // temperature limit in Celsius (stops poller if exceeded)
 
+    // CUDA heartbeat keep-alive - warm up WDDM GPUs during TG to keep clocks elevated (Windows only)
+    // FMA chain length per non-TCC (WDDM) GPU, in device order. Empty = disabled.
+    std::vector<int> orca_fma;     // e.g. --orca 262144,393216 : GPU0=262144 FMA, GPU1=393216 FMA
+
     std::vector<std::string> in_files;     // all input files
     std::vector<std::string> antiprompt;   // strings upon which more user input is prompted (a.k.a. reverse prompts)
     std::vector<std::string> ban_phrases;  // strings that are banned in generation

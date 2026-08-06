@@ -67,6 +67,12 @@ GGML_API GGML_CALL int  ggml_backend_cuda_get_pindev(void);
 // hb=1: Launch a lightweight keep-alive kernel during TG to prevent clock drop
 GGML_API GGML_CALL void ggml_backend_cuda_set_hb(bool val);
 
+// Set per-GPU FMA chain length for the heartbeat warmup kernel. The array maps
+// positionally to non-TCC (WDDM) GPUs in ggml device order; TCC devices skip.
+// Call before or after set_hb(true); it is safe either way (set_hb(true) logs
+// each WDDM GPU with the effective FMA). Devices past the end keep defaults.
+GGML_API GGML_CALL void ggml_backend_cuda_set_hb_fmas(const int * fmas, int n);
+
 // Get current heartbeat setting
 GGML_API GGML_CALL bool ggml_backend_cuda_get_hb(void);
 
