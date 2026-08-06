@@ -27,8 +27,8 @@
 // #pragma STDC FP_CONTRACT OFF (as they now are), so a /arch:AVX2 build cannot
 // FMA-contract sumlx += w*x*l and drift by ~1 ulp.
 //
-// Currently implemented: Q8_0 (ref), Q4_0 (ref), Q5_0 (ref), Q4_0 and Q5_0 with
-// an importance matrix.
+// Currently implemented: Q8_0 (ref), Q4_0 (ref), Q5_0 (ref), Q6_0 (ref), and
+// Q4_0, Q5_0, Q6_0 with an importance matrix.
 //
 // The host entries process the tensor in fixed-size device chunks (~128 MiB
 // F32 per chunk) so single large tensors never require a large contiguous
@@ -40,7 +40,10 @@
 size_t ggml_cuda_quantize_q8_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
 size_t ggml_cuda_quantize_q4_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
 size_t ggml_cuda_quantize_q5_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
+size_t ggml_cuda_quantize_q6_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
 size_t ggml_cuda_quantize_q4_0_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix);
 size_t ggml_cuda_quantize_q5_0_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix);
+size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix);
