@@ -41,7 +41,7 @@ reference line numbers are from `ggml/src/ggml-quants.c` on `custom_pre_ols`.
 
 | Type | CPU scale (`_ref`) | CPU quant idiom | Stored fields |
 |------|--------------------|-----------------|---------------|
-| `Q4_0` | `amax = max\|v\|; d = max/-8; id = d?1/d:0` (`:673`) | `(int8_t)(x*id + 8.5f)`, clamp `MIN(15,…)` | `d`(fp16), 16 nibbles `qs[j] = xi0 \| xi1<<4` |
+| `Q4_0` ✓ | `amax = max\|v\|; d = max/-8; id = d?1/d:0` (`:673`) | `(int8_t)(x*id + 8.5f)`, clamp `MIN(15,…)` | `d`(fp16), 16 nibbles `qs[j] = xi0 \| xi1<<4` |
 | `Q4_1` | `min/max; d=(max-min)/15; m=min` (`:716`) | `(int8_t)((x-min)*id + 0.5f)`, clamp `MIN(15,…)` | `d,m`(fp16), nibbles |
 | `Q5_0` | `amax; d=max/-16` (`:757`) | `(int8_t)(x*id + 16.5f)`, clamp `MIN(31,…)` | `d`(fp16), nibbles, `qh`(32b) |
 | `Q5_1` | `min/max; d=(max-min)/31; m=min` (`:805`) | `(uint8_t)((x-min)*id + 0.5f)` (no clamp) | `d,m`(fp16), nibbles, `qh`(32b) |
@@ -120,10 +120,11 @@ Implemented as follows:
 3. `llama_model_quantize_params` gains `bool cuda_quantize` (default false),
    set by the `--cuda-quantize` CLI flag in `examples/quantize/quantize.cpp`
    (ignored with a warning in non-CUDA builds).
-4. `do_quantize()`: when `params->cuda_quantize && new_type == GGML_TYPE_Q8_0`,
-   routes each `ne[2]` (expert) slice through the CUDA entry and skips the CPU
-   chunk loop. All other types fall back to the CPU `ggml_quantize_chunk` path
-   untouched.
+4. `do_quantize()`: when `params->cuda_quantize` and the new type is eligible
+   (`Q8_0` always; `Q4_0` only when there is no importance matrix and
+   `--symmetric-q4-0` is off), routes each `ne[2]` (expert) slice through the
+   CUDA entry and skips the CPU chunk loop. All other types (and non-eligible
+   `Q4_0`) fall back to the CPU `ggml_quantize_chunk` path untouched.
 5. `ggml_validate_row_data` still runs on the CUDA output (it must pass, since
    the bytes equal the CPU bytes).
 
@@ -159,10 +160,11 @@ Build: `cmake --build build --target unit_test_cuda -j`. Run:
 
 ## 7. Known gaps / follow-ups
 
-- **`Q4_0` dispatch:** switch `quantize_row_q4_0` to the legacy
-  `quantize_row_q4_0_ref` (the commented call already exists at
-  `ggml-quants.c:719-722`) so the CPU output matches the legacy algorithm, then
-  add the CUDA `Q4_0` kernel.
+- ~~**`Q4_0` dispatch:** switch `quantize_row_q4_0` to the legacy
+  `quantize_row_q4_0_ref`, then add the CUDA `Q4_0` kernel.~~ Done: the fork's
+  CPU `quantize_row_q4_0` already dispatches to the legacy ref and the CUDA
+  `Q4_0` kernel is in. `Q4_0` stays on the CPU only when an importance matrix is
+  present or `--symmetric-q4-0` is requested.
 - Add `Q4_1, Q5_0, Q5_1, Q6_0 (Q6_1 is not implemented)` kernels behind the same entry, one commit
   per type, each validated by the harness.
 - Multi-GPU: rows are independent; later split row ranges across the 3 devices
