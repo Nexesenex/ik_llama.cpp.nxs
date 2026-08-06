@@ -43,14 +43,15 @@ reference line numbers are from `ggml/src/ggml-quants.c` on `custom_pre_ols`.
 |------|--------------------|-----------------|---------------|
 | `Q4_0` ✓ | `amax = max\|v\|; d = max/-8; id = d?1/d:0` (`:673`) | `(int8_t)(x*id + 8.5f)`, clamp `MIN(15,…)` | `d`(fp16), 16 nibbles `qs[j] = xi0 \| xi1<<4` |
 | `Q4_1` | `min/max; d=(max-min)/15; m=min` (`:716`) | `(int8_t)((x-min)*id + 0.5f)`, clamp `MIN(15,…)` | `d,m`(fp16), nibbles |
-| `Q5_0` | `amax; d=max/-16` (`:757`) | `(int8_t)(x*id + 16.5f)`, clamp `MIN(31,…)` | `d`(fp16), nibbles, `qh`(32b) |
+| `Q5_0` ✓ | `amax; d=max/-16` (`:757`) | `(int8_t)(x*id + 16.5f)`, clamp `MIN(31,…)` | `d`(fp16), nibbles, `qh`(32b) |
 | `Q5_1` | `min/max; d=(max-min)/31; m=min` (`:805`) | `(uint8_t)((x-min)*id + 0.5f)` (no clamp) | `d,m`(fp16), nibbles, `qh`(32b) |
 | `Q6_0` | `amax; d=max/-32` (`:853`) | `(int8_t)(x*id + 32.5f)`, clamp `MIN(63,…)` | `d`(fp16), nibbles, `qh`(8B) |
 Not implemented for now : | `Q6_1` | `min/max; d=(max-min)/63; m=min` (`:897`) | `(int)((x-min)*id + 0.5f)`, clamp `MIN(63,…)` | `d,m`(fp16), nibbles, `qh`(8B) |
 | `Q8_0` ✓ | `amax; d=amax/127; id=d?1/d:0` (`:943`) | `roundf(x*id)` (round-half-away) | `d`(fp16), 32 int8 |
 
-✓ = implemented on CUDA. `Q4_0` with an importance matrix (the `make_qx_quants`
-path, `quantize_row_q4_0_impl`) is likewise CUDA-implemented, see §4.4.
+✓ = implemented on CUDA. `Q4_0` and `Q5_0` with an importance matrix (the
+`make_qx_quants` path, `quantize_row_q4_0_impl` / `quantize_row_q5_0_impl`) are
+likewise CUDA-implemented, see §4.4.
 
 Round-trip rule: the CPU `(int8_t)/(int)(f)` cast **truncates toward zero**;
 CUDA `(signed char)/(int)(f)` truncates identically. `roundf()` in both C and
@@ -181,22 +182,25 @@ parity. It compares three producers of Q8_0 GGUF bytes on identical input:
 `gpu vs cpu` answers "is the kernel byte-exact?", `cpu vs ref` answers "is the
 fork's CPU path still the vanilla reference?", `gpu vs ref` ties the two
 together with an independent baseline. The harness is spec-driven: a
-`quant_spec` table lists each covered type (currently `Q8_0` and `Q4_0`) with
-its `QK`, block size, CUDA entry, local `ref_*` copy and fill set, so adding a
-type is one table entry. Fills are `random-uniform`, `weight-like` (90% of
-32-value blocks tight around zero, 10% wide), and crafted `edge-cases`
+`quant_spec` table lists each covered type (currently `Q8_0`, `Q4_0`, `Q5_0`)
+with its `QK`, block size, CUDA entry, local `ref_*` copy and fill set, so
+adding a type is one table entry. Fills are `random-uniform`, `weight-like` (90%
+of 32-value blocks tight around zero, 10% wide), crafted `edge-cases`
 (all-zero, single outlier, ±max, exact `.5` rounding ties, denormals,
-huge/tiny magnitudes, mixed signs); a `> 1<<20`-block tensor exercises the CUDA
-host wrapper's chunk loop. `test_slices` reproduces `do_quantize`'s `ne[2]`
-slicing exactly: the CUDA and CPU branches both quantize one expert slice at a
-time into consecutive slots, and both must equal a single whole-tensor call.
+huge/tiny magnitudes, mixed signs), and a `q5-boundary` fill that drives the
+5-th-bit / `qh` bitmap and the `x*id + 16.5f` truncation ties; a
+`> 1<<20`-block tensor exercises the CUDA host wrapper's chunk loop. `test_slices`
+reproduces `do_quantize`'s `ne[2]` slicing exactly: the CUDA and CPU branches
+both quantize one expert slice at a time into consecutive slots, and both must
+equal a single whole-tensor call.
 
-`q4_0-imatrix` adds a fourth spec: the local `ref_*` copies replay the imatrix
-quantizer (`make_qx_quants` + `quantize_row_q4_0_impl` from `ggml-quants.c`)
+`q4_0-imatrix` and `q5_0-imatrix` add imatrix specs: the local `ref_*` copies
+replay the imatrix quantizer (`make_qx_quants` +
+`quantize_row_q4_0_impl`/`quantize_row_q5_0_impl` from `ggml-quants.c`)
 with the fp16 step done by a host port of `ggml_compute_fp32_to_fp16`'s
 bit-twiddle, and a synthetic importance matrix is generated with one weight per
-column, reused for every row (the CPU convention). Its scale can legitimately
-be NaN for degenerate blocks, so this spec sets `nan_d_equal`: two fp16 `d`
+column, reused for every row (the CPU convention). Their scales can legitimately
+be NaN for degenerate blocks, so these specs set `nan_d_equal`: two fp16 `d`
 values that are both NaN compare equal even if their sign/payload differs (see
 §7). Every finite block must still match byte-for-byte.
 
