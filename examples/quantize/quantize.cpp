@@ -160,7 +160,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--skip-missing-splits] [--override-kv] [--individual-tensors LIST] [--skip-first-shard] [--virtual-map PATH] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--skip-missing-splits] [--cuda-quantize] [--override-kv] [--individual-tensors LIST] [--skip-first-shard] [--virtual-map PATH] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -196,6 +196,7 @@ static void usage(const char * executable) {
     printf("  --individual-tensors LIST: Comma-separated list of split IDs (integers >= 2). Requires --keep-split to be set. Example: --individual-tensors 2,5,1094 will produce tensor_ids = {1,4,1093}.\n");
     printf("  --skip-first-shard: Do not output the first shard (assumed to be metadata only and not containing tensors). Must be used in combination with --individual-tensors and --keep-split.\n");
     printf("  --virtual-map PATH: Path to an existing fully quantized model used as the base tensor source. Tensors from --individual-tensors replace corresponding tensors in this reference model, then are requantized. Non-target tensors pass through from the reference model unchanged.\n\n");
+    printf("  --cuda-quantize: use CUDA for bit-exact legacy block quantization (currently Q8_0 only; requires CUDA build)\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n\n");
     printf("Note: --include-weights and --exclude-weights cannot be used together\n");
@@ -706,6 +707,12 @@ int main(int argc, char ** argv) {
             params.partial_requant = true;
         } else if (strcmp(argv[arg_idx], "--skip-missing-splits") == 0) {
             params.skip_missing_splits = true;
+        } else if (strcmp(argv[arg_idx], "--cuda-quantize") == 0) {
+#if defined(GGML_USE_CUDA)
+            params.cuda_quantize = true;
+#else
+            fprintf(stderr, "%s: warning: --cuda-quantize requires a CUDA build; ignoring\n", argv[0]);
+#endif
         } else {
             usage(argv[0]);
         }
