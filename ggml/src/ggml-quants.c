@@ -3574,6 +3574,11 @@ size_t quantize_q4_1(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+// See the FP_CONTRACT note above make_qx_quants: the per-block weight
+// `qw[j]*sqrtf(sigma2 + x[j]*x[j])` and the row-level `sum_x2 += x[j]*x[j]`
+// are reproduced byte-for-byte on the GPU, so they must not be FMA-contracted
+// by the compiler.
+#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q5_0_impl(const float * restrict x, block_q5_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK5_0 == 32, "QK5_0 must be 32");
 
@@ -3612,6 +3617,7 @@ static void quantize_row_q5_0_impl(const float * restrict x, block_q5_0 * restri
         memcpy(&y[ib].qh, &qh, sizeof(qh));
     }
 }
+#pragma STDC FP_CONTRACT ON
 
 size_t quantize_q5_0(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
