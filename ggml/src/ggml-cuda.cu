@@ -6260,3 +6260,25 @@ GGML_CALL void ggml_backend_cuda_set_hb_active(bool val) {
                 : "heartbeat inactive during PP (GPU clocks may drop)");
     }
 }
+
+// Fire a lightweight warmup burst on every non-TCC GPU. This is the "real work"
+// companion to the NVAPI poller: each call puts a GPC kernel in the work queue,
+// so polling reads become actual engine activity. Uses the same cached streams,
+// but is intentionally cheap (single block per SM, short chain) so an external
+// loop can call it many times per second. Fire-and-forget.
+GGML_CALL void ggml_backend_cuda_ping(void) {
+    const auto & info = ggml_cuda_info();
+    for (int i = 0; i < info.device_count; ++i) {
+        if (info.devices[i].is_tcc) continue;
+        int cuda_id = info.cuda_device_id[i];
+        if (cuda_id < 0) continue;
+        if (ggml_cuda_hb_streams[i] == nullptr) {
+            cudaSetDevice(cuda_id);
+            cudaStreamCreateWithFlags(&ggml_cuda_hb_streams[i], cudaStreamNonBlocking);
+        }
+        int nsm = std::max(info.devices[i].nsm, 1);
+        cudaSetDevice(cuda_id);
+        // One block per SM, 256 threads, short chain: a real but tiny burst.
+        k_hb_warmup<<<nsm, 256, 0, ggml_cuda_hb_streams[i]>>>(4096);
+    }
+}

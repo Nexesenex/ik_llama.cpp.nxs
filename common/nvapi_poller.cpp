@@ -6,6 +6,10 @@
 #include <windows.h>
 #include <nvapi.h>
 
+#ifdef GGML_USE_CUDA
+#include "ggml-cuda.h"
+#endif
+
 #include <chrono>
 #include <cstdio>
 
@@ -71,6 +75,13 @@ void NvapiPoller::thread_func() {
             handles.size(), interval_ms);
 
     while (should_run.load()) {
+#ifdef GGML_USE_CUDA
+        // Turn the driver-query chatter into real GPC activity: a tiny warmup
+        // kernel per WDDM GPU on each cycle. Cheap (one 4096-FMA block/SM),
+        // fire-and-forget, complements the FMA-length tuning of the heartbeat.
+        ggml_backend_cuda_ping();
+#endif
+
         for (auto handle : handles) {
             for (int round = 0; round < rounds; ++round) {
                 // Aggressive NVAPI burst — forces high P-states via driver queries

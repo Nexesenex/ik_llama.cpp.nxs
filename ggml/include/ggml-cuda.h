@@ -80,6 +80,12 @@ GGML_API GGML_CALL bool ggml_backend_cuda_get_hb(void);
 // Called from llama.cpp at the same points as the shark_callback.
 GGML_API GGML_CALL void ggml_backend_cuda_set_hb_active(bool val);
 
+// Fire a single lightweight warmup burst on every non-TCC (WDDM) GPU.
+// Unlike set_hb_active() this does not track heart rate/phase — it is meant to
+// be called from an external polling loop (e.g. the NVAPI poller) to convert
+// driver-level queries into real GPC engine activity. Fire-and-forget, async.
+GGML_API GGML_CALL void ggml_backend_cuda_ping(void);
+
 // Set stream-k efficiency threshold (0-100, default 75)
 // Lower values use stream-k more aggressively, higher values prefer wave attention
 // Use: ggml_backend_cuda_set_stream_k_thresh(50) for more stream-k
