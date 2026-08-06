@@ -49,7 +49,8 @@ reference line numbers are from `ggml/src/ggml-quants.c` on `custom_pre_ols`.
 Not implemented for now : | `Q6_1` | `min/max; d=(max-min)/63; m=min` (`:897`) | `(int)((x-min)*id + 0.5f)`, clamp `MIN(63,…)` | `d,m`(fp16), nibbles, `qh`(8B) |
 | `Q8_0` ✓ | `amax; d=amax/127; id=d?1/d:0` (`:943`) | `roundf(x*id)` (round-half-away) | `d`(fp16), 32 int8 |
 
-✓ = implemented on CUDA.
+✓ = implemented on CUDA. `Q4_0` with an importance matrix (the `make_qx_quants`
+path, `quantize_row_q4_0_impl`) is likewise CUDA-implemented, see §4.4.
 
 Round-trip rule: the CPU `(int8_t)/(int)(f)` cast **truncates toward zero**;
 CUDA `(signed char)/(int)(f)` truncates identically. `roundf()` in both C and
@@ -63,10 +64,12 @@ CUDA is round-half-away-from-zero. FP16 is round-to-nearest-even on both sides.
 - `IQ1_S…IQ4_KT`: trellis/IQ search with `best_scale = sumqx/sumq2`
   (`ggml-quants.c` ~`13262+`). Same reason. Future work if exactness can be
   pinned to a single canonical scan order.
-- `Q4_0` fast path: the public `quantize_row_q4_0` still dispatches to
+- `Q4_0` fast path: the standalone `quantize_row_q4_0` still dispatches to
   `iqk_quantize_q4_0` whose stored scale is `d = sumqx/sumq2`
-  (`iqk_quantize.cpp:849`). Before `Q4_0` can join the CUDA set, the CPU
-  dispatch must point to the legacy `quantize_row_q4_0_ref` (see §7).
+  (`iqk_quantize.cpp:849`). That is not the GGUF-chunk entry: the fork's
+  `quantize_q4_0` (`ggml-quants.c:3509`), used by `ggml_quantize_chunk`, already
+  calls the legacy `quantize_row_q4_0_ref` (no weights) or
+  `quantize_row_q4_0_impl` (with weights), which is what the CUDA set matches.
 
 ## 4. Kernel design
 
@@ -104,6 +107,37 @@ makes row splitting across multiple GPUs trivially safe.
 - rounding and FP16: per-element, matched semantics (§2, §3.1).
 - No cross-lane FP accumulation anywhere.
 
+### 4.4 `Q4_0` with importance matrix (`make_qx_quants`)
+
+The imatrix quantizer (`quantize_row_q4_0_impl`, `ggml-quants.c:3429`) is a
+sequential algorithm — a per-block greedy `make_qx_quants` search — so it
+cannot use the warp-per-block tiling of §4.2. Instead:
+
+- **One thread per quant block** replays `make_qx_quants` (`ggml-quants.c:1786`)
+  in the exact CPU order, including the greedy `-(nmax + 0.1*is)/max` iscale
+  sweep and the coordinate-descent loop. Every float op is a correctly-rounded
+  intrinsic (`__fdiv_rn` / `__fmul_rn` / `__fadd_rn` / `__fsqrt_rn`, nearest-int
+  via the 2^23 + 2^22 magic), so the `-use_fast_math` build cannot change a
+  single bit.
+- **Row `sigma2` is host-computed.** `sum_x2 += x[j]*x[j]` is order-dependent,
+  so it is summed on the host in the exact CPU summation order and uploaded once
+  per tensor; the kernel computes only the per-block weight
+  `qw[j]*sqrtf(sigma2 + x[j]^2)`.
+- **Chunked driver with a per-chunk `base`.** Like §4.1 the tensor is processed
+  in `1<<20`-block device chunks; the kernel maps block `gb = base + ib` to row
+  `gb/blocks_per_row` and weight block `gb % blocks_per_row`, so the
+  row/weight indexing stays correct even when a chunk boundary is not a multiple
+  of `blocks_per_row`.
+- **Byte-exact fp16.** `GGML_FP32_TO_FP16` here resolves to the bit-twiddle
+  `ggml_compute_fp32_to_fp16` (`ggml-impl.h:595`, no `__F16C__` in this build),
+  ported as `fp32_to_fp16_ggml` and stored via `__ushort_as_half` — a
+  `(ggml_half)` cast would run the bit pattern through `__half(float)` and
+  corrupt the value. Degenerate blocks can yield a NaN scale; see §7.
+- **CPU must not FMA-contract.** `make_qx_quants` and
+  `quantize_row_q4_0_impl` are compiled with `#pragma STDC FP_CONTRACT OFF` in
+  `ggml-quants.c`; a `/arch:AVX2` release build otherwise contracts
+  `sumlx += w*x*l` and drifts ~1 ulp from the GPU.
+
 ## 5. Integration into `llama-quantize`
 
 Implemented as follows:
@@ -121,10 +155,12 @@ Implemented as follows:
    set by the `--cuda-quantize` CLI flag in `examples/quantize/quantize.cpp`
    (ignored with a warning in non-CUDA builds).
 4. `do_quantize()`: when `params->cuda_quantize` and the new type is eligible
-   (`Q8_0` always; `Q4_0` only when there is no importance matrix and
-   `--symmetric-q4-0` is off), routes each `ne[2]` (expert) slice through the
-   CUDA entry and skips the CPU chunk loop. All other types (and non-eligible
-   `Q4_0`) fall back to the CPU `ggml_quantize_chunk` path untouched.
+   (`Q8_0` always; `Q4_0` unless `--symmetric-q4-0` is requested), routes each
+   `ne[2]` (expert) slice through the CUDA entry and skips the CPU chunk loop.
+   The imatrix slice follows the CPU convention `imatrix + i02*ne[0]` (one
+   weight per column, reused for every row of the expert). All other types (and
+   non-eligible `Q4_0`) fall back to the CPU `ggml_quantize_chunk` path
+   untouched.
 5. When eligibility holds the per-tensor progress log reads
    `converts to %s ..` instead of `converting to %s ..`, so a `--cuda-quantize`
    run can be told apart from the CPU path in the output.
@@ -174,9 +210,9 @@ Build: `cmake --build build --target unit_test_cuda -j`. Run:
 
 - ~~**`Q4_0` dispatch:** switch `quantize_row_q4_0` to the legacy
   `quantize_row_q4_0_ref`, then add the CUDA `Q4_0` kernel.~~ Done: the fork's
-  CPU `quantize_row_q4_0` already dispatches to the legacy ref and the CUDA
-  `Q4_0` kernel is in. `Q4_0` stays on the CPU only when an importance matrix is
-  present or `--symmetric-q4-0` is requested.
+  GGUF-chunk path `quantize_q4_0` already calls the legacy ref / `_impl` and the
+  CUDA `Q4_0` kernel is in, including the importance-matrix path (`§4.4`).
+  `Q4_0` stays on the CPU only when `--symmetric-q4-0` is requested.
 - Add `Q4_1, Q5_0, Q5_1, Q6_0 (Q6_1 is not implemented)` kernels behind the same entry, one commit
   per type, each validated by the harness.
 - Multi-GPU: rows are independent; later split row ranges across the 3 devices
