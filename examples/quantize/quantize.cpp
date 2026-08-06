@@ -194,7 +194,7 @@ static void usage(const char * executable) {
     printf("  --individual-tensors LIST: Comma-separated list of split IDs (integers >= 2). Requires --keep-split to be set. Example: --individual-tensors 2,5,1094 will produce tensor_ids = {1,4,1093}.\n");
     printf("  --skip-first-shard: Do not output the first shard (assumed to be metadata only and not containing tensors). Must be used in combination with --individual-tensors and --keep-split.\n");
     printf("  --virtual-map PATH: Path to an existing fully quantized model used as the base tensor source. Tensors from --individual-tensors replace corresponding tensors in this reference model, then are requantized. Non-target tensors pass through from the reference model unchanged.\n\n");
-    printf("  --cuda-quantize: use CUDA for bit-exact legacy block quantization (currently Q8_0 only; requires CUDA build)\n");
+    printf("  --cuda-quantize: use CUDA for bit-exact legacy block quantization (currently Q8_0, Q4_0; requires CUDA build)\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n\n");
     printf("Note: --include-weights and --exclude-weights cannot be used together\n");
