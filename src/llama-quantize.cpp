@@ -966,17 +966,17 @@ static llama_ftype repacked_ftype(llama_ftype ftype) {
 
 #if defined(GGML_USE_CUDA)
 // True when do_quantize's CUDA branch will handle `new_type` for this tensor.
-// Mirrors the CPU-side conditions under which the legacy ref is used: Q4_0
-// falls back to the CPU make_qx_quants path when an imatrix is present, and to
-// the symmetric kernel when --symmetric-q4-0 is requested.
+// Mirrors the CPU-side dispatch: Q4_0 uses the legacy ref (CUDA) when no
+// imatrix is present, the make_qx_quants imatrix path (also CUDA) when an
+// imatrix is present, and the symmetric kernel (CPU) when --symmetric-q4-0 is
+// requested.
 static bool cuda_quantize_eligible(ggml_type new_type, const float * imatrix, const llama_model_quantize_params * params) {
     if (!params->cuda_quantize) return false;
     switch (new_type) {
         case GGML_TYPE_Q8_0:
             return true;
         case GGML_TYPE_Q4_0:
-            return imatrix == nullptr &&
-                !(params->user_data && static_cast<const quantize_user_data *>(params->user_data)->symmetric_q4_0);
+            return !(params->user_data && static_cast<const quantize_user_data *>(params->user_data)->symmetric_q4_0);
         default:
             return false;
     }
@@ -993,22 +993,28 @@ static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_t
         const llama_model_quantize_params * params) {
 #if defined(GGML_USE_CUDA)
     // bit-exact CUDA quantization of the legacy (non-OLS) block quants.
-    // Q8_0 has no CPU-side alternative (ref is always used). Q4_0 can only
-    // match the CPU output when the CPU itself would use the ref, i.e. no
-    // imatrix (importance matrix -> make_qx_quants) and no symmetric q4_0.
+    // Q8_0 has no CPU-side alternative (ref is always used). Q4_0 without an
+    // imatrix uses the legacy ref, with an imatrix the make_qx_quants path -
+    // both byte-exact on CUDA. --symmetric-q4-0 stays on the CPU.
     if (cuda_quantize_eligible(new_type, imatrix, params)) {
-        // one expert slice at a time
+        // one expert slice at a time; the imatrix slice follows the CPU path's
+        // convention of imatrix + i02*ne[0] (one weight per column, reused for
+        // every row of the expert)
         const int64_t nelements_matrix = tensor->ne[0]*tensor->ne[1];
-        const auto quantize = [&](const float * src, void * dst) -> size_t {
+        const auto quantize = [&](const float * src, void * dst, const float * im) -> size_t {
             if (new_type == GGML_TYPE_Q8_0) {
                 return ggml_cuda_quantize_q8_0(src, dst, tensor->ne[1], tensor->ne[0]);
+            }
+            if (im) {
+                return ggml_cuda_quantize_q4_0_imatrix(src, dst, tensor->ne[1], tensor->ne[0], im);
             }
             return ggml_cuda_quantize_q4_0(src, dst, tensor->ne[1], tensor->ne[0]);
         };
         new_size = 0;
         for (int64_t i02 = 0; i02 < tensor->ne[2]; ++i02) {
             void * this_data = (char *)new_data + i02*ggml_row_size(new_type, tensor->ne[0])*tensor->ne[1];
-            const size_t nb = quantize(f32_data + i02*nelements_matrix, this_data);
+            const float * this_imatrix = imatrix ? imatrix + i02*tensor->ne[0] : nullptr;
+            const size_t nb = quantize(f32_data + i02*nelements_matrix, this_data, this_imatrix);
             if (nb == 0) {
                 throw std::runtime_error(std::string("CUDA ") + ggml_type_name(new_type) + " quantization failed");
             }

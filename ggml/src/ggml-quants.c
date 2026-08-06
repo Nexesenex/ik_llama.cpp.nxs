@@ -1715,6 +1715,15 @@ static inline int nearest_int(float fval) {
     return (i & 0x007fffff) - 0x00400000;
 }
 
+// This function performs a sequential greedy/coordinate-descent optimization whose
+// every float accumulation is reproduced byte-for-byte on the GPU (see
+// ggml/src/ggml-cuda/quantize_gguf.cu). To keep that reproduction exact across
+// compilers, forbid FMA contraction (the built-in -use_fast_math/CUDA kernels are
+// already non-contracting; without this a /arch:AVX2 build contracts sumlx += w*x*l
+// and shifts the result by ~1 ulp). FP_CONTRACT is a standard pragma: honored by
+// clang (the fork's C/C++ compiler); MSVC cl ignores it, which is harmless since cl
+// never contracts by default.
+#pragma STDC FP_CONTRACT OFF
 static float make_qx_quants(int n, int nmax, const float * restrict x, int8_t * restrict L, int rmse_type,
         const float * restrict qw) {
     float max = 0;
@@ -1840,6 +1849,7 @@ static float make_qx_quants(int n, int nmax, const float * restrict x, int8_t * 
     }
     return scale;
 }
+#pragma STDC FP_CONTRACT ON
 
 static float make_q3_quants(int n, int nmax, const float * restrict x, int8_t * restrict L, bool do_rmse) {
     float max = 0;
@@ -3358,6 +3368,11 @@ size_t quantize_q6_K(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+// See the FP_CONTRACT note above make_qx_quants: the per-block weight
+// `qw[j]*sqrtf(sigma2 + x[j]*x[j])` and the row-level `sum_x2 += x[j]*x[j]`
+// are reproduced byte-for-byte on the GPU, so they must not be FMA-contracted
+// by the compiler.
+#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q4_0_impl(const float * restrict x, block_q4_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK4_0 == 32, "QK4_0 must be 32");
 
@@ -3389,6 +3404,7 @@ static void quantize_row_q4_0_impl(const float * restrict x, block_q4_0 * restri
         }
     }
 }
+#pragma STDC FP_CONTRACT ON
 
 static void quantize_row_q4_0_symmetric(const float * restrict x, block_q4_0 * restrict y, int64_t k) {
     static const int qk = QK4_0;
