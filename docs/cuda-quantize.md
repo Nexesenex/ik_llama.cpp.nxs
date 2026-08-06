@@ -4,9 +4,10 @@
 
 Offload part of the `llama-quantize` tensor quantization work to the CUDA GPUs
 while producing **byte-for-byte identical** GGUF tensor payloads to the CPU
-reference quantizers. The first milestone is a proof-of-concept for `Q8_0`,
-extendable to every quant type that is *provably bit-exact* under the legacy
-(non-OLS) algorithms.
+reference quantizers. `Q8_0` is implemented and enabled with `--cuda-quantize`
+(off by default); every other quant type in the target set is *provably
+bit-exact* under the legacy (non-OLS) algorithms and can be added behind the
+same entry.
 
 This branch (`custom_pre_ols`) is scoped so that the GGUF-facing reference
 quantizers do **not** use the OLS `d = sumqx/sumq2` scale refinement. OLS is
@@ -46,7 +47,9 @@ reference line numbers are from `ggml/src/ggml-quants.c` on `custom_pre_ols`.
 | `Q5_1` | `min/max; d=(max-min)/31; m=min` (`:805`) | `(uint8_t)((x-min)*id + 0.5f)` (no clamp) | `d,m`(fp16), nibbles, `qh`(32b) |
 | `Q6_0` | `amax; d=max/-32` (`:853`) | `(int8_t)(x*id + 32.5f)`, clamp `MIN(63,…)` | `d`(fp16), nibbles, `qh`(8B) |
 Not implemented for now : | `Q6_1` | `min/max; d=(max-min)/63; m=min` (`:897`) | `(int)((x-min)*id + 0.5f)`, clamp `MIN(63,…)` | `d,m`(fp16), nibbles, `qh`(8B) |
-| `Q8_0` | `amax; d=amax/127; id=d?1/d:0` (`:943`) | `roundf(x*id)` (round-half-away) | `d`(fp16), 32 int8 |
+| `Q8_0` ✓ | `amax; d=amax/127; id=d?1/d:0` (`:943`) | `roundf(x*id)` (round-half-away) | `d`(fp16), 32 int8 |
+
+✓ = implemented on CUDA.
 
 Round-trip rule: the CPU `(int8_t)/(int)(f)` cast **truncates toward zero**;
 CUDA `(signed char)/(int)(f)` truncates identically. `roundf()` in both C and
@@ -103,19 +106,24 @@ makes row splitting across multiple GPUs trivially safe.
 
 ## 5. Integration into `llama-quantize`
 
+Implemented as follows:
+
 1. New CUDA translation unit `ggml/src/ggml-cuda/quantize_gguf.cu`
    (+ `.cuh`), auto-picked by the `ggml-cuda/*.cu` GLOB in
    `ggml/src/CMakeLists.txt`.
 2. Public host entry exposed via `ggml-cuda.h` under `GGML_USE_CUDA`:
    `ggml_cuda_quantize_q8_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row)`.
    It owns a device context (device 0 for the POC), allocates device buffers,
-   copies in, launches, copies out, frees. Returns `nrows * ggml_row_size(Q8_0, n_per_row)`.
+   copies in, launches, copies out, frees, and checks every CUDA return code
+   (returning `0` on failure so the caller aborts). Returns
+   `nrows * ggml_row_size(Q8_0, n_per_row)`.
 3. `llama_model_quantize_params` gains `bool cuda_quantize` (default false),
-   set by a new `--cuda-quantize` CLI flag in `examples/quantize/quantize.cpp`.
-4. `do_quantize()` in `src/llama-quantize.cpp`: when
-   `params->cuda_quantize && new_type == GGML_TYPE_Q8_0`, route each `ne[2]`
-   (expert) slice through the CUDA entry and skip the CPU chunk loop. All other
-   types fall back to the CPU `ggml_quantize_chunk` path untouched.
+   set by the `--cuda-quantize` CLI flag in `examples/quantize/quantize.cpp`
+   (ignored with a warning in non-CUDA builds).
+4. `do_quantize()`: when `params->cuda_quantize && new_type == GGML_TYPE_Q8_0`,
+   routes each `ne[2]` (expert) slice through the CUDA entry and skips the CPU
+   chunk loop. All other types fall back to the CPU `ggml_quantize_chunk` path
+   untouched.
 5. `ggml_validate_row_data` still runs on the CUDA output (it must pass, since
    the bytes equal the CPU bytes).
 
