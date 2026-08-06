@@ -184,7 +184,7 @@ static void usage(const char * executable) {
     printf("      --ffn-up-type ggml_type: use this ggml_type for the ffn_up tensor.\n\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --partial-requant: quantize only missing split files in the split quantized .gguf destination directory\n");
-    printf("  --cuda-quantize: use CUDA for bit-exact legacy block quantization (currently Q8_0 only; requires CUDA build)\n");
+    printf("  --cuda-quantize: use CUDA for bit-exact legacy block quantization (currently Q8_0, Q4_0; requires CUDA build)\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n\n");
     printf("Note: --include-weights and --exclude-weights cannot be used together\n");
