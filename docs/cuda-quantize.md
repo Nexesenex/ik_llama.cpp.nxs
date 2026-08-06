@@ -155,6 +155,15 @@ host wrapper's chunk loop. `test_slices` reproduces `do_quantize`'s `ne[2]`
 slicing exactly: the CUDA and CPU branches both quantize one expert slice at a
 time into consecutive slots, and both must equal a single whole-tensor call.
 
+`q4_0-imatrix` adds a fourth spec: the local `ref_*` copies replay the imatrix
+quantizer (`make_qx_quants` + `quantize_row_q4_0_impl` from `ggml-quants.c`)
+with the fp16 step done by a host port of `ggml_compute_fp32_to_fp16`'s
+bit-twiddle, and a synthetic importance matrix is generated with one weight per
+column, reused for every row (the CPU convention). Its scale can legitimately
+be NaN for degenerate blocks, so this spec sets `nan_d_equal`: two fp16 `d`
+values that are both NaN compare equal even if their sign/payload differs (see
+§7). Every finite block must still match byte-for-byte.
+
 End-to-end: `llama-quantize` twice on a small F32 model (`Q8_0`), once CPU,
 once `--cuda-quantize`; `memcmp` the resulting tensor payloads.
 
@@ -174,3 +183,11 @@ Build: `cmake --build build --target unit_test_cuda -j`. Run:
   and add pinned-memory async upload. Does not affect bit-exactness.
 - Reproducibility statement: CUDA kernels must never introduce an FMA or a
   reduction into a stored scale; the validation harness is the guard.
+- **NaN sign (accepted, not a porting gap):** the imatrix scale can be NaN for
+  degenerate blocks (e.g. huge `|x|` makes `x*x` overflow to `inf`, so the
+  per-block weights become `0*inf`/`inf` and `sumlx/suml2` is NaN). x86 SSE sets
+  the sign of such a NaN from the operand signs (renders `-NaN`, fp16 `0xfe00`),
+  whereas NVIDIA always emits the default quiet NaN (`+NaN`, `0x7e00`). This is a
+  CPU-vendor semantic difference — even CPU-only llama.cpp is not NaN-sign-stable
+  across CPU vendors — so the harness treats any NaN `d` as equal (`nan_d_equal`)
+  and the imatrix blocks at issue only ever differ by that single bit.
