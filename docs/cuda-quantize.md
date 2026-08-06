@@ -140,12 +140,16 @@ parity. It compares three producers of Q8_0 GGUF bytes on identical input:
 
 `gpu vs cpu` answers "is the kernel byte-exact?", `cpu vs ref` answers "is the
 fork's CPU path still the vanilla reference?", `gpu vs ref` ties the two
-together with an independent baseline. Fills cover all-zero, single outlier,
-±max, exact `.5` rounding ties, denormals, huge/tiny magnitudes and mixed
-signs; a `> 1<<20`-block tensor exercises the CUDA host wrapper's chunk loop.
-`test_slices` reproduces `do_quantize`'s `ne[2]` slicing exactly: the CUDA and
-CPU branches both quantize one expert slice at a time into consecutive slots,
-and both must equal a single whole-tensor call.
+together with an independent baseline. The harness is spec-driven: a
+`quant_spec` table lists each covered type (currently `Q8_0` and `Q4_0`) with
+its `QK`, block size, CUDA entry, local `ref_*` copy and fill set, so adding a
+type is one table entry. Fills are `random-uniform`, `weight-like` (90% of
+32-value blocks tight around zero, 10% wide), and crafted `edge-cases`
+(all-zero, single outlier, ±max, exact `.5` rounding ties, denormals,
+huge/tiny magnitudes, mixed signs); a `> 1<<20`-block tensor exercises the CUDA
+host wrapper's chunk loop. `test_slices` reproduces `do_quantize`'s `ne[2]`
+slicing exactly: the CUDA and CPU branches both quantize one expert slice at a
+time into consecutive slots, and both must equal a single whole-tensor call.
 
 End-to-end: `llama-quantize` twice on a small F32 model (`Q8_0`), once CPU,
 once `--cuda-quantize`; `memcmp` the resulting tensor payloads.
