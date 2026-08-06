@@ -980,6 +980,8 @@ static bool cuda_quantize_eligible(ggml_type new_type, const float * imatrix, co
             return !(params->user_data && static_cast<const quantize_user_data *>(params->user_data)->symmetric_q4_0);
         case GGML_TYPE_Q5_0:
             return true;
+        case GGML_TYPE_Q6_0:
+            return true;
         default:
             return false;
     }
@@ -1013,6 +1015,12 @@ static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_t
                     return ggml_cuda_quantize_q5_0_imatrix(src, dst, tensor->ne[1], tensor->ne[0], im);
                 }
                 return ggml_cuda_quantize_q5_0(src, dst, tensor->ne[1], tensor->ne[0]);
+            }
+            if (new_type == GGML_TYPE_Q6_0) {
+                if (im) {
+                    return ggml_cuda_quantize_q6_0_imatrix(src, dst, tensor->ne[1], tensor->ne[0], im);
+                }
+                return ggml_cuda_quantize_q6_0(src, dst, tensor->ne[1], tensor->ne[0]);
             }
             if (im) {
                 return ggml_cuda_quantize_q4_0_imatrix(src, dst, tensor->ne[1], tensor->ne[0], im);
