@@ -125,7 +125,10 @@ Implemented as follows:
    `--symmetric-q4-0` is off), routes each `ne[2]` (expert) slice through the
    CUDA entry and skips the CPU chunk loop. All other types (and non-eligible
    `Q4_0`) fall back to the CPU `ggml_quantize_chunk` path untouched.
-5. `ggml_validate_row_data` still runs on the CUDA output (it must pass, since
+5. When eligibility holds the per-tensor progress log reads
+   `converts to %s ..` instead of `converting to %s ..`, so a `--cuda-quantize`
+   run can be told apart from the CPU path in the output.
+6. `ggml_validate_row_data` still runs on the CUDA output (it must pass, since
    the bytes equal the CPU bytes).
 
 ## 6. Validation harness
