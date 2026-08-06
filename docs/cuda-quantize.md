@@ -2,9 +2,8 @@
 
 ## 1. Goal
 
-Offload part of the `llama-quantize` tensor quantization work to the CUDA GPUs
 while producing **byte-for-byte identical** GGUF tensor payloads to the CPU
-reference quantizers. `Q8_0`, `Q4_0` and `Q5_0` are implemented and enabled with
+reference quantizers. `Q8_0`, `Q4_0`, `Q5_0` and `Q6_0` are implemented and enabled with
 `--cuda-quantize` (off by default); every other quant type in the target set is
 *provably bit-exact* under the legacy (non-OLS) algorithms and can be added
 behind the same entry.
@@ -45,13 +44,13 @@ reference line numbers are from `ggml/src/ggml-quants.c` on `custom_pre_ols`.
 | `Q4_1` | `min/max; d=(max-min)/15; m=min` (`:716`) | `(int8_t)((x-min)*id + 0.5f)`, clamp `MIN(15,…)` | `d,m`(fp16), nibbles |
 | `Q5_0` ✓ | `amax; d=max/-16` (`:757`) | `(int8_t)(x*id + 16.5f)`, clamp `MIN(31,…)` | `d`(fp16), nibbles, `qh`(32b) |
 | `Q5_1` | `min/max; d=(max-min)/31; m=min` (`:805`) | `(uint8_t)((x-min)*id + 0.5f)` (no clamp) | `d,m`(fp16), nibbles, `qh`(32b) |
-| `Q6_0` | `amax; d=max/-32` (`:853`) | `(int8_t)(x*id + 32.5f)`, clamp `MIN(63,…)` | `d`(fp16), nibbles, `qh`(8B) |
+| `Q6_0` ✓ | `amax; d=max/-32` (`:853`) | `(int8_t)(x*id + 32.5f)`, clamp `MIN(63,…)` | `d`(fp16), nibbles, `qh`(8B) |
 Not implemented for now : | `Q6_1` | `min/max; d=(max-min)/63; m=min` (`:897`) | `(int)((x-min)*id + 0.5f)`, clamp `MIN(63,…)` | `d,m`(fp16), nibbles, `qh`(8B) |
 | `Q8_0` ✓ | `amax; d=amax/127; id=d?1/d:0` (`:943`) | `roundf(x*id)` (round-half-away) | `d`(fp16), 32 int8 |
 
-✓ = implemented on CUDA. `Q4_0` and `Q5_0` with an importance matrix (the
-`make_qx_quants` path, `quantize_row_q4_0_impl` / `quantize_row_q5_0_impl`) are
-likewise CUDA-implemented, see §4.4.
+✓ = implemented on CUDA. `Q4_0`, `Q5_0` and `Q6_0` with an importance matrix (the
+`make_qx_quants` path, `quantize_row_q4_0_impl` / `quantize_row_q5_0_impl` /
+`quantize_row_q6_0_impl`) are likewise CUDA-implemented, see §4.4.
 
 Round-trip rule: the CPU `(int8_t)/(int)(f)` cast **truncates toward zero**;
 CUDA `(signed char)/(int)(f)` truncates identically. `roundf()` in both C and
@@ -114,12 +113,12 @@ makes row splitting across multiple GPUs trivially safe.
 - rounding and FP16: per-element, matched semantics (§2, §3.1).
 - No cross-lane FP accumulation anywhere.
 
-### 4.4 `Q4_0` / `Q5_0` with importance matrix (`make_qx_quants`)
+### 4.4 `Q4_0` / `Q5_0` / `Q6_0` with importance matrix (`make_qx_quants`)
 
 The imatrix quantizers (`quantize_row_q4_0_impl` `:3429`,
-`quantize_row_q5_0_impl` `:3577`) are sequential algorithms — a per-block greedy
-`make_qx_quants` search — so they cannot use the warp-per-block tiling of §4.2.
-Instead:
+`quantize_row_q5_0_impl` `:3577`, `quantize_row_q6_0_impl` `:3698`) are
+sequential algorithms — a per-block greedy `make_qx_quants` search — so they
+cannot use the warp-per-block tiling of §4.2. Instead:
 
 - **One thread per quant block** replays `make_qx_quants` (`ggml-quants.c:1786`)
   in the exact CPU order, including the greedy `-(nmax + 0.1*is)/max` iscale
@@ -141,15 +140,23 @@ Instead:
   ported as `fp32_to_fp16_ggml` and stored via `__ushort_as_half` — a
   `(ggml_half)` cast would run the bit pattern through `__half(float)` and
   corrupt the value. Degenerate blocks can yield a NaN scale; see §7.
-- **CPU must not FMA-contract.** `make_qx_quants`, `quantize_row_q4_0_impl`
-  and `quantize_row_q5_0_impl` are compiled with `#pragma STDC FP_CONTRACT OFF`
-  in `ggml-quants.c`; a `/arch:AVX2` release build otherwise contracts
-  `sumlx += w*x*l` (in `make_qx_quants`) and the per-block weight's
-  `sigma2 + x[j]*x[j]` (in the `_impl` functions), drifting ~1 ulp from the GPU.
+- **CPU must not FMA-contract.** `make_qx_quants`, `quantize_row_q4_0_impl`,
+  `quantize_row_q5_0_impl` and `quantize_row_q6_0_impl` are compiled with
+  `#pragma STDC FP_CONTRACT OFF` in `ggml-quants.c`; a `/arch:AVX2` release
+  build otherwise contracts `sumlx += w*x*l` (in `make_qx_quants`) and the
+  per-block weight's `sigma2 + x[j]*x[j]` (in the `_impl` functions), drifting
+  ~1 ulp from the GPU.
 - `Q5_0` additionally uses `nmax == 16` (vs 8 for `Q4_0`) and, after the
   optimizer, packs each `L`'s 5-th bit into the `qh` bitmap exactly like
   `quantize_row_q5_0_impl`; the device kernel and the host driver mirror the
   `Q4_0` imatrix shapes with `QK5_0` / `sizeof(block_q5_0)`.
+- `Q6_0` uses `nmax == 32`, so the optimizer emits `L` in `[0, 63]` (6-bit) and
+  the packing writes two `qh` bits per element — `qh[k] = h_k | h_{k+8}<<4` with
+  `h_e = (L_e>>4) | (L_{e+16}>>4)<<2` — mirroring `quantize_row_q6_0_impl`. The
+  `_impl` early-returns to `quantize_row_q6_0_ref` when no `quant_weights` are
+  given (matching `Q4_0`/`Q5_0`), so the plain kernel stays the §4.2 warp port;
+  the imatrix driver mirrors the `Q4_0`/`Q5_0` shapes with `QK6_0` /
+  `sizeof(block_q6_0)`.
 
 ## 5. Integration into `llama-quantize`
 
@@ -168,12 +175,12 @@ Implemented as follows:
    set by the `--cuda-quantize` CLI flag in `examples/quantize/quantize.cpp`
    (ignored with a warning in non-CUDA builds).
 4. `do_quantize()`: when `params->cuda_quantize` and the new type is eligible
-   (`Q8_0` and `Q5_0` always; `Q4_0` unless `--symmetric-q4-0` is requested),
-   routes each `ne[2]` (expert) slice through the CUDA entry and skips the CPU
-   chunk loop. The imatrix slice follows the CPU convention `imatrix + i02*ne[0]`
-   (one weight per column, reused for every row of the expert). All other types
-   (and non-eligible `Q4_0`) fall back to the CPU `ggml_quantize_chunk` path
-   untouched.
+   (`Q8_0`, `Q5_0` and `Q6_0` always; `Q4_0` unless `--symmetric-q4-0` is
+   requested), routes each `ne[2]` (expert) slice through the CUDA entry and
+   skips the CPU chunk loop. The imatrix slice follows the CPU convention
+   `imatrix + i02*ne[0]` (one weight per column, reused for every row of the
+   expert). All other types (and non-eligible `Q4_0`) fall back to the CPU
+   `ggml_quantize_chunk` path untouched.
 5. When eligibility holds the per-tensor progress log reads
    `converts to %s ..` instead of `converting to %s ..`, so a `--cuda-quantize`
    run can be told apart from the CPU path in the output.
@@ -194,24 +201,27 @@ parity. It compares three producers of Q8_0 GGUF bytes on identical input:
 `gpu vs cpu` answers "is the kernel byte-exact?", `cpu vs ref` answers "is the
 fork's CPU path still the vanilla reference?", `gpu vs ref` ties the two
 together with an independent baseline. The harness is spec-driven: a
-`quant_spec` table lists each covered type (currently `Q8_0`, `Q4_0`, `Q5_0`)
-with its `QK`, block size, CUDA entry, local `ref_*` copy and fill set, so
-adding a type is one table entry. Fills are `random-uniform`, `weight-like` (90%
+`quant_spec` table lists each covered type (currently `Q8_0`, `Q4_0`, `Q5_0`,
+`Q6_0`) with its `QK`, block size, CUDA entry, local `ref_*` copy and fill set,
+so adding a type is one table entry. Fills are `random-uniform`, `weight-like` (90%
 of 32-value blocks tight around zero, 10% wide), crafted `edge-cases`
 (all-zero, single outlier, ±max, exact `.5` rounding ties, denormals,
-huge/tiny magnitudes, mixed signs), and a `q5-boundary` fill that drives the
-5-th-bit / `qh` bitmap and the `x*id + 16.5f` truncation ties; a
-`> 1<<20`-block tensor exercises the CUDA host wrapper's chunk loop. `test_slices`
+huge/tiny magnitudes, mixed signs), a `q5-boundary` fill that drives the
+5-th-bit / `qh` bitmap and the `x*id + 16.5f` truncation ties, and a
+`q6-boundary` fill that likewise drives `Q6_0`'s `qh` and its `x*id + 32.5f`
+truncation ties; a `> 1<<20`-block tensor exercises the CUDA host wrapper's
+chunk loop. `test_slices`
 reproduces `do_quantize`'s `ne[2]` slicing exactly: the CUDA and CPU branches
 both quantize one expert slice at a time into consecutive slots, and both must
 equal a single whole-tensor call.
 
-`q4_0-imatrix` and `q5_0-imatrix` add imatrix specs: the local `ref_*` copies
-replay the imatrix quantizer (`make_qx_quants` +
-`quantize_row_q4_0_impl`/`quantize_row_q5_0_impl` from `ggml-quants.c`)
-with the fp16 step done by a host port of `ggml_compute_fp32_to_fp16`'s
-bit-twiddle, and a synthetic importance matrix is generated with one weight per
-column, reused for every row (the CPU convention). Their scales can legitimately
+`q4_0-imatrix`, `q5_0-imatrix` and `q6_0-imatrix` add imatrix specs: the local
+`ref_*` copies replay the imatrix quantizer (`make_qx_quants` +
+`quantize_row_q4_0_impl`/`quantize_row_q5_0_impl`/`quantize_row_q6_0_impl` from
+`ggml-quants.c`) with the fp16 step done by a host port of
+`ggml_compute_fp32_to_fp16`'s bit-twiddle, and a synthetic importance matrix is
+generated with one weight per column, reused for every row (the CPU convention).
+Their scales can legitimately
 be NaN for degenerate blocks, so these specs set `nan_d_equal`: two fp16 `d`
 values that are both NaN compare equal even if their sign/payload differs (see
 §7). Every finite block must still match byte-for-byte.
@@ -229,8 +239,8 @@ Build: `cmake --build build --target unit_test_cuda -j`. Run:
   GGUF-chunk path `quantize_q4_0` already calls the legacy ref / `_impl` and the
   CUDA `Q4_0` kernel is in, including the importance-matrix path (`§4.4`).
   `Q4_0` stays on the CPU only when `--symmetric-q4-0` is requested.
-- Add `Q4_1, Q5_1, Q6_0 (Q6_1 is not implemented)` kernels behind the same entry, one commit
-  per type, each validated by the harness. (`Q5_0` and its imatrix path are done.)
+- Add `Q4_1, Q5_1 (Q6_1 is not implemented)` kernels behind the same entry, one commit
+  per type, each validated by the harness. (`Q5_0`, `Q6_0` and their imatrix paths are done.)
 - Multi-GPU: rows are independent; later split row ranges across the 3 devices
   and add pinned-memory async upload. Does not affect bit-exactness.
 - Reproducibility statement: CUDA kernels must never introduce an FMA or a
