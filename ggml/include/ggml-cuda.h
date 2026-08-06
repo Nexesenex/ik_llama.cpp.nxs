@@ -79,13 +79,14 @@ GGML_API GGML_CALL void ggml_backend_cuda_log_set_callback(ggml_log_callback log
 GGML_API GGML_CALL void ggml_backend_cuda_invalidate_graphs(const void * model);
 
 // Bit-exact CUDA quantization of legacy (non-OLS) block quants for GGUF.
-// Currently implemented: Q8_0. Byte-for-byte identical to the corresponding
-// quantize_row_*_ref CPU implementation.
+// Currently implemented: Q8_0, Q4_0. Byte-for-byte identical to the
+// corresponding quantize_row_*_ref CPU implementation.
 // src : host F32 row-major buffer, nrows rows of n_per_row floats
 // dst : host output buffer, nrows * ggml_row_size(type, n_per_row) bytes
 // Returns the number of bytes written, or 0 if the call could not be executed
 // (e.g. no CUDA device). See ggml/src/ggml-cuda/quantize_gguf.cuh.
 GGML_API GGML_CALL size_t ggml_cuda_quantize_q8_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
+GGML_API GGML_CALL size_t ggml_cuda_quantize_q4_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
 #ifdef  __cplusplus
 }
 #endif
