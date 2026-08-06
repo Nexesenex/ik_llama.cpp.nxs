@@ -360,6 +360,41 @@ static void ref_quantize_q5_0(void * dst, const float * src, int64_t nrows, int6
     }
 }
 
+// Local copy of quantize_row_q6_0_ref (ggml/src/ggml-quants.c:853). Bits 4-5
+// of every 6-bit quant go into the 8-byte qh: byte k = h_k | (h_{k+8} << 4)
+// with h_e = (q_e>>4) | ((q_{e+16}>>4) << 2), matching `qh[j%8] |= h<<4*(j/8)`.
+static void ref_quantize_q6_0(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    const int64_t nb = (nrows*n_per_row)/QK6_0;
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        const float * xb = src + ib*QK6_0;
+        block_q6_0 *  yb = (block_q6_0 *)dst + ib;
+
+        float amax = 0.0f;
+        float max  = 0.0f;
+        for (int j = 0; j < QK6_0; ++j) {
+            const float v = xb[j];
+            if (amax < fabsf(v)) {
+                amax = fabsf(v);
+                max  = v;
+            }
+        }
+
+        const float d  = max/-32.0f;
+        const float id = d ? 1.0f/d : 0.0f;
+
+        yb->d = (ggml_half)__half_as_ushort(__float2half_rn(d));
+
+        memset(yb->qh, 0, QK6_0/4);
+        for (int j = 0; j < QK6_0/2; ++j) {
+            const uint8_t xi0 = (uint8_t)std::min(63, (int)(int8_t)(xb[j]*id + 32.5f));
+            const uint8_t xi1 = (uint8_t)std::min(63, (int)(int8_t)(xb[j + QK6_0/2]*id + 32.5f));
+            yb->qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
+            const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
+            yb->qh[j%(QK6_0/4)] |= (uint8_t)(h << 4*(j/(QK6_0/4)));
+        }
+    }
+}
+
 // Local copy of quantize_row_q5_0_impl (ggml-quants.c:3577): make_qx_quants
 // with nmax == 16, plus the qh 5th-bit bitmap packing.
 static void ref_quantize_q5_0_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
@@ -391,6 +426,40 @@ static void ref_quantize_q5_0_imatrix(void * dst, const float * src, int64_t nro
                 qh |= ((uint32_t)((xi1 & 0x10u) >> 4)) << (j + QK5_0/2);
             }
             memcpy(y[ib].qh, &qh, sizeof(qh));
+        }
+    }
+}
+
+// Local copy of quantize_row_q6_0_impl (ggml-quants.c:3697): make_qx_quants
+// with nmax == 32, plus the 2-bit qh packing (6-bit quants).
+static void ref_quantize_q6_0_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    for (int64_t irow = 0; irow < nrows; ++irow) {
+        const float * x = src + irow*n_per_row;
+        block_q6_0 * y = (block_q6_0 *)dst + irow*(n_per_row/QK6_0);
+
+        float sum_x2 = 0;
+        for (int64_t j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
+        float sigma2 = sum_x2/n_per_row;
+
+        float weight[QK6_0];
+        int8_t L[QK6_0];
+        const int64_t nb = n_per_row/QK6_0;
+        for (int64_t ib = 0; ib < nb; ++ib) {
+            const float * xb = x + QK6_0 * ib;
+            const float * qw = imatrix + QK6_0 * ib;
+            for (int j = 0; j < QK6_0; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+            float d = ref_make_qx_quants(QK6_0, 32, xb, L, 1, weight);
+            y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(d);
+
+            memset(y[ib].qh, 0, QK6_0/4);
+            for (int j = 0; j < QK6_0/2; ++j) {
+                const uint8_t xi0 = (uint8_t)L[j];
+                const uint8_t xi1 = (uint8_t)L[j + QK6_0/2];
+                y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
+                const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
+                y[ib].qh[j%(QK6_0/4)] |= (uint8_t)(h << 4*(j/(QK6_0/4)));
+            }
         }
     }
 }
@@ -482,6 +551,43 @@ static void fill_q5_0_boundary(float * dst, int64_t n) {
                 break;
             default: // all zeros (d == 0 -> id == 0 path)
                 for (int j = 0; j < QK5_0; ++j) xb[j] = 0.0f;
+                break;
+        }
+    }
+}
+
+// Q6_0 boundary blocks: exercises the 6-bit levels / 2-bit qh and the
+// (int32_t)(x*id + 32.5f) truncation ties.
+static void fill_q6_0_boundary(float * dst, int64_t n) {
+    const int64_t nb = n/QK6_0;
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        float * xb = dst + ib*QK6_0;
+        switch (ib % 7) {
+            case 0: // x*id = -32..31 by 1 -> q = 0..63, every qh 2-bit pair set
+                for (int j = 0; j < QK6_0; ++j) xb[j] = (float)j - 32.0f;
+                break;
+            case 1: // half-integer q values; amax = -32 (id = 1)
+                for (int j = 0; j < QK6_0; ++j) xb[j] = 0.5f*(float)(j % 8) + (float)(j % 3) - 20.0f;
+                xb[QK6_0-1] = -32.0f;
+                break;
+            case 2: // q clamps at the top: x = ±32 -> q = 63 / 0
+                for (int j = 0; j < QK6_0; ++j) xb[j] = (j & 1) ? 32.0f : -32.0f;
+                break;
+            case 3: // qh bit4 boundary: q crosses 32 at x*id = -0.5
+                for (int j = 0; j < QK6_0; ++j) {
+                    const float v = (float)(j % 8) - 0.5f; // -0.5f 0.5f .. 7.5f
+                    xb[j] = (j & 1) ? v : -v;
+                }
+                xb[QK6_0-1] = -32.0f;
+                break;
+            case 4: // qh bit5 boundary: q crosses 64 at x*id = 31.5
+                for (int j = 0; j < QK6_0; ++j) xb[j] = (float)(j % 4) + 29.5f;
+                break;
+            case 5: // q samples spread over [0, 64)
+                for (int j = 0; j < QK6_0; ++j) xb[j] = ((g_rng() % 65) - 32) + 0.25f;
+                break;
+            default: // all zeros (d == 0 -> id == 0 path)
+                for (int j = 0; j < QK6_0; ++j) xb[j] = 0.0f;
                 break;
         }
     }
@@ -740,6 +846,10 @@ int main(int argc, char ** argv) {
                 false, nullptr, nullptr },
         { "q5_0-imatrix", GGML_TYPE_Q5_0, QK5_0, sizeof(block_q5_0), ggml_cuda_quantize_q5_0, ref_quantize_q5_0,
                 true, ggml_cuda_quantize_q5_0_imatrix, ref_quantize_q5_0_imatrix, true },
+        { "q6_0", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), ggml_cuda_quantize_q6_0, ref_quantize_q6_0,
+                false, nullptr, nullptr },
+        { "q6_0-imatrix", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), ggml_cuda_quantize_q6_0, ref_quantize_q6_0,
+                true, ggml_cuda_quantize_q6_0_imatrix, ref_quantize_q6_0_imatrix, true },
     };
     const size_t nspec = sizeof(specs)/sizeof(specs[0]);
 
@@ -767,6 +877,7 @@ int main(int argc, char ** argv) {
                     test_one("weight-like",   nrows, n_per_row, fill_random_weight_like, dev, spec);
                     test_one("edge-cases",    std::min<int64_t>(nrows, 1024), n_per_row, fill_edge_cases, dev, spec);
                     test_one("q5-boundary",  std::min<int64_t>(nrows, 1024), n_per_row, fill_q5_0_boundary, dev, spec);
+                    test_one("q6-boundary",  std::min<int64_t>(nrows, 1024), n_per_row, fill_q6_0_boundary, dev, spec);
                 }
             }
         }
