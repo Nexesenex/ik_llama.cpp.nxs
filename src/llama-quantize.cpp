@@ -8,6 +8,10 @@
 
 #include "iqk/iqk_quantize.h"
 
+#if defined(GGML_USE_CUDA)
+#  include "ggml-cuda.h"
+#endif
+
 #include <thread>
 #include <regex>
 #include <mutex>
@@ -963,6 +967,22 @@ static llama_ftype repacked_ftype(llama_ftype ftype) {
 static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_type, const float * f32_data, char * new_data,
         const float * imatrix, std::vector<std::thread> & workers, size_t & new_size, int chunk_size_multiplier,
         const llama_model_quantize_params * params) {
+#if defined(GGML_USE_CUDA)
+    if (params->cuda_quantize && new_type == GGML_TYPE_Q8_0) {
+        // bit-exact CUDA Q8_0 quantization (legacy ref algorithm), one expert slice at a time
+        const int64_t nelements_matrix = tensor->ne[0]*tensor->ne[1];
+        new_size = 0;
+        for (int64_t i02 = 0; i02 < tensor->ne[2]; ++i02) {
+            void * this_data = (char *)new_data + i02*ggml_row_size(new_type, tensor->ne[0])*tensor->ne[1];
+            const size_t nb = ggml_cuda_quantize_q8_0(f32_data + i02*nelements_matrix, this_data, tensor->ne[1], tensor->ne[0]);
+            if (nb == 0) {
+                throw std::runtime_error("CUDA Q8_0 quantization failed");
+            }
+            new_size += nb;
+        }
+        return;
+    }
+#endif
     if (nthread > 1 && (tensor->ne[2] % nthread == 0 || tensor->ne[2] >= 2*nthread)) {
         std::mutex mutex;
         int counter = 0;
