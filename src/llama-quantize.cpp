@@ -1874,7 +1874,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 chunk_size_multiplier = num_rows;
             }
 
-            LLAMA_LOG_INFO("converting to %7s .. ", ggml_type_name(new_type));
+            LLAMA_LOG_INFO(cuda_quantize_eligible(new_type, imatrix, params) ? "converts to %7s .. " : "converting to %7s .. ",
+                    ggml_type_name(new_type));
             fflush(stdout);
 
             if (params->dry_run) {
@@ -1941,7 +1942,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                     } else {
                         chunk_size_multiplier = num_rows;
                     }
-                    LLAMA_LOG_INFO("converting to %7s .. ", ggml_type_name(new_type));
+                    LLAMA_LOG_INFO(cuda_quantize_eligible(new_type, imatrix, params) ? "converts to %7s .. " : "converting to %7s .. ",
+                            ggml_type_name(new_type));
                     fflush(stdout);
 
                     do_quantize(nthread, tensor, new_type, f32_data, (char *)new_data, imatrix, workers,
