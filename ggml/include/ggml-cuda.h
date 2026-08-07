@@ -113,6 +113,8 @@ GGML_API GGML_CALL size_t ggml_cuda_quantize_q5_0_imatrix(const float * src, voi
         const float * imatrix);
 GGML_API GGML_CALL size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix);
+GGML_API GGML_CALL size_t ggml_cuda_quantize_q8_0_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix);
 #ifdef  __cplusplus
 }
 #endif
