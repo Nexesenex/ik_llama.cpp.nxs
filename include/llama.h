@@ -1142,6 +1142,10 @@ extern "C" {
     // Stop shark GPU clock elevation (Windows only, personal use)
     LLAMA_API void llama_shark_stop(struct llama_context * ctx);
 
+    // Enable/disable the in-process NVAPI poller (Windows only, personal use).
+    // Disabled by default; --shark turns it on. Safe to call before any decode.
+    LLAMA_API void llama_nvapi_poller_set_enabled(bool enabled);
+
     // Wait until all computations are finished
     // This is automatically done when using one of the functions below to obtain the computation results
     // and is not necessary to call it explicitly in most cases

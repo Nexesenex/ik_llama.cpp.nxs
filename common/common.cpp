@@ -4846,6 +4846,9 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
         g_shark_args = params.shark_args;
         cparams.shark_callback = common_shark_callback;
         cparams.shark_callback_data = nullptr; // uses globals
+        // In-process NVAPI poller (real GPC ping + utilization sampling) is
+        // gated by the same --shark flag; disabled by default.
+        llama_nvapi_poller_set_enabled(true);
     }
     if (!params.orca_fma.empty()) {
         // CUDA heartbeat warmup: per-GPU FMA length, one entry per non-TCC (WDDM)

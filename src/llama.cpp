@@ -155,7 +155,21 @@ static bool stop_internal_decode = false;
 
 #ifdef GGML_USE_CUDA
 static NvapiPoller g_nvapi_poller({0, 1}, 5);
+static bool g_nvapi_poller_enabled = false; // on only when --shark is passed
 #endif
+
+// Enable/disable the in-process NVAPI poller (Windows only, personal use).
+// Disabled by default; --shark turns it on. A stopped poller is a no-op.
+void llama_nvapi_poller_set_enabled(bool enabled) {
+#ifdef GGML_USE_CUDA
+    g_nvapi_poller_enabled = enabled;
+    if (!enabled) {
+        g_nvapi_poller.stop();
+    }
+#else
+    (void) enabled;
+#endif
+}
 
 void  llama_decode_reset() {
     stop_internal_decode = false;
@@ -6245,13 +6259,14 @@ static int llama_decode_internal(
             ggml_backend_cuda_set_hb_active(n_tokens_all <= 8);
         }
     }
-    // NVAPI poller: start/stop at same TG/PP boundaries as heartbeat
+    // NVAPI poller: start/stop at same TG/PP boundaries as heartbeat.
+    // Only runs when enabled via --shark (disabled by default).
     {
         static bool nvapi_prefill_done = false;
         if (n_tokens_all > 8) {
             nvapi_prefill_done = true;
         }
-        if (nvapi_prefill_done) {
+        if (nvapi_prefill_done && g_nvapi_poller_enabled) {
             if (n_tokens_all <= 8 && !g_nvapi_poller.is_running()) {
                 g_nvapi_poller.start();
             } else if (n_tokens_all > 8 && g_nvapi_poller.is_running()) {
