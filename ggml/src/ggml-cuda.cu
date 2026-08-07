@@ -6225,9 +6225,11 @@ GGML_CALL void ggml_backend_cuda_set_hb(bool val) {
             cudaDeviceProp prop;
             CUDA_CHECK(cudaGetDeviceProperties(&prop, cuda_id));
             snprintf(name, sizeof(name), "%s", prop.name);
+            char pci_bus_id[16] = {0};
+            cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), cuda_id);
             const int fma = ggml_cuda_hb_fma[w] > 0 ? ggml_cuda_hb_fma[w] : GGML_CUDA_HB_FMA_DEFAULT;
-            GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_hb: orca enabling heartbeat on GPU %d (%s), WDDM[%d]: %d FMA\n",
-                cuda_id, name, w, fma);
+            GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_hb: orca enabling heartbeat on GPU %d (%s, PCI %s), WDDM[%d]: %d FMA\n",
+                cuda_id, name, pci_bus_id, w, fma);
             w++;
         }
     } else {
