@@ -1018,6 +1018,61 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             (float) (csa_state_bytes + hca_state_bytes + lid_state_bytes) / (1024.0f * 1024.0f),
             (float) (csa_k_bytes + hca_k_bytes + lid_k_bytes + csa_state_bytes + hca_state_bytes + lid_state_bytes) / (1024.0f * 1024.0f),
             n_stream);
+    // Peak indexer (LID) top-k work buffer size. The indexer top-k op is fused
+    // into the graph of each CSA layer, so a copy of this temporary work buffer
+    // is allocated on every GPU that hosts a CSA layer.
+    {
+        const int64_t n_kv   = csa_kv; // LID kv per stream
+        const int64_t n_head = model.hparams.indexer_n_head;
+        const int64_t n_embd = model.hparams.indexer_head_size;
+        const int64_t n_tok  = std::max<int64_t>(1, cparams.n_ubatch);
+
+        int64_t max_rows;
+        if (cparams.idx_type_k == GGML_TYPE_F16) {
+            max_rows = std::min<int64_t>(256, n_tok);
+        } else {
+            max_rows = std::min<int64_t>(256, (int64_t(1) << 26) / std::max<int64_t>(1, n_kv*n_head));
+            max_rows = std::max<int64_t>(1, std::min<int64_t>(max_rows, n_tok));
+        }
+
+        size_t work_bytes = 0;
+        if (cparams.idx_type_k == GGML_TYPE_F16) {
+            work_bytes += (size_t) n_kv * n_head * max_rows * 2;      // kq (f16)
+            work_bytes += (size_t) n_kv * max_rows * sizeof(float);   // score
+            work_bytes += (size_t) n_kv * max_rows * sizeof(int);     // sorted
+            work_bytes += (size_t) n_embd * n_head * max_rows * 2;    // q_f16 (f16)
+        } else {
+            work_bytes += (size_t) n_kv * max_rows * n_head * sizeof(float); // kq
+            work_bytes += (size_t) n_kv * max_rows * sizeof(float);          // score
+            work_bytes += (size_t) n_kv * max_rows * sizeof(int);            // sorted
+        }
+
+        std::vector<std::string> gpu_names;
+        for (int32_t il = 0; il < n_layer; ++il) {
+            if (model.hparams.dsv4_compress_ratios[(size_t) il] != dsv4_runtime::CSA_RATIO) {
+                continue;
+            }
+            const char * name = ggml_backend_buft_name(llama_dsv4_layer_buft(*this, il));
+            if (name != nullptr && std::find(gpu_names.begin(), gpu_names.end(), name) == gpu_names.end()) {
+                gpu_names.push_back(name);
+            }
+        }
+
+        if (gpu_names.size() > 1) {
+            std::string gpus;
+            for (size_t i = 0; i < gpu_names.size(); ++i) {
+                if (i > 0) gpus += ", ";
+                gpus += gpu_names[i];
+            }
+            LLAMA_LOG_INFO("%s: indexer work buffer = %7.2f MiB per GPU (%s)\n", __func__,
+                    (float) work_bytes / (1024.0f * 1024.0f), gpus.c_str());
+        } else {
+            LLAMA_LOG_INFO("%s: indexer work buffer = %7.2f MiB on %s\n", __func__,
+                    (float) work_bytes / (1024.0f * 1024.0f),
+                    gpu_names.empty() ? "CPU" : gpu_names[0].c_str());
+        }
+    }
+
     if (cparams.dsv4_cache_cpu) {
         LLAMA_LOG_INFO("%s: DSV4 compressed-attention K caches (CSA/HCA/LID) are in host memory\n", __func__);
     }
