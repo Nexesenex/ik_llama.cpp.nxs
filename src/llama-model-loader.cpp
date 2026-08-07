@@ -304,7 +304,8 @@ static void coalesce_ranges(std::vector<llama_file_range> & ranges) {
 llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors,
         bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p, const size_t * tensor_ids) {
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p, const size_t * tensor_ids,
+        bool skip_missing_splits) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -363,6 +364,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     split_to_file_idx[0] = 0;
     uint16_t n_split = 0;
     get_key(llm_kv(LLM_KV_SPLIT_COUNT), n_split, false);
+    n_split_total = std::max<uint16_t>(n_split, 1);
 
     // Load additional GGML contexts
     if (n_split > 1) {
@@ -385,6 +387,20 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         auto load_split = [&](uint16_t idx) {
             llama_split_path(split_path, sizeof(split_path), split_prefix, idx, n_split);
 
+            if (skip_missing_splits) {
+                // tolerate missing split files: the tensors they hold are expected
+                // to already exist quantized in the destination (partial-requant)
+                try {
+                    files.emplace_back(new llama_file(split_path, "rb"));
+                } catch (const std::exception &) {
+                    LLAMA_LOG_INFO("%s: split file %s not found, skipping\n", __func__, split_path);
+                    return;
+                }
+            } else {
+                files.emplace_back(new llama_file(split_path, "rb"));
+            }
+            split_to_file_idx[idx] = files.size() - 1;
+
             struct gguf_init_params split_params = {
                 /*.no_alloc = */ true,
                 /*.ctx      = */ &ctx,
@@ -394,8 +410,6 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
                 throw std::runtime_error(format("%s: failed to load GGUF split from %s\n", __func__, split_path));
             }
 
-            files.emplace_back(new llama_file(split_path, "rb"));
-            split_to_file_idx[idx] = files.size() - 1;
             contexts.emplace_back(ctx);
 
             // Save tensors data offset info of the shard.
@@ -423,9 +437,9 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         get_key(llm_kv(LLM_KV_SPLIT_TENSORS_COUNT), n_tensors);
 
         // sanity check
-        // only enforced when all split files are loaded (tensor_ids == nullptr):
-        // a partial load via tensor_ids is expected to find fewer tensors
-        if (tensor_ids == nullptr) {
+        // only enforced when all split files are loaded (tensor_ids == nullptr and no missing splits):
+        // a partial load via tensor_ids or skip_missing_splits is expected to find fewer tensors
+        if (tensor_ids == nullptr && !skip_missing_splits) {
             const int n_tensors_loaded = (int) weights.size();
             if (n_tensors != n_tensors_loaded) {
                 throw std::runtime_error(format("corrupted model: %d tensors expected but %d found", n_tensors, n_tensors_loaded));
