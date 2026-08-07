@@ -432,7 +432,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
             }
         }
 
-        LLAMA_LOG_INFO("%s: additional %d GGUFs metadata loaded.\n",  __func__, n_split - 1);
+        LLAMA_LOG_INFO("%s: additional %d GGUFs metadata loaded.\n",  __func__, (int) files.size() - 1);
     }
 
     n_kv      = gguf_get_n_kv(meta);
