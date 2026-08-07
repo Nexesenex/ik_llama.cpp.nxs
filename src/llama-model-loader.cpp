@@ -21,6 +21,7 @@
 #include <set>
 #include <map>
 #include <array>
+#include <limits>
 #include <charconv>
 #include <future>
 #include <regex>
@@ -307,7 +308,8 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
-        const std::string & ngram_fname, llama_nvfp4_precision nvfp4_precision, llama_fp8_precision fp8_precision) {
+        const std::string & ngram_fname, llama_nvfp4_precision nvfp4_precision, llama_fp8_precision fp8_precision,
+        const size_t * tensor_ids) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -393,6 +395,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     // For subsidiary files, `meta` tensor data offset must not be used,
     // so we build a unified tensors index for weights.
     add_weights(ctx, meta, 0);
+    split_to_file_idx[0] = 0;
     uint16_t n_split = 0;
     get_key(llm_kv(LLM_KV_SPLIT_COUNT), n_split, false);
 
@@ -437,7 +440,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         }
 
         char split_path[PATH_MAX] = {0};
-        for (idx = 1; idx < n_split; idx++) {
+        auto load_split = [&](uint16_t idx) {
             llama_split_path(split_path, sizeof(split_path), split_prefix, idx, n_split);
 
             struct gguf_context * ctx_gguf = NULL;
@@ -460,18 +463,35 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
                 }
                 files.emplace_back(new llama_file(split_path, "rb"));
             }
+            split_to_file_idx[idx] = files.size() - 1;
             contexts.emplace_back(ctx);
 
             // Save tensors data offset info of the shard.
             add_weights(ctx, ctx_gguf, idx);
 
             gguf_free(ctx_gguf);
+        };
+
+        if (tensor_ids) {
+            for (const size_t *p = tensor_ids; *p != 0; ++p) {
+                size_t id = *p;
+                if (id > std::numeric_limits<uint16_t>::max()) {
+                    throw std::out_of_range("tensor id doesn't fit in uint16_t");
+                }
+                load_split(static_cast<uint16_t>(id));
+            }
+        } else {
+            for (uint16_t idx = 1; idx < n_split; idx++) {
+                load_split(idx);
+            }
         }
 
         get_key(llm_kv(LLM_KV_SPLIT_TENSORS_COUNT), n_tensors);
 
         // sanity check
-        {
+        // only enforced when all split files are loaded (tensor_ids == nullptr):
+        // a partial load via tensor_ids is expected to find fewer tensors
+        if (tensor_ids == nullptr) {
             const int n_tensors_loaded = (int) weights.size();
             if (n_tensors != n_tensors_loaded) {
                 throw std::runtime_error(format("corrupted model: %d tensors expected but %d found", n_tensors, n_tensors_loaded));
@@ -494,6 +514,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
                 ngram_fname.c_str(), gguf_get_n_tensors(gguf_ngram));
         ngram_file_idx = (int) files.size();
         files.emplace_back(new llama_file(ngram_fname.c_str(), "rb"));
+        split_to_file_idx[(uint16_t) ngram_file_idx] = files.size() - 1;
         contexts.emplace_back(ctx_ngram);
         add_weights(ctx_ngram, gguf_ngram, ngram_file_idx);
         gguf_free(gguf_ngram);
@@ -1789,10 +1810,12 @@ static void load_nvfp4_tensor(ggml_tensor * cur, size_t chunk_size, const llama_
 void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     const auto & w = require_weight(ggml_get_name(cur));
 
+    const size_t file_idx = split_to_file_idx.at(w.idx);
+
     if (!w.f8_scale.empty() || !w.nvfp4_scale.empty() || w.mxfp4_repack) {
-        read_nvfp4_rows(w, *files.at(w.idx), cur, (uint8_t *) cur->data, 0, ggml_nrows(cur));
+        read_nvfp4_rows(w, *files.at(file_idx), cur, (uint8_t *) cur->data, 0, ggml_nrows(cur));
     } else if (use_mmap) {
-        const auto & mapping = mappings.at(w.idx);
+        const auto & mapping = mappings.at(file_idx);
         if (cur->data == nullptr) {
             cur->data = (uint8_t *)mapping->addr() + w.offs;
         } else {
@@ -1800,8 +1823,8 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
         }
     } else {
         GGML_ASSERT(cur->data != nullptr);
-        GGML_ASSERT(w.idx < files.size());
-        const auto & file = files.at(w.idx);
+        GGML_ASSERT(file_idx < files.size());
+        const auto & file = files.at(file_idx);
         file->seek(w.offs, SEEK_SET);
         file->read_raw(cur->data, ggml_nbytes(cur));
     }

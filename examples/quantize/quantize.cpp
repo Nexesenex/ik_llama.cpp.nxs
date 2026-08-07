@@ -17,6 +17,7 @@
 #include <fstream>
 #include <sstream>
 #include <cmath>
+#include <algorithm>
 
 struct quant_option {
     std::string name;
@@ -161,7 +162,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable, int exit_code = 1) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [-dev/--device DEVICES] [-ts/--tensor-split SPLIT] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--custom-q] [--repack] [--repack-pattern] [--symmetric-q40] [--slow-iq2ks] [--keep-split] [--partial-requant] [--override-kv] [--analytical-imatrix output_file] [--estimate-imatrix] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [-dev/--device DEVICES] [-ts/--tensor-split SPLIT] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--custom-q] [--repack] [--repack-pattern] [--symmetric-q40] [--slow-iq2ks] [--keep-split] [--partial-requant] [--individual-tensors LIST] [--skip-first-shard] [--override-kv] [--analytical-imatrix output_file] [--estimate-imatrix] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  -h, --help: print usage and exit\n");
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
@@ -200,6 +201,8 @@ static void usage(const char * executable, int exit_code = 1) {
     printf("  --partial-requant: quantize only missing split files in the split quantized .gguf destination directory\n");
     printf("  --analytical-imatrix output_file: Compute an estimate of the imatrix and store it in output_file. If an input imatrix is provided, it will be combined with the estimate. Nothing else happens when this option is specified\n");
     printf("  --estimate-imatrix: Use an estimated imatrix for quantization, possibly combining with the input imatrix (if specified)\n");
+    printf("  --individual-tensors LIST: Comma-separated list of split IDs (integers >= 2). Requires --keep-split to be set. Example: --individual-tensors 2,5,1094 will produce tensor_ids = {1,4,1093}.\n\n");
+    printf("  --skip-first-shard: Do not output the first shard (assumed to be metadata only and not containing tensors). Must be used in combination with --individual-tensors and --keep-split.\n\n");
     printf("  -okv KEY=TYPE:VALUE, --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n\n");
     printf("Note: --include-weights and --exclude-weights cannot be used together\n");
@@ -451,6 +454,10 @@ int main(int argc, char ** argv) {
 
     std::string analytical_imatrix;
 
+    // Store the parsed individual-tensors list as integers (1-based for now)
+    bool individual_tensors_specified = false;
+    std::vector<int> individual_tensors_list; // holds original (1-based) ids parsed from CLI
+
     std::vector<int> cuda_devs;
     std::vector<float> cuda_ts;
     bool have_cuda_ts = false;
@@ -651,6 +658,29 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--keep-split") == 0) {
             params.keep_split = true;
+        } else if (strcmp(argv[arg_idx], "--individual-tensors") == 0) {
+            // parse a comma-separated list of split IDs from the next arg
+            if (arg_idx < argc-1) {
+                auto items = string_split<std::string>(argv[++arg_idx], ',');
+                for (auto & item : items) {
+                    try {
+                        int v = std::stoi(item);
+                        if (v < 2) {
+                            fprintf(stderr, "%s: invalid individual tensor id '%s' (must be >= 2)\n", __func__, item.c_str());
+                            usage(argv[0]);
+                        }
+                        individual_tensors_list.push_back(v);
+                    } catch (const std::exception & e) {
+                        fprintf(stderr, "%s: invalid individual tensor id '%s' (%s)\n", __func__, item.c_str(), e.what());
+                        usage(argv[0]);
+                    }
+                }
+                individual_tensors_specified = true;
+            } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--skip-first-shard") == 0) {
+            params.skip_first_shard = true;
         } else if (strcmp(argv[arg_idx], "--partial-requant") == 0) {
             params.partial_requant = true;
         } else {
@@ -704,6 +734,34 @@ int main(int argc, char ** argv) {
     }
     if (!included_weights.empty() && !excluded_weights.empty()) {
         usage(argv[0]);
+    }
+
+    // enforce requirement: if --individual-tensors specified, require --keep-split
+    if (individual_tensors_specified && !params.keep_split) {
+        fprintf(stderr, "%s: --individual-tensors requires --keep-split to be set\n", argv[0]);
+        usage(argv[0]);
+    }
+
+    // prepare tensor_ids vector (0-terminated, zero-based split indices)
+    std::vector<size_t> tensor_ids_vec;
+    if (individual_tensors_specified) {
+        // dedupe and sort original 1-based ids
+        std::sort(individual_tensors_list.begin(), individual_tensors_list.end());
+        individual_tensors_list.erase(std::unique(individual_tensors_list.begin(), individual_tensors_list.end()), individual_tensors_list.end());
+
+        for (int v : individual_tensors_list) {
+            // subtract 1 (convert to zero-based)
+            int zero_based = v - 1;
+            if (zero_based <= 0) continue; // should not happen because v >= 2 was enforced
+            tensor_ids_vec.push_back(static_cast<size_t>(zero_based));
+        }
+
+        if (tensor_ids_vec.empty()) {
+            fprintf(stderr, "%s: --individual-tensors resulted in an empty list\n", argv[0]);
+            usage(argv[0]);
+        }
+
+        tensor_ids_vec.push_back(static_cast<size_t>(0)); // Add 0 at the end, which is used for llama_model_loader to know when to end processing
     }
 
     std::string imatrix_dataset;
@@ -867,7 +925,7 @@ int main(int argc, char ** argv) {
     {
         const int64_t t_start_us = llama_time_us();
 
-        if (llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), &params)) {
+        if (llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), &params, tensor_ids_vec.empty() ? nullptr : tensor_ids_vec.data())) {
             fprintf(stderr, "%s: failed to quantize model from '%s'\n", __func__, fname_inp.c_str());
             return 1;
         }

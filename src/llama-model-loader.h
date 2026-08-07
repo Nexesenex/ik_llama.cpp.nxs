@@ -69,6 +69,9 @@ struct llama_model_loader {
 
     llama_mmaps mappings;
 
+    // Maps split number -> index into files/mappings vectors (supports non-sequential tensor_ids loading)
+    std::unordered_map<uint16_t, size_t> split_to_file_idx;
+
     // Holds information on a model weight
     struct llama_tensor_weight {
         uint16_t  idx; // source file index
@@ -130,7 +133,8 @@ struct llama_model_loader {
             const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
             const std::string & ngram_fname = std::string(),
             llama_nvfp4_precision nvfp4_precision = LLAMA_NVFP4_PRECISION_AUTO,
-            llama_fp8_precision fp8_precision = LLAMA_FP8_PRECISION_AUTO);
+            llama_fp8_precision fp8_precision = LLAMA_FP8_PRECISION_AUTO,
+            const size_t * tensor_ids = nullptr);
 
     ~llama_model_loader();
 
