@@ -1145,13 +1145,16 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         auto v = (std::vector<llama_model_kv_override>*)params->kv_overrides;
         kv_overrides = v->data();
     }
-    // When --virtual-map is used, load the reference model (which has ALL tensors) instead of the source
+    // When --virtual-map is used, load the reference model (which has ALL tensors) instead of the source.
+    // With --skip-missing-splits the source split files whose tensors already exist quantized in the
+    // destination are tolerated as missing.
     llama_model_loader ml(
             params->virtual_map ? std::string(params->virtual_map) : fname_inp,
             0, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
             /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false,
             /* defer_experts */ false, kv_overrides, nullptr,
-            params->virtual_map ? nullptr : tensor_ids);
+            params->virtual_map ? nullptr : tensor_ids,
+            params->skip_missing_splits);
     ml.init_mappings(false); // no prefetching
 
     llama_model model;
@@ -1175,7 +1178,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
         llama_model_loader src_ml(fname_inp, 0, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
                 /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false,
-                /* defer_experts */ false, /* kv_overrides */ nullptr, /* tensor_buft_overrides */ nullptr, tensor_ids);
+                /* defer_experts */ false, /* kv_overrides */ nullptr, /* tensor_buft_overrides */ nullptr, tensor_ids,
+                params->skip_missing_splits);
         src_ml.init_mappings(false);
 
         // read_buf for non-mmap source reading
@@ -1440,8 +1444,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     }
 
     // Set split info if needed
-    // Use the actual output split count (from the loaded tensors)
-    const uint16_t out_split_count = (uint16_t) ctx_outs.size();
+    // Use the original declared split count when part of the source splits are missing
+    // or only a subset is loaded, so the output split files keep the original shard numbering
+    const uint16_t out_split_count = std::max<uint16_t>((uint16_t) ctx_outs.size(), ml.n_split_total);
     if (out_split_count > 1) {
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
             if (ctx_outs[i] == NULL) continue;
