@@ -64,6 +64,13 @@ void NvapiPoller::stop() {
     running = false;
 }
 
+// No-op callback for the periodic utilization sampling subscription. The real
+// "work" is done by the NVIDIA driver continuously computing GPU/FB/VID/BUS
+// utilization samples on its backend; this callback merely holds the client alive.
+static void __cdecl s_util_cb(NvPhysicalGpuHandle, NV_GPU_CLIENT_CALLBACK_UTILIZATION_DATA_V1 *) {
+    // no-op: the periodic sampling itself keeps the backend active
+}
+
 void NvapiPoller::thread_func() {
     std::vector<NvPhysicalGpuHandle> handles;
     if (!get_nvapi_handles(devices, handles)) {
@@ -79,10 +86,6 @@ void NvapiPoller::thread_func() {
     // than on a one-shot query. The callback is intentionally a no-op — the work
     // is done by the driver computing the samples, which keeps the GPU busy.
     // One subscription per physical GPU; we must unregister before NvAPI_Unload.
-    static void __cdecl s_util_cb(NvPhysicalGpuHandle, NV_GPU_CLIENT_CALLBACK_UTILIZATION_DATA_V1 *) {
-        // no-op: the periodic sampling itself holds the backend active
-    }
-
     std::vector<NV_GPU_CLIENT_UTILIZATION_PERIODIC_CALLBACK_SETTINGS> util_settings(handles.size());
     for (size_t k = 0; k < handles.size(); ++k) {
         util_settings[k].version = NV_GPU_CLIENT_UTILIZATION_PERIODIC_CALLBACK_SETTINGS_VER;
