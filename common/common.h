@@ -394,6 +394,7 @@ struct gpt_params {
 
     // GPU Poller - lightweight GPU clock elevation for WDDM GPUs (Windows only)
     bool   shark_enable            = false;
+    int    shark_interval_ms       = 5;    // in-process NVAPI poller period in ms (--shark N)
     std::string shark_path         = "gpu_poller.exe";
     std::vector<std::string> shark_args; // additional arguments passed to the poller (e.g. --interval 15)
     int    shark_temp_limit        = 85;   // temperature limit in Celsius (stops poller if exceeded)

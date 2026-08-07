@@ -22,6 +22,10 @@ public:
     void start();
     void stop();
 
+    // Change the polling interval (ms). Applies to the next cycle; safe to call
+    // while running since the loop re-reads it each iteration.
+    void set_interval(int ms) { interval_ms = ms; }
+
     bool is_running() const { return running.load(); }
 
 private:

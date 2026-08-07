@@ -2331,7 +2331,18 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--shark") {
+        // Optional value: --shark N sets the in-process poller interval in ms.
+        // Bare --shark keeps the default interval.
         params.shark_enable = true;
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.shark_interval_ms = atoi(argv[i+1]);
+            if (params.shark_interval_ms < 1) {
+                fprintf(stderr, "error: --shark interval must be >= 1 ms\n");
+                invalid_param = true;
+            } else {
+                i++; // consume the interval value
+            }
+        }
         return true;
     }
     if (arg == "--orca") {
@@ -3577,7 +3588,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
     options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
-    options.push_back({ "win32",       "--shark",                       "enable GPU clock elevation via gpushark (Windows only)" });
+    options.push_back({ "win32",       "--shark [N]",                   "enable GPU clock elevation via gpushark (N = poller interval in ms, default 5)" });
     options.push_back({ "win32",       "--orca FMA1,FMA2,...",             "enable CUDA heartbeat warmup with per-GPU FMA length (non-TCC order)" });
     options.push_back({ "win32",       "--shark-path PATH",             "path to gpu_poller executable (default: %s)", params.shark_path.c_str() });
     options.push_back({ "win32",       "--shark-arg ARG",               "additional argument passed to gpushark (can be repeated)" });
@@ -4848,6 +4859,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
         cparams.shark_callback_data = nullptr; // uses globals
         // In-process NVAPI poller (real GPC ping + utilization sampling) is
         // gated by the same --shark flag; disabled by default.
+        llama_nvapi_poller_set_interval(params.shark_interval_ms);
         llama_nvapi_poller_set_enabled(true);
     }
     if (!params.orca_fma.empty()) {

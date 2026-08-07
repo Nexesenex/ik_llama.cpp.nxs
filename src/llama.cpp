@@ -171,6 +171,16 @@ void llama_nvapi_poller_set_enabled(bool enabled) {
 #endif
 }
 
+// Set the in-process NVAPI poller interval in ms (--shark N). Applies to the
+// next start; a running poller keeps its current interval.
+void llama_nvapi_poller_set_interval(int interval_ms) {
+#ifdef GGML_USE_CUDA
+    g_nvapi_poller.set_interval(interval_ms);
+#else
+    (void) interval_ms;
+#endif
+}
+
 void  llama_decode_reset() {
     stop_internal_decode = false;
 }

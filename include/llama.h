@@ -1146,6 +1146,10 @@ extern "C" {
     // Disabled by default; --shark turns it on. Safe to call before any decode.
     LLAMA_API void llama_nvapi_poller_set_enabled(bool enabled);
 
+    // Set the in-process NVAPI poller interval in ms (--shark N). Applies to
+    // the next start; a running poller keeps its current interval.
+    LLAMA_API void llama_nvapi_poller_set_interval(int interval_ms);
+
     // Wait until all computations are finished
     // This is automatically done when using one of the functions below to obtain the computation results
     // and is not necessary to call it explicitly in most cases
