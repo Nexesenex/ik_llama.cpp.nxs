@@ -183,6 +183,75 @@ void NvapiPoller::thread_func() {
                 NV_ENCODER_STATISTICS encStats = {};
                 encStats.version = NV_ENCODER_STATISTICS_VER1;
                 NvAPI_GPU_GetEncoderStatistics(handle, &encStats);
+
+                // 15. GPU type / system type / SLI state (info paths)
+                NV_GPU_TYPE gpuType = NV_SYSTEM_TYPE_GPU_UNKNOWN;
+                NvAPI_GPU_GetGPUType(handle, &gpuType);
+
+                NV_SYSTEM_TYPE sysType = NV_SYSTEM_TYPE_UNKNOWN;
+                NvAPI_GPU_GetSystemType(handle, &sysType);
+
+                // 16. PCIe slot / IRQ (bus plumbing)
+                NvU32 busSlotId = 0;
+                NvAPI_GPU_GetBusSlotId(handle, &busSlotId);
+
+                NvU32 irq = 0;
+                NvAPI_GPU_GetIRQ(handle, &irq);
+
+                // 17. VBIOS reads (firmware path)
+                NvU32 vbiosRev = 0, vbiosOemRev = 0;
+                NvAPI_GPU_GetVbiosRevision(handle, &vbiosRev);
+                NvAPI_GPU_GetVbiosOEMRevision(handle, &vbiosOemRev);
+                NvAPI_ShortString vbiosStr = {0};
+                NvAPI_GPU_GetVbiosVersionString(handle, vbiosStr);
+
+                // 18. Frame buffer reads (memory path)
+                NvU32 physFb = 0, virtFb = 0;
+                NvAPI_GPU_GetPhysicalFrameBufferSize(handle, &physFb);
+                NvAPI_GPU_GetVirtualFrameBufferSize(handle, &virtFb);
+
+                // 19. Board info / memory bus width (board EEPROM + memory paths)
+                NV_BOARD_INFO boardInfo = {};
+                boardInfo.version = NV_BOARD_INFO_VER;
+                NvAPI_GPU_GetBoardInfo(handle, &boardInfo);
+
+                NvU32 ramBusWidth = 0;
+                NvAPI_GPU_GetRamBusWidth(handle, &ramBusWidth);
+
+                // 20. Architecture info (heavy chip-config read)
+                NV_GPU_ARCH_INFO archInfo = {};
+                archInfo.version = NV_GPU_ARCH_INFO_VER;
+                NvAPI_GPU_GetArchInfo(handle, &archInfo);
+
+                // 21. Virtualization mode
+                NV_GPU_VIRTUALIZATION_INFO virtInfo = {};
+                virtInfo.version = NV_GPU_VIRTUALIZATION_INFO_VER;
+                NvAPI_GPU_GetVirtualizationInfo(handle, &virtInfo);
+
+                // 22. Encoder sessions (engages video encode path)
+                NV_ENCODER_SESSIONS_INFO encSessions = {};
+                encSessions.version = NV_ENCODER_SESSIONS_INFO_VER;
+                NvAPI_GPU_GetEncoderSessionsInfo(handle, &encSessions);
+
+                // 23. GSP features (engages system processor firmware path)
+                NV_GPU_GSP_INFO gspInfo = {};
+                gspInfo.version = NV_GPU_GSP_INFO_VER;
+                NvAPI_GPU_GetGspFeatures(handle, &gspInfo);
+
+                // 24. GPU UUID (dedicated identifier path)
+                NV_GPU_UUID gpuUuid = {};
+                gpuUuid.version = NV_GPU_UUID_VER;
+                NvAPI_GPU_GetUUID(handle, &gpuUuid);
+
+                // 25. Overclock status (engages OC/perf clock control path)
+                NV_GPU_OVERCLOCK_STATUS ocStatus = {};
+                ocStatus.version = NV_GPU_OVERCLOCK_STATUS_VER;
+                NvAPI_GPU_GetOverclockStatus(handle, &ocStatus);
+
+                // 26. HDCP support status (display-protection path)
+                NV_GPU_GET_HDCP_SUPPORT_STATUS hdcpStatus = {};
+                hdcpStatus.version = NV_GPU_GET_HDCP_SUPPORT_STATUS_VER;
+                NvAPI_GPU_GetHDCPSupportStatus(handle, &hdcpStatus);
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
