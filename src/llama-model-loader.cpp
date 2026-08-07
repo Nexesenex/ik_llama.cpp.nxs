@@ -19,6 +19,7 @@
 #include <set>
 #include <map>
 #include <array>
+#include <limits>
 #include <charconv>
 #include <future>
 #include <regex>
@@ -303,7 +304,7 @@ static void coalesce_ranges(std::vector<llama_file_range> & ranges) {
 llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors,
         bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p, const size_t * tensor_ids) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -359,6 +360,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
         weights.emplace_back(files.back().get(), 0, cur->name, meta, cur);
     }
+    split_to_file_idx[0] = 0;
     uint16_t n_split = 0;
     get_key(llm_kv(LLM_KV_SPLIT_COUNT), n_split, false);
 
@@ -380,7 +382,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         }
 
         char split_path[PATH_MAX] = {0};
-        for (idx = 1; idx < n_split; idx++) {
+        auto load_split = [&](uint16_t idx) {
             llama_split_path(split_path, sizeof(split_path), split_prefix, idx, n_split);
 
             struct gguf_init_params split_params = {
@@ -393,6 +395,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
             }
 
             files.emplace_back(new llama_file(split_path, "rb"));
+            split_to_file_idx[idx] = files.size() - 1;
             contexts.emplace_back(ctx);
 
             // Save tensors data offset info of the shard.
@@ -401,12 +404,28 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
             }
 
             gguf_free(ctx_gguf);
+        };
+
+        if (tensor_ids) {
+            for (const size_t *p = tensor_ids; *p != 0; ++p) {
+                size_t id = *p;
+                if (id > std::numeric_limits<uint16_t>::max()) {
+                    throw std::out_of_range("tensor id doesn't fit in uint16_t");
+                }
+                load_split(static_cast<uint16_t>(id));
+            }
+        } else {
+            for (uint16_t idx = 1; idx < n_split; idx++) {
+                load_split(idx);
+            }
         }
 
         get_key(llm_kv(LLM_KV_SPLIT_TENSORS_COUNT), n_tensors);
 
         // sanity check
-        {
+        // only enforced when all split files are loaded (tensor_ids == nullptr):
+        // a partial load via tensor_ids is expected to find fewer tensors
+        if (tensor_ids == nullptr) {
             const int n_tensors_loaded = (int) weights.size();
             if (n_tensors != n_tensors_loaded) {
                 throw std::runtime_error(format("corrupted model: %d tensors expected but %d found", n_tensors, n_tensors_loaded));
@@ -1060,8 +1079,10 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
 void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     const auto & w = require_weight(ggml_get_name(cur));
 
+    const size_t file_idx = split_to_file_idx.at(w.idx);
+
     if (use_mmap) {
-        const auto & mapping = mappings.at(w.idx);
+        const auto & mapping = mappings.at(file_idx);
         if (cur->data == nullptr) {
             cur->data = (uint8_t *)mapping->addr() + w.offs;
         } else {
@@ -1069,8 +1090,8 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
         }
     } else {
         GGML_ASSERT(cur->data != nullptr);
-        GGML_ASSERT(w.idx < files.size());
-        const auto & file = files.at(w.idx);
+        GGML_ASSERT(file_idx < files.size());
+        const auto & file = files.at(file_idx);
         file->seek(w.offs, SEEK_SET);
         file->read_raw(cur->data, ggml_nbytes(cur));
     }
