@@ -12,7 +12,9 @@
 
 class NvapiPoller {
 public:
-    // devices: CUDA device indices to keep awake
+    // devices: CUDA device ordinals to keep awake (WDDM only; empty = auto-detect
+    // non-TCC GPUs via ggml). Pass raw CUDA ordinals obtained from
+    // ggml_backend_cuda_get_device_ordinal(), TCC devices are skipped.
     // interval_ms: polling interval (default 5)
     // rounds: number of NVAPI query bursts per poll cycle (default 3, try 3-5)
     explicit NvapiPoller(const std::vector<int>& devices, int interval_ms = 10, int rounds = 1);

@@ -154,7 +154,10 @@ static std::string trim(const std::string & str) {
 static bool stop_internal_decode = false;
 
 #ifdef GGML_USE_CUDA
-static NvapiPoller g_nvapi_poller({0, 1}, 5);
+// Empty device list: the poller auto-detects WDDM (non-TCC) GPUs in ggml
+// logical order, matching the orca heartbeat's device set. TCC (e.g. A4000)
+// is never polled.
+static NvapiPoller g_nvapi_poller({}, 5);
 static bool g_nvapi_poller_enabled = false; // on only when --shark is passed
 #endif
 

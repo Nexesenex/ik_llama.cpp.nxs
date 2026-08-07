@@ -30,10 +30,69 @@ static bool get_nvapi_handles(const std::vector<int>& cuda_devices,
         return false;
     }
 
-    // Simple mapping: assume CUDA device order matches physical order
-    for (int cuda_idx : cuda_devices) {
-        if (cuda_idx >= 0 && cuda_idx < (int)gpu_count) {
-            out_handles.push_back(gpu_handles[cuda_idx]);
+    // Resolve the WDDM-only CUDA ordinal list: explicit list if given (TCC
+    // ordinals are skipped), otherwise auto-detect all non-TCC GPUs in ggml
+    // logical order — same order the orca heartbeat uses.
+    std::vector<int> ordinals;
+#ifdef GGML_USE_CUDA
+    if (cuda_devices.empty()) {
+        const int n_dev = ggml_backend_cuda_get_device_count();
+        for (int i = 0; i < n_dev; ++i) {
+            if (ggml_backend_cuda_device_is_tcc(i)) continue;
+            ordinals.push_back(ggml_backend_cuda_get_device_ordinal(i));
+        }
+    }
+#endif
+    if (ordinals.empty()) {
+        for (int ord : cuda_devices) {
+            ordinals.push_back(ord);
+        }
+    }
+
+    // Match each CUDA ordinal to a physical GPU by PCI bus ID (the positional
+    // mapping breaks when TCC and WDDM GPUs interleave in NVAPI enumeration).
+    for (int ord : ordinals) {
+        char pci_bus_id[16] = {0};
+#ifdef GGML_USE_CUDA
+        // find which ggml logical device carries this ordinal, then its bus id
+        bool found = false;
+        const int n_dev = ggml_backend_cuda_get_device_count();
+        for (int i = 0; i < n_dev; ++i) {
+            if (ggml_backend_cuda_get_device_ordinal(i) == ord) {
+                ggml_backend_cuda_get_device_pci_bus_id(i, pci_bus_id, sizeof(pci_bus_id));
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            fprintf(stderr, "[NvapiPoller] WARN: CUDA device %d not present in ggml\n", ord);
+            continue;
+        }
+#endif
+        // CUDA bus id format: "0000:01:00.0" → bus is the 2nd field, hex
+        unsigned int bus_hex = 0;
+        int consumed = 0;
+        if (sscanf(pci_bus_id, "%*x:%x:%*x.%*x%n", &bus_hex, &consumed) != 1 || consumed == 0) {
+            fprintf(stderr, "[NvapiPoller] WARN: cannot parse PCI bus id '%s'\n", pci_bus_id);
+            continue;
+        }
+
+        NvPhysicalGpuHandle match = nullptr;
+        for (NvU32 k = 0; k < gpu_count; ++k) {
+            NvU32 nv_bus = 0;
+            if (NvAPI_GPU_GetBusId(gpu_handles[k], &nv_bus) == NVAPI_OK && nv_bus == bus_hex) {
+                match = gpu_handles[k];
+                break;
+            }
+        }
+        if (match) {
+            NvAPI_ShortString gpu_name = {0};
+            NvAPI_GPU_GetFullName(match, gpu_name);
+            fprintf(stderr, "[NvapiPoller] WDDM[%zu] <- CUDA %d (%s, PCI %s)\n",
+                    out_handles.size(), ord, gpu_name, pci_bus_id);
+            out_handles.push_back(match);
+        } else {
+            fprintf(stderr, "[NvapiPoller] WARN: no NVAPI physical GPU for CUDA %d (PCI %s)\n", ord, pci_bus_id);
         }
     }
 
