@@ -122,7 +122,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     constexpr int k_block_size = 256;
 
     if ((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_Q8_0) && q->type == GGML_TYPE_F32) {
-        constexpr size_t k_max_buf_size = 1 << 28;
+        constexpr size_t k_max_buf_size = 1 << 27;
         size_t per_row = size_t(n_kv)*(q->ne[1]*sizeof(half) + sizeof(int) + sizeof(float)) + q->ne[0]*q->ne[1]*sizeof(half);
         int max_rows = (k_max_buf_size + per_row - 1)/per_row;
         max_rows = std::min<int>(max_rows, q->ne[2]);
@@ -216,7 +216,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     }
 
     constexpr int k_max_rows = 256;
-    constexpr int64_t k_max_work_buffer_elements = 1 << 26;
+    constexpr int64_t k_max_work_buffer_elements = 1 << 25;
 
     int max_rows = std::min<int64_t>(k_max_rows, k_max_work_buffer_elements / n_kv / n_head);
     if (max_rows < 1) max_rows = 1;
