@@ -556,6 +556,7 @@ extern "C" {
         void * custom_quants;                // pointer to vector containing custom quantization rules
         void * repack_pattern;               // pointer to a vector containing regexes to be used for matching tensor names. Can be null
         struct quantize_user_data * user_data; // so we can pass extra data to the quantization functions
+        const char * virtual_map;              // path to an existing fully quantized model to use as the base tensor source
     } llama_model_quantize_params;
 
     // grammar types
