@@ -1008,6 +1008,9 @@ static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_t
         const int64_t nelements_matrix = tensor->ne[0]*tensor->ne[1];
         const auto quantize = [&](const float * src, void * dst, const float * im) -> size_t {
             if (new_type == GGML_TYPE_Q8_0) {
+                if (im) {
+                    return ggml_cuda_quantize_q8_0_imatrix(src, dst, tensor->ne[1], tensor->ne[0], im);
+                }
                 return ggml_cuda_quantize_q8_0(src, dst, tensor->ne[1], tensor->ne[0]);
             }
             if (new_type == GGML_TYPE_Q5_0) {
