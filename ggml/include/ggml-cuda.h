@@ -36,7 +36,9 @@ GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type
 
 GGML_API GGML_CALL int  ggml_backend_cuda_get_device_count(void);
 GGML_API GGML_CALL int  ggml_backend_cuda_get_device_ordinal(int device);
+GGML_API GGML_CALL bool ggml_backend_cuda_device_is_tcc(int device);
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size);
+GGML_API GGML_CALL void ggml_backend_cuda_get_device_pci_bus_id(int device, char * pci_bus_id, size_t pci_bus_id_size);
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total);
 
 // Set CUDA_SCALE_LAUNCH_QUEUES before buffer type init (must be called before any ggml_backend_cuda_buffer_type call)

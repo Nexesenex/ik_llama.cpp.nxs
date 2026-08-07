@@ -288,7 +288,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].nsm        = prop.multiProcessorCount;
 #if CUDART_VERSION >= 12000
         int kernel_exec_timeout = 1;
-        cudaDeviceGetAttribute(&kernel_exec_timeout, cudaDevAttrKernelExecTimeout, id);
+        cudaDeviceGetAttribute(&kernel_exec_timeout, cudaDevAttrKernelExecTimeout, cuda_id);
         info.devices[id].is_tcc = !kernel_exec_timeout;
 #else
         info.devices[id].is_tcc     = !prop.kernelExecTimeoutEnabled;
@@ -5775,12 +5775,29 @@ GGML_CALL int ggml_backend_cuda_get_device_ordinal(int device) {
     return info.cuda_device_id[device];
 }
 
+GGML_CALL bool ggml_backend_cuda_device_is_tcc(int device) {
+    const auto & info = ggml_cuda_info();
+    if (device < 0 || device >= info.device_count) {
+        GGML_CUDA_LOG_WARN("%s: CUDA device index %d out of range (max %d)\n", __func__, device, info.device_count - 1);
+        return false;
+    }
+    return info.devices[device].is_tcc;
+}
+
 GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size) {
     const auto & info = ggml_cuda_info();
     int cuda_device = (device >= 0 && device < info.device_count) ? info.cuda_device_id[device] : device;
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, cuda_device));
     snprintf(description, description_size, "%s", prop.name);
+}
+
+GGML_CALL void ggml_backend_cuda_get_device_pci_bus_id(int device, char * pci_bus_id, size_t pci_bus_id_size) {
+    const auto & info = ggml_cuda_info();
+    int cuda_device = (device >= 0 && device < info.device_count) ? info.cuda_device_id[device] : device;
+    if (pci_bus_id_size > 0) {
+        cudaDeviceGetPCIBusId(pci_bus_id, (int) pci_bus_id_size, cuda_device);
+    }
 }
 
 GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total) {
