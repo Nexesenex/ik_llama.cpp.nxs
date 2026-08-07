@@ -9358,6 +9358,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.only_repack                    =*/ false,
         /*.dry_run                        =*/ false,
         /*.partial_requant                =*/ false,
+        /*.skip_missing_splits            =*/ false,
         /*.slab_size                      =*/ 1ull << 30,
         /*.cuda_quantize                  =*/ false,
         /*.cuda_quantize_device             =*/ 0,
