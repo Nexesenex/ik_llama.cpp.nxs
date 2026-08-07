@@ -608,6 +608,58 @@ static __global__ void quantize_q6_0_imatrix_kernel(
     }
 }
 
+// Q8_0 imatrix kernel. Unlike Q4_0/Q5_0/Q6_0, Q8_0 cannot use
+// make_qx_quants (its offset encoding would overflow int8_t for 8-bit codes;
+// block_q8_0 stores signed int8 directly). The CPU impl
+// quantize_row_q8_0_impl (ggml-quants.c:3799) instead keeps the plain
+// `roundf(x*id)` codes and refines only the scale via weighted least-squares
+// d = sumqx/sumq2, weighted per element w[j] = qw[j]*sqrt(sigma2 + x[j]^2).
+// This kernel replays that loop in one thread per block with correctly-rounded
+// intrinsics (__fdiv_rn/__fadd_rn/__fmul_rn/__fsqrt_rn and roundf), so it is
+// byte-identical. The row-level sigma2 is pre-computed on the host in the
+// exact CPU summation order (see the driver).
+static __global__ void quantize_q8_0_imatrix_kernel(
+        const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
+        void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row) {
+    const int64_t ib = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
+    if (ib >= nblocks) {
+        return;
+    }
+    const int64_t gb = base + ib;
+    const float * xb = x + ib*QK8_0;
+    const float * qb = qw + (int32_t)(gb % blocks_per_row)*QK8_0;
+    const float s2   = sigma2[gb / blocks_per_row];
+
+    // per-element importance weight, byte-mirroring quantize_row_q8_0_impl
+    float weight[QK8_0];
+    for (int j = 0; j < QK8_0; ++j) {
+        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
+    }
+
+    // plain top magnitude -> base scale (exact under -use_fast_math)
+    float amax = 0.0f;
+    for (int j = 0; j < QK8_0; ++j) {
+        amax = fmaxf(amax, fabsf(xb[j]));
+    }
+    const float d0  = __fdiv_rn(amax, 127.0f);
+    const float id0 = d0 ? __fdiv_rn(1.0f, d0) : 0.0f;
+
+    // weighted least-squares scale over the plain signed codes
+    block_q8_0 * y = (block_q8_0 *)vy;
+    float sumqx = 0.0f, sumq2 = 0.0f;
+    for (int j = 0; j < QK8_0; ++j) {
+        const float v = xb[j];
+        const int8_t q = (int8_t)roundf(v*id0);
+        y[ib].qs[j] = q;
+
+        const float wq = __fmul_rn(weight[j], (float)q);
+        sumqx = __fadd_rn(sumqx, __fmul_rn(wq, v));        // w*q*x
+        sumq2 = __fadd_rn(sumq2, __fmul_rn(wq, (float)q)); // w*q*q
+    }
+    const float d = sumq2 > 0.0f ? __fdiv_rn(sumqx, sumq2) : d0;
+    y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(d));
+}
+
 // ---------------------------------------------------------------------------
 // host driver (shared by all block quants)
 // ---------------------------------------------------------------------------
@@ -1082,4 +1134,130 @@ size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, void * dst, int64_t nr
     }
 
     return nblocks_total*sizeof(block_q6_0);
+}
+
+// Q8_0 with an importance matrix. Unlike Q4_0/Q5_0/Q6_0 the Q8_0 imatrix path
+// is a weighted least-squares scale (quantize_row_q8_0_impl, ggml-quants.c),
+// not make_qx_quants, but the driver is identical: same chunked launch, same
+// host-computed row sigma2 in the exact CPU summation order.
+size_t ggml_cuda_quantize_q8_0_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    GGML_ASSERT(nrows > 0);
+    GGML_ASSERT(n_per_row % QK8_0 == 0);
+
+    const int64_t nblocks_total = nrows*(n_per_row/QK8_0);
+    const int32_t blocks_per_row = (int32_t)(n_per_row/QK8_0);
+
+    int n_devices = 0;
+    if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
+        return 0;
+    }
+    if (cudaSetDevice(0) != cudaSuccess) { // POC: device 0 only
+        return 0;
+    }
+
+    // Per-row sigma2 = sum_x2/n_per_row, summed sequentially in the exact
+    // order of quantize_row_q8_0_impl. See the Q4_0 driver for why this sum is
+    // computed on the host and not reduced in parallel.
+    std::vector<float> sigma2(nrows);
+    for (int64_t irow = 0; irow < nrows; ++irow) {
+        const float * xr = src + irow*n_per_row;
+        float sum_x2 = 0.0f;
+        for (int64_t j = 0; j < n_per_row; ++j) {
+            sum_x2 += xr[j]*xr[j];
+        }
+        sigma2[irow] = sum_x2/n_per_row;
+    }
+
+    // Fixed-size device chunks, same rationale as the generic driver.
+    const int64_t chunk_blocks = 1 << 20;
+    const int64_t chunk_x      = chunk_blocks*QK8_0;
+    const int64_t chunk_y      = chunk_blocks*sizeof(block_q8_0);
+
+    float   * x_dev = nullptr;
+    float   * q_dev = nullptr;
+    float   * s_dev = nullptr;
+    uint8_t * y_dev = nullptr;
+
+    cudaError_t err = cudaMalloc(&x_dev, chunk_x*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q8_0_imatrix: cudaMalloc(x_dev, %" PRId64 "): %s\n",
+                __func__, (int64_t)(chunk_x*sizeof(float)), cudaGetErrorString(err));
+        return 0;
+    }
+    err = cudaMalloc(&q_dev, n_per_row*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q8_0_imatrix: cudaMalloc(q_dev, %" PRId64 "): %s\n",
+                __func__, (int64_t)(n_per_row*sizeof(float)), cudaGetErrorString(err));
+        cudaFree(x_dev);
+        return 0;
+    }
+    err = cudaMalloc(&s_dev, nrows*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q8_0_imatrix: cudaMalloc(s_dev, %" PRId64 "): %s\n",
+                __func__, (int64_t)(nrows*sizeof(float)), cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        return 0;
+    }
+    err = cudaMalloc(&y_dev, chunk_y);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q8_0_imatrix: cudaMalloc(y_dev, %" PRId64 "): %s\n",
+                __func__, (int64_t)chunk_y, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        return 0;
+    }
+
+    err = cudaMemcpy(q_dev, imatrix, n_per_row*sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q8_0_imatrix: cudaMemcpy imatrix H2D: %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        cudaFree(y_dev);
+        return 0;
+    }
+    err = cudaMemcpy(s_dev, sigma2.data(), nrows*sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q8_0_imatrix: cudaMemcpy sigma2 H2D: %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        cudaFree(y_dev);
+        return 0;
+    }
+
+    for (int64_t base = 0; base < nblocks_total; base += chunk_blocks) {
+        const int64_t nblocks = std::min(chunk_blocks, nblocks_total - base);
+
+        err = cudaMemcpy(x_dev, src + base*QK8_0, nblocks*QK8_0*sizeof(float), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: q8_0_imatrix: cudaMemcpy H2D: %s\n", __func__, cudaGetErrorString(err));
+            break;
+        }
+
+        // 256 threads per block, one quant block per thread
+        const unsigned int block_size = 256;
+        quantize_q8_0_imatrix_kernel<<<(unsigned)((nblocks + block_size - 1)/block_size), block_size>>>(
+                x_dev, q_dev, s_dev, y_dev, base, nblocks, blocks_per_row);
+
+        err = cudaMemcpy((char *)dst + base*sizeof(block_q8_0), y_dev, nblocks*sizeof(block_q8_0), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: q8_0_imatrix: cudaMemcpy D2H: %s\n", __func__, cudaGetErrorString(err));
+            break;
+        }
+    }
+
+    cudaFree(x_dev);
+    cudaFree(q_dev);
+    cudaFree(s_dev);
+    cudaFree(y_dev);
+
+    if (err != cudaSuccess) {
+        return 0;
+    }
+
+    return nblocks_total*sizeof(block_q8_0);
 }
