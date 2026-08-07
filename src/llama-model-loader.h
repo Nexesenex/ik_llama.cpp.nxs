@@ -69,6 +69,12 @@ struct llama_model_loader {
 
     llama_mmaps mappings;
 
+    // Total number of splits declared by the source model metadata (1 for non-split models).
+    // Unlike n_tensors (loaded count), this keeps the original split count when some
+    // split files are missing or only a subset is loaded via tensor_ids, so the output
+    // split files keep the original shard numbering.
+    uint16_t n_split_total = 1;
+
     // Maps split number -> index into files/mappings vectors (supports non-sequential tensor_ids loading)
     std::unordered_map<uint16_t, size_t> split_to_file_idx;
 
@@ -134,7 +140,8 @@ struct llama_model_loader {
             const std::string & ngram_fname = std::string(),
             llama_nvfp4_precision nvfp4_precision = LLAMA_NVFP4_PRECISION_AUTO,
             llama_fp8_precision fp8_precision = LLAMA_FP8_PRECISION_AUTO,
-            const size_t * tensor_ids = nullptr);
+            const size_t * tensor_ids = nullptr,
+            bool skip_missing_splits = false);
 
     ~llama_model_loader();
 
