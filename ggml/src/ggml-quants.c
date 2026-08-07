@@ -3795,12 +3795,64 @@ size_t quantize_q6_1(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+// Importance-matrix quantizer for Q8_0. Q8_0 stores signed int8 codes with no
+// centering, so unlike Q4_0/Q5_0/Q6_0 it cannot use make_qx_quants (whose
+// offset encoding would overflow int8_t for 8-bit). Instead, downstream of the
+// plain `roundf(x*id)` codes it refines the scale with the weighted
+// least-squares d = sumqx/sumq2 (weighted by the per-block importance weight
+// qw[j]*sqrtf(sigma2 + x[j]*x[j]), the same convention as the other `_impl`
+// quantizers). See docs/cuda-quantize.md §4.4; the CUDA port must reproduce
+// this byte-for-byte so no FMA contraction is allowed here.
+#pragma STDC FP_CONTRACT OFF
+static void quantize_row_q8_0_impl(const float * restrict x, block_q8_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
+    if (!quant_weights) {
+        quantize_row_q8_0_ref(x, y, n_per_row);
+        return;
+    }
+
+    static_assert(QK8_0 == 32, "QK8_0 must be 32");
+
+    float weight[QK8_0];
+
+    float sum_x2 = 0;
+    for (int j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
+    float sigma2 = sum_x2/n_per_row;
+
+    const int64_t nb = n_per_row/QK8_0;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float * xb = x + QK8_0*ib;
+        const float * qw = quant_weights + QK8_0*ib;
+        for (int j = 0; j < QK8_0; ++j) weight[j] = qw[j]*sqrtf(sigma2 + xb[j]*xb[j]);
+
+        float amax = 0.0f;
+        for (int j = 0; j < QK8_0; ++j) amax = MAX(amax, fabsf(xb[j]));
+
+        const float d0 = amax/127.0f;
+        const float id0 = d0 ? 1.0f/d0 : 0.0f;
+
+        float sumqx = 0, sumq2 = 0;
+        for (int j = 0; j < QK8_0; ++j) {
+            const float v = xb[j];
+            const int8_t q = (int8_t) roundf(v*id0);
+            y[ib].qs[j] = q;
+            sumqx += weight[j]*q*v;
+            sumq2 += weight[j]*q*q;
+        }
+        y[ib].d = sumq2 > 0 ? GGML_FP32_TO_FP16(sumqx/sumq2) : GGML_FP32_TO_FP16(d0);
+    }
+}
+#pragma STDC FP_CONTRACT ON
+
 size_t quantize_q8_0(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
     GGML_UNUSED(user_data);
-    (void)quant_weights; // not used
     const size_t row_size = ggml_row_size(GGML_TYPE_Q8_0, n_per_row);
-    quantize_row_q8_0_ref(src, dst, (int64_t)nrow*n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q8_0_impl(src, (block_q8_0 *)qrow, n_per_row, quant_weights);
+        src += n_per_row;
+        qrow += row_size;
+    }
     return nrow * row_size;
 }
 
