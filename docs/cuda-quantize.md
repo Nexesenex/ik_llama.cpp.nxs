@@ -50,7 +50,9 @@ Not implemented for now : | `Q6_1` | `min/max; d=(max-min)/63; m=min` (`:897`) |
 
 ✓ = implemented on CUDA. `Q4_0`, `Q5_0` and `Q6_0` with an importance matrix (the
 `make_qx_quants` path, `quantize_row_q4_0_impl` / `quantize_row_q5_0_impl` /
-`quantize_row_q6_0_impl`) are likewise CUDA-implemented, see §4.4.
+`quantize_row_q6_0_impl`) are likewise CUDA-implemented, see §4.4. `Q8_0`'s
+importance-matrix path is a weighted least-squares scale
+(`quantize_row_q8_0_impl`), see §4.5.
 
 Round-trip rule: the CPU `(int8_t)/(int)(f)` cast **truncates toward zero**;
 CUDA `(signed char)/(int)(f)` truncates identically. `roundf()` in both C and
@@ -153,10 +155,34 @@ cannot use the warp-per-block tiling of §4.2. Instead:
 - `Q6_0` uses `nmax == 32`, so the optimizer emits `L` in `[0, 63]` (6-bit) and
   the packing writes two `qh` bits per element — `qh[k] = h_k | h_{k+8}<<4` with
   `h_e = (L_e>>4) | (L_{e+16}>>4)<<2` — mirroring `quantize_row_q6_0_impl`. The
-  `_impl` early-returns to `quantize_row_q6_0_ref` when no `quant_weights` are
-  given (matching `Q4_0`/`Q5_0`), so the plain kernel stays the §4.2 warp port;
-  the imatrix driver mirrors the `Q4_0`/`Q5_0` shapes with `QK6_0` /
-  `sizeof(block_q6_0)`.
+`_impl` early-returns to `quantize_row_q6_0_ref` when no `quant_weights` are
+   given (matching `Q4_0`/`Q5_0`), so the plain kernel stays the §4.2 warp port;
+   the imatrix driver mirrors the `Q4_0`/`Q5_0` shapes with `QK6_0` /
+   `sizeof(block_q6_0)`.
+
+### 4.5 `Q8_0` with importance matrix (weighted least-squares)
+
+`Q8_0` cannot use `make_qx_quants`: its codes are signed `int8` that fit a
+full 8 bits, but `make_qx_quants` shifts by `nmax` (`q = l + nmax`) and for
+`nmax == 128` an `int8_t` would overflow (and the offset encoding would not
+reproduce the reference's sign). `quantize_row_q8_0_impl` (`ggml-quants.c`)
+therefore keeps the plain `roundf(x*id)` codes and refines **only the scale**
+with the weighted least-squares
+
+```
+d  = sumqx/sumq2,   sumqx = sum w[j] * q[j] * x[j],   sumq2 = sum w[j] * q[j]^2
+w[j] = qw[j] * sqrtf(sigma2 + x[j]^2)     (same weight convention as §4.4)
+```
+
+This is the fork's earlier Q8_0 "OLS scale refinement"
+(`d = sumqx/sumq2`, weight `v^2` in the reverted commit) re-weighted by the
+importance matrix. The device kernel `quantize_q8_0_imatrix_kernel` replays it
+one thread per quant block, with the LS products/sums expressed as
+`__fmul_rn`/`__fadd_rn` (and `__fsqrt_rn`, `__fdiv_rn`) so a `-use_fast_math`
+build cannot FMA-contract them; the row `sigma2` is again host-computed in the
+exact CPU order. `quantize_q8_0_impl` is guarded by `#pragma STDC FP_CONTRACT OFF`
+and early-returns to `quantize_row_q8_0_ref` when no `quant_weights` are given
+(plain warp kernel unchanged). `d` may be NaN for degenerate blocks; see §7.
 
 ## 5. Integration into `llama-quantize`
 
@@ -215,9 +241,11 @@ reproduces `do_quantize`'s `ne[2]` slicing exactly: the CUDA and CPU branches
 both quantize one expert slice at a time into consecutive slots, and both must
 equal a single whole-tensor call.
 
-`q4_0-imatrix`, `q5_0-imatrix` and `q6_0-imatrix` add imatrix specs: the local
-`ref_*` copies replay the imatrix quantizer (`make_qx_quants` +
-`quantize_row_q4_0_impl`/`quantize_row_q5_0_impl`/`quantize_row_q6_0_impl` from
+`q4_0-imatrix`, `q5_0-imatrix`, `q6_0-imatrix` and `q8_0-imatrix` add imatrix
+specs: the local
+`ref_*` copies replay the imatrix quantizer (
+`make_qx_quants` + `quantize_row_q4_0_impl`/`quantize_row_q5_0_impl`/
+`quantize_row_q6_0_impl`, or the weighted-LS `quantize_row_q8_0_impl` from
 `ggml-quants.c`) with the fp16 step done by a host port of
 `ggml_compute_fp32_to_fp16`'s bit-twiddle, and a synthetic importance matrix is
 generated with one weight per column, reused for every row (the CPU convention).
@@ -240,7 +268,7 @@ Build: `cmake --build build --target unit_test_cuda -j`. Run:
   CUDA `Q4_0` kernel is in, including the importance-matrix path (`§4.4`).
   `Q4_0` stays on the CPU only when `--symmetric-q4-0` is requested.
 - Add `Q4_1, Q5_1 (Q6_1 is not implemented)` kernels behind the same entry, one commit
-  per type, each validated by the harness. (`Q5_0`, `Q6_0` and their imatrix paths are done.)
+  per type, each validated by the harness. (`Q5_0`, `Q6_0` and their imatrix paths, and the `Q8_0` imatrix path, are done.)
 - Multi-GPU: rows are independent; later split row ranges across the 3 devices
   and add pinned-memory async upload. Does not affect bit-exactness.
 - Reproducibility statement: CUDA kernels must never introduce an FMA or a
