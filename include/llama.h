@@ -581,6 +581,7 @@ extern "C" {
         int  cuda_quantize_n_devices;         // row-split device count, 0 = off
         int  cuda_quantize_devices[16];       // row-split ordinals (-dev CUDA0,CUDA1,CUDA2)
         float cuda_quantize_split[16];        // row-split shares, sum 1 (-ts 3,3,2)
+        bool skip_missing_splits;            // tolerate split files missing in the source (their tensors are expected to already exist quantized in the destination)
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
         void * custom_quants;                // pointer to vector containing custom quantization rules

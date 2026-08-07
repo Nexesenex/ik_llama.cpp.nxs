@@ -9234,6 +9234,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.cuda_quantize_n_devices          =*/ 0,
         /*.cuda_quantize_devices            =*/ {},
         /*.cuda_quantize_split              =*/ {},
+        /*.skip_missing_splits            =*/ false,
         /*.imatrix                        =*/ nullptr,
         /*.kv_overrides                   =*/ nullptr,
         /*.custom_quants                  =*/ nullptr,
