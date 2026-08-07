@@ -1507,6 +1507,15 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     };
 
     const auto tn = LLM_TN(model.arch);
+
+    if (out_split_count > 1) {
+        LLAMA_LOG_INFO("[%4s/%4s] (%4s/%4s) %37s - [%6s, %6s, %4s, %4s], type = %7s, size = %8s MiB -> %7s MiB\n",
+                "idx", "tot", "shd", "tot", "tensor name", "dim0", "dim1", "dim2", "dim3", "type", "before", "after");
+    } else {
+        LLAMA_LOG_INFO("[%4s/%4s] %37s - [%6s, %6s, %4s, %4s], type = %7s, size = %8s MiB -> %7s MiB\n",
+                "idx", "tot", "tensor name", "dim0", "dim1", "dim2", "dim3", "type", "before", "after");
+    }
+
     new_ofstream(0);
     for (int i = 0; i < ml.n_tensors; ++i) {
         auto weight = ml.get_weight(i);
@@ -1536,11 +1545,19 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             ml.load_data_for(tensor);
         }
 
-        LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
-               ++idx, ml.n_tensors,
-               ggml_get_name(tensor),
-               llama_format_tensor_shape(tensor).c_str(),
-               ggml_type_name(tensor->type));
+        if (out_split_count > 1) {
+            LLAMA_LOG_INFO("[%4d/%4d] (%4d/%4d) %37s - [%s], type = %7s, ",
+                   ++idx, ml.n_tensors, weight->idx + 1, out_split_count,
+                   ggml_get_name(tensor),
+                   llama_format_tensor_shape(tensor).c_str(),
+                   ggml_type_name(tensor->type));
+        } else {
+            LLAMA_LOG_INFO("[%4d/%4d] %37s - [%s], type = %7s, ",
+                   ++idx, ml.n_tensors,
+                   ggml_get_name(tensor),
+                   llama_format_tensor_shape(tensor).c_str(),
+                   ggml_type_name(tensor->type));
+        }
 
         bool quantize = tensor->type != GGML_TYPE_I32 &&
                         tensor->type != GGML_TYPE_I64 &&
@@ -1801,7 +1818,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 chunk_size_multiplier = num_rows;
             }
 
-            LLAMA_LOG_INFO("converting to %s .. ", ggml_type_name(new_type));
+            LLAMA_LOG_INFO("converting to %7s .. ", ggml_type_name(new_type));
             fflush(stdout);
 
             if (params->dry_run) {
@@ -1836,21 +1853,29 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                         fout.write((const char *) new_data, new_size);
                         zeros(fout, GGML_PAD(new_size, align) - new_size);
                         total_size_new += new_size;
-                        LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", cur_size/1024.0/1024.0, new_size/1024.0/1024.0);
+                        LLAMA_LOG_INFO("size = %8.2f MiB -> %7.2f MiB\n", cur_size/1024.0/1024.0, new_size/1024.0/1024.0);
                     } else {
                         gguf_set_tensor_type(ctx_outs[cur_split], name.c_str(), tensor->type);
                         gguf_set_tensor_data(ctx_outs[cur_split], name.c_str(), tensor->data, cur_size);
                         fout.write((const char *) tensor->data, cur_size);
                         zeros(fout, GGML_PAD(cur_size, align) - cur_size);
                         total_size_new += cur_size;
-                        LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", cur_size/1024.0/1024.0, cur_size/1024.0/1024.0);
+                        LLAMA_LOG_INFO("size = %8.2f MiB -> %7.2f MiB\n", cur_size/1024.0/1024.0, cur_size/1024.0/1024.0);
                     }
 
-                    LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
-                           ++idx, ml.n_tensors,
-                           ggml_get_name(tensor),
-                           llama_format_tensor_shape(tensor).c_str(),
-                           ggml_type_name(tensor->type));
+                    if (out_split_count > 1) {
+                        LLAMA_LOG_INFO("[%4d/%4d] (%4d/%4d) %37s - [%s], type = %7s, ",
+                               ++idx, ml.n_tensors, weight->idx + 1, out_split_count,
+                               ggml_get_name(tensor),
+                               llama_format_tensor_shape(tensor).c_str(),
+                               ggml_type_name(tensor->type));
+                    } else {
+                        LLAMA_LOG_INFO("[%4d/%4d] %37s - [%s], type = %7s, ",
+                               ++idx, ml.n_tensors,
+                               ggml_get_name(tensor),
+                               llama_format_tensor_shape(tensor).c_str(),
+                               ggml_type_name(tensor->type));
+                    }
 
                     new_type = params->extra_output_type;
                     chunk_size_multiplier = 1;
@@ -1860,7 +1885,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                     } else {
                         chunk_size_multiplier = num_rows;
                     }
-                    LLAMA_LOG_INFO("converting to %s .. ", ggml_type_name(new_type));
+                    LLAMA_LOG_INFO("converting to %7s .. ", ggml_type_name(new_type));
                     fflush(stdout);
 
                     do_quantize(nthread, tensor, new_type, f32_data, (char *)new_data, imatrix, workers,
@@ -1873,7 +1898,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 }
 
             }
-            LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", ggml_nbytes(tensor)/1024.0/1024.0, new_size/1024.0/1024.0);
+            LLAMA_LOG_INFO("size = %8.2f MiB -> %7.2f MiB\n", ggml_nbytes(tensor)/1024.0/1024.0, new_size/1024.0/1024.0);
         }
 
 QuantizationDone:;
