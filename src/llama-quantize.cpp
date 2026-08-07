@@ -1659,9 +1659,6 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         }
     };
     auto new_ofstream = [&](int index) {
-        if (params->dry_run) {
-            return;
-        }
         cur_split = index;
         GGML_ASSERT(ctx_outs[cur_split] && "Find uninitialized gguf_context");
         std::string fname = fname_out;
@@ -1679,6 +1676,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 fout = std::ofstream();
                 return;
             }
+        }
+
+        if (params->dry_run) {
+            return;
         }
 
         if (params->skip_first_shard) {
