@@ -108,6 +108,19 @@ void   vec_dot_iq3_kt_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void
 void   quantize_row_iq4_kt_ref(const float * GGML_RESTRICT x, block_iq4_kt  * GGML_RESTRICT y, int64_t k);
 void   quantize_row_iq4_kt(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 size_t quantize_iq4_kt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * use_data);
+
+// Look-up tables used by the IQ4_KT quantizer, exposed so that GPU backends can
+// replicate the scale search / refinement without re-building the codebook.
+struct iq4_kt_tables {
+    int             nfields;      // number of values per point (kGroupSize, always 4)
+    int             nval;         // number of LUT points (32768)
+    int             nclusters;    // number of clusters (625)
+    int             total_points; // sum of in-cluster point counts
+    const float   * values;       // nval*nfields floats
+    const int32_t * cluster_base; // (nclusters+1) prefix offsets into points
+    const int32_t * points;       // total_points indices into values
+};
+void iq4_kt_get_tables(int with_offset, struct iq4_kt_tables * out);
 void   dequantize_row_iq4_kt(const block_iq4_kt  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void   vec_dot_iq4_kt_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 

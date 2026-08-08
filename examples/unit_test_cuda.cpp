@@ -49,6 +49,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "ggml-cuda.h"
+#include "iqk/iqk_quantize.h"
 
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
@@ -634,6 +635,54 @@ static void fill_q6_0_boundary(float * dst, int64_t n) {
     }
 }
 
+// IQ4_KT edge blocks: same crafted patterns as fill_edge_cases but with bounded
+// magnitudes. The CPU reference quantize_row_iq4_kt_impl forms weights
+// 0.25*sigma2 + x*x, which for |x| >= ~1e20 overflows sumx2 to inf, making the
+// CPU AVX find_best_match produce NaN scores and assert (jbest = -1). Bounding
+// the magnitudes keeps the CPU reference alive while still covering zero rows,
+// single outliers, denormals, and the tiny-vs-large contrast.
+static void fill_edge_iq4_kt(float * dst, int64_t n) {
+    const int64_t nb = n/QK8_0;
+    const int64_t pat = 8;
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        float * xb = dst + ib*QK8_0;
+        switch (ib % pat) {
+            case 0: // all zeros (d == 0 -> id == 0 path)
+                for (int j = 0; j < QK8_0; ++j) xb[j] = 0.0f;
+                break;
+            case 1: // single outlier, rest tiny
+                for (int j = 0; j < QK8_0; ++j) xb[j] = 0.001f;
+                xb[g_rng() % QK8_0] = 1.0e4f;
+                break;
+            case 2: // values at exactly ±amax
+                for (int j = 0; j < QK8_0; ++j) xb[j] = (j & 1) ? 1000.0f : -1000.0f;
+                break;
+            case 3: // moderate .5 rounding ties
+                for (int j = 0; j < QK8_0; ++j) {
+                    const float v = (float)(j % 5) + 0.5f;
+                    xb[j] = (j & 1) ? -v : v;
+                }
+                break;
+            case 4: // denormals / subnormals
+                for (int j = 0; j < QK8_0; ++j) xb[j] = (j & 1) ? 1.0e-38f : 1.0e-30f;
+                break;
+            case 5: // large but finite magnitudes (w*x*q stays < FLT_MAX)
+                // The CPU find_best_scale accumulates w*x*q in fp32; with x up
+                // to ~1e4, w ~ x^2 ~ 1e8 and q ~ codebook (<=~700) so the
+                // products stay ~1e14, safely finite. 1e10+ magnitudes overflow
+                // and the CPU reference asserts.
+                for (int j = 0; j < QK8_0; ++j) xb[j] = (j & 1) ? 1000.0f : 1.0e4f;
+                break;
+            case 6: // mixed signs, small (amax from a negative value)
+                for (int j = 0; j < QK8_0; ++j) xb[j] = (j & 1) ? -0.4f : 0.1f;
+                break;
+            default: // moderate varied magnitudes
+                for (int j = 0; j < QK8_0; ++j) xb[j] = (float)((g_rng() % 2001) - 1000)/8.0f;
+                break;
+        }
+    }
+}
+
 // Synthetic importance matrix: positive weights spanning ~5 decades, with
 // every 11th column zero (exercises the w == 0 / suml2 == 0 paths).
 static void fill_imatrix(float * dst, int64_t n_per_row) {
@@ -820,6 +869,106 @@ static void test_slices(int device, int64_t ne0, int64_t ne1, int64_t ne2, const
 }
 
 // ---------------------------------------------------------------------------
+// IQ4_KT: SSE-parity (not byte-exact) comparison
+// ---------------------------------------------------------------------------
+//
+// quantize_row_iq4_kt_impl is not byte-exact reproducible on the GPU (see
+// ggml/src/ggml-cuda/quantize_iq4kt.cuh), so instead of requiring identical
+// bytes we require the packed result to drive the same per-row quantization
+// SSE error as the CPU reference. Both producers replay the exact same search
+// over the same two 32768-point codebooks, so their SSE should match closely.
+
+static void test_iq4_kt(const char * tag, int64_t nrows, int64_t n_per_row,
+        void (*fill)(float *, int64_t), int device, bool imatrix) {
+    if (n_per_row % QK_K != 0 || nrows <= 0) return;
+
+    const int64_t nelements = nrows*n_per_row;
+    std::vector<float> src(nelements);
+    fill(src.data(), nelements);
+
+    std::vector<float> imat;
+    if (imatrix) {
+        imat.resize(n_per_row);
+        fill_imatrix(imat.data(), n_per_row);
+    }
+    const float * imatrix_ptr = imatrix ? imat.data() : nullptr;
+
+    const size_t row_size = ggml_row_size(GGML_TYPE_IQ4_KT, n_per_row);
+    const size_t out_size = nrows*row_size;
+
+    std::vector<uint8_t> out_cpu(out_size);
+    std::vector<uint8_t> out_gpu(out_size);
+
+    // CPU: real llama-quantize path (quantize_iq4_kt).
+    const size_t nb_cpu = ggml_quantize_chunk(GGML_TYPE_IQ4_KT, src.data(), out_cpu.data(),
+            0, nrows, n_per_row, imatrix_ptr, nullptr);
+
+    // GPU: real CUDA path.
+    cudaSetDevice(device);
+    const size_t nb_gpu = ggml_cuda_quantize_iq4_kt(src.data(), out_gpu.data(), nrows, n_per_row, imatrix_ptr);
+
+    if (nb_cpu != out_size || nb_gpu != out_size) {
+        printf("  [FAIL] %s: size mismatch cpu=%zu gpu=%zu expected=%zu\n", tag, nb_cpu, nb_gpu, out_size);
+        ++g_failures;
+        return;
+    }
+
+    std::vector<float> yq(nelements);
+    int nbad = 0;
+    double sse_cpu_total = 0.0, sse_gpu_total = 0.0, max_ratio = 0.0;
+    for (int64_t r = 0; r < nrows; ++r) {
+        const float * xr = src.data() + r*n_per_row;
+        // dequantize_row_iq4_kt reads the row scale from the first float of
+        // the pointer it is given, so point it at the row start.
+        dequantize_row_iq4_kt((const block_iq4_kt *)(out_cpu.data() + r*row_size), yq.data(), n_per_row);
+        double sse_cpu = 0.0;
+        for (int64_t j = 0; j < n_per_row; ++j) {
+            const double d = (double)xr[j] - yq[j];
+            sse_cpu += d*d;
+        }
+        dequantize_row_iq4_kt((const block_iq4_kt *)(out_gpu.data() + r*row_size), yq.data(), n_per_row);
+        double sse_gpu = 0.0;
+        for (int64_t j = 0; j < n_per_row; ++j) {
+            const double d = (double)xr[j] - yq[j];
+            sse_gpu += d*d;
+        }
+        sse_cpu_total += sse_cpu;
+        sse_gpu_total += sse_gpu;
+        if (!std::isfinite(sse_cpu) || !std::isfinite(sse_gpu)) {
+            // Huge/tiny magnitude blocks can overflow the weights to inf on
+            // both paths; that is not a parity regression.
+            continue;
+        }
+        // Both producers replay the same near-optimal search over the same
+        // codebooks, so the GPU must not be meaningfully worse than the CPU
+        // reference. A single row can legitimately land a different near-tied
+        // weighted candidate (fp rounding flips an equal score), which can move
+        // the *unweighted* SSE of that row a lot for weight-like data. So the
+        // per-row guard is generous (1.5x); the aggregate guard is the real
+        // parity check.
+        if (sse_cpu < 1e-12) {
+            if (sse_gpu > 1e-9) ++nbad;
+        } else {
+            const double ratio = sse_gpu / sse_cpu;
+            max_ratio = std::max(max_ratio, ratio);
+            if (ratio > 1.5) ++nbad;
+        }
+    }
+
+    const double agg_ratio = sse_cpu_total > 0.0 ? sse_gpu_total/sse_cpu_total : 1.0;
+    if (nbad == 0 && agg_ratio <= 1.15) {
+        printf("  [OK]   %s iq4_kt nrows=%-6lld n_per_row=%-5lld %s : sse gpu=%.6g cpu=%.6g max_ratio=%.4f\n",
+               tag, (long long)nrows, (long long)n_per_row, imatrix ? "imatrix" : "no-imatrix",
+               sse_gpu_total, sse_cpu_total, max_ratio);
+    } else {
+        printf("  [FAIL] %s iq4_kt nrows=%-6lld n_per_row=%-5lld %s : %d bad rows, sse gpu=%.6g cpu=%.6g max_ratio=%.4f (agg=%.4f)\n",
+               tag, (long long)nrows, (long long)n_per_row, imatrix ? "imatrix" : "no-imatrix",
+               nbad, sse_gpu_total, sse_cpu_total, max_ratio, agg_ratio);
+        ++g_failures;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Device diagnostics
 // ---------------------------------------------------------------------------
 
@@ -942,6 +1091,24 @@ int main(int argc, char ** argv) {
             printf("\n--- Test: huge tensor (Llama-3.2-1B token_embd 128256x2048) ---\n");
             test_one("huge-token_embd", 128256, 2048, fill_random_uniform, devices[0], spec);
         }
+    }
+
+    printf("\n=== type iq4_kt (SSE parity, not byte-exact) ===\n");
+    {
+        static const int64_t npr[]   = { 256, 1024, 4096 };
+        static const int64_t nrows[] = { 8, 100 };
+        for (int64_t k = 0; k < 3; ++k) {
+            for (int64_t r = 0; r < 2; ++r) {
+                const int64_t n_per_row = npr[k];
+                const int64_t nrows_n   = std::min(nrows[r], cap/n_per_row);
+                for (int im = 0; im < 2; ++im) {
+                    test_iq4_kt("random-uniform", nrows_n, n_per_row, fill_random_uniform, devices[0], im != 0);
+                    test_iq4_kt("weight-like",    nrows_n, n_per_row, fill_random_weight_like, devices[0], im != 0);
+                }
+            }
+        }
+        test_iq4_kt("edge-cases", 128, 256, fill_edge_iq4_kt, devices[0], false);
+        test_iq4_kt("edge-cases", 128, 256, fill_edge_iq4_kt, devices[0], true);
     }
 
     printf("\n=== %s ===\n", g_failures == 0 ? "ALL PASS" : "FAILURES PRESENT");

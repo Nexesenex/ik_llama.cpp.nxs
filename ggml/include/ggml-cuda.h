@@ -115,6 +115,11 @@ GGML_API GGML_CALL size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, voi
         const float * imatrix);
 GGML_API GGML_CALL size_t ggml_cuda_quantize_q8_0_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix);
+// Quantize to IQ4_KT by replaying the IQK reference's scale sweep and codebook
+// search (see ggml/src/ggml-cuda/quantize_iq4kt.cuh). Not byte-exact: the CUDA
+// output targets the same per-row SSE error as the CPU reference.
+GGML_API GGML_CALL size_t ggml_cuda_quantize_iq4_kt(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix);
 #ifdef  __cplusplus
 }
 #endif

@@ -8663,6 +8663,10 @@ public:
     QuantizerIQKT(int num_clusters, int num_neighbours, int offset = 4096);
     const float * values() const { return m_values.data(); }
 
+    const std::vector<float>& values_vec() const { return m_values; }
+    const std::vector<std::vector<int>>& in_cluster() const { return m_in_cluster; }
+    int num_clusters() const { return (int)(m_clusters.size()/kGroupSize); }
+
     inline void find_best_match(float d, const float * xb, const float * weight, int * best_idx) const;
     inline std::pair<float, float> find_best_scale(const float * xb, const float * weight, const int * best_idx) const;
     inline float find_best_inverse_scale(const float * xb, const float * weight, const int * best_idx) const;
@@ -10299,6 +10303,41 @@ void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const f
         }
     }
 }
+}
+
+void iq4_kt_get_tables(int with_offset, struct iq4_kt_tables * out) {
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    static std::vector<float> values[2];
+    static std::vector<int32_t> cluster_base[2];
+    static std::vector<int32_t> points[2];
+    static struct iq4_kt_tables tables[2];
+    int idx = with_offset ? 1 : 0;
+    if (values[idx].empty()) {
+        auto& quantizer = with_offset ? iq4kt_quantizer(true) : iq4kt_quantizer();
+        values[idx] = quantizer.values_vec();
+        const auto& in_cluster = quantizer.in_cluster();
+        const int nclusters = quantizer.num_clusters();
+        cluster_base[idx].resize(nclusters+1);
+        cluster_base[idx][0] = 0;
+        int total = 0;
+        for (int ic = 0; ic < nclusters; ++ic) {
+            total += (int)in_cluster[ic].size();
+            cluster_base[idx][ic+1] = total;
+        }
+        points[idx].reserve(total);
+        for (int ic = 0; ic < nclusters; ++ic) {
+            for (int p : in_cluster[ic]) points[idx].push_back(p);
+        }
+        tables[idx].nfields      = QuantizerIQ4KT::kGroupSize;
+        tables[idx].nval         = QuantizerIQ4KT::kNumVal;
+        tables[idx].nclusters    = nclusters;
+        tables[idx].total_points = total;
+        tables[idx].values       = values[idx].data();
+        tables[idx].cluster_base = cluster_base[idx].data();
+        tables[idx].points       = points[idx].data();
+    }
+    *out = tables[idx];
 }
 
 void quantize_row_iq4_kt_ref(const float * GGML_RESTRICT x, block_iq4_kt * GGML_RESTRICT y, int64_t k) {
