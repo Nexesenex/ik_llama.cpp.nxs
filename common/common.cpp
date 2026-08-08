@@ -2358,6 +2358,19 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--orca-ping") {
+        CHECK_ARG
+        std::string arg_str = argv[i];
+        if (arg_str.rfind("orca-ping=", 0) == 0) {
+            arg_str = arg_str.substr(10);
+        }
+        params.orca_ping = string_split<int>(arg_str, ',');
+        if (params.orca_ping.empty()) {
+            fprintf(stderr, "error: --orca-ping requires at least one FMA length, e.g. --orca-ping 65536,98304\n");
+            invalid_param = true;
+        }
+        return true;
+    }
     if (arg == "--shark-path") {
         CHECK_ARG
         params.shark_path = argv[i];
@@ -3590,6 +3603,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
     options.push_back({ "win32",       "--shark [N]",                   "enable GPU clock elevation via gpushark (N = poller interval in ms, default 5)" });
     options.push_back({ "win32",       "--orca FMA1,FMA2,...",             "enable CUDA heartbeat warmup with per-GPU FMA length (non-TCC order)" });
+    options.push_back({ "win32",       "--orca-ping FMA1,FMA2,...",        "per-GPU poller ping strength, shorter than the warmup (~1 ms default)" });
     options.push_back({ "win32",       "--shark-path PATH",             "path to gpu_poller executable (default: %s)", params.shark_path.c_str() });
     options.push_back({ "win32",       "--shark-arg ARG",               "additional argument passed to gpushark (can be repeated)" });
     if (llama_supports_mlock()) {
@@ -4867,6 +4881,10 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
         // device in ggml's device order (A4000/TCC is skipped automatically).
         ggml_backend_cuda_set_hb_fmas(params.orca_fma.data(), params.orca_fma.size());
         ggml_backend_cuda_set_hb(true); // logs each WDDM GPU with its effective FMA
+    }
+    if (!params.orca_ping.empty()) {
+        // Poller ping strength per WDDM GPU (same positional mapping as --orca).
+        ggml_backend_cuda_set_hb_pings(params.orca_ping.data(), params.orca_ping.size());
     }
 #endif
 

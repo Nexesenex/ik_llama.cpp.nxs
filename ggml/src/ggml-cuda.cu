@@ -669,6 +669,13 @@ static int ggml_cuda_hb_fma[GGML_CUDA_MAX_DEVICES] = {0};
 
 static constexpr int GGML_CUDA_HB_FMA_DEFAULT = 262144;
 
+// Per-GPU FMA chain length for the poller ping (index = k-th WDDM GPU).
+// Stronger than a tickle but lighter than the warmup: ~1 ms of full-residency
+// load per poller cycle, so the GPU still gets idle gaps (no constant wear).
+static int ggml_cuda_hb_ping_fma[GGML_CUDA_MAX_DEVICES] = {0};
+
+static constexpr int GGML_CUDA_HB_PING_FMA_DEFAULT = 65536;
+
 // 16 blocks per SM (resident rating), 256 threads per block — full 2048-thread
 // residency with no over-subscription. The per-GPU FMA chain makes the
 // resident threads issue back-to-back for a deep, sustained load pulse at flat
@@ -6228,8 +6235,9 @@ GGML_CALL void ggml_backend_cuda_set_hb(bool val) {
             char pci_bus_id[16] = {0};
             cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), cuda_id);
             const int fma = ggml_cuda_hb_fma[w] > 0 ? ggml_cuda_hb_fma[w] : GGML_CUDA_HB_FMA_DEFAULT;
-            GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_hb: orca enabling heartbeat on GPU %d (%s, PCI %s), WDDM[%d]: %d FMA\n",
-                cuda_id, name, pci_bus_id, w, fma);
+            const int ping_fma = ggml_cuda_hb_ping_fma[w] > 0 ? ggml_cuda_hb_ping_fma[w] : GGML_CUDA_HB_PING_FMA_DEFAULT;
+            GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_hb: orca enabling heartbeat on GPU %d (%s, PCI %s), WDDM[%d]: %d FMA (ping %d)\n",
+                cuda_id, name, pci_bus_id, w, fma, ping_fma);
             w++;
         }
     } else {
@@ -6250,6 +6258,22 @@ GGML_CALL void ggml_backend_cuda_set_hb_fmas(const int * fmas, int n) {
             GGML_CUDA_LOG_WARN("%s: ignoring negative FMA length %d for device %d\n",
                 __func__, fmas[w], i);
             ggml_cuda_hb_fma[w] = GGML_CUDA_HB_FMA_DEFAULT;
+        }
+        w++;
+    }
+}
+
+GGML_CALL void ggml_backend_cuda_set_hb_pings(const int * fmas, int n) {
+    // Same positional WDDM mapping as set_hb_fmas: fmas[0] => first WDDM GPU.
+    int w = 0;
+    for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
+        if (ggml_cuda_info().devices[i].is_tcc) continue;
+        if (w >= n) break;
+        ggml_cuda_hb_ping_fma[w] = fmas[w];
+        if (fmas[w] < 0) {
+            GGML_CUDA_LOG_WARN("%s: ignoring negative ping FMA length %d for device %d\n",
+                __func__, fmas[w], i);
+            ggml_cuda_hb_ping_fma[w] = GGML_CUDA_HB_PING_FMA_DEFAULT;
         }
         w++;
     }
@@ -6280,13 +6304,15 @@ GGML_CALL void ggml_backend_cuda_set_hb_active(bool val) {
     }
 }
 
-// Fire a lightweight warmup burst on every non-TCC GPU. This is the "real work"
+// Fire a warmup burst on every non-TCC GPU. This is the "real work"
 // companion to the NVAPI poller: each call puts a GPC kernel in the work queue,
-// so polling reads become actual engine activity. Uses the same cached streams,
-// but is intentionally cheap (single block per SM, short chain) so an external
-// loop can call it many times per second. Fire-and-forget.
+// so polling reads become actual engine activity. Uses the same cached streams
+// and full-residency grid as the heartbeat, but with a shorter per-GPU chain
+// (default ~1 ms vs ~5 ms for the warmup) so the poller cycle still leaves
+// idle gaps instead of constant load. Fire-and-forget.
 GGML_CALL void ggml_backend_cuda_ping(void) {
     const auto & info = ggml_cuda_info();
+    int w = 0;
     for (int i = 0; i < info.device_count; ++i) {
         if (info.devices[i].is_tcc) continue;
         int cuda_id = info.cuda_device_id[i];
@@ -6296,8 +6322,10 @@ GGML_CALL void ggml_backend_cuda_ping(void) {
             cudaStreamCreateWithFlags(&ggml_cuda_hb_streams[i], cudaStreamNonBlocking);
         }
         int nsm = std::max(info.devices[i].nsm, 1);
+        const int fma = ggml_cuda_hb_ping_fma[w] > 0 ? ggml_cuda_hb_ping_fma[w] : GGML_CUDA_HB_PING_FMA_DEFAULT;
+        w++;  // w = WDDM position of this device (TCC devices do not consume a slot)
         cudaSetDevice(cuda_id);
-        // One block per SM, 256 threads, short chain: a real but tiny burst.
-        k_hb_warmup<<<nsm, 256, 0, ggml_cuda_hb_streams[i]>>>(4096);
+        // Full 2048-thread residency (16 blocks/SM x 256 threads), shorter chain.
+        k_hb_warmup<<<nsm * 16, 256, 0, ggml_cuda_hb_streams[i]>>>(fma);
     }
 }

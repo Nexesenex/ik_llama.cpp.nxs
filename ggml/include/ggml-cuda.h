@@ -75,6 +75,11 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_hb(bool val);
 // each WDDM GPU with the effective FMA). Devices past the end keep defaults.
 GGML_API GGML_CALL void ggml_backend_cuda_set_hb_fmas(const int * fmas, int n);
 
+// Set per-GPU FMA chain length for the poller ping (ggml_backend_cuda_ping()).
+// Same positional non-TCC (WDDM) mapping and semantics as set_hb_fmas; shorter
+// than the warmup by default (~1 ms), so the poller cycle keeps idle gaps.
+GGML_API GGML_CALL void ggml_backend_cuda_set_hb_pings(const int * fmas, int n);
+
 // Get current heartbeat setting
 GGML_API GGML_CALL bool ggml_backend_cuda_get_hb(void);
 

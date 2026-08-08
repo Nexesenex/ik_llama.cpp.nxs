@@ -159,9 +159,10 @@ void NvapiPoller::thread_func() {
 
     while (should_run.load()) {
 #ifdef GGML_USE_CUDA
-        // Turn the driver-query chatter into real GPC activity: a tiny warmup
-        // kernel per WDDM GPU on each cycle. Cheap (one 4096-FMA block/SM),
-        // fire-and-forget, complements the FMA-length tuning of the heartbeat.
+        // Turn the driver-query chatter into real GPC activity: a full-residency
+        // warmup burst per WDDM GPU on each cycle, with per-GPU FMA length
+        // (--orca-ping, default ~1 ms). Fire-and-forget, complements the FMA-length
+        // tuning of the heartbeat and leaves idle gaps between cycles.
         ggml_backend_cuda_ping();
 #endif
 

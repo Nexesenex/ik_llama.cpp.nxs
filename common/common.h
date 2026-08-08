@@ -402,6 +402,8 @@ struct gpt_params {
     // CUDA heartbeat keep-alive - warm up WDDM GPUs during TG to keep clocks elevated (Windows only)
     // FMA chain length per non-TCC (WDDM) GPU, in device order. Empty = disabled.
     std::vector<int> orca_fma;     // e.g. --orca 262144,393216 : GPU0=262144 FMA, GPU1=393216 FMA
+    // Poller ping strength per WDDM GPU (same mapping as orca_fma). Default ~1 ms.
+    std::vector<int> orca_ping;    // e.g. --orca-ping 65536,98304 : stronger ping per cycle
 
     std::vector<std::string> in_files;     // all input files
     std::vector<std::string> antiprompt;   // strings upon which more user input is prompted (a.k.a. reverse prompts)
