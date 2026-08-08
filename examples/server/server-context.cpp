@@ -32,7 +32,7 @@ static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, lla
 
     const size_t n = llama_state_seq_get_data(ctx, ckpt.data.data(), ckpt.data.size(), id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
     if (n != checkpoint_size) {
-        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
+        GGML_ABORT("ckpt size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
     }
 }
 
@@ -388,7 +388,7 @@ void server_context::init() {
     bool reuse_forced_off = false;
     if (llama_model_is_openpangu(model) && params_base.has_mtp &&
         (params_base.ctx_checkpoints_n > 0 || params_base.cache_ram_mib != 0)) {
-        LLAMA_LOG_WARN("context checkpoints and prompt cache are disabled for openPangu while MTP is enabled: the MTP companion keeps its own conv slot, which no saved target state carries\n");
+        LLAMA_LOG_WARN("ckpt and prompt cache are disabled for openPangu while MTP is on: the MTP companion keeps its own conv slot, which no saved target state carries\n");
         params_base.ctx_checkpoints_n = 0;
         params_base.cache_ram_mib    = 0;
         reuse_forced_off = true;
@@ -1261,7 +1261,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             send_error(task,
                 "Error: speculative n_max=" + std::to_string(slot.params.speculative.get_max_stage_n_max()) +
                 " exceeds the recurrent speculative startup limit of " + std::to_string(params_base.speculative.get_max_stage_n_max()) +
-                "; restart the server with a higher n_max inside the configured --spec-type stages to reserve checkpoint capacity",
+                "; restart the server with a higher n_max inside the configured --spec-type stages to reserve ckpt capacity",
                     ERROR_TYPE_INVALID_REQUEST);
             return false;
         }
@@ -3778,7 +3778,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     SLT_ERR(slot, "checkpoint rewind to %d was refused; reprocessing from scratch\n", it->pos_max + 1);
                     do_reset = true;
                 } else if (n != checkpoint_size) {
-                    SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float)checkpoint_size / 1024 / 1024);
+                    SLT_ERR(slot, "failed to restore ckpt (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float)checkpoint_size / 1024 / 1024);
                     do_reset = true;
                     //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
                 } else if (!verify_restored_checkpoint(*it, slot, "")) {
@@ -3802,7 +3802,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
 
                     slot.checkpoint_pos = it->pos_max;
 
-                    SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
+                    SLT_WRN(slot, "restored ckpt took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
                 }
             }
 
@@ -3837,7 +3837,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 const auto & cur = *it;
                 if (cur.pos_max > pos_min_thold) {
                     ++n_erased;
-                    SLT_WRN(slot, "erased invalidated context checkpoint %d of %d (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
+                    SLT_WRN(slot, "erased invalidated ckpt %d of %d (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
                         n_erased, params_base.ctx_checkpoints_n, cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024);
                     it = slot.server_cached_prompt.checkpoints.erase(it);
                 } else {
@@ -3953,7 +3953,7 @@ bool server_context::create_checkpoint(server_slot & slot) {
                 it = evict_checkpoint_by_streamlined(slot, slot.server_cached_prompt.checkpoints);
             }
             const auto & cur = *it;
-            SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+            SLT_WRN(slot, "erasing old ckpt (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                 cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024);
             slot.server_cached_prompt.checkpoints.erase(it);
         }
@@ -3961,7 +3961,7 @@ bool server_context::create_checkpoint(server_slot & slot) {
         auto & cur = slot.server_cached_prompt.checkpoints.emplace_back();
         server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), checkpoint_pos_min, pos_max, slot.n_past_offset);
 
-        SLT_WRN(slot, "created context checkpoint %d of %d (timestamp=%lld, pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, took %.2f ms)\n",
+        SLT_WRN(slot, "add ckpt %d of %d (time=%lld, pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, took %.2f ms)\n",
             (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, (int64_t)time(nullptr), cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024,
             (ggml_time_us() - t_start) / 1000.0);
     }
@@ -5251,7 +5251,7 @@ void server_context::update_slots() {
             slot.i_batch_dft.clear();
             slot.n_past = slot.cache_tokens.n_tokens();
             slot.spec_target_only = false;
-            SLT_WRN(slot, "%s", "spec checkpoint unavailable; removed draft rows and continuing root-only\n");
+            SLT_WRN(slot, "%s", "spec ckpt unavailable; removed draft rows and continuing root-only\n");
         };
 
         for (auto & slot : slots) {
