@@ -1982,12 +1982,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-ctk" || arg == "--cache-type-k") {
-        CHECK_ARG
         params.cache_type_k = argv[++i];
         return true;
     }
     if (arg == "-ctv" || arg == "--cache-type-v") {
-        CHECK_ARG
         params.cache_type_v = argv[++i];
         return true;
     }
