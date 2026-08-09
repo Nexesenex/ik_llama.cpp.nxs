@@ -2055,7 +2055,7 @@ size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread
     }
 #ifdef fixme__AVX2__
     if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && q->ne[1] % 8 == 0 && k->ne[1] % 32 == 0) {
-        size += k->ne[0] * k->ne[1] * sizeof(float); // repacked K converted to f16
+        size += k->ne[0] * k->ne[1] * sizeof(float); // repacked K converted to f32
         size += 32 * q->ne[1] * sizeof(float) * nthread;
     }
 #endif
@@ -2279,7 +2279,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
                 }
                 for (int iq1 = 0; iq1 < (int)q->ne[1]; iq1 += 8) {
                     iqk_mul_f32_f32_r<8>(k->ne[0], 32, q->nb[1]/sizeof(float), k_repacked,
-                            (const float *)(this_q + iq1*q->nb[1]), kq_local);
+                            (const float *)(this_q + iq1*q->nb[1]), kq_local + 32*iq1);
                 }
                 __m256 acc[4];
                 if (m->type == GGML_TYPE_F32) {
