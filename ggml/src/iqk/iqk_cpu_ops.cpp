@@ -1133,7 +1133,19 @@ inline void iqk_blend_row(int n, int nidx, const Data * x, const Idx * idx, Data
         b = GGML_FP32_TO_BF16(c);
     }
     if (y != x) {
-        for (int j = 0; j < n; ++j) y[j] = x[j];
+        int j = 0;
+#if defined(__AVX2__)
+        if constexpr (sizeof(Data) == 4) {
+            for (; j + 7 < n; j += 8) {
+                _mm256_storeu_ps((float *)(y + j), _mm256_loadu_ps((const float *)(x + j)));
+            }
+        } else if constexpr (sizeof(Data) == 2) {
+            for (; j + 15 < n; j += 16) {
+                _mm256_storeu_si256((__m256i *)(y + j), _mm256_loadu_si256((const __m256i *)(x + j)));
+            }
+        }
+#endif
+        for (; j < n; ++j) y[j] = x[j];
     }
     for (int j = 0; j < nidx; ++j) y[idx[j]] = b;
 }
