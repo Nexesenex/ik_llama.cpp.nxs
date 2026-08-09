@@ -73,6 +73,26 @@ inline std::vector<std::pair<float,int>> & get_work_buffer(size_t size) {
     return buffer;
 
 }
+#if defined(__AVX2__)
+inline void iqk_fill_pairs(int n, int isrc, int idst, const float * src, std::pair<float,int> * aux) {
+    int j = 0;
+    auto vindex = _mm256_setr_epi32(isrc, isrc + 1, isrc + 2, isrc + 3, isrc + 4, isrc + 5, isrc + 6, isrc + 7);
+    for (; j + 7 < n; j += 8) {
+        auto vf  = _mm256_loadu_ps(src + isrc + j);
+        auto vi  = _mm256_castsi256_ps(vindex);
+        auto t0  = _mm256_unpacklo_ps(vf, vi);
+        auto t1  = _mm256_unpackhi_ps(vf, vi);
+        _mm256_storeu_ps((float *)(aux + idst + j),     _mm256_permute2f128_ps(t0, t1, 0x20));
+        _mm256_storeu_ps((float *)(aux + idst + j + 4), _mm256_permute2f128_ps(t0, t1, 0x31));
+        vindex = _mm256_add_epi32(vindex, _mm256_set1_epi32(8));
+    }
+    for (; j < n; ++j) aux[idst + j] = { src[isrc + j], isrc + j };
+}
+#else
+inline void iqk_fill_pairs(int n, int isrc, int idst, const float * src, std::pair<float,int> * aux) {
+    for (int j = 0; j < n; ++j) aux[idst + j] = { src[isrc + j], isrc + j };
+}
+#endif
 #ifdef __ARM_NEON
 inline float32x4_t v_sigmoid(float32x4_t x) {
     const float32x4_t one = vdupq_n_f32(1.0f);
@@ -250,10 +270,10 @@ void iqk_grouped_top_k(ggml_tensor * dst, int ith, int nth) {
             for (int ig = 0; ig < n_top_groups; ++ig) {
                 int i0 = n_per_group * ig;
                 int j0 = n_per_group * groups[ig].second;
-                for (int j = 0; j < n_per_group; ++j) aux[i0 + j] = { data[j0 + j], j0 + j };
+                iqk_fill_pairs(n_per_group, j0, i0, data, aux.data());
             }
         } else {
-            for (int j = 0; j < ne00; ++j) aux[j] = { data[j], j };
+            iqk_fill_pairs(ne00, 0, 0, data, aux.data());
         }
         if (ne0 < n_top_groups*n_per_group) {
             std::partial_sort(aux.begin(), aux.begin() + ne0, aux.begin() + n_top_groups*n_per_group, std::greater<std::pair<float,int>>{});
@@ -285,7 +305,7 @@ void iqk_argsort(ggml_tensor * dst, int ith, int nth) {
 
     for (int ir = first; ir < last; ++ir) {
         auto data = (const float *)((const char *)src->data + ir*src->nb[1]);
-        for (int j = 0; j < ne00; ++j) aux[j] = {data[j], j};
+        iqk_fill_pairs(ne00, 0, 0, data, aux.data());
         if (nk < ne00) {
             if (order == GGML_SORT_ORDER_DESC) {
                 std::partial_sort(aux.begin(), aux.begin() + nk, aux.begin() + ne00, std::greater<std::pair<float,int>>{});
@@ -348,7 +368,16 @@ void iqk_bailingmoev2_experts(struct ggml_tensor * dst, struct ggml_tensor * top
         auto weights = (float *)((char *)dst->data + ir*dst->nb[2]);
         auto ids = (int32_t *)((char *)topk->data + ir*topk->nb[1]);
         if (ne0 > n_per_group*n_top_groups) {
-            for (int j = 0; j < ne0; ++j) {
+            int j = 0;
+#if defined(__AVX2__)
+            auto vindex = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+            for (; j + 7 < ne0; j += 8) {
+                _mm256_storeu_ps(weights + j, _mm256_loadu_ps(values + j));
+                _mm256_storeu_si256((__m256i *)(ids + j), vindex);
+                vindex = _mm256_add_epi32(vindex, _mm256_set1_epi32(8));
+            }
+#endif
+            for (; j < ne0; ++j) {
                 weights[j] = values[j];
                 ids[j]     = j;
             }
@@ -363,10 +392,10 @@ void iqk_bailingmoev2_experts(struct ggml_tensor * dst, struct ggml_tensor * top
             for (int ig = 0; ig < n_top_groups; ++ig) {
                 int i0 = n_per_group * ig;
                 int j0 = n_per_group * groups[ig].second;
-                for (int j = 0; j < n_per_group; ++j) aux[i0 + j] = { biased_values[j0 + j], j0 + j };
+                iqk_fill_pairs(n_per_group, j0, i0, biased_values, aux.data());
             }
         } else {
-            for (int j = 0; j < ne00; ++j) aux[j] = { biased_values[j], j };
+            iqk_fill_pairs(ne00, 0, 0, biased_values, aux.data());
         }
         std::partial_sort(aux.begin(), aux.begin() + ne0, aux.begin() + n_top_groups*n_per_group, std::greater<std::pair<float,int>>{});
         for (int j = 0; j < ne0; ++j) {
@@ -446,7 +475,7 @@ void iqk_openai_experts(struct ggml_tensor * topk, struct ggml_tensor * softmax,
 
     for (int ir = first; ir < last; ++ir) {
         auto data = (const float *)((const char *)probs->data + ir*probs->nb[1]);
-        for (int j = 0; j < ne00; ++j) aux[j] = { data[j], j };
+        iqk_fill_pairs(ne00, 0, 0, data, aux.data());
         if (ne0 < ne00) {
             std::partial_sort(aux.begin(), aux.begin() + ne0, aux.begin() + ne00, std::greater<std::pair<float,int>>{});
         } else {
