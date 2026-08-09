@@ -440,11 +440,25 @@ void iqk_openai_experts(struct ggml_tensor * topk, struct ggml_tensor * softmax,
         auto weights = (float *)((char *)softmax->data + ir*softmax->nb[1]);
         auto ids = (int32_t *)((char *)topk->data + ir*topk->nb[1]);
         float max = aux.front().first;
+        int j1 = 0;
+#if defined(__AVX2__)
+        auto vmax  = _mm256_set1_ps(max);
+        auto vsum  = _mm256_setzero_ps();
+        for (; j1 + 7 < ne0; j1 += 8) {
+            auto vindex = _mm256_setr_epi32(j1, j1 + 1, j1 + 2, j1 + 3, j1 + 4, j1 + 5, j1 + 6, j1 + 7);
+            auto w = v_expf(_mm256_sub_ps(_mm256_i32gather_ps((const float *)&aux[j1].first, vindex, 8), vmax));
+            vsum = _mm256_add_ps(vsum, w);
+            _mm256_storeu_ps(weights + j1, w);
+            _mm256_storeu_si256((__m256i *)(ids + j1), _mm256_i32gather_epi32((const int *)&aux[j1].second, vindex, 8));
+        }
+        float sum = hsum_float_8(vsum);
+#else
         float sum = 0;
-        for (int j = 0; j < ne0; ++j) {
-            weights[j] = expf(aux[j].first - max);
-            ids[j]     = aux[j].second;
-            sum += weights[j];
+#endif
+        for (; j1 < ne0; ++j1) {
+            weights[j1] = expf(aux[j1].first - max);
+            ids[j1]     = aux[j1].second;
+            sum += weights[j1];
         }
         GGML_ASSERT(sum > 0);
         float norm = 1/sum;
