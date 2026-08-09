@@ -1913,6 +1913,52 @@ void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_in
     // -inf values if present are at the end, and I saw no real performance difference.
     int ngood = 0, ninf = 0;
     float max = values[0], min = values[0];
+#ifdef __AVX2__
+    // Process 8 values at a time: track max/min of the good values and the -inf count
+    // in SIMD. Groups that are entirely good are compacted (values + original indices)
+    // with vectorized stores; mixed groups fall back to the scalar path.
+    {
+        auto vninf = _mm256_set1_ps(-INFINITY);
+        auto vpinf = _mm256_set1_ps( INFINITY);
+        auto vmax = vninf;
+        auto vmin = vpinf;
+        int j = 0;
+        for (; j + 8 <= nval; j += 8) {
+            auto v = _mm256_loadu_ps(values + j);
+            auto good = _mm256_cmp_ps(v, vninf, _CMP_GT_OQ);
+            vmax = _mm256_max_ps(vmax, v);
+            vmin = _mm256_min_ps(vmin, _mm256_blendv_ps(vpinf, v, good));
+            if (_mm256_movemask_ps(good) == 0xff) {
+                _mm256_storeu_ps(values + ngood, v);
+                auto vi = _mm256_add_epi32(_mm256_set1_epi32(j), _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0));
+                _mm256_storeu_si256((__m256i *)(idx + ngood), vi);
+                ngood += 8;
+            } else {
+                for (int k = 0; k < 8; ++k) {
+                    if (float vv = values[j + k]; vv > -INFINITY) {
+                        values[ngood] = vv;
+                        idx[ngood++] = j + k;
+                    } else {
+                        idx_inf[ninf++] = j + k;
+                    }
+                }
+            }
+        }
+        max = hmax_f32_8(vmax);
+        min = hmin_f32_8(vmin);
+        for (; j < nval; ++j) {
+            float v = values[j];
+            if (v > -INFINITY) {
+                values[ngood] = v;
+                idx[ngood++] = j;
+                max = std::max(max, v);
+                min = std::min(min, v);
+            } else {
+                idx_inf[ninf++] = j;
+            }
+        }
+    }
+#else
     for (int j = 0; j < nval; ++j) {
         if (float v = values[j]; v > -INFINITY) {
             values[ngood] = v;
@@ -1923,6 +1969,7 @@ void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_in
             idx_inf[ninf++] = j;
         }
     }
+#endif
 #endif
     if (ngood <= ntop) {
         for (int j = ngood; j < ntop; ++j) idx[j] = idx_inf[j-ngood];
@@ -1965,6 +2012,41 @@ void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_in
         if (sum >= ntop) break;
     }
     int nhave = 0, nlast = 0;
+#ifdef __AVX2__
+    // Classify 8 rows at a time: skip whole groups that land past the last bucket
+    // (the common case when ntop << nval) and store whole groups that all qualify
+    // with vectorized stores.
+    {
+        auto vlb = _mm256_set1_epi32(last_bucket);
+        int j = 0;
+        for (; j + 8 <= ngood; j += 8) {
+            auto vaux = _mm256_loadu_si256((const __m256i *)(idx_aux + j));
+            int mlt = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpgt_epi32(vlb, vaux)));
+            int meq = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(vaux, vlb)));
+            if (mlt == 0xff) {
+                _mm256_storeu_si256((__m256i *)(idx + nhave), _mm256_loadu_si256((const __m256i *)(idx + j)));
+                nhave += 8;
+            } else if ((mlt | meq) == 0) {
+                continue;
+            } else {
+                for (int k = 0; k < 8; ++k) {
+                    if (idx_aux[j + k] < last_bucket) {
+                        idx[nhave++] = idx[j + k];
+                    } else if (idx_aux[j + k] == last_bucket) {
+                        idx_inf[nlast++] = idx[j + k];
+                    }
+                }
+            }
+        }
+        for (; j < ngood; ++j) {
+            if (idx_aux[j] < last_bucket) {
+                idx[nhave++] = idx[j];
+            } else if (idx_aux[j] == last_bucket) {
+                idx_inf[nlast++] = idx[j];
+            }
+        }
+    }
+#else
     for (int j = 0; j < ngood; ++j) {
         if (idx_aux[j] < last_bucket) {
             idx[nhave++] = idx[j];
@@ -1972,6 +2054,7 @@ void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_in
             idx_inf[nlast++] = idx[j];
         }
     }
+#endif
     int n_extra = ntop - nhave;
     auto compare = [values] (int l, int r) {
         return values[l] > values[r];
