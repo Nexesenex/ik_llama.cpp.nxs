@@ -2053,7 +2053,7 @@ size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread
         auto row_size_q = ggml_row_size(tt.vec_dot_type, q->ne[0]);
         size = row_size_q * q->ne[1] * q->ne[2];
     }
-#ifdef fixme__AVX2__
+#ifdef __AVX2__
     if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && q->ne[1] % 8 == 0 && k->ne[1] % 32 == 0) {
         size += k->ne[0] * k->ne[1] * sizeof(float); // repacked K converted to f32
         size += 32 * q->ne[1] * sizeof(float) * nthread;
@@ -2256,7 +2256,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     if (k->ne[1] % 32 != 0) return false; // we can assume cache size is a multiple of at least 32
     int n32 = k->ne[1] / 32;
 
-#ifdef fixme__AVX2__
+#ifdef __AVX2__
     if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && q->ne[1] % 8 == 0) {
         auto k_repacked_all = (float *)work_buffer;
         //auto kq = (float *)work_buffer;
