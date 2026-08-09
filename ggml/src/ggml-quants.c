@@ -3766,26 +3766,26 @@ size_t quantize_q5_1(const float * restrict src, void * restrict dst, int64_t nr
 static void quantize_row_q6_0_impl(const float * restrict x, block_q6_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK6_0 == 32, "QK6_0 must be 32");
 
-    if (!quant_weights) {
-        quantize_row_q6_0_ref(x, y, n_per_row);
-        return;
-    }
-
     float weight[QK6_0];
     int8_t L[QK6_0];
 
-    float sum_x2 = 0;
-    for (int j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
-    float sigma2 = sum_x2/n_per_row;
+    float sigma2 = 0;
+    if (quant_weights) {
+        float sum_x2 = 0;
+        for (int j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
+        sigma2 = sum_x2/n_per_row;
+    }
 
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0);
 
     const int64_t nb = n_per_row/QK6_0;
     for (int ib = 0; ib < nb; ++ib) {
         const float * xb = x + QK6_0 * ib;
-        {
+        if (quant_weights) {
             const float * qw = quant_weights + QK6_0 * ib;
             for (int j = 0; j < QK6_0; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+        } else {
+            for (int j = 0; j < QK6_0; ++j) weight[j] = xb[j]*xb[j];
         }
         float d = make_qx_quants(QK6_0, 32, xb, L, 1, weight);
         y[ib].d = GGML_FP32_TO_FP16(d * fudge);
