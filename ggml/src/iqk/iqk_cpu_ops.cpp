@@ -46,10 +46,25 @@ inline float group_score_max(int n_per_group, const float * data) {
 }
 // Actual top-nk group score: sum of top-nk probabilities in the group
 inline float group_score(int n_per_group, int nk, const float * data, float * aux) {
-    for (int j = 0; j < n_per_group; ++j) aux[j] = data[j];
+    int j = 0;
+#if defined(__AVX2__)
+    for (; j + 7 < n_per_group; j += 8) {
+        _mm256_storeu_ps(aux + j, _mm256_loadu_ps(data + j));
+    }
+#endif
+    for (; j < n_per_group; ++j) aux[j] = data[j];
     std::partial_sort(aux, aux + nk, aux + n_per_group, std::greater<float>{});
+    j = 0;
+#if defined(__AVX2__)
+    auto vsum = _mm256_setzero_ps();
+    for (; j + 7 < nk; j += 8) {
+        vsum = _mm256_add_ps(vsum, _mm256_loadu_ps(aux + j));
+    }
+    float sum = hsum_float_8(vsum);
+#else
     float sum = 0;
-    for (int j = 0; j < nk; ++j) sum += aux[j];
+#endif
+    for (; j < nk; ++j) sum += aux[j];
     return sum;
 }
 inline std::vector<std::pair<float,int>> & get_work_buffer(size_t size) {
