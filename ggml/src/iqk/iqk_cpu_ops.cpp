@@ -1249,11 +1249,22 @@ void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth) {
             auto x = (const ggml_half *)((const char *)mask->data + mask->nb[1]*i1 + mask->nb[2]*i2 + mask->nb[3]*i3);
             auto y = (ggml_half *)((char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
             if (i1 < topk->ne[1]) {
-                for (int j = 0; j < n; ++j) y[j] = hinf;
+                int j = 0;
+#if defined(__AVX2__)
+                auto vhinf = _mm256_set1_epi16((int16_t)hinf);
+                for (; j + 15 < n; j += 16) _mm256_storeu_si256((__m256i *)(y + j), vhinf);
+#endif
+                for (; j < n; ++j) y[j] = hinf;
                 for (int j = 0; j < nidx; ++j) y[idx[j]] = hzero;
                 iqk_add_f16(n, x, y);
             } else {
-                for (int j = 0; j < n; ++j) y[j] = x[j];
+                int j = 0;
+#if defined(__AVX2__)
+                for (; j + 15 < n; j += 16) {
+                    _mm256_storeu_si256((__m256i *)(y + j), _mm256_loadu_si256((const __m256i *)(x + j)));
+                }
+#endif
+                for (; j < n; ++j) y[j] = x[j];
             }
         } else {
             auto x = (const float *)((const char *)mask->data + mask->nb[1]*i1 + mask->nb[2]*i2 + mask->nb[3]*i3);
