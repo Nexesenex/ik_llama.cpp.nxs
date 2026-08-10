@@ -226,6 +226,15 @@ target_include_directories(test-quant-scale PRIVATE ${PROJECT_SOURCE_DIR}/ggml/s
 llama_target_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_target_and_test(test-autorelease.cpp        LABEL "model")
 
+llama_target_and_test(test-swa-ring-state.cpp LABEL "model")
+target_include_directories(test-swa-ring-state PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+llama_target_and_test(test-swa-ring-multiseq.cpp LABEL "model")
+target_include_directories(test-swa-ring-multiseq PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+llama_target_and_test(test-swa-ring-reuse.cpp LABEL "model")
+target_include_directories(test-swa-ring-reuse PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
