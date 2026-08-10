@@ -64,6 +64,7 @@ struct mla_pp_params {
     bool force_flash_f32 = false;
 };
 
+bool can_use_kv_swa_reduction(const llama_cparams & cparams, const llama_kv_cache & kv);
 struct llm_build_context {
     const llama_model    & model;
           llama_context  & lctx;
