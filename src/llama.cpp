@@ -687,7 +687,7 @@ static void why_not_reuse_previous(const llama_batch & u_batch, const llama_cont
                 (int64_t) kv_self_used.live_swa() + u_batch.n_tokens, kv_self_used.sink_rows,
                 u_batch.n_tokens, kv_self_used.window_swa,
                 llama_kv_cache::get_padding(ctx.cparams.flash_attn));
-        if (view.w_view != the_prev->swa_w_view || view.win_off != the_prev->swa_win_off) {
+        if (view.w_view != the_prev->swa_w_view) {
             printf("    SWA view is not the same\n"); return;
         }
     }
@@ -718,7 +718,7 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch, uint64_t seq_fi
                 (int64_t) kv_self_used.live_swa() + u_batch.n_tokens, kv_self_used.sink_rows,
                 u_batch.n_tokens, kv_self_used.window_swa,
                 llama_kv_cache::get_padding(cparams.flash_attn));
-        if (view.w_view != the_prev->swa_w_view || view.win_off != the_prev->swa_win_off) {
+        if (view.w_view != the_prev->swa_w_view) {
             return false;
         }
     }
@@ -5844,8 +5844,10 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                         "SWA window view must be engaged when KQ_mask_swa_win is present");
                 GGML_ASSERT(built.n_kv == n_kv && built.n_tokens == n_tokens &&
                         built.pad == pad && built.w_view == view.w_view &&
-                        built.win_off == view.win_off &&
                         "SWA window view reuse-key mismatch");
+                // The window offset advances once per token in compacted mode; it is not
+                // baked into the graph (only the view width is), so refresh it here.
+                lctx.swa_window_view.win_off = view.win_off;
 
                 const int64_t W_view  = built.w_view;
                 const int64_t win_off = built.win_off;
