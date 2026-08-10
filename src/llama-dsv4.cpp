@@ -843,45 +843,140 @@ static void dsv4_set_input_tensor(ggml_tensor * tensor, const std::vector<T> & v
     ggml_backend_tensor_set(tensor, values.data(), 0, values.size()*sizeof(T));
 }
 
+// Uploads the per-stream KQ mask. On graph-reuse decode the mask tensor is
+// reuploaded from scratch every step, which moves width*height entries even
+// though only the newly-unmasked prefix (the entries in [prev, n_visible) of
+// the freshly written row) actually changed. This routine keeps the host-side
+// staging buffer persistent and only transfers the cells that differ:
+//
+//  * the tensor device buffer is refreshed whenever it is reallocated (a graph
+//    rebuild), detected by the tensor->data identity
+//  * each row is only ever a causal prefix of zeros on top of an -inf tail, so
+//    a row that merely grows keeps its -inf tail intact and needs only its new
+//    zero prefix uploaded
+//  * a row whose visibility shrank (rewound/reshuffled stream) has its whole
+//    intact row rewritten so the stale zero entries revert to -inf
+template<typename T>
+static void dsv4_set_mask_tensor_impl(llama_context & lctx, ggml_tensor * tensor,
+        const std::vector<int32_t> & n_visible, int32_t n_tokens) {
+    const int64_t width  = tensor->ne[0];
+    const int64_t height = tensor->ne[1];
+    const size_t elem_size = sizeof(T);
+    const size_t row_bytes = (size_t) width * elem_size;
+    const size_t need = row_bytes * (size_t) height;
+    const T h_inf = [&]() {
+        if constexpr (std::is_same_v<T, ggml_fp16_t>) {
+            return ggml_fp32_to_fp16(-INFINITY);
+        } else {
+            return (T) -INFINITY;
+        }
+    }();
+    const T h_zero = [&]() {
+        if constexpr (std::is_same_v<T, ggml_fp16_t>) {
+            return ggml_fp32_to_fp16(0.0f);
+        } else {
+            return (T) 0.0f;
+        }
+    }();
+
+    using mask_upload_state = llama_context::dsv4_runtime::mask_upload_state;
+
+    // Per-tensor transfer bookkeeping. The vector is a small set (one entry per
+    // distinct graph the mask tensor was baked into); entries of retired graphs
+    // are simply left behind.
+    auto & states = lctx.dsv4.mask_states;
+    mask_upload_state * state = nullptr;
+    for (size_t i = 0; i < states.size(); ++i) {
+        if (states[i].tensor == tensor) {
+            state = &states[i];
+            break;
+        }
+    }
+    if (state == nullptr) {
+        states.push_back(mask_upload_state{});
+        state = &states.back();
+        state->tensor = tensor;
+    }
+
+    // Persistent host staging buffer (avoids a full width*height allocation
+    // on every decode step).
+    if (lctx.dsv4.mask_staging.size() < need) {
+        lctx.dsv4.mask_staging.resize(need);
+    }
+    T * staging = (T *) lctx.dsv4.mask_staging.data();
+
+    auto & prev_visible = state->prev_visible;
+    if ((int64_t) prev_visible.size() < height) {
+        prev_visible.resize((size_t) height, -1);
+    }
+
+    // A fresh device buffer (graph rebuild) means no row is in sync with the
+    // device anymore: initialize the full mask and upload it once.
+    const bool fresh = state->data != tensor->data;
+    if (fresh) {
+        state->data = tensor->data;
+        prev_visible.assign((size_t) height, -1);
+        std::fill_n(staging, (size_t) width * (size_t) height, h_inf);
+    }
+
+    for (int64_t i = 0; i < height; ++i) {
+        T * row = staging + (size_t) i * width;
+        int32_t n_vis = i < n_tokens && i < (int64_t) n_visible.size() ? n_visible[(size_t) i] : 0;
+        n_vis = std::max(0, std::min((int32_t) width, n_vis));
+        int32_t & prev = prev_visible[(size_t) i];
+
+        // First touch of this row (fresh buffer, or the graph was taller than
+        // the previous one): upload the whole row.
+        if (prev < 0) {
+            std::fill_n(row, (size_t) width, h_inf);
+            for (int64_t j = 0; j < n_vis; ++j) {
+                row[j] = h_zero;
+            }
+            ggml_backend_tensor_set(tensor, row, (size_t) i * row_bytes, row_bytes);
+            prev = n_vis;
+            continue;
+        }
+
+        if (n_vis > prev) {
+            // Causal growth: only the newly-unmasked prefix differs; the -inf
+            // tail is already correct on the device.
+            for (int64_t j = prev; j < n_vis; ++j) {
+                row[j] = h_zero;
+            }
+            ggml_backend_tensor_set(tensor, row + (size_t) prev,
+                    (size_t) i * row_bytes + (size_t) prev * elem_size,
+                    ((size_t) n_vis - (size_t) prev) * elem_size);
+            prev = n_vis;
+        } else if (n_vis < prev) {
+            // The stream rewound or the cache reshuffled: the cells that are
+            // still zero on the device must revert to -inf again, so the whole
+            // row is rewritten.
+            std::fill_n(row, (size_t) width, h_inf);
+            for (int64_t j = 0; j < n_vis; ++j) {
+                row[j] = h_zero;
+            }
+            ggml_backend_tensor_set(tensor, row, (size_t) i * row_bytes, row_bytes);
+            prev = n_vis;
+        }
+        // n_vis == prev: the row is already correct on the device.
+    }
+}
+
 static void dsv4_set_mask_tensor(
+        llama_context & lctx,
         ggml_tensor * tensor,
         const llama_context::dsv4_runtime::comp_plan & plan,
         int32_t n_tokens) {
-    if (tensor == nullptr) {
+    if (tensor == nullptr || tensor->buffer == nullptr) {
         return;
     }
 
-    if (tensor->buffer == nullptr) {
-        return;
-    }
-
-    const int64_t width = tensor->ne[0];
-    const int64_t height = tensor->ne[1];
     auto type = tensor->type;
     GGML_ASSERT(type == GGML_TYPE_F16 || type == GGML_TYPE_F32);
-
-    //printf("%s: preparing mask %s of type %s with %ld x %ld entries\n", __func__, tensor->name, ggml_type_name(type), tensor->ne[0], tensor->ne[1]);
     if (type == GGML_TYPE_F16) {
-        auto h_inf = ggml_fp32_to_fp16(-INFINITY);
-        auto h_zero = ggml_fp32_to_fp16(0.0f);
-        std::vector<ggml_fp16_t> storage((size_t) width*height, h_inf);
-        for (int32_t i = 0; i < n_tokens; ++i) {
-            const int32_t n_visible = i < (int32_t) plan.n_visible.size() ? plan.n_visible[(size_t) i] : 0;
-            //if (i == 0) printf("    n_visible = %d\n", n_visible);
-            for (int32_t j = 0; j < n_visible && j < width; ++j) {
-                storage[(size_t) i*width + j] = h_zero;
-            }
-        }
-        ggml_backend_tensor_set(tensor, storage.data(), 0, storage.size()*sizeof(ggml_fp16_t));
+        dsv4_set_mask_tensor_impl<ggml_fp16_t>(lctx, tensor, plan.n_visible, n_tokens);
     } else {
-        std::vector<float> storage((size_t) width*height, -INFINITY);
-        for (int32_t i = 0; i < n_tokens; ++i) {
-            const int32_t n_visible = i < (int32_t) plan.n_visible.size() ? plan.n_visible[(size_t) i] : 0;
-            for (int32_t j = 0; j < n_visible && j < width; ++j) {
-                storage[(size_t) i*width + j] = 0.0f;
-            }
-        }
-        ggml_backend_tensor_set(tensor, storage.data(), 0, storage.size()*sizeof(float));
+        dsv4_set_mask_tensor_impl<float>(lctx, tensor, plan.n_visible, n_tokens);
     }
 }
 
@@ -1858,7 +1953,7 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
         dsv4_set_input_tensor(inputs.state_write_idxs, plan.state_write_idxs);
         dsv4_set_input_tensor(inputs.state_write_pos, plan.state_write_pos);
         if (set_mask) {
-            dsv4_set_mask_tensor(inputs.kq_mask, plan, batch.n_tokens);
+            dsv4_set_mask_tensor(lctx, inputs.kq_mask, plan, batch.n_tokens);
         }
     };
 
