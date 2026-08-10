@@ -630,6 +630,8 @@ struct llama_model {
     size_t cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn,
                       bool swa_compress = false, uint32_t n_ubatch = 0) const;
 
+    bool supports_swa_ring() const;
+
     void set_tensor_overrides(const llama_model_params& params);
 
     int device_count() const;
