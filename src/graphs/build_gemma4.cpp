@@ -369,7 +369,9 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
             cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask_l, hparams.f_attention_scale, hparams.f_max_alibi_bias,
                     hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
             cb(cur, "fa", il_cb);
-            cur->op_params[4] = n_swa;
+            if (is_sliding && can_use_kv_swa_reduction(cparams, kv_self)) {
+                cur->op_params[4] = n_swa;
+            }
             if (cparams.v_cache_hadamard) {
                 if (int block_size = lctx.model.hadamard_size_v(il); block_size > 0) {
                     cur = ggml_hadamard(ctx0, cur, block_size);
@@ -580,6 +582,12 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
     // it by absolute cell index (target_kv.head / target_kv.n) throughout.
     GGML_ASSERT(!target_kv.any_compacted());
 
+    if (target_kv.swa_ring) {
+        LLAMA_LOG_ERROR("%s: the Gemma4 MTP assistant graph cannot read a sliding-window ring target "
+                "cache (--swa-compress); retry without --swa-compress\n", __func__);
+        GGML_ABORT("Gemma4 MTP target cache is a SWA ring (--swa-compress)");
+    }
+
     ggml_tensor * inp_pos = build_inp_pos();
 
     ggml_tensor * token_embd = ggml_get_rows(ctx0, target_model.tok_embd, lctx.inp_tokens);
@@ -699,7 +707,9 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
                     ggml_row_size(split_vl->splits[id]->type, n_embd_head)*n_head_kv,
                     ggml_row_size(split_vl->splits[id]->type, n_embd_head), 0);
                 cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask_l, hparams.f_attention_scale, 0.0f, 0.0f);
-                cur->op_params[4] = n_swa;
+                if (is_sliding && can_use_kv_swa_reduction(target_cparams, target_kv)) {
+                    cur->op_params[4] = n_swa;
+                }
                 cb(cur, "fa", il_cb);
                 cur = ggml_reshape_2d(ctx0, cur, split_ol->splits[id]->ne[0], ggml_nelements(cur)/split_ol->splits[id]->ne[0]);
                 cur = llm_build_lora_mm(lctx, ctx0, split_ol->splits[id], cur);
