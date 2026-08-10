@@ -89,10 +89,10 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 
     // K is dequantized to f16 on the fly so the hot cublas F16 tensor-core GEMM
     // path also covers the quantized indexer cache types. Q8_0 is the default
-    // (-ictk q8_0); Q6_0 is added for models whose indexer cache is stored at the
-    // higher-grade 6-bit type (OpenPangu allows -ictk q6_0). Any other quantized
-    // K still falls through to the (slower) MMQ branch below.
-    if ((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_Q8_0 || k->type == GGML_TYPE_Q6_0) && q->type == GGML_TYPE_F32) {
+    // (-ictk q8_0); Q6_0 and Q6_1 are added for models whose indexer cache is
+    // stored at the higher-grade 6-bit types (OpenPangu allows -ictk q6_0/q6_1).
+    // Any other quantized K still falls through to the (slower) MMQ branch below.
+    if ((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_Q8_0 || k->type == GGML_TYPE_Q6_0 || k->type == GGML_TYPE_Q6_1) && q->type == GGML_TYPE_F32) {
         constexpr size_t k_max_buf_size = 1 << 27;
         size_t per_row = size_t(n_kv)*(q->ne[1]*sizeof(half) + sizeof(int) + sizeof(float)) + q->ne[0]*q->ne[1]*sizeof(half);
         int max_rows = (k_max_buf_size + per_row - 1)/per_row;
@@ -106,10 +106,10 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         ggml_cuda_pool_alloc<half>  k_f16(ctx.pool());
 
         auto k_data = (const half *)k->data;
-        if (k->type == GGML_TYPE_Q8_0 || k->type == GGML_TYPE_Q6_0) {
-            // both Q8_0 and Q6_0 have a dedicated CUDA row-dequantize-to-f16 kernel
-            // (ggml_get_to_fp16_cuda), so the K cache is materialized as f16 once
-            // per call, not per chunk.
+        if (k->type == GGML_TYPE_Q8_0 || k->type == GGML_TYPE_Q6_0 || k->type == GGML_TYPE_Q6_1) {
+            // all three have a dedicated CUDA dequantize-to-f16 kernel
+            // (ggml_get_to_fp16_cuda; Q6_1 is block-dequantized), so the K cache
+            // is materialized as f16 once per call, not per chunk.
             k_f16.alloc(k->ne[0]*k->ne[1]);
             auto to_fp16_cuda = ggml_get_to_fp16_cuda(k->type);
             GGML_ASSERT(to_fp16_cuda);
