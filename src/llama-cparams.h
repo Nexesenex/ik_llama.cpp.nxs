@@ -3,6 +3,26 @@
 #include "llama-impl.h"
 
 #include <cstdint>
+#include <algorithm>
+
+inline uint32_t llama_kv_pad_granularity(bool flash_attn) {
+    return flash_attn ? 256u : 32u;
+}
+
+// Compute the ring-window size for a SWA layer: the number of rows per sequence.
+// The window is padded to the granularity so that wraps are deterministic.
+inline uint32_t llama_kv_ring_win(uint32_t n_swa, uint32_t n_ubatch, bool flash_attn) {
+    const uint32_t pad = std::max<uint32_t>(llama_kv_pad_granularity(flash_attn), 256u);
+    return (uint32_t) GGML_PAD(n_swa + n_ubatch, pad);
+}
+
+// Compute the total ring size (rows across all sequences).
+// Returns 0 if the ring would not undercut the full context (caller should decide to stay dense).
+inline uint32_t llama_kv_ring_size(uint32_t n_swa, uint32_t n_ubatch, uint32_t kv_size, uint32_t n_seq_max, bool flash_attn) {
+    const uint32_t w = llama_kv_ring_win(n_swa, n_ubatch, flash_attn);
+    const uint32_t total = w * n_seq_max;
+    return total < kv_size ? total : 0;
+}
 
 struct llama_cparams {
     uint32_t n_ctx;           // context size used during inference
