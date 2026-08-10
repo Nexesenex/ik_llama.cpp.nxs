@@ -2,6 +2,7 @@
 
 #include "llama-impl.h"
 #include <unordered_map>
+#include <random>
 struct llama_sampling {
     llama_sampling(int32_t n_vocab) : n_vocab(n_vocab) {}
 
