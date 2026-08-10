@@ -511,7 +511,11 @@ int main(int argc, char ** argv) {
     server_context ctx_server;
 
     if (!params.system_prompt.empty()) {
-        ctx_server.system_prompt_set(params.system_prompt);
+        std::string why_not;
+        if (!ctx_server.system_prompt_set(params.system_prompt, why_not)) {
+            LOG_ERROR("--system-prompt rejected", {{"reason", why_not}});
+            return 1;
+        }
     }
 
     if (params.model_alias == "unknown") {
