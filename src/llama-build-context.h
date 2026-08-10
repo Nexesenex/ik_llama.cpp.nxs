@@ -77,6 +77,9 @@ struct mla_params {
     bool apply_wo = true, expand_before_wo = false;
     int post_attn_hadamard = 0;
 };
+
+bool can_use_kv_swa_reduction(const llama_cparams & cparams, const llama_kv_cache & kv);
+
 struct llm_build_context {
     const llama_model    & model;
           llama_context  & lctx;
