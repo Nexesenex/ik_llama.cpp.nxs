@@ -8390,7 +8390,7 @@ struct llama_context_params llama_context_default_params() {
         /*.split_mode_tensor_parallel_scheduling =*/ false,
         // /*.split_mode_f16           =*/ true,
         /*.scheduler_async             =*/ false,
-        /*.pipeline                    =*/ 0,
+        /*.pipeline                    =*/ false,
         /*.sched_max_copies            =*/ -1,
         /*.mtp                         =*/ false,
         /*.mtp_op_type                 =*/ MTP_OP_NONE,
@@ -9237,8 +9237,7 @@ struct llama_context * llama_init_from_model(
     //LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
     LLAMA_LOG_INFO("%s: reduce_type   = %s\n",     __func__, ggml_type_name(cparams.reduce_type));
     LLAMA_LOG_INFO("%s: sched_async   = %d\n",     __func__, cparams.scheduler_async);
-    const char * pipe_str = cparams.pipeline == 1 ? "lookahead" : cparams.pipeline == 2 ? "selfcopy" : "off";
-    LLAMA_LOG_INFO("%s: pipeline      = %s\n",     __func__, pipe_str);
+    LLAMA_LOG_INFO("%s: pipeline      = %d\n",     __func__, cparams.pipeline);
     LLAMA_LOG_INFO("%s: ser           = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",     __func__, cparams.rope_freq_scale);

@@ -521,7 +521,7 @@ extern "C" {
         bool split_mode_tensor_parallel_scheduling; // if true, force split mode tensor parallel scheduling
         //bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
         bool scheduler_async;   // if true, with split mode "graph" graph evaluation will be done using multiple threads
-        int  pipeline;          // 0=off, 1=lookahead, 2=selfcopy (experimental)
+        bool pipeline;          // if true, enable preloader lookahead pipeline (experimental)
         int  sched_max_copies;   // max number of graph parallel copies (default: from GGML_SCHED_MAX_COPIES)
         bool mtp;   // Activate MTP if supported
         enum llama_mtp_op_type mtp_op_type;
