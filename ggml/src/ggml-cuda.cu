@@ -146,8 +146,17 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
     int id = -1; // in case cudaGetDevice fails
     cudaGetDevice(&id);
 
+    int log_id = -1;
+    if (id >= 0 && id < ggml_cuda_info().device_count) {
+        log_id = ggml_cuda_info().device_id[id];
+    }
+
     GGML_CUDA_LOG_ERROR("CUDA error: %s\n", msg);
-    GGML_CUDA_LOG_ERROR("  current device: %d, in function %s at %s:%d\n", id, func, file, line);
+    if (log_id >= 0) {
+        GGML_CUDA_LOG_ERROR("  current device: Device %d (CUDA%d), in function %s at %s:%d\n", id, log_id, func, file, line);
+    } else {
+        GGML_CUDA_LOG_ERROR("  current device: %d, in function %s at %s:%d\n", id, func, file, line);
+    }
     GGML_CUDA_LOG_ERROR("  %s\n", stmt);
     // abort with GGML_ASSERT to get a stack trace
     GGML_ABORT("CUDA error");
@@ -621,7 +630,7 @@ ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * mo
     auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
     auto & all_ctx = info->all_ctx[model];
     if (all_ctx[device]) {
-        GGML_CUDA_LOG_WARN("%s: a context for device %d already exists?\n", __func__, device);
+        GGML_CUDA_LOG_WARN("%s: a context for CUDA%d (Device %d) already exists?\n", __func__, device, ggml_backend_cuda_get_device_ordinal(device));
     } else{
         all_ctx[device] = this;
     }
@@ -862,7 +871,7 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
     std::lock_guard<std::mutex> lock(mutex);
 
     if (device >= ggml_backend_cuda_get_device_count()) {
-        GGML_CUDA_LOG_WARN("%s: device %d out of range (max %d)\n", __func__, device, ggml_backend_cuda_get_device_count() - 1);
+        GGML_CUDA_LOG_WARN("%s: CUDA device index %d out of range (max %d)\n", __func__, device, ggml_backend_cuda_get_device_count() - 1);
         return nullptr;
     }
 
@@ -2586,7 +2595,7 @@ static void ggml_cuda_op_mul_mat(
                             }
                         } else {
                             if (!src1->data) {
-                                GGML_ABORT("src1->data is NULL on device %d (OOM?)", ctx.device);
+                                GGML_ABORT("src1->data is NULL on CUDA%d (Device %d) (OOM?)", ctx.device, ggml_backend_cuda_get_device_ordinal(ctx.device));
                             }
                             float * src1_ddf_i_source = (float *) src1->data;
                             src1_ddf_i_source += (i0*ne11 + src1_col_0) * ne10;
@@ -5885,7 +5894,7 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
 
 GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] const void * param_string, const void * model) {
     if (device < 0 || device >= ggml_backend_cuda_get_device_count()) {
-        GGML_CUDA_LOG_ERROR("%s: invalid device %d\n", __func__, device);
+        GGML_CUDA_LOG_ERROR("%s: invalid CUDA device %d (logical index)\n", __func__, device);
         return nullptr;
     }
 
@@ -5969,7 +5978,7 @@ GGML_CALL int ggml_backend_cuda_get_device_count() {
 GGML_CALL int ggml_backend_cuda_get_device_ordinal(int device) {
     const auto & info = ggml_cuda_info();
     if (device < 0 || device >= info.device_count) {
-        GGML_CUDA_LOG_WARN("%s: device %d out of range (max %d)\n", __func__, device, info.device_count - 1);
+        GGML_CUDA_LOG_WARN("%s: CUDA device index %d out of range (max %d)\n", __func__, device, info.device_count - 1);
         return -1;
     }
     return info.cuda_device_id[device];
