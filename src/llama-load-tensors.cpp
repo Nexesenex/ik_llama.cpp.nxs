@@ -6672,7 +6672,7 @@ bool create_tensors_helper::create_tensors() {
                     }
                     {
                         int nr = layer.ffn_down->ne[0];
-                        for (int64_t g = 128; g > ffn_granularity; g /= 2) {
+                        for (int64_t g = 32; g > ffn_granularity; g /= 2) {
                             if (nr % g == 0) {
                                 ffn_granularity = (int)g;
                                 break;
@@ -6702,7 +6702,7 @@ bool create_tensors_helper::create_tensors() {
                     }
                     {
                         int nr = layer.ffn_down_exps->ne[0];
-                        for (int64_t g = 128; g > ffn_granularity; g /= 2) {
+                        for (int64_t g = 32; g > ffn_granularity; g /= 2) {
                             if (nr % g == 0) {
                                 ffn_granularity = (int)g;
                                 break;
@@ -6771,7 +6771,7 @@ bool create_tensors_helper::create_tensors() {
                             }
                             {
                                 int nr = layer.ffn_down_shexp->ne[0];
-                                for (int64_t g = 128; g > ffn_granularity; g /= 2) {
+                                for (int64_t g = 32; g > ffn_granularity; g /= 2) {
                                     if (nr % g == 0) {
                                         ffn_granularity = (int)g;
                                         break;
@@ -6795,7 +6795,7 @@ bool create_tensors_helper::create_tensors() {
                             }
                             {
                                 int nr = layer.ffn_down_shexp->ne[0];
-                                for (int64_t g = 128; g > ffn_granularity; g /= 2) {
+                                for (int64_t g = 32; g > ffn_granularity; g /= 2) {
                                     if (nr % g == 0) {
                                         ffn_granularity = (int)g;
                                         break;
@@ -6949,7 +6949,7 @@ bool create_tensors_helper::create_tensors() {
                     int nr = model.output->ne[1];
                     int granularity = 16;
                     {
-                        for (int64_t g = 128; g > granularity; g /= 2) {
+                        for (int64_t g = 32; g > granularity; g /= 2) {
                             if (nr % g == 0) {
                                 granularity = (int)g;
                                 break;
