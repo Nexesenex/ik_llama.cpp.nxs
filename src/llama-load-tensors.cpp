@@ -1958,16 +1958,12 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
         if (model.output == NULL) {
             model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
         }
-        int flags = llama_model_loader::TENSOR_NOT_REQUIRED;
-        if (!model.mtp) flags |= llama_model_loader::TENSOR_SKIP;
-        auto output_mtp = create_tensor(ctx_output, "output_extra.weight", {n_embd, n_vocab}, flags);
+        // The MTP head has the same shape as the main output head; skip loading
+        // the separate output_extra.weight and reuse model.output for MTP
+        create_tensor(ctx_output, "output_extra.weight", {n_embd, n_vocab},
+                llama_model_loader::TENSOR_NOT_REQUIRED | llama_model_loader::TENSOR_SKIP);
         if (model.mtp) {
-            model.output_mtp = output_mtp;
-            if (!model.output_mtp) {
-                model.output_mtp = model.output;
-            } else {
-                LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Using %s as MTP output\n", model.output_mtp->name);
-            }
+            model.output_mtp = model.output;
         }
     }
 
@@ -2075,16 +2071,12 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
             model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab},
                     llama_model_loader::TENSOR_DUPLICATED);
         }
-        int flags = llama_model_loader::TENSOR_NOT_REQUIRED;
-        if (!model.mtp) flags |= llama_model_loader::TENSOR_SKIP;
-        auto output_mtp = create_tensor(ctx_output, "output_extra.weight", {n_embd, n_vocab}, flags);
+        // The MTP head has the same shape as the main output head; skip loading
+        // the separate output_extra.weight and reuse model.output for MTP
+        create_tensor(ctx_output, "output_extra.weight", {n_embd, n_vocab},
+                llama_model_loader::TENSOR_NOT_REQUIRED | llama_model_loader::TENSOR_SKIP);
         if (model.mtp) {
-            model.output_mtp = output_mtp;
-            if (!model.output_mtp) {
-                model.output_mtp = model.output;
-            } else {
-                LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Using %s as MTP output\n", model.output_mtp->name);
-            }
+            model.output_mtp = model.output;
         }
     }
 
