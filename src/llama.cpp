@@ -8222,6 +8222,14 @@ struct llama_model * llama_model_load_from_file(
             const char* name = ggml_backend_buft_name(buft);
             const char* description = name;
             size_t description_size = llama_get_device_memory(*model, i);
+#ifdef GGML_USE_CUDA
+            char device_description[64];
+            if (strncmp(name, GGML_CUDA_NAME, strlen(GGML_CUDA_NAME)) == 0) {
+                int ordinal = ggml_backend_cuda_get_device_ordinal(i);
+                snprintf(device_description, sizeof(device_description), "%s device %d", GGML_CUDA_NAME, ordinal);
+                description = device_description;
+            }
+#endif
             LLAMA_LOG_INFO("%s: using device %s - %zu MiB free\n",
                 name, description,
                 description_size / 1024 / 1024);
