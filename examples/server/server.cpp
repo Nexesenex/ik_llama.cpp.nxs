@@ -604,8 +604,28 @@ int main(int argc, char ** argv) {
     svr->set_write_timeout(params.timeout_write);
 
     if (!svr->bind_to_port(params.hostname, params.port)) {
-        fprintf(stderr, "\ncouldn't bind to server socket: hostname=%s port=%d\n\n", params.hostname.c_str(), params.port);
-        return 1;
+        fprintf(stderr, "\ncouldn't bind to server socket: hostname=%s port=%d (port in use)\n", params.hostname.c_str(), params.port);
+        fprintf(stderr, "trying fallback ports...\n");
+        bool bound = false;
+        if (params.port != 8080 && svr->bind_to_port(params.hostname, 8080)) {
+            params.port = 8080;
+            bound = true;
+        }
+        if (!bound) {
+            const int fallback_ports[] = { 16160, 24240, 32320, 40400, 48480, 56560, 64640 };
+            for (int port : fallback_ports) {
+                if (svr->bind_to_port(params.hostname, port)) {
+                    params.port = port;
+                    bound = true;
+                    break;
+                }
+            }
+        }
+        if (!bound) {
+            fprintf(stderr, "couldn't bind to server socket: all fallback ports in use\n\n");
+            return 1;
+        }
+        fprintf(stderr, "bound to fallback port: %d\n\n", params.port);
     }
 
     std::unordered_map<std::string, std::string> log_data;
