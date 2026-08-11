@@ -260,6 +260,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
     GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_CUBLAS (Instead of MMQ):    yes\n", __func__);
 #endif // GGML_CUDA_FORCE_CUBLAS
     GGML_CUDA_LOG_INFO("%s: found %d " GGML_CUDA_NAME " devices:\n", __func__, info.device_count);
+    GGML_CUDA_LOG_WARN("WARNING : CUDAn is per LOGICAL ranking (PCIE order per default as CUDA_VISIBLE_DEVICES), Device N is per ORDINAL ranking, TCC first, then WDDM, then PCIE ordering)\n");
     for (int id = 0; id < info.device_count; ++id) {
         int cuda_id = info.cuda_device_id[id];
         int device_vmm = 0;
@@ -284,7 +285,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         cudaDeviceProp prop;
         CUDA_CHECK(cudaGetDeviceProperties(&prop, cuda_id));
         const char * attach = (prop.pciBusID < 0x80) ? "CPU" : "PCH";
-        GGML_CUDA_LOG_INFO("  Device %d: %s (PCIE %s, %s), compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n", id, prop.name, pci_bus_id, attach, prop.major, prop.minor, device_vmm ? "yes" : "no",
+        GGML_CUDA_LOG_INFO("CUDA%d (Device %d) : %s (PCIE %s, %s), compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n", id, cuda_id, prop.name, pci_bus_id, attach, prop.major, prop.minor, device_vmm ? "yes" : "no",
                 prop.totalGlobalMem/(1024*1024));
 
         info.devices[id].total_vram   = prop.totalGlobalMem;
