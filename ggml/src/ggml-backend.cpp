@@ -1280,10 +1280,8 @@ struct ggml_backend_sched {
     bool has_pipeline = false;
 
     // double-buffered pipeline slots for async input preloading
-    // slot_pipe_events[b][slot] signaled when copy into that slot is done (preloader -> GPU)
+    // slot_pipe_events[b][slot] signaled when copy into that slot is done
     ggml_backend_event_t slot_pipe_events[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_PIPE_SLOTS];
-    // eval_done_events[b][slot] signaled when GPU is done evaluating with that slot (GPU -> preloader)
-    ggml_backend_event_t eval_done_events[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_PIPE_SLOTS];
     // track which slot each split uses for its backend (indexed by split index)
     std::vector<int> split_pipe_slot_vec;
     // preload state: for each backend, which slot was last preloaded
@@ -2368,116 +2366,85 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             std::vector<uint32_t> unique_ids;
             ggml_tensor * last_ids_tensor = nullptr;
 
-            if (sched->has_pipeline && ith == 0) {
-                // Preloader lookahead path:
-                //   - dedicated preloader thread copies inputs for future splits
-                //   - GPU threads evaluate using preloaded data
-                //   - event sync eliminates post-copy global barrier
-                std::barrier gpu_barrier(sched->n_backends);
+            if (sched->has_pipeline) {
+                // Pipeline path: each GPU copies inputs for its own splits.
+                // No post-copy global barrier, no single copy_thread bottleneck.
+                for (int i = 0; i < sched->n_splits; i++) {
+#if IK_PRINT_TIMING
+                    int64_t tim1 = ggml_time_us();
+#endif
+                    struct ggml_backend_sched_split * split = &splits[i];
+                    int split_backend_id = split->backend_id;
+                    ggml_backend_t split_backend = sched->backends[split_backend_id];
 
-                // Preloader context (separate from GPU thread state to avoid races)
-                std::vector<int32_t> preloader_ids;
-                std::vector<uint32_t> preloader_unique_ids;
-                ggml_tensor * preloader_last_ids_tensor = nullptr;
-                std::array<bool, GGML_SCHED_MAX_BACKENDS> preloader_needs_sync;
-                for (auto & item : preloader_needs_sync) item = true;
+                    bool needs_barrier = split->n_inputs > 0 || split->graph.nodes[0]->op == GGML_OP_REDUCE;
 
-                // Preloader thread: iterates all splits, copies inputs for each,
-                // signals slot_pipe_events when done.  GPU threads wait on those
-                // events before evaluating, then signal eval_done_events when done.
-                std::thread preloader([&]() {
-                    for (int pi = 0; pi < sched->n_splits; pi++) {
-                        auto psplit = &sched->splits[pi];
-                        if (psplit->n_inputs == 0) continue;
+                    // top barrier: ensures all prior splits' outputs are visible
+                    if (needs_barrier) {
+                        #pragma omp barrier
+                    }
 
-                        int bid = psplit->backend_id;
-                        int slot = sched->split_pipe_slot_vec[pi];
-
-                        // splits with only host inputs have no device slot
+                    // wait on the slot's pipe event to ensure the slot is not
+                    // still in use by a previous split before copying new data
+                    if (split->n_inputs > 0 && ith == split_backend_id) {
+                        int slot = (size_t)i < sched->split_pipe_slot_vec.size() ? sched->split_pipe_slot_vec[i] : -1;
                         if (slot >= 0) {
-                            // wait for GPU to finish using this slot
-                            ggml_backend_event_wait(sched->backends[bid], sched->eval_done_events[bid][slot]);
-                        }
-
-                        ggml_backend_sched_copy_inputs(sched, psplit, preloader_needs_sync,
-                            preloader_ids, preloader_unique_ids, preloader_last_ids_tensor);
-
-                        if (slot >= 0) {
-                            if (sched->n_copies > 1 && sched->events[bid][sched->cur_copy] != NULL) {
-                                ggml_backend_event_record(sched->events[bid][sched->cur_copy]);
+                            if (auto ev = sched->slot_pipe_events[split_backend_id][slot]) {
+                                ggml_backend_event_wait(split_backend, ev);
                             }
-                            // signal GPU: data ready for evaluation
-                            ggml_backend_event_record(sched->slot_pipe_events[bid][slot]);
                         }
                     }
-                });
 
-                // GPU compute threads
-                auto gpu_compute = [&](int ith) {
-                    int last_reduce = first_reduce;
-                    struct ggml_backend_sched_split * splits = sched->splits;
+                    // each GPU copies its own split's inputs
+                    if (split->n_inputs > 0 && ith == split_backend_id) {
+                        ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
+                    }
 
-                    for (int i = 0; i < sched->n_splits; i++) {
-                        auto split = &splits[i];
-                        int bid = split->backend_id;
+                    if (ith == split_backend_id) {
+                        sched->statuses[ith] = ggml_backend_sched_eval(sched, split_backend, split);
 
-                        bool needs_barrier = split->n_inputs > 0 || split->graph.nodes[0]->op == GGML_OP_REDUCE;
-
-                        if (needs_barrier) {
-                            gpu_barrier.arrive_and_wait();
-                        }
-
-                        if (ith == bid) {
-                            if (split->n_inputs > 0) {
-                                int slot = sched->split_pipe_slot_vec[i];
-                                if (slot >= 0) {
-                                    // wait for preloader: data ready
-                                    ggml_backend_event_wait(sched->backends[bid], sched->slot_pipe_events[bid][slot]);
-                                }
-                            }
-
-                            sched->statuses[ith] = ggml_backend_sched_eval(sched, sched->backends[bid], split);
-
-                            if (split->n_inputs > 0 && !sched->own_cpy[bid]) {
-                                sched->needs_sync[bid] = true;
-                            } else {
-                                for (int j = 0; j < split->n_inputs; ++j) {
-                                    if (ggml_backend_buffer_is_host(split->inputs[j]->buffer)) {
-                                        sched->needs_sync[bid] = true;
-                                    }
-                                }
-                            }
-
-                            if (split->n_inputs > 0) {
-                                int slot = sched->split_pipe_slot_vec[i];
-                                if (slot >= 0) {
-                                    // signal preloader: done with this slot
-                                    ggml_backend_event_record(sched->eval_done_events[bid][slot]);
+                        if (split->n_inputs > 0 && !sched->own_cpy[split_backend_id]) {
+                            sched->needs_sync[split_backend_id] = true;
+                        } else {
+                            for (int j = 0; j < split->n_inputs; ++j) {
+                                if (ggml_backend_buffer_is_host(split->inputs[j]->buffer)) {
+                                    sched->needs_sync[split_backend_id] = true;
                                 }
                             }
                         }
 
-                        if (split->graph.nodes[0]->op == GGML_OP_REDUCE && i < sched->n_splits - 1) {
-                            last_reduce = bid;
-                            if (ith == bid) {
-                                auto node = split->graph.nodes[0];
-                                int n = node->op_params[1];
-                                for (int j = 0; j < n; ++j) {
-                                    if (node->src[j]) {
-                                        sched->needs_sync[j] = false;
-                                    }
+                        // signal that this slot is now free for reuse
+                        if (split->n_inputs > 0) {
+                            int slot = (size_t)i < sched->split_pipe_slot_vec.size() ? sched->split_pipe_slot_vec[i] : -1;
+                            if (slot >= 0) {
+                                if (auto ev = sched->slot_pipe_events[split_backend_id][slot]) {
+                                    ggml_backend_event_record(ev);
                                 }
                             }
-                            gpu_barrier.arrive_and_wait();
                         }
                     }
-                };
 
-                for (int i = 0; i < sched->n_backends; ++i) sched->workers.emplace_back(gpu_compute, i);
-                for (auto & w : sched->workers) w.join();
-                sched->workers.clear();
+                    if (split->graph.nodes[0]->op == GGML_OP_REDUCE && i < sched->n_splits - 1) {
+                        last_reduce = split_backend_id;
+                        if (ith == split_backend_id) {
+                            auto node = split->graph.nodes[0];
+                            int n = node->op_params[1];
+                            for (int j = 0; j < n; ++j) {
+                                if (node->src[j]) {
+                                    sched->needs_sync[j] = false;
+                                }
+                            }
+                        }
+                        #pragma omp barrier
+                    }
 
-                preloader.join();
+                    // record the event of this copy
+                    if (sched->n_copies > 1 && split->n_inputs > 0 && ith == split_backend_id) {
+                        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                            ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
+                        }
+                    }
+                }
             } else {
                 // Original path: single copy_thread, global barriers
                 for (int i = 0; i < sched->n_splits; i++) {
@@ -2820,7 +2787,6 @@ ggml_backend_sched_t ggml_backend_sched_new(
         }
         for (int s = 0; s < GGML_SCHED_PIPE_SLOTS; s++) {
             sched->slot_pipe_events[b][s] = nullptr;
-            sched->eval_done_events[b][s] = nullptr;
         }
         sched->last_preloaded_slot[b] = -1;
         sched->last_preloaded_split[b] = -1;
@@ -2844,16 +2810,6 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     for (int b = 0; b < sched->n_backends; b++) {
         for (int c = 0; c < sched->n_copies; c++) {
             ggml_backend_event_free(sched->events[b][c]);
-        }
-    }
-    for (int b = 0; b < sched->n_backends; b++) {
-        for (int s = 0; s < GGML_SCHED_PIPE_SLOTS; s++) {
-            if (sched->slot_pipe_events[b][s]) {
-                ggml_backend_event_free(sched->slot_pipe_events[b][s]);
-            }
-            if (sched->eval_done_events[b][s]) {
-                ggml_backend_event_free(sched->eval_done_events[b][s]);
-            }
         }
     }
     for (int i = 0; i < sched->n_backends; ++i) {
@@ -2967,12 +2923,7 @@ static void ggml_sched_prepare_graph(ggml_backend_sched_t sched) {
                     if (!sched->slot_pipe_events[backend_id][s]) {
                         sched->slot_pipe_events[backend_id][s] = ggml_backend_event_new(sched->backends[backend_id]);
                     }
-                    if (!sched->eval_done_events[backend_id][s]) {
-                        sched->eval_done_events[backend_id][s] = ggml_backend_event_new(sched->backends[backend_id]);
-                    }
-                    // initially signal both so first preloader pass does not block
                     ggml_backend_event_record(sched->slot_pipe_events[backend_id][s]);
-                    ggml_backend_event_record(sched->eval_done_events[backend_id][s]);
                 }
                 sched->last_preloaded_slot[backend_id] = -1;
                 sched->last_preloaded_split[backend_id] = -1;
