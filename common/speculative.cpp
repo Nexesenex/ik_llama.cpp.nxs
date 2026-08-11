@@ -2035,7 +2035,19 @@ bool common_speculative_prepare_mtp_runtime(
     if (!has_external_mtp) {
         gpt_params params_mtp = params_base;
         params_mtp.pooling_type = LLAMA_POOLING_TYPE_NONE;
+        // The embedded MTP companion is a second, fully independent llama_context of
+        // the same model. Its KV cache must mirror the target's (tail-layer full
+        // attention), so its n_ctx stays equal to the target's. Its graph compute
+        // buffers, however, are a second full set on top of the target's: prompt
+        // warmup re-decodes the target's batches, and with a large target n_ubatch
+        // those buffers can exceed the smallest device in a multi-GPU setup (OOM on
+        // the first long prompt). Draft generation only ever uses 1..n_max tokens per
+        // step, so cap the companion's n_ubatch to the stock default to keep its
+        // compute buffers small.
+        params_mtp.n_ubatch = std::min(params_mtp.n_ubatch, 512);
         params.cparams_dft = common_context_params_to_llama(params_mtp);
+        LOG_INF("%s: embedded MTP companion uses n_ctx=%d, n_batch=%d, n_ubatch=%d\n",
+                __func__, params.cparams_dft.n_ctx, params.cparams_dft.n_batch, params.cparams_dft.n_ubatch);
     }
 
     params.cparams_dft.mtp         = true;
