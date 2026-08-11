@@ -8534,7 +8534,7 @@ struct llama_context * llama_init_from_model(
             }
 
             if (memory_size_k + memory_size_v) {
-	            if (cparams.mla_attn != 0 && !cparams.flash_attn) {
+                if (cparams.mla_attn != 0 && !cparams.flash_attn) {
                     LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T (%s): %7.2f MiB\n", __func__,
                             (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
                             ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
