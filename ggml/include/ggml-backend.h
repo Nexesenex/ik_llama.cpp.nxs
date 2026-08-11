@@ -220,8 +220,7 @@ extern "C" {
     GGML_API void                 ggml_backend_sched_set_only_active_experts(ggml_backend_sched_t sched, bool on_or_off);
     GGML_API void                 ggml_backend_sched_set_split_mode_tensor_parallel(ggml_backend_sched_t sched, bool on_or_off, bool async);
     GGML_API void                 ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extra_alloc_MiB);
-    // pipeline mode: 0=off, 1=lookahead, 2=selfcopy
-    GGML_API void                 ggml_backend_sched_set_pipeline(ggml_backend_sched_t sched, int mode);
+    GGML_API void                 ggml_backend_sched_set_pipeline(ggml_backend_sched_t sched, bool on_or_off);
 
     // prefetch mmap'd MoE expert weights into the page cache
     GGML_API bool                 ggml_backend_prefetch_init(int n_threads);
