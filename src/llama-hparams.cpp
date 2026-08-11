@@ -302,7 +302,7 @@ void llm_load_hparams(
 
                 if (model.type == MODEL_17B_128E) {
                     hparams.use_kq_norm = false;
-                    }
+                }
             } break;
         case LLM_ARCH_DECI:
             {
