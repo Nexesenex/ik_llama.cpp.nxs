@@ -9422,7 +9422,13 @@ struct ggml_tensor * ggml_reshape_2d(
         int64_t               ne0,
         int64_t               ne1) {
     GGML_ASSERT(ggml_is_contiguous(a));
-    GGML_ASSERT(ggml_nelements(a) == ne0*ne1);
+    if (ggml_nelements(a) != ne0*ne1) {
+        GGML_ABORT("ggml_reshape_2d: element count mismatch: ne0=%" PRId64 " ne1=%" PRId64 " (want %" PRId64 ") != nelements=%" PRId64 " of tensor '%s' with shape [%lld x %lld x %lld x %lld] type %s",
+                ne0, ne1, ne0*ne1, ggml_nelements(a),
+                a->name, (long long) a->ne[0], (long long) a->ne[1],
+                (long long) a->ne[2], (long long) a->ne[3],
+                ggml_type_name(a->type));
+    }
 
     bool is_node = false;
 
