@@ -6270,6 +6270,12 @@ bool create_tensors_helper::create_tensors() {
                         auto ctx_split = ctx_map[model.buft_output.buft_matrix];
                         prepare_split_tensors(-1, ctx_split, model.output_norm, model.split_output_norm, split, mem_used);
                     }
+                    if (model.output_mtp && model.output_mtp != model.output) {
+                        if (auto it = split_tensors.find(model.output_mtp); it != split_tensors.end() && !ggml_backend_buft_is_host(model.buft_output.buft_matrix)) {
+                            auto ctx_split = ctx_map[model.buft_output.buft_matrix];
+                            prepare_split_tensors(1, ctx_split, model.output_mtp, model.split_output_mtp, split, mem_used);
+                        }
+                    }
                 }
             }
         }
