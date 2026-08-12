@@ -552,6 +552,7 @@ struct llama_model {
 
     llama_split_tensor split_output;
     llama_split_tensor split_output_norm;
+    llama_split_tensor split_output_mtp;
 
     std::vector<llama_layer> layers;
 
