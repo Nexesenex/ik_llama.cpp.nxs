@@ -267,6 +267,34 @@ void iqk_kda_impl(int32_t n_heads, int32_t gqa_ratio, int32_t repeat_type, int32
                 }
             }
 #else
+#ifdef __AVX2__
+            // v_prime = state^T*kd and out_val = state^T*qd are FP32 matvecs sharing the same
+            // state loads, with kd/qd = k/q scaled by the per-column decay. Process a tile of
+            // 8 row-groups per column pass so the 8+8 accumulators fit in the 16 AVX registers
+            // (no spilling), while each state element is still read exactly once over all tiles.
+            const int32_t n_groups = head_dim / 8;
+            for (int32_t g0 = 0; g0 < n_groups; g0 += 8) {
+                const int32_t ng = n_groups - g0 < 8 ? n_groups - g0 : 8;
+                __m256 vp_acc[8], ov_acc[8];
+                for (int32_t gi = 0; gi < ng; ++gi) {
+                    vp_acc[gi] = _mm256_setzero_ps();
+                    ov_acc[gi] = _mm256_setzero_ps();
+                }
+                for (int32_t col = 0; col < head_dim; ++col) {
+                    const __m256 vk = _mm256_set1_ps(k_t[col] * decay_buf[col]);
+                    const __m256 vq = _mm256_set1_ps(q_t[col] * decay_buf[col]);
+                    for (int32_t gi = 0; gi < ng; ++gi) {
+                        const __m256 vs = _mm256_loadu_ps(state + g0*8 + 8*gi + col*head_dim);
+                        vp_acc[gi] = _mm256_fmadd_ps(vs, vk, vp_acc[gi]);
+                        ov_acc[gi] = _mm256_fmadd_ps(vs, vq, ov_acc[gi]);
+                    }
+                }
+                for (int32_t gi = 0; gi < ng; ++gi) {
+                    _mm256_storeu_ps(v_prime + g0*8 + 8*gi, vp_acc[gi]);
+                    _mm256_storeu_ps(out_val  + g0*8 + 8*gi, ov_acc[gi]);
+                }
+            }
+#else
             std::memset(v_prime, 0, head_dim*sizeof(float));
             std::memset(out_val, 0, head_dim*sizeof(float));
             for (int32_t col = 0; col < head_dim; ++col) {
@@ -278,6 +306,7 @@ void iqk_kda_impl(int32_t n_heads, int32_t gqa_ratio, int32_t repeat_type, int32
                     out_val[row] += s * q_col;
                 }
             }
+#endif
             for (int32_t row = 0; row < head_dim; ++row) {
                 const float v_new = v_t[row] * beta_val - v_prime[row] * beta_val;
                 v_new_buf[row] = v_new;
