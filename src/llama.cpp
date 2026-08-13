@@ -1143,22 +1143,22 @@ static bool llama_openpangu_validate_latent_cache_types(
     return true;
 }
 
-static inline bool llama_openpangu_indexer_cache_type_supported(ggml_type type) {
+static inline bool llama_dsa_indexer_cache_type_supported(ggml_type type) {
     return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 ||
         type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q6_1;
 }
 
-static std::string llama_openpangu_indexer_cache_type_error(ggml_type type) {
-    return format("OpenPangu indexer K cache supports only f32, f16, bf16, q8_0, q6_0, and q6_1 (requested %s); use -ictk q8_0",
+static std::string llama_dsa_indexer_cache_type_error(ggml_type type) {
+    return format("DSA indexer K cache supports only f32, f16, bf16, q8_0, q6_0, and q6_1 (requested %s); use -ictk q8_0",
             ggml_type_name(type));
 }
 
-static bool llama_openpangu_validate_indexer_cache_type(
+static bool llama_dsa_validate_indexer_cache_type(
         ggml_type     idx_type_k,
         std::string * error_msg) {
-    if (!llama_openpangu_indexer_cache_type_supported(idx_type_k)) {
+    if (!llama_dsa_indexer_cache_type_supported(idx_type_k)) {
         if (error_msg) {
-            *error_msg = llama_openpangu_indexer_cache_type_error(idx_type_k);
+            *error_msg = llama_dsa_indexer_cache_type_error(idx_type_k);
         }
         return false;
     }
@@ -1516,7 +1516,7 @@ static bool llama_kv_cache_init(
             ggml_format_name(kv, "cache_k_l%d", i);
             cache.k_l.push_back(kv);
             // DSA lightning-indexer key cache (MQA, single head). Store the Hadamard-rotated
-            // indexer keys in F16 so a decoded token can score against ALL past keys.
+            // indexer keys in idx_type_k (F16 by default) so a decoded token can score against ALL past keys.
             if (has_glm_dsa_indexer && model.layers[i].indexer_attn_k && hparams.indexer_is_full[i] && !is_mtp_tail_layer) {
                 ggml_tensor * kr = ggml_new_tensor_2d(ctx, idx_type_k, hparams.indexer_head_size, kv_size);
                 ggml_format_name(kr, "cache_kr_l%d", i);
@@ -5174,12 +5174,12 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
         }
-        if (model.arch == LLM_ARCH_OPENPANGU) {
+        if (model.arch == LLM_ARCH_OPENPANGU || model.arch == LLM_ARCH_GLM_DSA) {
             std::string error_msg;
-            if (!llama_openpangu_validate_latent_cache_types(params.type_k, params.type_v, &error_msg)) {
+            if (model.arch == LLM_ARCH_OPENPANGU && !llama_openpangu_validate_latent_cache_types(params.type_k, params.type_v, &error_msg)) {
                 throw std::runtime_error(error_msg);
             }
-            if (!llama_openpangu_validate_indexer_cache_type(params.idx_type_k, &error_msg)) {
+            if (!llama_dsa_validate_indexer_cache_type(params.idx_type_k, &error_msg)) {
                 throw std::runtime_error(error_msg);
             }
         }
@@ -8501,13 +8501,13 @@ struct llama_context * llama_init_from_model(
         return nullptr;
     }
 
-    if (model->arch == LLM_ARCH_OPENPANGU) {
+    if (model->arch == LLM_ARCH_OPENPANGU || model->arch == LLM_ARCH_GLM_DSA) {
         std::string error_msg;
-        if (!llama_openpangu_validate_latent_cache_types(params.type_k, params.type_v, &error_msg)) {
+        if (model->arch == LLM_ARCH_OPENPANGU && !llama_openpangu_validate_latent_cache_types(params.type_k, params.type_v, &error_msg)) {
             LLAMA_LOG_ERROR("%s: %s\n", __func__, error_msg.c_str());
             return nullptr;
         }
-        if (!llama_openpangu_validate_indexer_cache_type(params.idx_type_k, &error_msg)) {
+        if (!llama_dsa_validate_indexer_cache_type(params.idx_type_k, &error_msg)) {
             LLAMA_LOG_ERROR("%s: %s\n", __func__, error_msg.c_str());
             return nullptr;
         }
