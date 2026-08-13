@@ -2330,7 +2330,13 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
             // iqk_bucket_topk(k->ne[1], n_top_k, score, sorted, idx_inf, k_n_bucket, counts, idx_aux);
 
             for (int j = 0; j < int(k->ne[1]); ++j) sorted[j] = j;
-            std::partial_sort(sorted, sorted + n_top_k, sorted + k->ne[1], [score] (int32_t l, int32_t r) -> bool { return score[l] > score[r]; });
+            // The consumers of this top-k (ggml_indexer_mask/MASK_TOPK scatter, ggml_get_rows
+            // gather, FA top-k src[5]) treat the selected keys as a set, so the kept keys need
+            // not be sorted among themselves (the single-token path already emits them in bucket
+            // order). std::nth_element partitions in O(n_kv) average comparisons instead of
+            // std::partial_sort's O(n_kv*log(n_top_k)) and skips the wasted final ordering.
+            // The k->ne[1] > n_top_k guard above keeps the partition point strictly inside.
+            std::nth_element(sorted, sorted + n_top_k, sorted + k->ne[1], [score] (int32_t l, int32_t r) -> bool { return score[l] > score[r]; });
             std::memcpy((char *)dst->data + dst->nb[1]*iq, sorted, n_top_k*sizeof(int32_t));
         }
         return true;
