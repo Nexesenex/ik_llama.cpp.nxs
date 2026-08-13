@@ -267,6 +267,15 @@ GGML_CALL void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void *
 
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+    if (offset + size > ggml_nbytes(tensor)) {
+        fprintf(stderr, "%s: tensor read out of bounds: name=%s type=%s ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] offset=%zu size=%zu nbytes=%zu buf=%s view_src=%s\n",
+            __func__, tensor->name, ggml_type_name(tensor->type),
+            (long long) tensor->ne[0], (long long) tensor->ne[1], (long long) tensor->ne[2], (long long) tensor->ne[3],
+            (size_t) tensor->nb[0], (size_t) tensor->nb[1], (size_t) tensor->nb[2], (size_t) tensor->nb[3],
+            offset, size, ggml_nbytes(tensor),
+            buf ? ggml_backend_buffer_name(buf) : "none",
+            tensor->view_src ? tensor->view_src->name : "none");
+    }
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
 
     if (!size) {
