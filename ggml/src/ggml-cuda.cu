@@ -761,7 +761,7 @@ GGML_CALL static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t 
             GGML_CUDA_LOG_WARN("%s: cross-device copy not available (GGML_CUDA_NO_PEER_COPY)\n", __func__);
             return false;
 #else
-            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, dst_ctx->device, src->data, src_ctx->device, ggml_nbytes(src), cudaStreamPerThread));
+            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, ggml_cuda_info().cuda_device_id[dst_ctx->device], src->data, ggml_cuda_info().cuda_device_id[src_ctx->device], ggml_nbytes(src), cudaStreamPerThread));
 #endif
         }
         CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
@@ -2580,10 +2580,10 @@ static void ggml_cuda_op_mul_mat(
                                 const size_t pitch = ne11*sizeof(block_q8_1_mmq);
                                 const size_t width = src1_ncols*sizeof(block_q8_1_mmq);
                                 const size_t height = src1_padded_col_size/(4*QK8_1);
-                                CUDA_CHECK(ggml_cuda_Memcpy2DPeerAsync(src1_ddq_i, id, pitch, src1_ddq_i_source, ctx.device, pitch, width, height, stream));
+                                CUDA_CHECK(ggml_cuda_Memcpy2DPeerAsync(src1_ddq_i, ggml_cuda_info().cuda_device_id[id], pitch, src1_ddq_i_source, ggml_cuda_info().cuda_device_id[ctx.device], pitch, width, height, stream));
                             } else {
                                 CUDA_CHECK(cudaMemcpyPeerAsync(
-                                    src1_ddq_i, id, src1_ddq_i_source, ctx.device, src1_ncols*src1_padded_col_size*q8_1_ts/q8_1_bs, stream));
+                                    src1_ddq_i, ggml_cuda_info().cuda_device_id[id], src1_ddq_i_source, ggml_cuda_info().cuda_device_id[ctx.device], src1_ncols*src1_padded_col_size*q8_1_ts/q8_1_bs, stream));
                             }
                         } else {
                             if (!src1->data) {
@@ -2591,7 +2591,7 @@ static void ggml_cuda_op_mul_mat(
                             }
                             float * src1_ddf_i_source = (float *) src1->data;
                             src1_ddf_i_source += (i0*ne11 + src1_col_0) * ne10;
-                            CUDA_CHECK(cudaMemcpyPeerAsync(src1_ddf_i, id, src1_ddf_i_source, ctx.device,
+                            CUDA_CHECK(cudaMemcpyPeerAsync(src1_ddf_i, ggml_cuda_info().cuda_device_id[id], src1_ddf_i_source, ggml_cuda_info().cuda_device_id[ctx.device],
                                                             src1_ncols*ne10*sizeof(float), stream));
                         }
                     }
@@ -4813,13 +4813,13 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
 
                 ggml_cuda_cpy(*cuda_ctx_src, src, &src_f16, true);
 
-                CUDA_CHECK(cudaMemcpyPeerAsync(tmp_dst.ptr, cuda_ctx_dst->device, src_f16.data, cuda_ctx_src->device, ggml_nbytes(&src_f16), cuda_ctx_src->stream()));
+                CUDA_CHECK(cudaMemcpyPeerAsync(tmp_dst.ptr, ggml_cuda_info().cuda_device_id[cuda_ctx_dst->device], src_f16.data, ggml_cuda_info().cuda_device_id[cuda_ctx_src->device], ggml_nbytes(&src_f16), cuda_ctx_src->stream()));
 
                 needs_f16_f32_copy = true;
 
             } else {
                 ggml_cuda_set_device(cuda_ctx_src->device);
-                CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
+                CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, ggml_cuda_info().cuda_device_id[cuda_ctx_dst->device], src->data, ggml_cuda_info().cuda_device_id[cuda_ctx_src->device], ggml_nbytes(dst), cuda_ctx_src->stream()));
             }
 #endif
         }
