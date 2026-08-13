@@ -649,6 +649,18 @@ void fast_ht(int n, T * values) {
                         _mm256_storeu_ps(values + j,     _mm256_add_ps(vx, vy));
                         _mm256_storeu_ps(values + j + h, _mm256_sub_ps(vx, vy));
                     }
+                } else if (h == 4) {
+                    // h=4: one block of 8 elements (2h = 8) fits a full register and the
+                    // butterfly operands (j, j+4) are the two 128-bit halves of the vector.
+                    // Add/sub the halves and reassemble (sums in the low lane, diffs in the
+                    // high lane), bit-identical to the scalar butterfly.
+                    auto vx = _mm256_loadu_ps(values + i);
+                    __m128 lo = _mm256_castps256_ps128(vx);
+                    __m128 hi = _mm256_extractf128_ps(vx, 1);
+                    __m128 s = _mm_add_ps(lo, hi);
+                    __m128 d = _mm_sub_ps(lo, hi);
+                    _mm256_storeu_ps(values + i, _mm256_set_m128(d, s));
+                    j = i + 8;
                 }
             }
 #endif
