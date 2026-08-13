@@ -107,7 +107,7 @@ static void copy_missing_tensors(ggml_backend_cuda_context & ctx, ggml_tensor * 
         isrc = (isrc + 1)%nhave;
         //printf("%s: copying from device %d to device %d: %p -> %p\n", __func__, j, i, dst->src[j]->data, dst->src[i]->data);
         ggml_cuda_set_device(j);
-        CUDA_CHECK(cudaMemcpyPeerAsync(dst->src[i]->data, all_ctx[i]->device, dst->src[j]->data, all_ctx[j]->device,
+        CUDA_CHECK(cudaMemcpyPeerAsync(dst->src[i]->data, info.cuda_device_id[all_ctx[i]->device], dst->src[j]->data, info.cuda_device_id[all_ctx[j]->device],
                             size, all_ctx[j]->stream()));
         CUDA_CHECK(cudaEventRecord(all_ctx[j]->copy_event, all_ctx[j]->stream()));
     }
@@ -314,8 +314,8 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 if (stage > 0) {
                     CUDA_CHECK(cudaStreamWaitEvent(all_ctx[peer]->stream(), all_ctx[i]->compute_event, 0));
                 }
-                CUDA_CHECK(cudaMemcpyPeerAsync(all_ctx[i]->copy_buffer, all_ctx[i]->device,
-                            (const char *)dst->src[peer]->data + ichunk*size_per_device, all_ctx[peer]->device,
+                CUDA_CHECK(cudaMemcpyPeerAsync(all_ctx[i]->copy_buffer, info.cuda_device_id[all_ctx[i]->device],
+                            (const char *)dst->src[peer]->data + ichunk*size_per_device, info.cuda_device_id[all_ctx[peer]->device],
                             this_size, all_ctx[peer]->stream()));
                 CUDA_CHECK(cudaEventRecord(all_ctx[peer]->copy_event, all_ctx[peer]->stream()));
                 ichunk = (ichunk + 1)%nhave;
@@ -357,8 +357,8 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 if (stage == 0) {
                     CUDA_CHECK(cudaStreamWaitEvent(all_ctx[peer]->stream(), all_ctx[i]->compute_event, 0));
                 }
-                CUDA_CHECK(cudaMemcpyPeerAsync((char *)dst->src[i]->data + ichunk*size_per_device, all_ctx[i]->device,
-                            (const char *)dst->src[peer]->data + ichunk*size_per_device, all_ctx[peer]->device,
+                CUDA_CHECK(cudaMemcpyPeerAsync((char *)dst->src[i]->data + ichunk*size_per_device, info.cuda_device_id[all_ctx[i]->device],
+                            (const char *)dst->src[peer]->data + ichunk*size_per_device, info.cuda_device_id[all_ctx[peer]->device],
                             this_size, all_ctx[peer]->stream()));
                 CUDA_CHECK(cudaEventRecord(all_ctx[peer]->copy_event, all_ctx[peer]->stream()));
                 ichunk = (ichunk + 1)%nhave;
@@ -546,7 +546,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         GGML_ASSERT(ggml_are_same_shape(dst, dst->src[i]));
         if (i == ctx.device) continue;
         ggml_cuda_set_device(i);
-        CUDA_CHECK(cudaMemcpyPeerAsync(ptr, ctx.device, dst->src[i]->data, i, nbytes, all_ctx[i]->stream()));
+        CUDA_CHECK(cudaMemcpyPeerAsync(ptr, info.cuda_device_id[ctx.device], dst->src[i]->data, info.cuda_device_id[i], nbytes, all_ctx[i]->stream()));
         if (!all_ctx[i]->copy_event) {
             CUDA_CHECK(cudaEventCreateWithFlags(&all_ctx[i]->copy_event, cudaEventDisableTiming));
         }
@@ -583,7 +583,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         if (i == ctx.device) continue;
         ggml_cuda_set_device(i);
         CUDA_CHECK(cudaStreamWaitEvent(all_ctx[i]->stream(), ctx.copy_event, 0));
-        CUDA_CHECK(cudaMemcpyPeerAsync(dst->src[i]->data, i, dst->data, ctx.device, nbytes, all_ctx[i]->stream()));
+        CUDA_CHECK(cudaMemcpyPeerAsync(dst->src[i]->data, info.cuda_device_id[i], dst->data, info.cuda_device_id[ctx.device], nbytes, all_ctx[i]->stream()));
         CUDA_CHECK(cudaEventRecord(all_ctx[i]->copy_event, all_ctx[i]->stream()));
     }
     ggml_cuda_set_device(ctx.device);
