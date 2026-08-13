@@ -1813,7 +1813,6 @@ bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int repeat_ty
 
 namespace {
 constexpr int k_indexer_chunks = 64;
-constexpr int k_n_bucket = 64;
 size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth) {
     auto k = dst->src[0];
     auto q = dst->src[1];
@@ -1862,210 +1861,6 @@ inline float hmin_f32_8(__m256 x) {
 }
 #endif
 
-// Note: result is not actually sorted in decreasing order, we just get the indices of the ntop
-//       values stored in idx.
-// In micro-benchmark testing this code outperforms std::partial_sort by a factor of 4-6
-// (factors, not percentages!).
-// For DS4 running CPU-only this translates into a 3% better TG at a context of 128k tokens.
-void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_inf, int nbucket, int * counts,
-        int * idx_aux) {
-#if 0
-    int ngood = nval;
-    while (ngood > 0 && values[ngood-1] == -INFINITY) --ngood;
-    if (ngood <= ntop) {
-        for (int j = 0; j < ntop; ++j) idx[j] = j;
-        return;
-    }
-    float max = values[0], min = values[0];
-#ifdef __AVX2__
-    auto vmax = _mm256_loadu_ps(values);
-    auto vmin = vmax;
-    auto vidx = _mm256_set_epi32(7,6,5,4,3,2,1,0);
-    auto vstep = _mm256_set1_epi32(8);
-    _mm256_storeu_si256((__m256i *)idx, vidx);
-    for (int j = 1; j < ngood/8; ++j) {
-        auto v = _mm256_loadu_ps(values + 8*j);
-        vidx = _mm256_add_epi32(vidx, vstep);
-        _mm256_storeu_si256((__m256i *)idx + j, vidx);
-        vmax = _mm256_max_ps(vmax, v);
-        vmin = _mm256_min_ps(vmin, v);
-    }
-    max = hmax_f32_8(vmax);
-    min = hmin_f32_8(vmin);
-    for (int j = 8*(ngood/8); j < ngood; ++j) {
-        float v = values[j];
-        max = std::max(max, v);
-        min = std::min(min, v);
-        idx[j] = j;
-    }
-#else
-    for (int j = 0; j < ngood; ++j) {
-        float v = values[j];
-        max = std::max(max, v);
-        min = std::min(min, v);
-        idx[j] = j;
-    }
-#endif
-#else
-    // If we knew that we don't have -inf values, we could do this more efficiently.
-    // But we don't. At least not for sure.
-    // Oh, I did measure using the above commented out code, which assumes that
-    // -inf values if present are at the end, and I saw no real performance difference.
-    int ngood = 0, ninf = 0;
-    float max = values[0], min = values[0];
-#ifdef __AVX2__
-    // Process 8 values at a time: track max/min of the good values and the -inf count
-    // in SIMD. Groups that are entirely good are compacted (values + original indices)
-    // with vectorized stores; mixed groups fall back to the scalar path.
-    {
-        auto vninf = _mm256_set1_ps(-INFINITY);
-        auto vpinf = _mm256_set1_ps( INFINITY);
-        auto vmax = vninf;
-        auto vmin = vpinf;
-        int j = 0;
-        for (; j + 8 <= nval; j += 8) {
-            auto v = _mm256_loadu_ps(values + j);
-            auto good = _mm256_cmp_ps(v, vninf, _CMP_GT_OQ);
-            vmax = _mm256_max_ps(vmax, v);
-            vmin = _mm256_min_ps(vmin, _mm256_blendv_ps(vpinf, v, good));
-            if (_mm256_movemask_ps(good) == 0xff) {
-                _mm256_storeu_ps(values + ngood, v);
-                auto vi = _mm256_add_epi32(_mm256_set1_epi32(j), _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0));
-                _mm256_storeu_si256((__m256i *)(idx + ngood), vi);
-                ngood += 8;
-            } else {
-                for (int k = 0; k < 8; ++k) {
-                    if (float vv = values[j + k]; vv > -INFINITY) {
-                        values[ngood] = vv;
-                        idx[ngood++] = j + k;
-                    } else {
-                        idx_inf[ninf++] = j + k;
-                    }
-                }
-            }
-        }
-        max = hmax_f32_8(vmax);
-        min = hmin_f32_8(vmin);
-        for (; j < nval; ++j) {
-            float v = values[j];
-            if (v > -INFINITY) {
-                values[ngood] = v;
-                idx[ngood++] = j;
-                max = std::max(max, v);
-                min = std::min(min, v);
-            } else {
-                idx_inf[ninf++] = j;
-            }
-        }
-    }
-#else
-    for (int j = 0; j < nval; ++j) {
-        if (float v = values[j]; v > -INFINITY) {
-            values[ngood] = v;
-            idx[ngood++] = j;
-            max = std::max(max, v);
-            min = std::min(min, v);
-        } else {
-            idx_inf[ninf++] = j;
-        }
-    }
-#endif
-#endif
-    if (ngood <= ntop) {
-        for (int j = ngood; j < ntop; ++j) idx[j] = idx_inf[j-ngood];
-        return;
-    }
-    if (max - min < 1e-6f) return; // we got basically the same values, so it doesn't matter which we pick
-    float av = (nbucket - 0.75f)/(min - max);
-    float bv = -av*max;
-#ifdef __AVX2__
-    auto v_av = _mm256_set1_ps(av);
-    auto v_bv = _mm256_set1_ps(bv);
-    for (int i = 0; i < nbucket; ++i) counts[i] = 0;
-    for (int j = 0; j < ngood/8; ++j) {
-        auto v = _mm256_loadu_ps(values + 8*j);
-        auto xv = _mm256_fmadd_ps(v_av, v, v_bv);
-        auto iv = _mm256_cvtps_epi32(xv);
-        iv = _mm256_min_epi32(iv, _mm256_set1_epi32(nbucket-1));
-        auto aux = idx_aux + 8*j;
-        _mm256_storeu_si256((__m256i *)aux, iv);
-        for (int k = 0; k < 8; ++k) ++counts[aux[k]];
-    }
-    for (int j = 8*(ngood/8); j < ngood; ++j) {
-        int i = int(av*values[j] + bv);
-        i = std::min(i, nbucket-1);
-        idx_aux[j] = i;
-        ++counts[i];
-    }
-#else
-    for (int j = 0; j < ngood; ++j) {
-        int i = int(av*values[j] + bv);
-        i = std::min(i, nbucket-1);
-        idx_aux[j] = i;
-        ++counts[i];
-    }
-#endif
-    int last_bucket = 0;
-    int sum = 0;
-    for (; last_bucket < nbucket-1; ++last_bucket) {
-        sum += counts[last_bucket];
-        if (sum >= ntop) break;
-    }
-    int nhave = 0, nlast = 0;
-#ifdef __AVX2__
-    // Classify 8 rows at a time: skip whole groups that land past the last bucket
-    // (the common case when ntop << nval) and store whole groups that all qualify
-    // with vectorized stores.
-    {
-        auto vlb = _mm256_set1_epi32(last_bucket);
-        int j = 0;
-        for (; j + 8 <= ngood; j += 8) {
-            auto vaux = _mm256_loadu_si256((const __m256i *)(idx_aux + j));
-            int mlt = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpgt_epi32(vlb, vaux)));
-            int meq = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(vaux, vlb)));
-            if (mlt == 0xff) {
-                _mm256_storeu_si256((__m256i *)(idx + nhave), _mm256_loadu_si256((const __m256i *)(idx + j)));
-                nhave += 8;
-            } else if ((mlt | meq) == 0) {
-                continue;
-            } else {
-                for (int k = 0; k < 8; ++k) {
-                    if (idx_aux[j + k] < last_bucket) {
-                        idx[nhave++] = idx[j + k];
-                    } else if (idx_aux[j + k] == last_bucket) {
-                        idx_inf[nlast++] = idx[j + k];
-                    }
-                }
-            }
-        }
-        for (; j < ngood; ++j) {
-            if (idx_aux[j] < last_bucket) {
-                idx[nhave++] = idx[j];
-            } else if (idx_aux[j] == last_bucket) {
-                idx_inf[nlast++] = idx[j];
-            }
-        }
-    }
-#else
-    for (int j = 0; j < ngood; ++j) {
-        if (idx_aux[j] < last_bucket) {
-            idx[nhave++] = idx[j];
-        } else if (idx_aux[j] == last_bucket) {
-            idx_inf[nlast++] = idx[j];
-        }
-    }
-#endif
-    int n_extra = ntop - nhave;
-    auto compare = [values] (int l, int r) {
-        return values[l] > values[r];
-    };
-    if (2*n_extra < nlast) {
-        std::partial_sort(idx_inf, idx_inf + n_extra, idx_inf + nlast, compare);
-    } else {
-        std::sort(idx_inf, idx_inf + nlast, compare);
-    }
-    for (int j = 0; j < n_extra; ++j) idx[nhave + j] = idx_inf[j];
-}
 #ifdef __AVX2__
 inline void iqk_repack_f16(int nrows, int n_per_row, const char * k_in, size_t nb, float * k_out) {
     __m256 xv[4];
@@ -2145,7 +1940,6 @@ size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread
     size += k->ne[1] * q->ne[1] * sizeof(float);
     size += k->ne[1] * sizeof(float);
     size += k->ne[1] * sizeof(int32_t);
-    size += (2*k->ne[1] + k_n_bucket)*sizeof(int);
     return size;
 }
 
@@ -2352,10 +2146,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
         auto kq = k_repacked_all + k->ne[1]*k->ne[0];
         auto score = kq + k->ne[1]*q->ne[1];
         auto sorted = (int32_t *)(score + k->ne[1]);
-        auto idx_inf = sorted + k->ne[1];
-        auto idx_aux = idx_inf + k->ne[1];
-        auto counts  = idx_aux + k->ne[1];
-        auto kq_local = (float *)(counts + k_n_bucket) + ith * 32 * q->ne[1];
+        auto kq_local = (float *)(sorted + k->ne[1]) + ith * 32 * q->ne[1];
         for (int iq2 = 0; iq2 < q->ne[2]; ++iq2) {
             auto this_q = (const char *)q->data + iq2*q->nb[2];
             auto this_m = (const char *)m->data + iq2*m->nb[1];
@@ -2391,7 +2182,8 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
             }
             barrier(barrier_data);
             if (ith == 0) {
-                iqk_bucket_topk(k->ne[1], n_top_k, score, sorted, idx_inf, k_n_bucket, counts, idx_aux);
+                for (int j = 0; j < int(k->ne[1]); ++j) sorted[j] = j;
+                std::nth_element(sorted, sorted + n_top_k, sorted + k->ne[1], [score] (int32_t l, int32_t r) -> bool { return score[l] > score[r]; });
                 std::memcpy((char *)dst->data + dst->nb[1]*iq2, sorted, n_top_k*sizeof(int32_t));
             }
             if (iq2 + 1 < q->ne[2]) {
@@ -2437,9 +2229,6 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     auto score = kq + k->ne[1]*q->ne[1];
     auto score_th = score + first;
     auto sorted = (int32_t *)(score + k->ne[1]);
-    auto idx_inf = sorted + k->ne[1];
-    auto idx_aux = idx_inf + k->ne[1];
-    auto counts  = idx_aux + k->ne[1];
     for (int iq = 0; iq < q->ne[2]; ++iq) {
         if (n_this_thread > 0) {
             auto this_q = q_data + iq*qnb2;
@@ -2480,7 +2269,8 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
         }
         barrier(barrier_data);
         if (ith == 0) {
-            iqk_bucket_topk(k->ne[1], n_top_k, score, sorted, idx_inf, k_n_bucket, counts, idx_aux);
+            for (int j = 0; j < int(k->ne[1]); ++j) sorted[j] = j;
+            std::nth_element(sorted, sorted + n_top_k, sorted + k->ne[1], [score] (int32_t l, int32_t r) -> bool { return score[l] > score[r]; });
             std::memcpy((char *)dst->data + dst->nb[1]*iq, sorted, n_top_k*sizeof(int32_t));
         }
         if (iq + 1 < q->ne[2]) {
