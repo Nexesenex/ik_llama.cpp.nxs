@@ -2031,6 +2031,8 @@ static void ggml_cuda_op_mul_mat_cublas(
 static bool ggml_cuda_set_peer_access(int main_device) {
     ggml_cuda_set_device(main_device);
 
+    const auto & info = ggml_cuda_info();
+
     bool all_enabled = true;
     for (int id_other = 0; id_other < ggml_backend_cuda_get_device_count(); ++id_other) {
         if (main_device == id_other) {
@@ -2038,12 +2040,12 @@ static bool ggml_cuda_set_peer_access(int main_device) {
         }
 
         int can_access_peer;
-        CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, main_device, id_other));
+        CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, info.cuda_device_id[main_device], info.cuda_device_id[id_other]));
         if (can_access_peer) {
 //~ #ifdef NDEBUG
             GGML_CUDA_LOG_INFO(" =========================== %s: Enabling Peer Access between Devices %d->%d\n", __func__, main_device, id_other);
 //~ #endif //NDEBUG
-            cudaError_t err = cudaDeviceEnablePeerAccess(id_other, 0);
+            cudaError_t err = cudaDeviceEnablePeerAccess(info.cuda_device_id[id_other], 0);
             if (err != cudaErrorPeerAccessAlreadyEnabled) {
                 CUDA_CHECK(err);
             } else {
