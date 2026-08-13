@@ -446,7 +446,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     }
 
     // ---- write the batch's indexer keys into the persistent indexer-key cache at kv_head ----
-    // kr_l[il] is [head_size, kv_size] (F16, MQA single head). Store {head_size, n_tokens}.
+    // kr_l[il] is [head_size, kv_size] (idx_type_k, MQA single head). Store {head_size, n_tokens}.
     ggml_tensor * kr_cache = kv_self.kr_l[il];
     GGML_ASSERT(kr_cache && "DSA indexer key cache not allocated");
     {
