@@ -2655,7 +2655,7 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
         for (int id = 0; id < split_output->n_device; ++id) {
             auto split = split_output->splits[id];
             if (!split) continue;
-            o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur));
+            o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, get_input_tensor_sm_graph(ctx, cur, id)));
             cb(o.back(), "output", id);
         }
         if (o.size() == 1) cur = o.front();
@@ -2681,14 +2681,15 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
         for (int id = 0; id < split_output->n_device; ++id) {
             auto split = split_output->splits[id];
             if (!split) continue;
+            auto cur_id = get_input_tensor_sm_graph(ctx, cur, id);
             if (output_norm) {
                 auto the_norm = split_output_norm ? split_output_norm->splits[id] : output_norm;
-                auto cur_normed = llm_build_context::llm_build_norm(ctx, cur, lctx.model.hparams, the_norm, NULL, LLM_NORM_RMS, cb, -1);
+                auto cur_normed = llm_build_context::llm_build_norm(ctx, cur_id, lctx.model.hparams, the_norm, NULL, LLM_NORM_RMS, cb, -1);
                 last_norm = cur_normed;
                 cb(cur_normed, "result_norm", 1000*(id+1));
                 o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur_normed));
             } else {
-                o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur));
+                o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur_id));
             }
             cb(o.back(), "output", id);
             if (add_normed_name && last_norm) {
