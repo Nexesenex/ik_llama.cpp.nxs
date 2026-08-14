@@ -327,7 +327,33 @@ struct llama_control_vector {
     struct ggml_tensor * apply_to(struct ggml_context * ctx, struct ggml_tensor * cur, int  il) const {
         ggml_tensor * layer_dir = tensor_for(il);
         if (layer_dir != nullptr) {
-            cur = ggml_add(ctx, cur, layer_dir);
+            if (cur->op == GGML_OP_REDUCE) {
+                // In tensor-parallel mode the layer output is a REDUCE node: a view of the
+                // last device's partial, and after the reduce runs every device's partial
+                // holds the full sum. Adding the direction on top of the view would force
+                // the scheduler to copy the whole hidden state to every device for the next
+                // layer. Instead, apply the direction to the last local partial and rebuild
+                // the reduce so the full sum (including the direction) is written back into
+                // every device's partial, preserving the local-partial consumption pattern.
+                const int n = cur->op_params[1];
+                const uint32_t placeholders = cur->op_params[4];
+                ggml_tensor * srcs[GGML_MAX_SRC];
+                for (int j = 0; j < n; ++j) {
+                    srcs[j] = cur->src[j];
+                }
+                int last = n - 1;
+                while (last >= 0 && srcs[last] == nullptr) --last;
+                GGML_ASSERT(last >= 0);
+                // the original reduce is already expanded into the graph; turn it into a
+                // no-op so it does not overwrite the partials with the direction-free sum
+                // before the rebuilt reduce runs
+                cur->op_params[3] = 1;
+                srcs[last] = ggml_add(ctx, srcs[last], layer_dir);
+                cur = ggml_reduce(ctx, srcs, n, GGML_OP_ADD);
+                cur->op_params[4] = placeholders;
+            } else {
+                cur = ggml_add(ctx, cur, layer_dir);
+            }
         }
         return cur;
     }
