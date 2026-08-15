@@ -83,12 +83,17 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_poller_sync(const int * intervals,
 // for that GPU. n_intervals <= 0 or all zeros disables (default).
 GGML_API GGML_CALL void ggml_backend_cuda_set_poller_ping_mem(const int * intervals, int n_intervals);
 
-// Autonomous periodic FMA ping (--poller-ping-fma N[,N,...]). A background thread fires
-// the full-residency FMA burst on each non-TCC (WDDM) GPU at its own interval -
-// the core-clock half of the ping load, no NVAPI. Per-GPU chain length comes
+// Set per-GPU number of 2 MiB passes (bursts) for each autonomous mem-clock ping
+// (--poller-ping-mem-amplitude). Same broadcast / positional non-TCC (WDDM) mapping and
+// semantics as set_poller_ping_fma_amplitude; 0 in the list disables the mem ping on that GPU.
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_ping_mem_amplitude(const int * bursts, int n);
+
+// Autonomous periodic compute ping (--poller-ping-compute N[,N,...]). A background thread fires
+// the full-residency FMA+MMA bursts on each non-TCC (WDDM) GPU at its own interval -
+// the core-clock compute half of the ping load, no NVAPI. Per-GPU chain length comes
 // from set_poller_ping_fma_amplitude(); the shared skip mask (set_poller_skip) is honored.
 // Same per-GPU mapping as set_poller_ping_mem (single value broadcasts, 0 = off).
-GGML_API GGML_CALL void ggml_backend_cuda_set_poller_ping_fma(const int * intervals, int n_intervals);
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_ping_compute(const int * intervals, int n_intervals);
 
 // Enable the CUDA heartbeat warmup (--poller-warmup-fma). During TG, launches a full-residency
 // FMA burst per WDDM GPU per decode batch to keep the core clock elevated.
@@ -97,11 +102,12 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_poller_warmup_fma(bool val);
 
 // Decode-gated mem-clock companion (--poller-warmup-mem). During TG, launches the mem burst
 // per enabled WDDM GPU per decode batch, mirroring the poller-warmup-fma cadence
-// (mem-only, FMA-free). mask[] maps positionally to non-TCC (WDDM) GPUs in ggml
-// device order; 1 = on for that GPU, 0 = off. A single value broadcasts to every
-// WDDM GPU (bare --poller-warmup-mem = all on); all zeros or n <= 0 disables (default). The
+// (mem-only, FMA-free). bursts[] maps positionally to non-TCC (WDDM) GPUs in ggml
+// device order; the value is the number of 2 MiB passes over the companion buffer per
+// TG batch, 0 = off for that GPU. A single value broadcasts to every WDDM GPU
+// (bare --poller-warmup-mem = 1 burst); all zeros or n <= 0 disables (default). The
 // shared skip mask (set_poller_skip) is honored. Works independently of --poller-warmup-fma.
-GGML_API GGML_CALL void ggml_backend_cuda_set_poller_warmup_mem(const int * mask, int n);
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_warmup_mem(const int * bursts, int n);
 
 // Decode-solicited FMA probe (--poller-activity-fma). During TG, fires a short FMA burst on
 // a WDDM GPU exactly when that GPU actually receives compute nodes in the current
@@ -137,6 +143,15 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_poller_warmup_mma(const int * mmas
 // permanent heat penalty.
 GGML_API GGML_CALL void ggml_backend_cuda_set_poller_activity_mma(const int * mmas, int n);
 
+// Decode-solicited mem burst (--poller-activity-mem). During TG, fires a short mem-clock burst
+// on a WDDM GPU exactly when that GPU actually receives compute nodes in the current
+// batch's split graph (the scheduler invokes graph_compute per device that has work).
+// bursts[] maps positionally to non-TCC (WDDM) GPUs in ggml device order; the value is
+// the number of 2 MiB passes, 0 = off for that GPU. A single value broadcasts to every
+// WDDM GPU (bare --poller-activity-mem = 1 burst); all zeros or n <= 0 disables (default).
+// The shared skip mask (set_poller_skip) is honored.
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_activity_mem(const int * bursts, int n);
+
 // Set per-GPU FMA chain length for the heartbeat warmup kernel. A single value
 // broadcasts to every WDDM GPU (bare --poller-warmup-fma = all GPUs at the default); more
 // values map positionally to non-TCC (WDDM) GPUs in ggml device order (TCC
@@ -147,15 +162,21 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_poller_activity_mma(const int * mm
 // each WDDM GPU with the effective FMA, or that it is disabled).
 GGML_API GGML_CALL void ggml_backend_cuda_set_poller_warmup_fma_strength(const int * fmas, int n);
 
-// Set per-GPU FMA chain length for the autonomous FMA ping (--poller-ping-fma). Same
+// Set per-GPU FMA chain length for the autonomous compute ping (--poller-ping-compute). Same
 // broadcast / positional non-TCC (WDDM) mapping and semantics as set_poller_warmup_fma_strength;
 // shorter than the warmup by default (~1 ms), so the ping cycle keeps idle gaps.
 // 0 in the list disables the FMA ping on that GPU (e.g. --poller-ping-fma-amplitude 0,8192).
 GGML_API GGML_CALL void ggml_backend_cuda_set_poller_ping_fma_amplitude(const int * fmas, int n);
 
+// Set per-GPU tensor-core (HMMA) chain length for the autonomous compute ping (--poller-ping-compute).
+// The MMA half of the core-clock compute ping, driven by the same --poller-ping-compute thread as the
+// FMA half. Same broadcast / positional non-TCC (WDDM) mapping and semantics as
+// set_poller_ping_fma_amplitude; 0 in the list disables the MMA ping on that GPU.
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_ping_mma_amplitude(const int * mmas, int n);
+
 // Set a per-card skip mask for the warmup and the pings. skip[] is indexed by
 // WDDM position (0 = first non-TCC GPU) and, when true, suppresses the warmup
-// (--poller-warmup-fma), the mem stream (--poller-ping-mem) and the FMA ping (--poller-ping-fma) for that
+// (--poller-warmup-fma), the mem stream (--poller-ping-mem) and the compute ping (--poller-ping-compute) for that
 // GPU (e.g. a card that is too hot). The NVAPI poller (--poller-nvapi) feeds this
 // from its per-GPU temperature readings. Pass skip == nullptr to clear it.
 GGML_API GGML_CALL void ggml_backend_cuda_set_poller_skip(const bool * skip, int n);

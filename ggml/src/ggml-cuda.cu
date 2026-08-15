@@ -5181,6 +5181,8 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     // poller-activity-mma: same decode-solicited trigger but for the tensor-core
     // HMMA probe - a far denser pulse per ms, riding along with the real kernels.
     ggml_cuda_poller_activity_mma_ping_device(cuda_ctx->device);
+    // poller-activity-mem: same decode-solicited trigger but for the mem-clock companion burst.
+    ggml_cuda_poller_activity_mem_ping_device(cuda_ctx->device);
 
     ggml_cuda_set_device(cuda_ctx->device);
 
