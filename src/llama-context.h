@@ -648,14 +648,8 @@ struct llama_context {
         comp_plan hca_plan;
         comp_plan lid_plan;
 
-        struct mask_upload_state {
-            const struct ggml_tensor * tensor = nullptr;
-            const void * data = nullptr;
-            std::vector<int32_t> prev_visible;
-        };
-
-        std::vector<mask_upload_state> mask_states;
-        std::vector<char> mask_staging;
+        std::vector<float> csa_mask_data;
+        std::vector<float> hca_mask_data;
     };
     dsv4_runtime dsv4;
 
