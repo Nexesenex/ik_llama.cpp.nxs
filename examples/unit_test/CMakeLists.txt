@@ -30,7 +30,7 @@ if (MSVC)
         target_compile_options(unit_test PRIVATE "-mavxvnni" "-mavxvnniint8")
     endif()
 else()
-    target_compile_options(unit_test PRIVATE -mavx2 -mavxvnni -mavxvnniint8)
+    target_compile_options(unit_test PRIVATE -mavx2 -mavxvnni -mavxvnniint8 -mfma -mf16c)
 endif()
 
 # The fixed converter + reference quantizers are compiled directly into this

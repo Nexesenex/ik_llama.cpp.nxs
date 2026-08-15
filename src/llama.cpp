@@ -51,7 +51,11 @@ static int64_t g_t_start_ctx = 0;
 
 #ifdef GGML_USE_CUDA
 #  include "ggml-cuda.h"
-#  include "../common/nvapi_poller.h"
+// The NVAPI poller drives WDDM clock/pstate behaviour and is Windows-only.
+#  if defined(_WIN32)
+#    define LLAMA_USE_NVAPI_POLLER
+#    include "../common/nvapi_poller.h"
+#  endif
 #elif defined(GGML_USE_VULKAN)
 #  include "ggml-vulkan.h"
 #elif defined(GGML_USE_SYCL)
@@ -153,7 +157,7 @@ static std::string trim(const std::string & str) {
 
 static bool stop_internal_decode = false;
 
-#ifdef GGML_USE_CUDA
+#ifdef LLAMA_USE_NVAPI_POLLER
 // Empty device list: the poller auto-detects WDDM (non-TCC) GPUs in ggml
 // logical order, matching the poller-warmup-fma heartbeat's device set. TCC (e.g. A4000)
 // is never polled.
@@ -164,7 +168,7 @@ static bool g_nvapi_poller_enabled = false; // on only when --poller-nvapi is pa
 // Enable/disable the in-process NVAPI poller (Windows only, personal use).
 // Disabled by default; --poller-nvapi turns it on. A stopped poller is a no-op.
 void llama_nvapi_poller_set_enabled(bool enabled) {
-#ifdef GGML_USE_CUDA
+#ifdef LLAMA_USE_NVAPI_POLLER
     g_nvapi_poller_enabled = enabled;
     if (!enabled) {
         g_nvapi_poller.stop();
@@ -178,7 +182,7 @@ void llama_nvapi_poller_set_enabled(bool enabled) {
 // One value applies to every WDDM GPU; a comma list maps positionally. Applies
 // to the next start; a running poller keeps its current interval.
 void llama_nvapi_poller_set_interval(const int * intervals, int n) {
-#ifdef GGML_USE_CUDA
+#ifdef LLAMA_USE_NVAPI_POLLER
     if (intervals != nullptr && n > 0) {
         g_nvapi_poller.set_intervals(std::vector<int>(intervals, intervals + n));
     } else {
@@ -193,7 +197,7 @@ void llama_nvapi_poller_set_interval(const int * intervals, int n) {
 // Set the temperature thresholds at which the NVAPI poller pauses (pause_celsius)
 // and resumes (resume_celsius) polling per card (0 = off).
 void llama_nvapi_poller_set_temp_limits(int pause_celsius, int resume_celsius) {
-#ifdef GGML_USE_CUDA
+#ifdef LLAMA_USE_NVAPI_POLLER
     g_nvapi_poller.set_temp_limits(pause_celsius, resume_celsius);
 #else
     (void) pause_celsius;
@@ -204,7 +208,7 @@ void llama_nvapi_poller_set_temp_limits(int pause_celsius, int resume_celsius) {
 // Enable/disable monitor-only mode (--poller-warmup-fma: temperature tracking only, the
 // heartbeat warmup consumes the published hot_state as its skip mask).
 void llama_nvapi_poller_set_monitor_only(bool monitor_only) {
-#ifdef GGML_USE_CUDA
+#ifdef LLAMA_USE_NVAPI_POLLER
     g_nvapi_poller.set_monitor_only(monitor_only);
 #else
     (void) monitor_only;
@@ -214,7 +218,7 @@ void llama_nvapi_poller_set_monitor_only(bool monitor_only) {
 // Check GPU temperatures via NVAPI instead of spawning nvidia-smi (Windows only).
 // Fail-open: returns true when NVAPI is unavailable.
 bool llama_nvapi_gpu_temp_ok(int limit_celsius) {
-#ifdef GGML_USE_CUDA
+#ifdef LLAMA_USE_NVAPI_POLLER
     return nvapi_gpu_temp_ok(limit_celsius);
 #else
     (void) limit_celsius;
@@ -238,6 +242,8 @@ void llama_shark_stop(struct llama_context * ctx) {
     }
 #ifdef GGML_USE_CUDA
     ggml_backend_cuda_set_poller_active(false);
+#endif
+#ifdef LLAMA_USE_NVAPI_POLLER
     g_nvapi_poller.stop();
 #endif
 }
@@ -6593,6 +6599,7 @@ static int llama_decode_internal(
         if (n_tokens_all > 8) {
             lctx.nvapi_prefill_done = true;
         }
+#ifdef LLAMA_USE_NVAPI_POLLER
         if (lctx.nvapi_prefill_done && g_nvapi_poller_enabled) {
             if (n_tokens_all <= 8 && !g_nvapi_poller.is_running()) {
                 g_nvapi_poller.start();
@@ -6600,6 +6607,7 @@ static int llama_decode_internal(
                 g_nvapi_poller.stop();
             }
         }
+#endif
     }
 #endif
 #if IK_PRINT_TIMING > 2
@@ -7208,6 +7216,8 @@ static int llama_decode_internal(
             }
 #ifdef GGML_USE_CUDA
             ggml_backend_cuda_set_poller_active(false);
+#endif
+#ifdef LLAMA_USE_NVAPI_POLLER
             g_nvapi_poller.stop();
 #endif
             return -3;

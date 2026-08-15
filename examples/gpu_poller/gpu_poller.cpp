@@ -16,6 +16,11 @@ void signal_handler(int) {
     running = false;
 }
 
+#ifdef _WIN32
+#define popen  _popen
+#define pclose _pclose
+#endif
+
 bool is_tcc_device(int dev_id) {
     cudaDeviceProp prop;
     cudaError_t err = cudaGetDeviceProperties(&prop, dev_id);
@@ -26,15 +31,15 @@ bool is_tcc_device(int dev_id) {
 int get_gpu_temperature(int dev_id) {
     // Use nvidia-smi to get temperature
     std::string cmd = "nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits -i " + std::to_string(dev_id);
-    FILE* pipe = _popen(cmd.c_str(), "r");
+    FILE* pipe = popen(cmd.c_str(), "r");
     if (!pipe) return -1; // fail-open: assume OK
     char buffer[256];
     if (fgets(buffer, sizeof(buffer), pipe)) {
         int temp = std::atoi(buffer);
-        _pclose(pipe);
+        pclose(pipe);
         return temp;
     }
-    _pclose(pipe);
+    pclose(pipe);
     return -1;
 }
 
@@ -187,7 +192,7 @@ int main(int argc, char** argv) {
     int shortest_interval = *std::min_element(per_dev_interval.begin(), per_dev_interval.end());
     const auto temp_check_period = std::chrono::milliseconds(std::max(50 * shortest_interval, 250));
     std::vector<int> hot_devices; // devices paused because they are too hot
-    std::vector<std::chrono::steady_clock::time_point> next_due(active_devices.size(), {});
+    std::vector<std::chrono::steady_clock::time_point> next_due(active_devices.size(), std::chrono::steady_clock::time_point{});
     auto next_temp_check = std::chrono::steady_clock::now();
 
     while (running) {
