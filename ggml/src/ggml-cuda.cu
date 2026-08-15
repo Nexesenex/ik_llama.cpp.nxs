@@ -4961,6 +4961,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
         // on 3D K-cache matmuls or head-dimension reshapes.
         if (node->op == GGML_OP_MUL_MAT && node->src[1]->ne[1] > 1 &&
             node->src[1]->ne[2] == 1 && node->src[1]->ne[3] == 1) {
+            graph->disable_due_to_batch_gt_1 = true;
             use_cuda_graph = false;
 #ifndef NDEBUG
             GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to batch > 1 (SMTPS PP split)\n", __func__);
@@ -5239,7 +5240,13 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
 
             if (!use_cuda_graph) {
                 graph->cpy_node_indices.clear();
-                graph->disable_due_to_failed_graph_capture = true;
+                // The batch > 1 disable is transient: the graph key may later be reused
+                // by a batch == 1 (TG) split that CUDA graphs do support. Only mark the
+                // failure as permanent when the incompatibility is structural.
+                if (!graph->disable_due_to_batch_gt_1) {
+                    graph->disable_due_to_failed_graph_capture = true;
+                }
+                graph->disable_due_to_batch_gt_1 = false;
             }
         } else {
             refresh_cuda_graph_copy_ops(graph, cgraph, cuda_ctx->stream());
