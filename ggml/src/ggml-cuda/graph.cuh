@@ -31,6 +31,7 @@ struct ggml_cuda_graph {
     bool disable_due_to_gpu_arch = false;
     bool disable_due_to_too_many_updates = false;
     bool disable_due_to_failed_graph_capture = false;
+    bool disable_due_to_batch_gt_1 = false;
     int number_consecutive_updates = 0;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
     std::vector<int> cpy_node_indices;
