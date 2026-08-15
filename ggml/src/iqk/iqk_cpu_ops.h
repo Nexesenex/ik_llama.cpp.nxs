@@ -19,6 +19,8 @@ bool iqk_has_fancy_simd(void);
 
 void iqk_sumrows_div(struct ggml_tensor * div, int ith, int nth);
 
+void iqk_reduce(struct ggml_tensor * dst, int ith, int nth);
+
 void iqk_grouped_top_k(struct ggml_tensor * dst, int ith, int nth);
 
 void iqk_argsort(struct ggml_tensor * dst, int ith, int nth);
