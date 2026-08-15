@@ -5262,16 +5262,16 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
             } else {
                 graph->number_consecutive_updates = 0;
             }
-        }
 
-        if (graph->number_consecutive_updates >= 4) {
-            graph->cpy_node_indices.clear();
-            graph->disable_due_to_too_many_updates = true;
-            use_cuda_graph = false;
-            cuda_ctx->cur_graph = nullptr;
+            if (graph->number_consecutive_updates >= 4) {
+                graph->cpy_node_indices.clear();
+                graph->disable_due_to_too_many_updates = true;
+                use_cuda_graph = false;
+                cuda_ctx->cur_graph = nullptr;
 #ifndef NDEBUG
-            GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
+                GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
 #endif
+            }
         }
     }
 
