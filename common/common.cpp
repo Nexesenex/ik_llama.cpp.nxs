@@ -2487,7 +2487,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-p-ping-mma-a" || arg == "--poller-ping-mma-amplitude" || arg == "-kraken-ping") {
         // Optional value: --poller-ping-mma-amplitude MMA1,MMA2,... sets the per-GPU tensor-core
-        // (HMMA) ping strength for the autonomous --poller-ping-compute thread (positional, 0 disables
+        // (HMMA) ping strength for the autonomous --poller-ping-mma thread (positional, 0 disables
         // a GPU). Bare --poller-ping-mma-amplitude applies the default 8192 to every WDDM GPU.
         if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
             params.poller_ping_mma_amplitude = string_split<int>(argv[i+1], ',');
@@ -2666,22 +2666,42 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "-p-ping-comp" || arg == "--poller-ping-compute" || arg == "-perch") {
-        // --poller-ping-compute N or N,N,...: autonomous compute ping (FMA+MMA halves). Same per-GPU mapping as
-        // --poller-ping-mem (0 = off for that GPU). Bare --poller-ping-compute applies the default
-        // 100 ms to every WDDM GPU. Decoupled from the pollers.
+    if (arg == "-p-ping-fma" || arg == "--poller-ping-fma" || arg == "-perch") {
+        // --poller-ping-fma N or N,N,...: autonomous FMA ping (core-clock FMA half). Same
+        // per-GPU mapping as --poller-ping-mem (0 = off for that GPU). Bare --poller-ping-fma
+        // applies the default 100 ms to every WDDM GPU. Decoupled from the pollers.
         if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
-            params.poller_ping_compute_interval_ms = string_split<int>(argv[i+1], ',');
-            for (int v : params.poller_ping_compute_interval_ms) {
+            params.poller_ping_fma_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_ping_fma_interval_ms) {
                 if (v < 0) {
-                    fprintf(stderr, "error: --poller-ping-compute intervals must be >= 0 ms (0 = off)\n");
+                    fprintf(stderr, "error: --poller-ping-fma intervals must be >= 0 ms (0 = off)\n");
                     invalid_param = true;
                     break;
                 }
             }
             i++; // consume the interval value
         } else {
-            params.poller_ping_compute_interval_ms = {100};
+            params.poller_ping_fma_interval_ms = {100};
+        }
+        return true;
+    }
+    if (arg == "-p-ping-mma" || arg == "--poller-ping-mma" || arg == "-megalodon") {
+        // --poller-ping-mma N or N,N,...: autonomous tensor-core (HMMA) ping (core-clock MMA
+        // half). Same per-GPU mapping as --poller-ping-fma (0 = off for that GPU); shares the
+        // same ping thread. Bare --poller-ping-mma applies the default 100 ms to every WDDM
+        // GPU. Decoupled from the pollers.
+        if (i + 1 < argc && argv[i+1] != nullptr && isdigit(argv[i+1][0])) {
+            params.poller_ping_mma_interval_ms = string_split<int>(argv[i+1], ',');
+            for (int v : params.poller_ping_mma_interval_ms) {
+                if (v < 0) {
+                    fprintf(stderr, "error: --poller-ping-mma intervals must be >= 0 ms (0 = off)\n");
+                    invalid_param = true;
+                    break;
+                }
+            }
+            i++; // consume the interval value
+        } else {
+            params.poller_ping_mma_interval_ms = {100};
         }
         return true;
     }
@@ -3922,8 +3942,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "win32",       "-p-temps, --poller-temps [PAUSE[,RESUME]] (alias -pt)", "per-card heat protection thresholds in C (pause at PAUSE, resume below RESUME; single N = resume N-10; bare = 85,75; default off)" });
     options.push_back({ "win32",       "-p-warm-fma, --poller-warmup-fma [FMA1,FMA2,...] (alias -orca)",            "enable CUDA heartbeat warmup with per-GPU FMA length (non-TCC order, 0 disables a GPU; bare = 32768, scales down as the prompt fills the context, default off)" });
     options.push_back({ "win32",       "-p-warm-mma, --poller-warmup-mma [MMA1,MMA2,...] (alias -kraken)",          "tensor-core warmup like --poller-warmup-fma but with HMMA (~1000x FLOPs per instruction, denser pulse; 0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
-    options.push_back({ "win32",       "-p-ping-fma-a, --poller-ping-fma-amplitude [FMA1,FMA2,...] (alias -orca-ping)",       "per-GPU FMA ping strength for --poller-ping-compute, shorter than the warmup (0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
-    options.push_back({ "win32",       "-p-ping-mma-a, --poller-ping-mma-amplitude [MMA1,MMA2,...] (alias -kraken-ping)",     "per-GPU MMA ping strength for --poller-ping-compute, tensor-core half of the ping (~1000x FLOPs per instruction, denser pulse; 0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "-p-ping-fma-a, --poller-ping-fma-amplitude [FMA1,FMA2,...] (alias -orca-ping)",       "per-GPU FMA ping strength for --poller-ping-fma, shorter than the warmup (0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
+    options.push_back({ "win32",       "-p-ping-mma-a, --poller-ping-mma-amplitude [MMA1,MMA2,...] (alias -kraken-ping)",     "per-GPU MMA ping strength for --poller-ping-mma, tensor-core half of the ping (~1000x FLOPs per instruction, denser pulse; 0 disables a GPU; bare = 8192, scales down as the prompt fills the context, default off)" });
     options.push_back({ "win32",       "-p-warm-mem, --poller-warmup-mem [N1,N2,...] (alias -cobra)",           "decode-gated mem-clock companion: mem-only burst at every TG batch (per-WDDM-GPU number of 2 MiB passes, 0 = off for a GPU; bare = 1, default off)" });
     options.push_back({ "win32",       "-p-act-fma, --poller-activity-fma [FMA1,FMA2,...] (alias -fisherman)",       "decode-solicited FMA probe: short burst when a GPU is actually given work in the TG batch (per-WDDM-GPU FMA length, 0 = off for a GPU; bare = 8192, default off)" });
     options.push_back({ "win32",       "-p-act-mma, --poller-activity-mma [MMA1,MMA2,...] (alias -harpoon)",          "decode-solicited HMMA probe like --poller-activity-fma but on tensor cores (~1000x FLOPs per instruction, denser pulse; per-WDDM-GPU length, 0 = off for a GPU; bare = 8192, default off)" });
@@ -3931,7 +3951,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "win32",       "-p-sync, --poller-sync [N[,N,...]] (alias -hb)",                  "per-device event record+sync every N ms (cheap WDDM keep-alive, 0 = off for a GPU; bare = 25 ms, default off)" });
     options.push_back({ "win32",       "-p-ping-mem, --poller-ping-mem [N[,N,...]] (alias -barracuda)",             "autonomous mem-clock stream on WDDM GPUs (per-GPU interval(s) ms, 0 = off for a GPU; bare = 200 ms, default off)" });
     options.push_back({ "win32",       "-p-ping-mem-a, --poller-ping-mem-amplitude [N1,N2,...] (alias -cobra-ping)",        "per-GPU number of 2 MiB bursts for each --poller-ping-mem cycle (0 = off for a GPU; bare = 1, default off)" });
-    options.push_back({ "win32",       "-p-ping-comp, --poller-ping-compute [N[,N,...]] (alias -perch)",                "autonomous compute ping (FMA+MMA halves) on WDDM GPUs (per-GPU interval(s) ms, core clock, 0 = off for a GPU; bare = 100 ms, default off)" });
+    options.push_back({ "win32",       "-p-ping-fma, --poller-ping-fma [N[,N,...]] (alias -perch)",                "autonomous FMA ping on WDDM GPUs (per-GPU interval(s) ms, core-clock FMA half, 0 = off for a GPU; bare = 100 ms, default off)" });
+    options.push_back({ "win32",       "-p-ping-mma, --poller-ping-mma [N[,N,...]] (alias -megalodon)",               "autonomous tensor-core (HMMA) ping on WDDM GPUs (per-GPU interval(s) ms, core-clock MMA half sharing the --poller-ping-fma thread, 0 = off for a GPU; bare = 100 ms, default off)" });
     options.push_back({ "win32",       "--shark-path PATH",             "path to gpu_poller executable (default: %s)", params.shark_path.c_str() });
     options.push_back({ "win32",       "--shark-arg ARG",               "additional argument passed to gpu_poller (can be repeated)" });
     if (llama_supports_mlock()) {
@@ -5253,7 +5274,8 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     } else if (!params.poller_warmup_fma_strength.empty() || !params.poller_warmup_mma_strength.empty() || !params.poller_activity_mma_strength.empty() ||
                !params.poller_activity_fma_strength.empty() || !params.poller_warmup_mem_bursts.empty() ||
                !params.poller_activity_mem_bursts.empty() || !params.poller_ping_mem_amplitude.empty() || !params.poller_ping_mma_amplitude.empty() ||
-               !params.poller_sync_interval_ms.empty() || !params.poller_ping_mem_interval_ms.empty() || !params.poller_ping_compute_interval_ms.empty()) {
+               !params.poller_sync_interval_ms.empty() || !params.poller_ping_mem_interval_ms.empty() || !params.poller_ping_fma_interval_ms.empty() ||
+               !params.poller_ping_mma_interval_ms.empty()) {
         // Clock-elevation flags without --poller-nvapi: run the poller in monitor-only
         // mode so the warmup / probe / tickle / ping threads consume the published
         // per-card heat state as their skip mask (every launch path honors
@@ -5303,10 +5325,14 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
         // poller only does NVAPI temps + P-state forcing, this supplies the load.
         ggml_backend_cuda_set_poller_ping_mem(params.poller_ping_mem_interval_ms.data(), (int) params.poller_ping_mem_interval_ms.size());
     }
-    if (!params.poller_ping_compute_interval_ms.empty()) {
-        // Autonomous compute ping (--poller-ping-compute), the core-clock compute half of the
-        // ping load (fires the FMA+MMA halves).
-        ggml_backend_cuda_set_poller_ping_compute(params.poller_ping_compute_interval_ms.data(), (int) params.poller_ping_compute_interval_ms.size());
+    if (!params.poller_ping_fma_interval_ms.empty()) {
+        // Autonomous FMA ping (--poller-ping-fma), the core-clock FMA half of the ping load.
+        ggml_backend_cuda_set_poller_ping_fma(params.poller_ping_fma_interval_ms.data(), (int) params.poller_ping_fma_interval_ms.size());
+    }
+    if (!params.poller_ping_mma_interval_ms.empty()) {
+        // Autonomous tensor-core (HMMA) ping (--poller-ping-mma), the core-clock MMA half of
+        // the ping load; shares the --poller-ping-fma thread.
+        ggml_backend_cuda_set_poller_ping_mma(params.poller_ping_mma_interval_ms.data(), (int) params.poller_ping_mma_interval_ms.size());
     }
 #endif
 

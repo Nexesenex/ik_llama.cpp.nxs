@@ -410,7 +410,8 @@ struct gpt_params {
     //   --poller-activity-mma   [MMA1,...]   HMMA default 8192 (decode-solicited); off by default (empty)
     //   --poller-sync        [N[,N,...]]  interval default 25 ms;        off by default (empty)
     //   --poller-ping-mem [N[,N,...]]  interval default 200 ms;       off by default (empty)
-    //   --poller-ping-compute [N[,N,...]]  interval default 100 ms;       off by default (empty)
+    //   --poller-ping-fma [N[,N,...]]  interval default 100 ms;       off by default (empty)
+    //   --poller-ping-mma [N[,N,...]]  interval default 100 ms;       off by default (empty)
     //
     //   - Off by default means an empty vector (flag not given).
     //   - A bare flag (no value) activates it for every WDDM GPU at the default.
@@ -460,7 +461,7 @@ struct gpt_params {
     // FMA ping strength per WDDM GPU (same broadcast mapping as poller_warmup_fma_strength).
     // Default ~1 ms.
     std::vector<int> poller_ping_fma_amplitude;    // e.g. --poller-ping-fma-amplitude 8192,98304 : stronger ping per cycle; 0 disables that GPU
-    // MMA (tensor-core) ping strength per WDDM GPU for the autonomous --poller-ping-compute thread
+    // MMA (tensor-core) ping strength per WDDM GPU for the autonomous --poller-ping-mma thread
     // (same broadcast mapping as poller_ping_fma_amplitude; ~1000x FLOPs per instruction vs scalar
     // FMA). Default 8192; 0 disables that GPU.
     std::vector<int> poller_ping_mma_amplitude = {};   // e.g. --poller-ping-mma-amplitude 4096,8192
@@ -518,10 +519,17 @@ struct gpt_params {
     // bare --poller-ping-mem-amplitude applies 1 burst to all WDDM GPUs.
     std::vector<int> poller_ping_mem_amplitude = {};
 
-    // Autonomous compute ping (--poller-ping-compute N[,N,...]) on WDDM GPUs, the core-clock compute
-    // half of the ping load (fires the FMA+MMA halves). Same per-GPU mapping; 0 = off for a GPU. Empty = off
-    // (default); bare --poller-ping-compute applies 100 ms to all WDDM GPUs.
-    std::vector<int> poller_ping_compute_interval_ms = {};
+    // Autonomous FMA ping (--poller-ping-fma N[,N,...]) on WDDM GPUs, the core-clock FMA
+    // half of the ping load (fires only the FMA chain; the MMA half is --poller-ping-mma's
+    // job, same thread). Same per-GPU mapping; 0 = off for a GPU. Empty = off
+    // (default); bare --poller-ping-fma applies 100 ms to all WDDM GPUs.
+    std::vector<int> poller_ping_fma_interval_ms = {};
+
+    // Autonomous tensor-core (HMMA) ping (--poller-ping-mma N[,N,...]) on WDDM GPUs, the
+    // core-clock MMA half of the ping load (fires only the MMA chain; the FMA half is
+    // --poller-ping-fma's job, same thread). Same per-GPU mapping; 0 = off for a GPU.
+    // Empty = off (default); bare --poller-ping-mma applies 100 ms to all WDDM GPUs.
+    std::vector<int> poller_ping_mma_interval_ms = {};
 
     std::vector<std::string> in_files;     // all input files
     std::vector<std::string> antiprompt;   // strings upon which more user input is prompted (a.k.a. reverse prompts)

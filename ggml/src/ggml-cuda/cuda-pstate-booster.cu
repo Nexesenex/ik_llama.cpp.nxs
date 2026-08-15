@@ -1,6 +1,6 @@
 //
 // Clock-boosting / p-state machinery for WDDM GPUs (--poller-warmup-fma, --poller-warmup-mem, --poller-activity-fma,
-// --poller-warmup-mma, --poller-activity-mma, --poller-ping-mem, --poller-ping-compute) and the GGML_CALL setters. Split out of
+// --poller-warmup-mma, --poller-activity-mma, --poller-ping-mem, --poller-ping-fma, --poller-ping-mma) and the GGML_CALL setters. Split out of
 // ggml-cuda.cu; declarations in cuda-pstate-booster.cuh (internal API) and ggml-cuda.h
 // (public GGML_CALL API). Logging macros and ggml_cuda_log come from common.cuh.
 //
@@ -95,7 +95,7 @@ static bool ggml_cuda_poller_activity_mem_any = false;
 // pass accompanies real decode work, so the pulse just tops up the mem clock governor.
 static constexpr int GGML_CUDA_POLLER_ACTIVITY_MEM_BURSTS_DEFAULT = 1;
 
-// Decode-phase gate shared by the autonomous ping threads (--poller-ping-mem/--poller-ping-compute):
+// Decode-phase gate shared by the autonomous ping halves (--poller-ping-fma/--poller-ping-mma/--poller-ping-mem):
 // true only while llama.cpp is in the TG phase (kept in sync with the warmup
 // state, but set unconditionally so it works even when the warmup is disabled).
 static std::atomic<bool> ggml_cuda_poller_gate = false;
@@ -245,7 +245,7 @@ static bool ggml_cuda_poller_ping_fma_amplitude_override[GGML_CUDA_MAX_DEVICES] 
 static constexpr int GGML_CUDA_POLLER_PING_FMA_AMPLITUDE_DEFAULT = 8192;
 
 // Per-GPU HMMA chain length for the tensor-core half of the poller ping (--poller-ping-mma-amplitude).
-// Shares the autonomous --poller-ping-compute thread: each ping cycle launches both the FMA chain
+// Shares the single autonomous ping thread: each ping cycle launches both the FMA chain
 // (k_poller_warmup_fma) and, when enabled, the MMA chain (k_poller_warmup_mma). ~1000x the FLOPs
 // per instruction of the FMA half, so a far denser boost for the same wall-clock pulse.
 // A 0 set via set_poller_ping_mma_amplitude disables the MMA ping on that GPU.
@@ -820,9 +820,9 @@ GGML_CALL void ggml_backend_cuda_set_poller_sync(const int * intervals, int n) {
 
 // Launch the ping load on the w-th non-TCC (WDDM) GPU only (w = WDDM position;
 // TCC devices do not consume a slot). Used by the autonomous ping threads for
-// per-GPU cadence. Fire-and-forget, async. The core-clock compute ping (--poller-ping-compute) fires
-// both the FMA chain (k_poller_warmup_fma) and, when enabled, the MMA chain
-// (k_poller_warmup_mma); the mem-clock ping (--poller-ping-mem) fires the mem burst with
+// per-GPU cadence. Fire-and-forget, async. The core-clock ping fires its FMA half
+// (k_poller_warmup_fma) for --poller-ping-fma, its MMA half (k_poller_warmup_mma) for
+// --poller-ping-mma, and the mem-clock ping (--poller-ping-mem) fires the mem burst with
 // its per-GPU burst count. Returns false when no such GPU or nothing to launch.
 static bool ggml_cuda_poller_ping_launch_w(int w, bool do_fma, bool do_mma, bool do_mem) {
     const auto & info = ggml_cuda_info();
@@ -879,8 +879,8 @@ static bool ggml_cuda_poller_ping_launch_w(int w, bool do_fma, bool do_mma, bool
 }
 
 // Fire a ping burst on every non-TCC GPU, optionally with the FMA chain, the MMA
-// chain and/or the mem-clock stream: --poller-ping-compute fires the FMA+MMA halves,
-// --poller-ping-mem the mem half.
+// chain and/or the mem-clock stream: --poller-ping-fma fires the FMA half, --poller-ping-mma
+// the MMA half, --poller-ping-mem the mem half.
 // skip[] is indexed by WDDM position (0 = first non-TCC GPU); skip == nullptr
 // falls back to the shared skip mask (set_poller_skip), so a poller-nvapi-fed
 // too-hot card is skipped. Fire-and-forget, async.
@@ -902,15 +902,19 @@ static void ggml_cuda_poller_ping_launch(bool do_fma, bool do_mma, bool do_mem, 
     }
 }
 
-// Shared control for the two autonomous ping threads (--poller-ping-mem mem stream,
-// --poller-ping-compute compute ping): owns the stop flag, the per-GPU intervals, and the thread.
-// Joining happens in stop_thread() and in the destructor (process exit), so the
-// threads are never left joinable and never leak.
+// Shared control for the single autonomous ping thread: owns the stop flag, three
+// independent per-GPU interval sets (one per pulse half: FMA, MMA, mem), and the thread.
+// The FMA (--poller-ping-fma) and MMA (--poller-ping-mma) halves are the core-clock
+// compute ping; the mem half (--poller-ping-mem) is the mem-clock stream. All three fire
+// from the same thread at their own per-GPU cadence. Joining happens in stop_thread()
+// and in the destructor (process exit), so the thread is never left joinable and never leaks.
 struct ggml_cuda_poller_ping_thread_control {
     std::atomic<bool> stop = false;
-    // Per-GPU (WDDM-positional) interval in ms; 0 = off for that GPU. Written by
-    // the setters, read by the thread each tick.
-    std::atomic<int>  ms[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
+    // Per-GPU (WDDM-positional) interval in ms per half; 0 = off for that GPU. Written
+    // by the setters, read by the thread each tick.
+    std::atomic<int>  fma_ms[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
+    std::atomic<int>  mma_ms[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
+    std::atomic<int>  mem_ms[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
     std::thread       t;
 
     void stop_thread() {
@@ -921,11 +925,12 @@ struct ggml_cuda_poller_ping_thread_control {
     }
     ~ggml_cuda_poller_ping_thread_control() { stop_thread(); }
 };
-static ggml_cuda_poller_ping_thread_control ggml_cuda_poller_ping_mem_ctrl;
-static ggml_cuda_poller_ping_thread_control ggml_cuda_poller_ping_compute_ctrl;
+static ggml_cuda_poller_ping_thread_control ggml_cuda_poller_ping_ctrl;
 
-static void ggml_cuda_poller_ping_thread_proc(bool do_fma, bool do_mma, bool do_mem, std::atomic<bool> & stop, ggml_cuda_poller_ping_thread_control & c) {
-    std::chrono::steady_clock::time_point next_due[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
+static void ggml_cuda_poller_ping_thread_proc(std::atomic<bool> & stop, ggml_cuda_poller_ping_thread_control & c) {
+    std::chrono::steady_clock::time_point next_due_fma[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
+    std::chrono::steady_clock::time_point next_due_mma[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
+    std::chrono::steady_clock::time_point next_due_mem[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
     bool was_active = false;
     while (!stop.load()) {
         const bool active = ggml_cuda_poller_gate.load();
@@ -933,7 +938,13 @@ static void ggml_cuda_poller_ping_thread_proc(bool do_fma, bool do_mma, bool do_
             // Fresh TG entry: clear the per-GPU cadence so every enabled GPU
             // fires immediately instead of on a stale schedule from an earlier
             // TG phase.
-            for (auto & d : next_due) {
+            for (auto & d : next_due_fma) {
+                d = std::chrono::steady_clock::time_point();
+            }
+            for (auto & d : next_due_mma) {
+                d = std::chrono::steady_clock::time_point();
+            }
+            for (auto & d : next_due_mem) {
                 d = std::chrono::steady_clock::time_point();
             }
         }
@@ -947,14 +958,34 @@ static void ggml_cuda_poller_ping_thread_proc(bool do_fma, bool do_mma, bool do_
         }
         const auto now = std::chrono::steady_clock::now();
         for (int w = 0; w < GGML_CUDA_MAX_DEVICES; ++w) {
-            const int interval = c.ms[w].load();
-            if (interval <= 0) continue;
             if (ggml_cuda_poller_skip[w]) continue; // too-hot card (fed by --poller-nvapi/--poller-warmup-fma)
-            if (next_due[w] != std::chrono::steady_clock::time_point{} && now < next_due[w]) {
-                continue; // not yet due
+            // FMA half (--poller-ping-fma): core-clock FMA chain.
+            const int fma_interval = c.fma_ms[w].load();
+            if (fma_interval > 0) {
+                if (next_due_fma[w] != std::chrono::steady_clock::time_point{} && now < next_due_fma[w]) {
+                    continue; // not yet due
+                }
+                ggml_cuda_poller_ping_launch_w(w, true, false, false);
+                next_due_fma[w] = now + std::chrono::milliseconds(fma_interval);
             }
-            ggml_cuda_poller_ping_launch_w(w, do_fma, do_mma, do_mem);
-            next_due[w] = now + std::chrono::milliseconds(interval);
+            // MMA half (--poller-ping-mma): tensor-core HMMA chain, same thread.
+            const int mma_interval = c.mma_ms[w].load();
+            if (mma_interval > 0) {
+                if (next_due_mma[w] != std::chrono::steady_clock::time_point{} && now < next_due_mma[w]) {
+                    continue; // not yet due
+                }
+                ggml_cuda_poller_ping_launch_w(w, false, true, false);
+                next_due_mma[w] = now + std::chrono::milliseconds(mma_interval);
+            }
+            // Mem half (--poller-ping-mem): mem-clock burst stream.
+            const int mem_interval = c.mem_ms[w].load();
+            if (mem_interval > 0) {
+                if (next_due_mem[w] != std::chrono::steady_clock::time_point{} && now < next_due_mem[w]) {
+                    continue; // not yet due
+                }
+                ggml_cuda_poller_ping_launch_w(w, false, false, true);
+                next_due_mem[w] = now + std::chrono::milliseconds(mem_interval);
+            }
         }
         // 10 ms tick: keeps per-GPU cadence within one interval of due while
         // noticing a stop or a TG->PP transition promptly.
@@ -962,27 +993,27 @@ static void ggml_cuda_poller_ping_thread_proc(bool do_fma, bool do_mma, bool do_
     }
 }
 
-// Apply a per-GPU interval list to a ping thread control: a single value
-// broadcasts to every WDDM GPU; a comma list maps positionally (values past the
+// Apply a per-GPU interval list to one half of the ping thread control: a single
+// value broadcasts to every WDDM GPU; a comma list maps positionally (values past the
 // WDDM GPU count are ignored, GPUs past the list get 0/off). Returns true when
 // any GPU has a positive interval.
-static bool ggml_cuda_poller_ping_set_intervals(ggml_cuda_poller_ping_thread_control & c, const int * intervals, int n_intervals) {
+static bool ggml_cuda_poller_ping_set_intervals(std::atomic<int> (&ms)[GGML_CUDA_MAX_DEVICES], const int * intervals, int n_intervals) {
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-        c.ms[i].store(0);
+        ms[i].store(0);
     }
     bool any = false;
     if (n_intervals > 1) {
         const int n = std::min(n_intervals, GGML_CUDA_MAX_DEVICES);
         for (int i = 0; i < n; ++i) {
-            const int ms = intervals[i] > 0 ? intervals[i] : 0;
-            c.ms[i].store(ms);
-            if (ms > 0) any = true;
+            const int ms_i = intervals[i] > 0 ? intervals[i] : 0;
+            ms[i].store(ms_i);
+            if (ms_i > 0) any = true;
         }
     } else {
-        const int ms = (n_intervals > 0 && intervals[0] > 0) ? intervals[0] : 0;
-        if (ms > 0) {
+        const int ms_i = (n_intervals > 0 && intervals[0] > 0) ? intervals[0] : 0;
+        if (ms_i > 0) {
             for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-                c.ms[i].store(ms);
+                ms[i].store(ms_i);
             }
             any = true;
         }
@@ -990,48 +1021,82 @@ static bool ggml_cuda_poller_ping_set_intervals(ggml_cuda_poller_ping_thread_con
     return any;
 }
 
+// True when at least one half has a positive per-GPU interval on any GPU, i.e. the
+// shared ping thread should be running.
+static bool ggml_cuda_poller_ping_any_active(const ggml_cuda_poller_ping_thread_control & c) {
+    for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+        if (c.fma_ms[i].load() > 0 || c.mma_ms[i].load() > 0 || c.mem_ms[i].load() > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ping-fma=N[,N,...]: autonomous FMA ping per WDDM GPU (0 = off for a GPU). The
+// core-clock FMA half of the ping load; per-GPU chain length comes from
+// set_poller_ping_fma_amplitude() (default 8192). Shares the single ping thread with
+// the MMA (--poller-ping-mma) and mem (--poller-ping-mem) halves.
+GGML_CALL void ggml_backend_cuda_set_poller_ping_fma(const int * intervals, int n_intervals) {
+    auto & c = ggml_cuda_poller_ping_ctrl;
+    ggml_cuda_poller_ping_set_intervals(c.fma_ms, intervals, n_intervals);
+    if (ggml_cuda_poller_ping_any_active(c) && !c.t.joinable()) {
+        c.stop = false;
+        c.t = std::thread(ggml_cuda_poller_ping_thread_proc, std::ref(c.stop), std::ref(c));
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_fma: FMA ping on WDDM GPUs (per-GPU ms):");
+        for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+            const int ms = c.fma_ms[i].load();
+            if (ms > 0) GGML_CUDA_LOG_INFO(" %d", ms);
+        }
+        GGML_CUDA_LOG_INFO("\n");
+    } else if (!ggml_cuda_poller_ping_any_active(c) && c.t.joinable()) {
+        c.stop_thread();
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_fma: disabled\n");
+    }
+}
+
+// ping-mma=N[,N,...]: autonomous tensor-core (HMMA) ping per WDDM GPU (0 = off for a
+// GPU). The core-clock MMA half of the ping load; per-GPU chain length comes from
+// set_poller_ping_mma_amplitude() (default 8192). Shares the single ping thread with
+// the FMA (--poller-ping-fma) and mem (--poller-ping-mem) halves.
+GGML_CALL void ggml_backend_cuda_set_poller_ping_mma(const int * intervals, int n_intervals) {
+    auto & c = ggml_cuda_poller_ping_ctrl;
+    ggml_cuda_poller_ping_set_intervals(c.mma_ms, intervals, n_intervals);
+    if (ggml_cuda_poller_ping_any_active(c) && !c.t.joinable()) {
+        c.stop = false;
+        c.t = std::thread(ggml_cuda_poller_ping_thread_proc, std::ref(c.stop), std::ref(c));
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_mma: MMA ping on WDDM GPUs (per-GPU ms):");
+        for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+            const int ms = c.mma_ms[i].load();
+            if (ms > 0) GGML_CUDA_LOG_INFO(" %d", ms);
+        }
+        GGML_CUDA_LOG_INFO("\n");
+    } else if (!ggml_cuda_poller_ping_any_active(c) && c.t.joinable()) {
+        c.stop_thread();
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_mma: disabled\n");
+    }
+}
+
 // ping-mem=N[,N,...]: autonomous mem-clock stream per WDDM GPU (0 = off for a
 // GPU). Single value broadcasts to every WDDM GPU; more values map positionally.
 // The mem half of the ping load, decoupled from poller-nvapi/warmup-fma - no NVAPI, no
 // temperature read. Each ping cycle streams the per-GPU burst count from
-// set_poller_ping_mem_amplitude() (default 1 x 2 MiB).
+// set_poller_ping_mem_amplitude() (default 1 x 2 MiB). Shares the single ping thread
+// with the FMA (--poller-ping-fma) and MMA (--poller-ping-mma) halves.
 GGML_CALL void ggml_backend_cuda_set_poller_ping_mem(const int * intervals, int n_intervals) {
-    auto & c = ggml_cuda_poller_ping_mem_ctrl;
-    const bool any = ggml_cuda_poller_ping_set_intervals(c, intervals, n_intervals);
-    if (any && !c.t.joinable()) {
+    auto & c = ggml_cuda_poller_ping_ctrl;
+    ggml_cuda_poller_ping_set_intervals(c.mem_ms, intervals, n_intervals);
+    if (ggml_cuda_poller_ping_any_active(c) && !c.t.joinable()) {
         c.stop = false;
-        c.t = std::thread(ggml_cuda_poller_ping_thread_proc, false, false, true, std::ref(c.stop), std::ref(c));
+        c.t = std::thread(ggml_cuda_poller_ping_thread_proc, std::ref(c.stop), std::ref(c));
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_mem: mem stream on WDDM GPUs (per-GPU ms):");
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-            const int ms = c.ms[i].load();
+            const int ms = c.mem_ms[i].load();
             if (ms > 0) GGML_CUDA_LOG_INFO(" %d", ms);
         }
         GGML_CUDA_LOG_INFO("\n");
-    } else if (!any && c.t.joinable()) {
+    } else if (!ggml_cuda_poller_ping_any_active(c) && c.t.joinable()) {
         c.stop_thread();
         GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_mem: disabled\n");
-    }
-}
-
-// ping-compute=N[,N,...]: autonomous compute ping per WDDM GPU (0 = off for a GPU). The
-// core-clock compute half of the ping load (fires the FMA+MMA halves); per-GPU chain length
-// comes from set_poller_ping_fma_amplitude() (default 8192). Shares the thread with the
-// tensor-core MMA ping, whose per-GPU chain length comes from set_poller_ping_mma_amplitude().
-GGML_CALL void ggml_backend_cuda_set_poller_ping_compute(const int * intervals, int n_intervals) {
-    auto & c = ggml_cuda_poller_ping_compute_ctrl;
-    const bool any = ggml_cuda_poller_ping_set_intervals(c, intervals, n_intervals);
-    if (any && !c.t.joinable()) {
-        c.stop = false;
-        c.t = std::thread(ggml_cuda_poller_ping_thread_proc, true, true, false, std::ref(c.stop), std::ref(c));
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_compute: compute ping on WDDM GPUs (per-GPU ms):");
-        for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-            const int ms = c.ms[i].load();
-            if (ms > 0) GGML_CUDA_LOG_INFO(" %d", ms);
-        }
-        GGML_CUDA_LOG_INFO("\n");
-    } else if (!any && c.t.joinable()) {
-        c.stop_thread();
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_compute: disabled\n");
     }
 }
 
@@ -1107,7 +1172,7 @@ GGML_CALL void ggml_backend_cuda_set_poller_ping_fma_amplitude(const int * fmas,
 GGML_CALL void ggml_backend_cuda_set_poller_ping_mma_amplitude(const int * mmas, int n) {
     // Same per-WDDM-GPU mapping as set_poller_ping_fma_amplitude: single value broadcasts,
     // comma list positional, 0 = off for a GPU, negative -> default. Feeds the tensor-core
-    // (HMMA) half of the autonomous --poller-ping-compute thread.
+    // (HMMA) half of the autonomous --poller-ping-mma thread.
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         ggml_cuda_poller_ping_mma_amplitude_override[i] = false;
     }

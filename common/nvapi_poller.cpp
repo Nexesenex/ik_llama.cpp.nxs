@@ -477,10 +477,10 @@ void NvapiPoller::thread_func() {
         }
 
         // Publish the per-card heat state (for any in-process consumer) and the
-        // shared skip mask, so the warmup (--poller-warmup-fma) and the autonomous ping
-        // (--poller-ping-mem mem / --poller-ping-compute compute) skip too-hot cards. The poller no
-        // longer pings itself: the mem stream is --poller-ping-mem's job, the FMA
-        // warmup --poller-warmup-fma's (per decode batch) or --poller-ping-compute's (fixed cadence).
+        // shared skip mask, so the warmup (--poller-warmup-fma) and the autonomous pings
+        // (--poller-ping-mem mem / --poller-ping-fma FMA / --poller-ping-mma MMA) skip too-hot cards. The poller no
+        // longer pings itself: the mem stream is --poller-ping-mem's job, the FMA/MMA
+        // warmup --poller-warmup-fma's (per decode batch) or --poller-ping-fma's/--poller-ping-mma's (fixed cadence).
         if (any_checked) {
             {
                 std::lock_guard<std::mutex> lk(hot_mtx);
