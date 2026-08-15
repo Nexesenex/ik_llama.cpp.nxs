@@ -38,7 +38,7 @@ static bool get_nvapi_handles(const std::vector<int>& cuda_devices,
 
     // Resolve the WDDM-only CUDA ordinal list: explicit list if given (TCC
     // ordinals are skipped), otherwise auto-detect all non-TCC GPUs in ggml
-    // logical order — same order the orca heartbeat uses.
+    // logical order — same order the poller-warmup-fma heartbeat uses.
     std::vector<int> ordinals;
 #ifdef GGML_USE_CUDA
     if (cuda_devices.empty()) {
@@ -226,7 +226,7 @@ void NvapiPoller::thread_func() {
     // is done by the driver computing the samples, which keeps the GPU busy.
     // One subscription per active physical GPU; we must unregister before
     // NvAPI_Unload. Skipped in monitor-only mode: it adds driver load, and
-    // --orca only needs the temperature tracking.
+    // --poller-warmup-fma only needs the temperature tracking.
     if (!monitor_only.load()) {
         std::vector<NV_GPU_CLIENT_UTILIZATION_PERIODIC_CALLBACK_SETTINGS> util_settings(handles.size());
         for (size_t k = 0; k < handles.size(); ++k) {
@@ -477,10 +477,10 @@ void NvapiPoller::thread_func() {
         }
 
         // Publish the per-card heat state (for any in-process consumer) and the
-        // shared orca skip mask, so the warmup (--orca) and the autonomous ping
-        // (--barracuda mem / --perch FMA) skip too-hot cards. The poller no
-        // longer pings itself: the mem stream is --barracuda's job, the FMA
-        // warmup --orca's (per decode batch) or --perch's (fixed cadence).
+        // shared skip mask, so the warmup (--poller-warmup-fma) and the autonomous ping
+        // (--poller-ping-mem mem / --poller-ping-fma FMA) skip too-hot cards. The poller no
+        // longer pings itself: the mem stream is --poller-ping-mem's job, the FMA
+        // warmup --poller-warmup-fma's (per decode batch) or --poller-ping-fma's (fixed cadence).
         if (any_checked) {
             {
                 std::lock_guard<std::mutex> lk(hot_mtx);
@@ -488,10 +488,10 @@ void NvapiPoller::thread_func() {
                 penalties = local_penalties;
             }
 #ifdef GGML_USE_CUDA
-            ggml_backend_cuda_set_orca_skip(
+            ggml_backend_cuda_set_poller_skip(
                 local_hot.empty() ? nullptr : reinterpret_cast<const bool *>(local_hot.data()),
                 (int) local_hot.size());
-            ggml_backend_cuda_set_orca_penalty(
+            ggml_backend_cuda_set_poller_penalty(
                 local_penalties.empty() ? nullptr : local_penalties.data(),
                 (int) local_penalties.size());
 #endif

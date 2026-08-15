@@ -155,14 +155,14 @@ static bool stop_internal_decode = false;
 
 #ifdef GGML_USE_CUDA
 // Empty device list: the poller auto-detects WDDM (non-TCC) GPUs in ggml
-// logical order, matching the orca heartbeat's device set. TCC (e.g. A4000)
+// logical order, matching the poller-warmup-fma heartbeat's device set. TCC (e.g. A4000)
 // is never polled.
 static NvapiPoller g_nvapi_poller({});
-static bool g_nvapi_poller_enabled = false; // on only when --piranha is passed
+static bool g_nvapi_poller_enabled = false; // on only when --poller-nvapi is passed
 #endif
 
 // Enable/disable the in-process NVAPI poller (Windows only, personal use).
-// Disabled by default; --piranha turns it on. A stopped poller is a no-op.
+// Disabled by default; --poller-nvapi turns it on. A stopped poller is a no-op.
 void llama_nvapi_poller_set_enabled(bool enabled) {
 #ifdef GGML_USE_CUDA
     g_nvapi_poller_enabled = enabled;
@@ -174,7 +174,7 @@ void llama_nvapi_poller_set_enabled(bool enabled) {
 #endif
 }
 
-// Set the in-process NVAPI poller interval(s) in ms (--piranha N[,N,...]).
+// Set the in-process NVAPI poller interval(s) in ms (--poller-nvapi N[,N,...]).
 // One value applies to every WDDM GPU; a comma list maps positionally. Applies
 // to the next start; a running poller keeps its current interval.
 void llama_nvapi_poller_set_interval(const int * intervals, int n) {
@@ -201,7 +201,7 @@ void llama_nvapi_poller_set_temp_limits(int pause_celsius, int resume_celsius) {
 #endif
 }
 
-// Enable/disable monitor-only mode (--orca: temperature tracking only, the
+// Enable/disable monitor-only mode (--poller-warmup-fma: temperature tracking only, the
 // heartbeat warmup consumes the published hot_state as its skip mask).
 void llama_nvapi_poller_set_monitor_only(bool monitor_only) {
 #ifdef GGML_USE_CUDA
@@ -237,7 +237,7 @@ void llama_shark_stop(struct llama_context * ctx) {
         ctx->cparams.shark_callback(false, ctx->cparams.shark_callback_data);
     }
 #ifdef GGML_USE_CUDA
-    ggml_backend_cuda_set_orca_active(false);
+    ggml_backend_cuda_set_poller_active(false);
     g_nvapi_poller.stop();
 #endif
 }
@@ -1013,7 +1013,7 @@ llama_context::~llama_context() {
         cparams.shark_callback(false, cparams.shark_callback_data);
     }
 #ifdef GGML_USE_CUDA
-    ggml_backend_cuda_set_orca_active(false);
+    ggml_backend_cuda_set_poller_active(false);
 #endif
 
     if (dflash.kv.cache_sched != nullptr) {
@@ -6578,16 +6578,16 @@ static int llama_decode_internal(
             lctx.hb_prefill_done = true;
         }
         if (lctx.hb_prefill_done) {
-            ggml_backend_cuda_set_orca_active(n_tokens_all <= 8);
+            ggml_backend_cuda_set_poller_active(n_tokens_all <= 8);
         }
-        // Prompt-aware FMA scale (--orca / --orca-ping): the more of the context
+        // Prompt-aware FMA scale (--poller-warmup-fma / --poller-ping-fma-amplitude): the more of the context
         // the prompt already fills, the less artificial FMA is needed. kv_self.n
         // at this point is the tokens already in cache (this batch not yet added),
         // i.e. the current prompt length; n_ctx is the context size.
-        ggml_backend_cuda_set_orca_prompt_len(lctx.kv_self.n, (int) lctx.cparams.n_ctx);
+        ggml_backend_cuda_set_poller_prompt_len(lctx.kv_self.n, (int) lctx.cparams.n_ctx);
     }
     // NVAPI poller: start/stop at same TG/PP boundaries as heartbeat.
-    // Runs when enabled via --piranha, or in monitor-only mode for --orca
+    // Runs when enabled via --poller-nvapi, or in monitor-only mode for --poller-warmup-fma
     // (temperature tracking only, feeding the heartbeat skip mask below).
     {
         if (n_tokens_all > 8) {
@@ -7207,7 +7207,7 @@ static int llama_decode_internal(
                 lctx.cparams.shark_callback(false, lctx.cparams.shark_callback_data);
             }
 #ifdef GGML_USE_CUDA
-            ggml_backend_cuda_set_orca_active(false);
+            ggml_backend_cuda_set_poller_active(false);
             g_nvapi_poller.stop();
 #endif
             return -3;

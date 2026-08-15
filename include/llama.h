@@ -1165,12 +1165,12 @@ extern "C" {
     LLAMA_API void llama_shark_stop(struct llama_context * ctx);
 
     // Enable/disable the in-process NVAPI poller (Windows only, personal use).
-    // Disabled by default; --piranha turns it on. Safe to call before any decode.
+    // Disabled by default; --poller-nvapi turns it on. Safe to call before any decode.
     LLAMA_API void llama_nvapi_poller_set_enabled(bool enabled);
 
-    // Set the in-process NVAPI poller interval(s) in ms (--piranha N[,N,...]).
+    // Set the in-process NVAPI poller interval(s) in ms (--poller-nvapi N[,N,...]).
     // One value applies to every WDDM GPU; a comma list maps positionally
-    // (WDDM slot order, same mapping as --orca). Applies to the next start; a
+    // (WDDM slot order, same mapping as --poller-warmup-fma). Applies to the next start; a
     // running poller keeps its current interval.
     LLAMA_API void llama_nvapi_poller_set_interval(const int * intervals, int n);
 
@@ -1179,7 +1179,7 @@ extern "C" {
     LLAMA_API void llama_nvapi_poller_set_temp_limits(int pause_celsius, int resume_celsius);
 
     // Enable/disable monitor-only mode: the NVAPI poller only tracks per-card
-    // temperatures (publishing hot_state, which the --orca heartbeat warmup
+    // temperatures (publishing hot_state, which the --poller-warmup-fma heartbeat warmup
     // consumes as its skip mask) and performs no NVAPI burst or CUDA ping.
     LLAMA_API void llama_nvapi_poller_set_monitor_only(bool monitor_only);
 

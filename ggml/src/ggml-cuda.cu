@@ -5173,14 +5173,14 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
-    // Fisherman (--fisherman): fire the per-GPU FMA probe exactly when this GPU
+    // poller-activity-fma: fire the per-GPU FMA probe exactly when this GPU
     // is actually solicited. The scheduler invokes graph_compute for a device only
     // when the batch's split graph gave it nodes, so reaching this point IS the
-    // keep-alive trigger being asked for. Gated to TG via ping_gate.
-    ggml_cuda_fisherman_ping_device(cuda_ctx->device);
-    // Harpoon (--harpoon): same decode-solicited trigger but for the tensor-core
+    // keep-alive trigger being asked for. Gated to TG via poller_gate.
+    ggml_cuda_poller_activity_fma_ping_device(cuda_ctx->device);
+    // poller-activity-mma: same decode-solicited trigger but for the tensor-core
     // HMMA probe - a far denser pulse per ms, riding along with the real kernels.
-    ggml_cuda_harpoon_ping_device(cuda_ctx->device);
+    ggml_cuda_poller_activity_mma_ping_device(cuda_ctx->device);
 
     ggml_cuda_set_device(cuda_ctx->device);
 

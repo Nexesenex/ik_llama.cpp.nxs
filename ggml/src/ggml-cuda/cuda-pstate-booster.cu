@@ -1,6 +1,6 @@
 //
-// Clock-boosting / p-state machinery for WDDM GPUs (--orca, --cobra, --fisherman,
-// --kraken, --harpoon, --barracuda, --perch) and the GGML_CALL setters. Split out of
+// Clock-boosting / p-state machinery for WDDM GPUs (--poller-warmup-fma, --poller-warmup-mem, --poller-activity-fma,
+// --poller-warmup-mma, --poller-activity-mma, --poller-ping-mem, --poller-ping-fma) and the GGML_CALL setters. Split out of
 // ggml-cuda.cu; declarations in cuda-pstate-booster.cuh (internal API) and ggml-cuda.h
 // (public GGML_CALL API). Logging macros and ggml_cuda_log come from common.cuh.
 //
@@ -14,80 +14,80 @@
 #include <functional>
 #include <thread>
 
-static bool ggml_cuda_orca = false;
-static bool ggml_cuda_orca_active = false; // orca_active: true during TG, false during PP
-// cobra: decode-gated mem-clock companion (--cobra). Per-GPU (WDDM-positional)
+static bool ggml_cuda_poller_warmup_fma = false;
+static bool ggml_cuda_poller_active = false; // active: true during TG, false during PP
+// warmup-mem: decode-gated mem-clock companion (--poller-warmup-mem). Per-GPU (WDDM-positional)
 // on/off mask: true = the mem burst fires on that GPU at every TG batch, in the
-// same fashion as --orca fires the FMA warmup. Set via ggml_backend_cuda_set_cobra.
-static bool ggml_cuda_cobra[GGML_CUDA_MAX_DEVICES] = {false};
-// Any WDDM slot enabled at all (set_cobra assigned at least one 1).
-static bool ggml_cuda_cobra_any = false;
-// fisherman: decode-solicited FMA probe (--fisherman). Per-GPU (WDDM-positional)
-// FMA chain length. Unlike --orca (fires on every TG batch) this fires only on a
+// same fashion as --poller-warmup-fma fires the FMA warmup. Set via ggml_backend_cuda_set_poller_warmup_mem.
+static bool ggml_cuda_poller_warmup_mem[GGML_CUDA_MAX_DEVICES] = {false};
+// Any WDDM slot enabled at all (set_poller_warmup_mem assigned at least one 1).
+static bool ggml_cuda_poller_warmup_mem_any = false;
+// activity-fma: decode-solicited FMA probe (--poller-activity-fma). Per-GPU (WDDM-positional)
+// FMA chain length. Unlike --poller-warmup-fma (fires on every TG batch) this fires only on a
 // GPU that actually received compute nodes in the current TG batch - the launch
 // lives in ggml_backend_cuda_graph_compute, which the scheduler invokes for a
 // device exactly when that device has work. Default 8192 (small, ~µs of work).
-static int  ggml_cuda_fisherman[GGML_CUDA_MAX_DEVICES] = {0};
-// Marks WDDM slots that set_fisherman assigned an explicit value (incl. 0 =>
+static int  ggml_cuda_poller_activity_fma[GGML_CUDA_MAX_DEVICES] = {0};
+// Marks WDDM slots that set_poller_activity_fma assigned an explicit value (incl. 0 =>
 // disabled). !override means "use default".
-static bool ggml_cuda_fisherman_override[GGML_CUDA_MAX_DEVICES] = {false};
-// Any WDDM slot enabled at all (set_fisherman assigned at least one positive value).
-static bool ggml_cuda_fisherman_any = false;
+static bool ggml_cuda_poller_activity_fma_override[GGML_CUDA_MAX_DEVICES] = {false};
+// Any WDDM slot enabled at all (set_poller_activity_fma assigned at least one positive value).
+static bool ggml_cuda_poller_activity_fma_any = false;
 
-// Fisherman probe default (bare --fisherman / missing list values). Much smaller
-// than the 32768 orca warmup: it accompanies real decode work (the GPU is already
+// activity-fma probe default (bare --poller-activity-fma / missing list values). Much smaller
+// than the 32768-FMA warmup: it accompanies real decode work (the GPU is already
 // busy), so a short pulse is enough to drag the clock governor to boost without
 // stealing the SM's budget from the actual kernels.
-static constexpr int GGML_CUDA_FISHERMAN_FMA_DEFAULT = 8192;
+static constexpr int GGML_CUDA_POLLER_ACTIVITY_FMA_DEFAULT = 8192;
 
-// kraken: tensor-core MMA warmup (--kraken). Like --orca but issues HMMA
+// warmup-mma: tensor-core MMA warmup (--poller-warmup-mma). Like --poller-warmup-fma but issues HMMA
 // instructions instead of scalar FFMA: mma.sync.m16n8k16 (fp16) = 2048 FLOPs per
 // instruction vs 2 for an FMA, so a much shorter wall-clock burst produces the
 // same (or stronger) load on the clock governor - "same compute work, shorter
-// pulse". Fires on every TG batch like --orca (decode-gated warmup), honors the
+// pulse". Fires on every TG batch like --poller-warmup-fma (decode-gated warmup), honors the
 // shared skip mask and the prompt-length scale. Per-GPU (WDDM-positional) HMMA
-// chain length; a 0 set via set_kraken disables it on that GPU.
-static int  ggml_cuda_kraken[GGML_CUDA_MAX_DEVICES] = {0};
-// Marks WDDM slots that set_kraken assigned an explicit value (incl. 0 =>
+// chain length; a 0 set via set_poller_warmup_mma disables it on that GPU.
+static int  ggml_cuda_poller_warmup_mma[GGML_CUDA_MAX_DEVICES] = {0};
+// Marks WDDM slots that set_poller_warmup_mma assigned an explicit value (incl. 0 =>
 // disabled). !override means "use default".
-static bool ggml_cuda_kraken_override[GGML_CUDA_MAX_DEVICES] = {false};
-// Any WDDM slot enabled at all (set_kraken assigned at least one positive value).
-static bool ggml_cuda_kraken_any = false;
-// Kraken default (bare --kraken / missing list values). 8192 HMMA is ~256x the
-// FLOPs of the 32768-FMA orca warmup in a far shorter pulse - a dense boost
+static bool ggml_cuda_poller_warmup_mma_override[GGML_CUDA_MAX_DEVICES] = {false};
+// Any WDDM slot enabled at all (set_poller_warmup_mma assigned at least one positive value).
+static bool ggml_cuda_poller_warmup_mma_any = false;
+// warmup-mma default (bare --poller-warmup-mma / missing list values). 8192 HMMA is ~256x the
+// FLOPs of the 32768-FMA warmup in a far shorter pulse - a dense boost
 // without the sustained power draw of the full chain. 32768 (same duration as
-// orca's 32768 FMA, ~1000x the FLOPs) is available as an explicit max-intensity
+// the warmup's 32768 FMA, ~1000x the FLOPs) is available as an explicit max-intensity
 // setting; the default stays conservative to avoid burning the card.
-static constexpr int GGML_CUDA_KRAKEN_MMA_DEFAULT = 8192;
+static constexpr int GGML_CUDA_POLLER_WARMUP_MMA_DEFAULT = 8192;
 
-// harpoon: decode-solicited HMMA probe (--harpoon). Like --fisherman but for the
+// activity-mma: decode-solicited HMMA probe (--poller-activity-mma). Like --poller-activity-fma but for the
 // tensor cores: a short HMMA burst fired exactly when a GPU actually receives
 // compute nodes in the current TG batch (rides along with real kernels). Much
-// denser than the FMA probe: 8192 HMMA is ~256x the FLOPs of fisherman's 8192
+// denser than the FMA probe: 8192 HMMA is ~256x the FLOPs of the FMA probe's 8192
 // FMA at a fraction of the wall time. Per-GPU (WDDM-positional) HMMA chain
-// length; a 0 set via set_harpoon disables it on that GPU.
-static int  ggml_cuda_harpoon[GGML_CUDA_MAX_DEVICES] = {0};
-// Marks WDDM slots that set_harpoon assigned an explicit value (incl. 0 =>
+// length; a 0 set via set_poller_activity_mma disables it on that GPU.
+static int  ggml_cuda_poller_activity_mma[GGML_CUDA_MAX_DEVICES] = {0};
+// Marks WDDM slots that set_poller_activity_mma assigned an explicit value (incl. 0 =>
 // disabled). !override means "use default".
-static bool ggml_cuda_harpoon_override[GGML_CUDA_MAX_DEVICES] = {false};
-// Any WDDM slot enabled at all (set_harpoon assigned at least one positive value).
-static bool ggml_cuda_harpoon_any = false;
-// Harpoon default (bare --harpoon / missing list values). 8192 HMMA rides along
+static bool ggml_cuda_poller_activity_mma_override[GGML_CUDA_MAX_DEVICES] = {false};
+// Any WDDM slot enabled at all (set_poller_activity_mma assigned at least one positive value).
+static bool ggml_cuda_poller_activity_mma_any = false;
+// activity-mma default (bare --poller-activity-mma / missing list values). 8192 HMMA rides along
 // with real decode kernels, so the pulse just tops up the clock governor; smaller
-// than the 32768 orca warmup because the GPU is already busy.
-static constexpr int GGML_CUDA_HARPOON_MMA_DEFAULT = 8192;
-// Decode-phase gate shared by the autonomous ping threads (--barracuda/--perch):
-// true only while llama.cpp is in the TG phase (kept in sync with orca_active,
-// but set unconditionally so it works even when orca itself is disabled).
-static std::atomic<bool> ggml_cuda_ping_gate = false;
+// than the 32768-FMA warmup because the GPU is already busy.
+static constexpr int GGML_CUDA_POLLER_ACTIVITY_MMA_DEFAULT = 8192;
+// Decode-phase gate shared by the autonomous ping threads (--poller-ping-mem/--poller-ping-fma):
+// true only while llama.cpp is in the TG phase (kept in sync with the warmup
+// state, but set unconditionally so it works even when the warmup is disabled).
+static std::atomic<bool> ggml_cuda_poller_gate = false;
 
 // Spin kernel: single-block FMA chain burst, launched many times per SM to
 // produce real activity and keep clocks elevated during TG (~us per launch).
 // Per-device chain length is passed in so each WDDM GPU gets its own pulse.
-static __device__ float ggml_cuda_orca_scratch = 0.0f;
+static __device__ float ggml_cuda_poller_scratch = 0.0f;
 
 // Tensor-core (HMMA) spin kernel: same full-residency launch shape as
-// k_orca_warmup but issues warp-convergent matrix-multiply-accumulate
+// k_poller_warmup_fma but issues warp-convergent matrix-multiply-accumulate
 // instructions on the tensor cores instead of scalar FMAs on the FP32 pipe.
 // Each mma.sync.m16n8k16 fp16 instruction is 16x8x16 MACs = 2048 FLOPs (vs 2 for
 // a scalar FFMA), so the same number of issued instructions delivers ~1000x the
@@ -98,7 +98,7 @@ static __device__ float ggml_cuda_orca_scratch = 0.0f;
 // latency-bound rather than issue-bound, and the unconditional global write below
 // defeats dead-code elimination. Fragment registers: c = 4x f32 (m16n8k16
 // c-fragment), a = 4x b32, b = 2x b32 (packed f16x2 each).
-static __global__ void k_kraken_mma(const int n_mma) {
+static __global__ void k_poller_warmup_mma(const int n_mma) {
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= CC_AMPERE)
     // Fragment init (m16n8k16): c (4x f32), a (4x b32 = 4x f16x2), b (2x b32).
     float c0 = 0.0f, c1 = 0.0f, c2 = 0.0f, c3 = 0.0f;
@@ -114,7 +114,7 @@ static __global__ void k_kraken_mma(const int n_mma) {
             : "+f"(c0), "+f"(c1), "+f"(c2), "+f"(c3)
             : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
     }
-    ggml_cuda_orca_scratch = c0 + c1 + c2 + c3;
+    ggml_cuda_poller_scratch = c0 + c1 + c2 + c3;
 #elif !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= CC_VOLTA)
     // Pre-Ampere: m16n8k8 fp16 (Volta/Turing) = 1024 FLOPs per instruction.
     // c-fragment is 4x f32, a is 4x b32 (4 f16x2), b is 2x b32 (2 f16x2).
@@ -129,11 +129,11 @@ static __global__ void k_kraken_mma(const int n_mma) {
             : "+f"(c0), "+f"(c1), "+f"(c2), "+f"(c3)
             : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
     }
-    ggml_cuda_orca_scratch = c0 + c1 + c2 + c3;
+    ggml_cuda_poller_scratch = c0 + c1 + c2 + c3;
 #else
     // Pre-Volta / HIP / MUSA (no NVIDIA tensor cores): fall back to scalar FFMA
     // so the launch still produces a load pulse (just ~1000x lighter, same as the
-    // orca warmup).
+    // warmup-fma).
     float acc[8] = {0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.5f};
     const int n_rounds = n_mma >> 3;
     const int n_tail   = n_mma & 7;
@@ -146,11 +146,11 @@ static __global__ void k_kraken_mma(const int n_mma) {
     float sum = 0.0f;
     #pragma unroll
     for (int j = 0; j < 8; ++j) sum += acc[j];
-    ggml_cuda_orca_scratch = sum;
+    ggml_cuda_poller_scratch = sum;
 #endif
 }
 
-static __global__ void k_orca_warmup(const int n_fma, int4 * __restrict__ mem, const int n_mem, const int n_pass) {
+static __global__ void k_poller_warmup_fma(const int n_fma, int4 * __restrict__ mem, const int n_mem, const int n_pass) {
     if (n_fma > 0) {
         // 8 independent accumulator chains (ILP = 8): the FMA body has no serial
         // dependency, so each warp issues back-to-back FMAs and the schedulers
@@ -172,7 +172,7 @@ static __global__ void k_orca_warmup(const int n_fma, int4 * __restrict__ mem, c
         for (int j = 0; j < 8; ++j) sum += acc[j];
         // Unconditional global write: guarantees the FMA chains are observable and
         // cannot be removed by dead-code elimination (fast-math builds included).
-        ggml_cuda_orca_scratch = sum;
+        ggml_cuda_poller_scratch = sum;
     }
     if (mem == nullptr || n_mem <= 0 || n_pass <= 0) return;
     // Mem-clock companion: stream 16-byte read-modify-writes through the small
@@ -192,48 +192,48 @@ static __global__ void k_orca_warmup(const int n_fma, int4 * __restrict__ mem, c
 
 // Launch one warmup burst per non-TCC device on a cached non-blocking stream.
 // No dedicated thread: llama's decode hot path calls this through
-// ggml_backend_cuda_set_orca_active() at every TG batch, which keeps the clocks
+// ggml_backend_cuda_set_poller_active() at every TG batch, which keeps the clocks
 // elevated with real kernels. Launch is fire & forget (async).
 static cudaStream_t ggml_cuda_poller_compute_streams[GGML_CUDA_MAX_DEVICES] = {nullptr};
 // FMA chain length per non-TCC (WDDM) device, in ggml device order (index = the
-// k-th WDDM GPU). A 0 set via set_orca_fmas disables the warmup on that GPU;
+// k-th WDDM GPU). A 0 set via set_poller_warmup_fma_strength disables the warmup on that GPU;
 // 0 with no explicit value keeps the prior default behaviour.
-static int ggml_cuda_orca_fma[GGML_CUDA_MAX_DEVICES] = {0};
-// Marks WDDM slots that set_orca_fmas() assigned an explicit value (incl. 0 =>
+static int ggml_cuda_poller_warmup_fma_strength[GGML_CUDA_MAX_DEVICES] = {0};
+// Marks WDDM slots that set_poller_warmup_fma_strength() assigned an explicit value (incl. 0 =>
 // disabled). !override means "use default".
-static bool ggml_cuda_orca_fma_override[GGML_CUDA_MAX_DEVICES] = {false};
+static bool ggml_cuda_poller_warmup_fma_strength_override[GGML_CUDA_MAX_DEVICES] = {false};
 
-static constexpr int GGML_CUDA_ORCA_FMA_DEFAULT = 32768;
+static constexpr int GGML_CUDA_POLLER_WARMUP_FMA_DEFAULT = 32768;
 
-// Prompt-length FMA scale (--orca / --orca-ping). The longer the prompt (i.e. the
+// Prompt-length FMA scale (--poller-warmup-fma / --poller-ping-fma-amplitude). The longer the prompt (i.e. the
 // more tokens already in context), the less FMA is needed to keep the clock up:
 // the GPU is already warm and busy with real attention work over a long KV cache.
 // The context is split into 256 brackets; when the prompt crosses bracket k
 // (k = floor(256 * prompt_len / n_ctx), clamped to 255), the effective FMA of both
 // the warmup and the ping is scaled by (256 - k) / 256. Set per decode by llama.cpp
-// via ggml_backend_cuda_set_orca_prompt_len; 0 = no scaling (prompt unknown).
-static std::atomic<int> ggml_cuda_orca_prompt_bracket = 0; // 0..255
+// via ggml_backend_cuda_set_poller_prompt_len; 0 = no scaling (prompt unknown).
+static std::atomic<int> ggml_cuda_poller_prompt_bracket = 0; // 0..255
 
 // Per-GPU FMA chain length for the poller ping (index = k-th WDDM GPU).
 // Stronger than a tickle but lighter than the warmup: ~1 ms of full-residency
 // load per poller cycle, so the GPU still gets idle gaps (no constant wear).
-// A 0 set via set_orca_ping disables the FMA ping on that GPU.
-static int ggml_cuda_orca_ping_fma[GGML_CUDA_MAX_DEVICES] = {0};
-// Marks WDDM slots that set_orca_ping() assigned an explicit value (incl. 0 =>
+// A 0 set via set_poller_ping_fma_amplitude disables the FMA ping on that GPU.
+static int ggml_cuda_poller_ping_fma_amplitude[GGML_CUDA_MAX_DEVICES] = {0};
+// Marks WDDM slots that set_poller_ping_fma_amplitude() assigned an explicit value (incl. 0 =>
 // disabled). !override means "use default".
-static bool ggml_cuda_orca_ping_fma_override[GGML_CUDA_MAX_DEVICES] = {false};
+static bool ggml_cuda_poller_ping_fma_amplitude_override[GGML_CUDA_MAX_DEVICES] = {false};
 
-static constexpr int GGML_CUDA_ORCA_PING_FMA_DEFAULT = 8192;
+static constexpr int GGML_CUDA_POLLER_PING_FMA_AMPLITUDE_DEFAULT = 8192;
 
 // Per-card skip mask for the heartbeat warmup (index = k-th WDDM GPU). Set from
-// the NVAPI temp monitor (--piranha / --orca): a too-hot card is not warmed up.
-static bool ggml_cuda_orca_skip[GGML_CUDA_MAX_DEVICES] = {false};
+// the NVAPI temp monitor (--poller-nvapi / --poller-warmup-fma): a too-hot card is not warmed up.
+static bool ggml_cuda_poller_skip[GGML_CUDA_MAX_DEVICES] = {false};
 
 // Per-card permanent FMA heat penalty (index = k-th WDDM GPU), in 1/256ths of
 // the full budget. Fed by the NVAPI temp monitor: when a card hits the pause
 // temp twice in a row, its scale_256 is permanently lowered by 16 (accumulates
 // per double-hot event, never recovers). Applied in ggml_cuda_scale_fma_prompt.
-static std::atomic<int> ggml_cuda_orca_penalty[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
+static std::atomic<int> ggml_cuda_poller_penalty[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
 
 // Per-GPU mem-clock companion buffer (index = same as ggml_cuda_poller_compute_streams).
 // The kernel streams 16-byte read-modify-writes through it with write-through
@@ -242,18 +242,18 @@ static std::atomic<int> ggml_cuda_orca_penalty[GGML_CUDA_MAX_DEVICES] = {}; // N
 // large working set. 2 MiB (fully L2-resident on GPUs with >= 2 MiB L2, e.g. the
 // 3090's 6 MiB) still spreads accesses across all memory channels/controllers at
 // full residency, costs ~nothing in VRAM, and is device-local (no PCIe).
-static int4 * ggml_cuda_orca_mem[GGML_CUDA_MAX_DEVICES] = {nullptr};
-static const int   GGML_CUDA_ORCA_MEM_SLOTS  = (2 << 20) / (int) sizeof(int4); // 2 MiB
+static int4 * ggml_cuda_poller_mem[GGML_CUDA_MAX_DEVICES] = {nullptr};
+static const int   GGML_CUDA_POLLER_MEM_SLOTS  = (2 << 20) / (int) sizeof(int4); // 2 MiB
 // Passes over the buffer per burst: 128 x 2 MiB ~= 256 MiB of write-through
 // stores, a few ms of sustained DRAM traffic - long enough to hold the mem
 // clock up, short enough not to idle-waste bandwidth.
-static const int   GGML_CUDA_ORCA_MEM_PASSES = 128;
+static const int   GGML_CUDA_POLLER_MEM_PASSES = 128;
 
 // 16 blocks per SM (resident rating), 256 threads per block — full 2048-thread
 // residency with no over-subscription. The per-GPU FMA chain makes the
 // resident threads issue back-to-back for a deep, sustained load pulse at flat
 // FLOP rate, which the clock governor needs to reach boost. Repeated every TG.
-// FMA-only: the mem-clock companion is --cobra's / --barracuda's job.
+// FMA-only: the mem-clock companion is --poller-warmup-mem's / --poller-ping-mem's job.
 
 // Apply the prompt-length scale to an FMA budget. The 256 brackets are split in
 // 8 slices of 32 brackets each. Each slice is its own branch below, expressed as
@@ -279,7 +279,7 @@ static const int   GGML_CUDA_ORCA_MEM_PASSES = 128;
 // cannot produce a sub-1024 pulse even if its budget is fine. prompt_bracket
 // of 0 = full FMA. w = WDDM position of the card.
 static int ggml_cuda_scale_fma_prompt(int fma, int w) {
-    const int k = ggml_cuda_orca_prompt_bracket.load();
+    const int k = ggml_cuda_poller_prompt_bracket.load();
     if (k <= 0 || fma <= 0) return fma;
     // j = bracket position within the current 32-bracket slice (0..31).
     const int j = k % 32;
@@ -303,7 +303,7 @@ static int ggml_cuda_scale_fma_prompt(int fma, int w) {
     }
     // Permanent heat penalty (in 1/256ths) applied on top of the curve.
     if (w >= 0 && w < GGML_CUDA_MAX_DEVICES) {
-        scale_256 -= ggml_cuda_orca_penalty[w].load();
+        scale_256 -= ggml_cuda_poller_penalty[w].load();
     }
     // A budget under 32 (1/256ths of the full budget) is too thin to matter:
     // disable FMA entirely so the launch is skipped instead of emitting a
@@ -311,18 +311,18 @@ static int ggml_cuda_scale_fma_prompt(int fma, int w) {
     if (scale_256 < 32) return 0;
     const int scaled = (int) (((int64_t) fma * scale_256) >> 8);
     // Alternative absolute floor: never emit a pulse shorter than 1024 FMA.
-    // A smaller base (e.g. --orca 2048) could otherwise pass the budget check
+    // A smaller base (e.g. --poller-warmup-fma 2048) could otherwise pass the budget check
     // yet still produce a sub-1024 result.
     return scaled >= 1024 ? scaled : 0;
 }
 
-static void ggml_cuda_orca_warmup() {
+static void ggml_cuda_poller_warmup_fma_launch() {
     int w = 0;
     for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
         if (ggml_cuda_info().devices[i].is_tcc) continue;
-        // skip: too-hot card (temp monitor), or explicitly disabled via --orca 0.
-        const bool skip_this = (w < GGML_CUDA_MAX_DEVICES && ggml_cuda_orca_skip[w])
-                            || (w < GGML_CUDA_MAX_DEVICES && ggml_cuda_orca_fma_override[w] && ggml_cuda_orca_fma[w] == 0);
+        // skip: too-hot card (temp monitor), or explicitly disabled via --poller-warmup-fma 0.
+        const bool skip_this = (w < GGML_CUDA_MAX_DEVICES && ggml_cuda_poller_skip[w])
+                            || (w < GGML_CUDA_MAX_DEVICES && ggml_cuda_poller_warmup_fma_strength_override[w] && ggml_cuda_poller_warmup_fma_strength[w] == 0);
         w++;  // w = WDDM position of this device (TCC devices do not consume a slot)
         if (skip_this) continue;
         int cuda_id = ggml_cuda_info().cuda_device_id[i];
@@ -333,26 +333,26 @@ static void ggml_cuda_orca_warmup() {
         }
         int nsm = std::max(ggml_cuda_info().devices[i].nsm, 1);
         const int fma = ggml_cuda_scale_fma_prompt(
-            ggml_cuda_orca_fma[w - 1] > 0 ? ggml_cuda_orca_fma[w - 1] : GGML_CUDA_ORCA_FMA_DEFAULT,
+            ggml_cuda_poller_warmup_fma_strength[w - 1] > 0 ? ggml_cuda_poller_warmup_fma_strength[w - 1] : GGML_CUDA_POLLER_WARMUP_FMA_DEFAULT,
             w - 1);
         if (fma <= 0) continue; // prompt in the last brackets or heat penalty: no warmup
         cudaSetDevice(cuda_id);
         // mem = nullptr: the kernel skips the mem stream entirely.
-        k_orca_warmup<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(fma, nullptr, 0, 0);
+        k_poller_warmup_fma<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(fma, nullptr, 0, 0);
     }
 }
 
-// Launch one HMMA burst per WDDM GPU that is enabled in the kraken mask. Same
-// cadence as ggml_cuda_orca_warmup: fired from set_orca_active on every TG batch.
+// Launch one HMMA burst per WDDM GPU that is enabled in the warmup-mma mask. Same
+// cadence as ggml_cuda_poller_warmup_fma_launch: fired from set_poller_active on every TG batch.
 // The HMMA chain makes the resident warps hammer the tensor cores back-to-back for
 // a dense power pulse; the prompt-length scale shortens it as the context fills.
-static void ggml_cuda_kraken_launch() {
+static void ggml_cuda_poller_warmup_mma_launch() {
     int w = 0;
     for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
         if (ggml_cuda_info().devices[i].is_tcc) continue;
-        // skip: too-hot card (temp monitor), or explicitly disabled via --kraken 0.
-        const bool skip_this = (w < GGML_CUDA_MAX_DEVICES && ggml_cuda_orca_skip[w])
-                            || (w < GGML_CUDA_MAX_DEVICES && ggml_cuda_kraken_override[w] && ggml_cuda_kraken[w] == 0);
+        // skip: too-hot card (temp monitor), or explicitly disabled via --poller-warmup-mma 0.
+        const bool skip_this = (w < GGML_CUDA_MAX_DEVICES && ggml_cuda_poller_skip[w])
+                            || (w < GGML_CUDA_MAX_DEVICES && ggml_cuda_poller_warmup_mma_override[w] && ggml_cuda_poller_warmup_mma[w] == 0);
         w++;  // w = WDDM position of this device (TCC devices do not consume a slot)
         if (skip_this) continue;
         int cuda_id = ggml_cuda_info().cuda_device_id[i];
@@ -363,26 +363,26 @@ static void ggml_cuda_kraken_launch() {
         }
         int nsm = std::max(ggml_cuda_info().devices[i].nsm, 1);
         const int n_mma = ggml_cuda_scale_fma_prompt(
-            ggml_cuda_kraken[w - 1] > 0 ? ggml_cuda_kraken[w - 1] : GGML_CUDA_KRAKEN_MMA_DEFAULT,
+            ggml_cuda_poller_warmup_mma[w - 1] > 0 ? ggml_cuda_poller_warmup_mma[w - 1] : GGML_CUDA_POLLER_WARMUP_MMA_DEFAULT,
             w - 1);
         if (n_mma <= 0) continue; // prompt in the last brackets or heat penalty: no warmup
         cudaSetDevice(cuda_id);
-        k_kraken_mma<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(n_mma);
+        k_poller_warmup_mma<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(n_mma);
     }
 }
 
-// Launch one cobra mem burst per WDDM GPU that is enabled in the cobra mask.
-// Same cadence as ggml_cuda_orca_warmup: fired from set_orca_active on every TG
+// Launch one mem burst per WDDM GPU that is enabled in the warmup-mem mask.
+// Same cadence as ggml_cuda_poller_warmup_fma_launch: fired from set_poller_active on every TG
 // batch, so the mem-clock companion runs alongside (or instead of) the FMA
-// warmup based on --cobra / --orca. FMA-free by construction (n_fma = 0): the
+// warmup based on --poller-warmup-mem / --poller-warmup-fma. FMA-free by construction (n_fma = 0): the
 // kernel skips the FMA chain and only streams the mem burst.
-static void ggml_cuda_cobra_launch() {
+static void ggml_cuda_poller_warmup_mem_launch() {
     int w = 0;
     for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
         if (ggml_cuda_info().devices[i].is_tcc) continue;
-        // skip: too-hot card (temp monitor), or not enabled via --cobra.
-        const bool skip_this = (w < GGML_CUDA_MAX_DEVICES && ggml_cuda_orca_skip[w])
-                            || (w < GGML_CUDA_MAX_DEVICES && !ggml_cuda_cobra[w]);
+        // skip: too-hot card (temp monitor), or not enabled via --poller-warmup-mem.
+        const bool skip_this = (w < GGML_CUDA_MAX_DEVICES && ggml_cuda_poller_skip[w])
+                            || (w < GGML_CUDA_MAX_DEVICES && !ggml_cuda_poller_warmup_mem[w]);
         w++;  // w = WDDM position of this device (TCC devices do not consume a slot)
         if (skip_this) continue;
         int cuda_id = ggml_cuda_info().cuda_device_id[i];
@@ -391,35 +391,35 @@ static void ggml_cuda_cobra_launch() {
             cudaSetDevice(cuda_id);
             cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
         }
-        if (ggml_cuda_orca_mem[i] == nullptr) {
-            CUDA_CHECK(cudaMalloc(&ggml_cuda_orca_mem[i], (size_t) GGML_CUDA_ORCA_MEM_SLOTS * sizeof(int4)));
+        if (ggml_cuda_poller_mem[i] == nullptr) {
+            CUDA_CHECK(cudaMalloc(&ggml_cuda_poller_mem[i], (size_t) GGML_CUDA_POLLER_MEM_SLOTS * sizeof(int4)));
         }
         int nsm = std::max(ggml_cuda_info().devices[i].nsm, 1);
         cudaSetDevice(cuda_id);
-        k_orca_warmup<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(
+        k_poller_warmup_fma<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(
             0,
-            ggml_cuda_orca_mem[i],
-            GGML_CUDA_ORCA_MEM_SLOTS,
-            GGML_CUDA_ORCA_MEM_PASSES);
+            ggml_cuda_poller_mem[i],
+            GGML_CUDA_POLLER_MEM_SLOTS,
+            GGML_CUDA_POLLER_MEM_PASSES);
     }
 }
 
-// Fire one fisherman FMA burst on a single WDDM GPU (w = WDDM position, the same
-// indexing as the orca/piranha arrays). Called from ggml_backend_cuda_graph_compute:
+// Fire one activity-fma FMA burst on a single WDDM GPU (w = WDDM position, the same
+// indexing as the warmup-fma/nvapi arrays). Called from ggml_backend_cuda_graph_compute:
 // the scheduler invokes that function per device exactly when the device has compute
 // nodes in the current batch's split graph, so this is the "GPU actually solicited"
-// signal. Unlike --orca (fires on every TG batch) and the autonomous ping threads,
+// signal. Unlike --poller-warmup-fma (fires on every TG batch) and the autonomous ping threads,
 // the probe accompanies real work on that specific card. FMA-only (mem = nullptr):
-// the mem-clock side is --cobra's / --barracuda's job.
-static void ggml_cuda_fisherman_ping_w(int w) {
+// the mem-clock side is --poller-warmup-mem's / --poller-ping-mem's job.
+static void ggml_cuda_poller_activity_fma_ping_w(int w) {
     const auto & info = ggml_cuda_info();
     int ww = 0;
     for (int i = 0; i < info.device_count; ++i) {
         if (info.devices[i].is_tcc) continue;
         if (ww == w) {
-            // skip: too-hot card (temp monitor), or explicitly disabled via --fisherman 0.
-            if (ggml_cuda_orca_skip[w]) return;
-            if (ggml_cuda_fisherman_override[w] && ggml_cuda_fisherman[w] == 0) return;
+            // skip: too-hot card (temp monitor), or explicitly disabled via --poller-activity-fma 0.
+            if (ggml_cuda_poller_skip[w]) return;
+            if (ggml_cuda_poller_activity_fma_override[w] && ggml_cuda_poller_activity_fma[w] == 0) return;
             int cuda_id = info.cuda_device_id[i];
             if (cuda_id < 0) return;
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
@@ -427,23 +427,23 @@ static void ggml_cuda_fisherman_ping_w(int w) {
                 cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
             }
             int nsm = std::max(info.devices[i].nsm, 1);
-            int fma = ggml_cuda_fisherman[w] > 0 ? ggml_cuda_fisherman[w] : GGML_CUDA_FISHERMAN_FMA_DEFAULT;
+            int fma = ggml_cuda_poller_activity_fma[w] > 0 ? ggml_cuda_poller_activity_fma[w] : GGML_CUDA_POLLER_ACTIVITY_FMA_DEFAULT;
             // Permanent heat penalty (in 1/256ths of the full budget) on top of
             // the skip mask: a card that has hit the pause temp twice in a row
             // permanently loses 16/256 of its FMA per double-hot episode. A
             // penalty large enough to zero the budget disables the probe.
             if (w >= 0 && w < GGML_CUDA_MAX_DEVICES) {
-                const int scale_256 = 256 - ggml_cuda_orca_penalty[w].load();
+                const int scale_256 = 256 - ggml_cuda_poller_penalty[w].load();
                 // A budget under 32 (1/256ths) is too thin to matter: disable the
                 // probe entirely (a short pulse adds stutter without any benefit).
                 if (scale_256 < 32) return;
                 fma = (int) (((int64_t) fma * scale_256) >> 8);
                 // Alternative absolute floor: never emit a pulse shorter than
-                // 1024 FMA, even for a small --fisherman base.
+                // 1024 FMA, even for a small --poller-activity-fma base.
                 if (fma < 1024) return;
             }
             cudaSetDevice(cuda_id);
-            k_orca_warmup<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(fma, nullptr, 0, 0);
+            k_poller_warmup_fma<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(fma, nullptr, 0, 0);
             return;
         }
         ww++;
@@ -462,36 +462,36 @@ static int ggml_cuda_wddm_pos(int i) {
     return w;
 }
 
-// Fire one fisherman burst for the device currently being computed. The scheduler
+// Fire one activity-fma burst for the device currently being computed. The scheduler
 // calls ggml_backend_cuda_graph_compute per device exactly when that device has
 // compute nodes in the current graph, so this is the "actually solicited" signal.
-// Gated to the TG phase via ggml_cuda_ping_gate (PP graphs don't trigger it).
-// Fire one fisherman burst for the device currently being computed (solicited
+// Gated to the TG phase via ggml_cuda_poller_gate (PP graphs don't trigger it).
+// Fire one activity-fma burst for the device currently being computed (solicited
 // from ggml_backend_cuda_graph_compute on a GPU that actually received work in
-// this TG batch). Gated to the TG phase via ggml_cuda_ping_gate.
-void ggml_cuda_fisherman_ping_device(int i) {
-    if (!ggml_cuda_fisherman_any) return;
-    if (!ggml_cuda_ping_gate.load()) return;
+// this TG batch). Gated to the TG phase via ggml_cuda_poller_gate.
+void ggml_cuda_poller_activity_fma_ping_device(int i) {
+    if (!ggml_cuda_poller_activity_fma_any) return;
+    if (!ggml_cuda_poller_gate.load()) return;
     const int w = ggml_cuda_wddm_pos(i);
     if (w < 0) return;
-    ggml_cuda_fisherman_ping_w(w);
+    ggml_cuda_poller_activity_fma_ping_w(w);
 }
 
-// Fire one harpoon HMMA burst on a single WDDM GPU (w = WDDM position). Same
-// decode-solicited semantics as ggml_cuda_fisherman_ping_w but launches the
+// Fire one activity-mma HMMA burst on a single WDDM GPU (w = WDDM position). Same
+// decode-solicited semantics as ggml_cuda_poller_activity_fma_ping_w but launches the
 // tensor-core kernel: called from ggml_backend_cuda_graph_compute exactly when
 // the device has compute nodes in the current batch's split graph, so the probe
 // rides along with real work on that specific card. Honors the shared skip mask
 // and the permanent heat penalty.
-static void ggml_cuda_harpoon_ping_w(int w) {
+static void ggml_cuda_poller_activity_mma_ping_w(int w) {
     const auto & info = ggml_cuda_info();
     int ww = 0;
     for (int i = 0; i < info.device_count; ++i) {
         if (info.devices[i].is_tcc) continue;
         if (ww == w) {
-            // skip: too-hot card (temp monitor), or explicitly disabled via --harpoon 0.
-            if (ggml_cuda_orca_skip[w]) return;
-            if (ggml_cuda_harpoon_override[w] && ggml_cuda_harpoon[w] == 0) return;
+            // skip: too-hot card (temp monitor), or explicitly disabled via --poller-activity-mma 0.
+            if (ggml_cuda_poller_skip[w]) return;
+            if (ggml_cuda_poller_activity_mma_override[w] && ggml_cuda_poller_activity_mma[w] == 0) return;
             int cuda_id = info.cuda_device_id[i];
             if (cuda_id < 0) return;
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
@@ -499,46 +499,46 @@ static void ggml_cuda_harpoon_ping_w(int w) {
                 cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
             }
             int nsm = std::max(info.devices[i].nsm, 1);
-            int n_mma = ggml_cuda_harpoon[w] > 0 ? ggml_cuda_harpoon[w] : GGML_CUDA_HARPOON_MMA_DEFAULT;
+            int n_mma = ggml_cuda_poller_activity_mma[w] > 0 ? ggml_cuda_poller_activity_mma[w] : GGML_CUDA_POLLER_ACTIVITY_MMA_DEFAULT;
             // Permanent heat penalty (in 1/256ths of the full budget) on top of
             // the skip mask: a card that has hit the pause temp twice in a row
             // permanently loses 16/256 of its HMMA per double-hot episode. A
             // penalty large enough to zero the budget disables the probe.
             if (w >= 0 && w < GGML_CUDA_MAX_DEVICES) {
-                const int scale_256 = 256 - ggml_cuda_orca_penalty[w].load();
+                const int scale_256 = 256 - ggml_cuda_poller_penalty[w].load();
                 // A budget under 32 (1/256ths) is too thin to matter: disable the
                 // probe entirely (a short pulse adds stutter without any benefit).
                 if (scale_256 < 32) return;
                 n_mma = (int) (((int64_t) n_mma * scale_256) >> 8);
                 // Alternative absolute floor: never emit a pulse shorter than
-                // 1024 HMMA, even for a small --harpoon base.
+                // 1024 HMMA, even for a small --poller-activity-mma base.
                 if (n_mma < 1024) return;
             }
             cudaSetDevice(cuda_id);
-            k_kraken_mma<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(n_mma);
+            k_poller_warmup_mma<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(n_mma);
             return;
         }
         ww++;
     }
 }
 
-// Fire one harpoon burst for the device currently being computed (same
-// decode-solicited trigger as fisherman). Gated to the TG phase via
-// ggml_cuda_ping_gate (PP graphs don't trigger it).
-// Fire one harpoon burst for the device currently being computed (solicited
+// Fire one activity-mma burst for the device currently being computed (same
+// decode-solicited trigger as the FMA probe). Gated to the TG phase via
+// ggml_cuda_poller_gate (PP graphs don't trigger it).
+// Fire one activity-mma burst for the device currently being computed (solicited
 // from ggml_backend_cuda_graph_compute on a GPU that actually received work in
-// this TG batch). Gated to the TG phase via ggml_cuda_ping_gate.
-void ggml_cuda_harpoon_ping_device(int i) {
-    if (!ggml_cuda_harpoon_any) return;
-    if (!ggml_cuda_ping_gate.load()) return;
+// this TG batch). Gated to the TG phase via ggml_cuda_poller_gate.
+void ggml_cuda_poller_activity_mma_ping_device(int i) {
+    if (!ggml_cuda_poller_activity_mma_any) return;
+    if (!ggml_cuda_poller_gate.load()) return;
     const int w = ggml_cuda_wddm_pos(i);
     if (w < 0) return;
-    ggml_cuda_harpoon_ping_w(w);
+    ggml_cuda_poller_activity_mma_ping_w(w);
 }
 
-GGML_CALL void ggml_backend_cuda_set_orca(bool val) {
-    if (val == ggml_cuda_orca) return;
-    ggml_cuda_orca = val;
+GGML_CALL void ggml_backend_cuda_set_poller_warmup_fma(bool val) {
+    if (val == ggml_cuda_poller_warmup_fma) return;
+    ggml_cuda_poller_warmup_fma = val;
     if (val) {
         const auto & info = ggml_cuda_info();
         int w = 0;
@@ -553,40 +553,40 @@ GGML_CALL void ggml_backend_cuda_set_orca(bool val) {
             snprintf(name, sizeof(name), "%s", prop.name);
             char pci_bus_id[16] = {0};
             cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), cuda_id);
-            if (ggml_cuda_orca_fma_override[w] && ggml_cuda_orca_fma[w] == 0) {
-                GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_orca: GPU %d (%s, PCI %s), WDDM[%d]: warmup disabled (0 in --orca list)\n",
+            if (ggml_cuda_poller_warmup_fma_strength_override[w] && ggml_cuda_poller_warmup_fma_strength[w] == 0) {
+                GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_warmup_fma: GPU %d (%s, PCI %s), WDDM[%d]: warmup disabled (0 in --poller-warmup-fma list)\n",
                     cuda_id, name, pci_bus_id, w);
                 w++;
                 continue;
             }
-            const int fma = ggml_cuda_orca_fma[w] > 0 ? ggml_cuda_orca_fma[w] : GGML_CUDA_ORCA_FMA_DEFAULT;
-            const bool ping_off = ggml_cuda_orca_ping_fma_override[w] && ggml_cuda_orca_ping_fma[w] == 0;
+            const int fma = ggml_cuda_poller_warmup_fma_strength[w] > 0 ? ggml_cuda_poller_warmup_fma_strength[w] : GGML_CUDA_POLLER_WARMUP_FMA_DEFAULT;
+            const bool ping_off = ggml_cuda_poller_ping_fma_amplitude_override[w] && ggml_cuda_poller_ping_fma_amplitude[w] == 0;
             char ping_s[32] = "off";
             if (!ping_off) {
-                const int ping_fma = ggml_cuda_orca_ping_fma[w] > 0 ? ggml_cuda_orca_ping_fma[w] : GGML_CUDA_ORCA_PING_FMA_DEFAULT;
+                const int ping_fma = ggml_cuda_poller_ping_fma_amplitude[w] > 0 ? ggml_cuda_poller_ping_fma_amplitude[w] : GGML_CUDA_POLLER_PING_FMA_AMPLITUDE_DEFAULT;
                 snprintf(ping_s, sizeof(ping_s), "%d", ping_fma);
             }
-            GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_orca: enabling heartbeat on GPU %d (%s, PCI %s), WDDM[%d]: %d FMA (ping %s)\n",
+            GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_warmup_fma: enabling heartbeat on GPU %d (%s, PCI %s), WDDM[%d]: %d FMA (ping %s)\n",
                 cuda_id, name, pci_bus_id, w, fma, ping_s);
             w++;
         }
         // Prime the warmup now, at enable time (before any decode): creates the
         // per-GPU streams, loads the kernel, and warms the WDDM context, so the
         // first TG-phase burst is not a cold first launch on the token path.
-        ggml_cuda_orca_warmup();
+        ggml_cuda_poller_warmup_fma_launch();
     } else {
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_orca: warmup disabled\n");
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_warmup_fma: warmup disabled\n");
     }
 }
 
 // Per-device event record+sync tickle: record and synchronize a CUDA event on
 // each non-TCC (WDDM) GPU. No kernel, no FMA - the cheapest way to touch a
 // WDDM card so it does not fully idle between tokens. Mirrors the old
-// gpu_poller light heartbeat, but in-process and decoupled from shark/orca.
-// Gated to the TG phase via ping_gate (like the ping threads) and honors the
-// shared orca skip mask, so a too-hot card is not tickled during PP.
-static cudaStream_t ggml_cuda_tick_streams[GGML_CUDA_MAX_DEVICES] = {nullptr};
-static cudaEvent_t  ggml_cuda_tick_events[GGML_CUDA_MAX_DEVICES]  = {nullptr};
+// gpu_poller light heartbeat, but in-process and decoupled from shark/warmup-fma.
+// Gated to the TG phase via poller_gate (like the ping threads) and honors the
+// shared skip mask, so a too-hot card is not tickled during PP.
+static cudaStream_t ggml_cuda_poller_sync_streams[GGML_CUDA_MAX_DEVICES] = {nullptr};
+static cudaEvent_t  ggml_cuda_poller_sync_events[GGML_CUDA_MAX_DEVICES]  = {nullptr};
 
 // Record and synchronize a CUDA event on device index i (a non-TCC WDDM GPU).
 // Persistent dedicated non-blocking stream + event per device (created once,
@@ -594,45 +594,45 @@ static cudaEvent_t  ggml_cuda_tick_events[GGML_CUDA_MAX_DEVICES]  = {nullptr};
 // default (NULL) stream would be ordered after all other in-flight work (implicit
 // stream sync), turning each tick into a pipeline-drain barrier; a dedicated
 // stream records instantly and never perturbs decode.
-static void ggml_cuda_tickle_one(int i) {
-    if (ggml_cuda_tick_streams[i] == nullptr) {
-        if (cudaStreamCreateWithFlags(&ggml_cuda_tick_streams[i], cudaStreamNonBlocking) != cudaSuccess) return;
+static void ggml_cuda_poller_sync_tickle(int i) {
+    if (ggml_cuda_poller_sync_streams[i] == nullptr) {
+        if (cudaStreamCreateWithFlags(&ggml_cuda_poller_sync_streams[i], cudaStreamNonBlocking) != cudaSuccess) return;
     }
-    if (ggml_cuda_tick_events[i] == nullptr) {
-        if (cudaEventCreate(&ggml_cuda_tick_events[i]) != cudaSuccess) return;
+    if (ggml_cuda_poller_sync_events[i] == nullptr) {
+        if (cudaEventCreate(&ggml_cuda_poller_sync_events[i]) != cudaSuccess) return;
     }
-    cudaEventRecord(ggml_cuda_tick_events[i], ggml_cuda_tick_streams[i]);
-    cudaEventSynchronize(ggml_cuda_tick_events[i]);
+    cudaEventRecord(ggml_cuda_poller_sync_events[i], ggml_cuda_poller_sync_streams[i]);
+    cudaEventSynchronize(ggml_cuda_poller_sync_events[i]);
 }
 
-static std::atomic<bool> ggml_cuda_tick_stop = false;
+static std::atomic<bool> ggml_cuda_poller_sync_stop = false;
 // Per-GPU (WDDM-positional) tickle interval in ms; 0 = off for that GPU. Written
-// by set_hb, read by the thread each tick.
-static std::atomic<int>  ggml_cuda_tick_ms[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
-static std::thread       ggml_cuda_tick_thread;
+// by set_poller_sync, read by the thread each tick.
+static std::atomic<int>  ggml_cuda_poller_sync_ms[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
+static std::thread       ggml_cuda_poller_sync_thread;
 
-// Stop and join the tickle thread. Called by set_hb(all-off) and by the guard below
+// Stop and join the tickle thread. Called by set_poller_sync(all-off) and by the guard below
 // at process exit: a joinable std::thread would otherwise call std::terminate
-// in its destructor, aborting a normal exit whenever --hb is active.
-static void ggml_cuda_tick_stop_thread() {
-    if (!ggml_cuda_tick_thread.joinable()) return;
-    ggml_cuda_tick_stop = true;
-    ggml_cuda_tick_thread.join();
-    ggml_cuda_tick_thread = std::thread();
+// in its destructor, aborting a normal exit whenever --poller-sync is active.
+static void ggml_cuda_poller_sync_stop_thread() {
+    if (!ggml_cuda_poller_sync_thread.joinable()) return;
+    ggml_cuda_poller_sync_stop = true;
+    ggml_cuda_poller_sync_thread.join();
+    ggml_cuda_poller_sync_thread = std::thread();
 }
 
-struct ggml_cuda_tick_thread_guard {
-    ~ggml_cuda_tick_thread_guard() { ggml_cuda_tick_stop_thread(); }
+struct ggml_cuda_poller_sync_thread_guard {
+    ~ggml_cuda_poller_sync_thread_guard() { ggml_cuda_poller_sync_stop_thread(); }
 };
-static ggml_cuda_tick_thread_guard ggml_cuda_tick_thread_guard_instance;
+static ggml_cuda_poller_sync_thread_guard ggml_cuda_poller_sync_thread_guard_instance;
 
-static void ggml_cuda_tick_thread_proc() {
+static void ggml_cuda_poller_sync_thread_proc() {
     // Per-GPU cadence (WDDM-positional), 10 ms tick so interval changes and a
     // stop are noticed promptly - same scheduling pattern as the ping threads.
     std::chrono::steady_clock::time_point next_due[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
     bool was_active = false;
-    while (!ggml_cuda_tick_stop.load()) {
-        const bool active = ggml_cuda_ping_gate.load();
+    while (!ggml_cuda_poller_sync_stop.load()) {
+        const bool active = ggml_cuda_poller_gate.load();
         if (active && !was_active) {
             // Fresh TG entry: clear the per-GPU cadence so every enabled GPU
             // fires immediately instead of on a stale schedule from an earlier
@@ -654,14 +654,14 @@ static void ggml_cuda_tick_thread_proc() {
         int w = 0;
         for (int i = 0; i < info.device_count; ++i) {
             if (info.devices[i].is_tcc) continue;
-            const int ms = ggml_cuda_tick_ms[w].load();
-            if (ms > 0 && ggml_cuda_orca_skip[w]) {
-                // too-hot card (fed by --piranha/--orca): hold off this tick
+            const int ms = ggml_cuda_poller_sync_ms[w].load();
+            if (ms > 0 && ggml_cuda_poller_skip[w]) {
+                // too-hot card (fed by --poller-nvapi/--poller-warmup-fma): hold off this tick
             } else if (ms > 0 && (next_due[w] == std::chrono::steady_clock::time_point{} || now >= next_due[w])) {
                 int cuda_id = info.cuda_device_id[i];
                 if (cuda_id >= 0) {
                     cudaSetDevice(cuda_id);
-                    ggml_cuda_tickle_one(i);
+                    ggml_cuda_poller_sync_tickle(i);
                     next_due[w] = now + std::chrono::milliseconds(ms);
                 }
             }
@@ -671,50 +671,50 @@ static void ggml_cuda_tick_thread_proc() {
     }
 }
 
-// hb=N[,N,...]: per-device event record+sync interval(s) in ms (0 = off).
+// poller-sync=N[,N,...]: per-device event record+sync interval(s) in ms (0 = off).
 // Single value broadcasts to every WDDM GPU; a comma list maps positionally;
-// all zeros or n <= 0 disables. Decoupled from shark/orca/piranha: this only
+// all zeros or n <= 0 disables. Decoupled from shark/warmup-fma/nvapi: this only
 // runs the lightweight tickle thread.
-GGML_CALL void ggml_backend_cuda_set_hb(const int * intervals, int n) {
+GGML_CALL void ggml_backend_cuda_set_poller_sync(const int * intervals, int n) {
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-        ggml_cuda_tick_ms[i].store(0);
+        ggml_cuda_poller_sync_ms[i].store(0);
     }
     bool any = false;
     if (n > 1) {
         const int m = std::min(n, GGML_CUDA_MAX_DEVICES);
         for (int i = 0; i < m; ++i) {
             const int ms = intervals[i] > 0 ? intervals[i] : 0;
-            ggml_cuda_tick_ms[i].store(ms);
+            ggml_cuda_poller_sync_ms[i].store(ms);
             if (ms > 0) any = true;
         }
     } else if (n == 1) {
         const int ms = intervals[0] > 0 ? intervals[0] : 0;
         if (ms > 0) {
             for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-                ggml_cuda_tick_ms[i].store(ms);
+                ggml_cuda_poller_sync_ms[i].store(ms);
             }
             any = true;
         }
     }
-    if (any && !ggml_cuda_tick_thread.joinable()) {
-        ggml_cuda_tick_stop = false;
-        ggml_cuda_tick_thread = std::thread(ggml_cuda_tick_thread_proc);
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_hb: event tickle on WDDM GPUs (per-GPU ms):");
+    if (any && !ggml_cuda_poller_sync_thread.joinable()) {
+        ggml_cuda_poller_sync_stop = false;
+        ggml_cuda_poller_sync_thread = std::thread(ggml_cuda_poller_sync_thread_proc);
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_sync: event tickle on WDDM GPUs (per-GPU ms):");
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-            const int ms = ggml_cuda_tick_ms[i].load();
+            const int ms = ggml_cuda_poller_sync_ms[i].load();
             if (ms > 0) GGML_CUDA_LOG_INFO(" %d", ms);
         }
         GGML_CUDA_LOG_INFO("\n");
-    } else if (!any && ggml_cuda_tick_thread.joinable()) {
-        ggml_cuda_tick_stop_thread();
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_hb: disabled\n");
+    } else if (!any && ggml_cuda_poller_sync_thread.joinable()) {
+        ggml_cuda_poller_sync_stop_thread();
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_sync: disabled\n");
     }
 }
 
 // Launch the ping load on the w-th non-TCC (WDDM) GPU only (w = WDDM position;
 // TCC devices do not consume a slot). Used by the autonomous ping threads for
 // per-GPU cadence. Fire-and-forget, async. Returns false when no such GPU.
-static bool ggml_cuda_ping_launch_w(int w, bool do_fma, bool do_mem) {
+static bool ggml_cuda_poller_ping_launch_w(int w, bool do_fma, bool do_mem) {
     const auto & info = ggml_cuda_info();
     int ww = 0;
     for (int i = 0; i < info.device_count; ++i) {
@@ -722,9 +722,9 @@ static bool ggml_cuda_ping_launch_w(int w, bool do_fma, bool do_mem) {
         if (ww == w) {
             int cuda_id = info.cuda_device_id[i];
             if (cuda_id < 0) return false;
-            // Perch FMA half explicitly disabled for this GPU (--orca-ping 0):
-            // nothing to launch. The barracuda mem half is unaffected.
-            if (do_fma && ggml_cuda_orca_ping_fma_override[w] && ggml_cuda_orca_ping_fma[w] == 0) {
+            // FMA ping half explicitly disabled for this GPU (--poller-ping-fma-amplitude 0):
+            // nothing to launch. The mem half is unaffected.
+            if (do_fma && ggml_cuda_poller_ping_fma_amplitude_override[w] && ggml_cuda_poller_ping_fma_amplitude[w] == 0) {
                 return false;
             }
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
@@ -733,22 +733,22 @@ static bool ggml_cuda_ping_launch_w(int w, bool do_fma, bool do_mem) {
             }
             int nsm = std::max(info.devices[i].nsm, 1);
             const int fma = do_fma
-                ? ggml_cuda_scale_fma_prompt(ggml_cuda_orca_ping_fma[w] > 0 ? ggml_cuda_orca_ping_fma[w] : GGML_CUDA_ORCA_PING_FMA_DEFAULT, w)
+                ? ggml_cuda_scale_fma_prompt(ggml_cuda_poller_ping_fma_amplitude[w] > 0 ? ggml_cuda_poller_ping_fma_amplitude[w] : GGML_CUDA_POLLER_PING_FMA_AMPLITUDE_DEFAULT, w)
                 : 0;
             // Prompt in the last brackets or heat penalty zeroed the FMA budget:
             // with no FMA and no mem half there is nothing to launch for this GPU.
             if (fma <= 0 && !do_mem) return false;
             cudaSetDevice(cuda_id);
-            if (do_mem && ggml_cuda_orca_mem[i] == nullptr) {
-                CUDA_CHECK(cudaMalloc(&ggml_cuda_orca_mem[i], (size_t) GGML_CUDA_ORCA_MEM_SLOTS * sizeof(int4)));
+            if (do_mem && ggml_cuda_poller_mem[i] == nullptr) {
+                CUDA_CHECK(cudaMalloc(&ggml_cuda_poller_mem[i], (size_t) GGML_CUDA_POLLER_MEM_SLOTS * sizeof(int4)));
             }
             // Full 2048-thread residency (16 blocks/SM x 256 threads). The kernel
             // skips the FMA chain when n_fma == 0 and the mem stream when mem is null.
-            k_orca_warmup<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(
+            k_poller_warmup_fma<<<nsm * 16, 256, 0, ggml_cuda_poller_compute_streams[i]>>>(
                 fma,
-                do_mem ? ggml_cuda_orca_mem[i] : nullptr,
-                do_mem ? GGML_CUDA_ORCA_MEM_SLOTS : 0,
-                do_mem ? GGML_CUDA_ORCA_MEM_PASSES : 0);
+                do_mem ? ggml_cuda_poller_mem[i] : nullptr,
+                do_mem ? GGML_CUDA_POLLER_MEM_SLOTS : 0,
+                do_mem ? GGML_CUDA_POLLER_MEM_PASSES : 0);
             return true;
         }
         ww++;
@@ -757,15 +757,15 @@ static bool ggml_cuda_ping_launch_w(int w, bool do_fma, bool do_mem) {
 }
 
 // Fire a warmup burst on every non-TCC GPU, optionally with the FMA chain and/or
-// the mem-clock stream: --perch fires the FMA half, --barracuda the mem half.
+// the mem-clock stream: --poller-ping-fma fires the FMA half, --poller-ping-mem the mem half.
 // skip[] is indexed by WDDM position (0 = first non-TCC GPU); skip == nullptr
-// falls back to the shared orca skip mask (set_orca_skip), so a piranha-fed
+// falls back to the shared skip mask (set_poller_skip), so a poller-nvapi-fed
 // too-hot card is skipped. Fire-and-forget, async.
-static void ggml_cuda_ping_launch(bool do_fma, bool do_mem, const bool * skip, int n_skip) {
+static void ggml_cuda_poller_ping_launch(bool do_fma, bool do_mem, const bool * skip, int n_skip) {
     if (skip == nullptr) {
         // Autonomous ping threads: honor the shared skip mask fed by the NVAPI
-        // temp monitor (--piranha / --orca) so a too-hot card is skipped.
-        skip = ggml_cuda_orca_skip;
+        // temp monitor (--poller-nvapi / --poller-warmup-fma) so a too-hot card is skipped.
+        skip = ggml_cuda_poller_skip;
         n_skip = GGML_CUDA_MAX_DEVICES;
     }
     const auto & info = ggml_cuda_info();
@@ -775,15 +775,15 @@ static void ggml_cuda_ping_launch(bool do_fma, bool do_mem, const bool * skip, i
         const bool skip_this = (skip != nullptr) && (w < n_skip) && skip[w];
         w++;  // w = WDDM position of this device (TCC devices do not consume a slot)
         if (skip_this) continue;
-        ggml_cuda_ping_launch_w(w - 1, do_fma, do_mem);
+        ggml_cuda_poller_ping_launch_w(w - 1, do_fma, do_mem);
     }
 }
 
-// Shared control for the two autonomous ping threads (--barracuda mem stream,
-// --perch FMA ping): owns the stop flag, the per-GPU intervals, and the thread.
+// Shared control for the two autonomous ping threads (--poller-ping-mem mem stream,
+// --poller-ping-fma FMA ping): owns the stop flag, the per-GPU intervals, and the thread.
 // Joining happens in stop_thread() and in the destructor (process exit), so the
 // threads are never left joinable and never leak.
-struct ggml_cuda_ping_thread_control {
+struct ggml_cuda_poller_ping_thread_control {
     std::atomic<bool> stop = false;
     // Per-GPU (WDDM-positional) interval in ms; 0 = off for that GPU. Written by
     // the setters, read by the thread each tick.
@@ -796,16 +796,16 @@ struct ggml_cuda_ping_thread_control {
         t.join();
         t = std::thread();
     }
-    ~ggml_cuda_ping_thread_control() { stop_thread(); }
+    ~ggml_cuda_poller_ping_thread_control() { stop_thread(); }
 };
-static ggml_cuda_ping_thread_control ggml_cuda_barracuda_ctrl;
-static ggml_cuda_ping_thread_control ggml_cuda_perch_ctrl;
+static ggml_cuda_poller_ping_thread_control ggml_cuda_poller_ping_mem_ctrl;
+static ggml_cuda_poller_ping_thread_control ggml_cuda_poller_ping_fma_ctrl;
 
-static void ggml_cuda_ping_thread_proc(bool do_fma, bool do_mem, std::atomic<bool> & stop, ggml_cuda_ping_thread_control & c) {
+static void ggml_cuda_poller_ping_thread_proc(bool do_fma, bool do_mem, std::atomic<bool> & stop, ggml_cuda_poller_ping_thread_control & c) {
     std::chrono::steady_clock::time_point next_due[GGML_CUDA_MAX_DEVICES] = {}; // NOLINT(cppcoreguidelines-avoid-c-arrays)
     bool was_active = false;
     while (!stop.load()) {
-        const bool active = ggml_cuda_ping_gate.load();
+        const bool active = ggml_cuda_poller_gate.load();
         if (active && !was_active) {
             // Fresh TG entry: clear the per-GPU cadence so every enabled GPU
             // fires immediately instead of on a stale schedule from an earlier
@@ -826,11 +826,11 @@ static void ggml_cuda_ping_thread_proc(bool do_fma, bool do_mem, std::atomic<boo
         for (int w = 0; w < GGML_CUDA_MAX_DEVICES; ++w) {
             const int interval = c.ms[w].load();
             if (interval <= 0) continue;
-            if (ggml_cuda_orca_skip[w]) continue; // too-hot card (fed by --piranha/--orca)
+            if (ggml_cuda_poller_skip[w]) continue; // too-hot card (fed by --poller-nvapi/--poller-warmup-fma)
             if (next_due[w] != std::chrono::steady_clock::time_point{} && now < next_due[w]) {
                 continue; // not yet due
             }
-            ggml_cuda_ping_launch_w(w, do_fma, do_mem);
+            ggml_cuda_poller_ping_launch_w(w, do_fma, do_mem);
             next_due[w] = now + std::chrono::milliseconds(interval);
         }
         // 10 ms tick: keeps per-GPU cadence within one interval of due while
@@ -843,7 +843,7 @@ static void ggml_cuda_ping_thread_proc(bool do_fma, bool do_mem, std::atomic<boo
 // broadcasts to every WDDM GPU; a comma list maps positionally (values past the
 // WDDM GPU count are ignored, GPUs past the list get 0/off). Returns true when
 // any GPU has a positive interval.
-static bool ggml_cuda_ping_set_intervals(ggml_cuda_ping_thread_control & c, const int * intervals, int n_intervals) {
+static bool ggml_cuda_poller_ping_set_intervals(ggml_cuda_poller_ping_thread_control & c, const int * intervals, int n_intervals) {
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         c.ms[i].store(0);
     }
@@ -867,17 +867,17 @@ static bool ggml_cuda_ping_set_intervals(ggml_cuda_ping_thread_control & c, cons
     return any;
 }
 
-// barracuda=N[,N,...]: autonomous mem-clock stream per WDDM GPU (0 = off for a
+// ping-mem=N[,N,...]: autonomous mem-clock stream per WDDM GPU (0 = off for a
 // GPU). Single value broadcasts to every WDDM GPU; more values map positionally.
-// The mem half of the ping load, decoupled from piranha/orca - no NVAPI, no
+// The mem half of the ping load, decoupled from poller-nvapi/warmup-fma - no NVAPI, no
 // temperature read.
-GGML_CALL void ggml_backend_cuda_set_barracuda(const int * intervals, int n_intervals) {
-    auto & c = ggml_cuda_barracuda_ctrl;
-    const bool any = ggml_cuda_ping_set_intervals(c, intervals, n_intervals);
+GGML_CALL void ggml_backend_cuda_set_poller_ping_mem(const int * intervals, int n_intervals) {
+    auto & c = ggml_cuda_poller_ping_mem_ctrl;
+    const bool any = ggml_cuda_poller_ping_set_intervals(c, intervals, n_intervals);
     if (any && !c.t.joinable()) {
         c.stop = false;
-        c.t = std::thread(ggml_cuda_ping_thread_proc, false, true, std::ref(c.stop), std::ref(c));
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_barracuda: mem stream on WDDM GPUs (per-GPU ms):");
+        c.t = std::thread(ggml_cuda_poller_ping_thread_proc, false, true, std::ref(c.stop), std::ref(c));
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_mem: mem stream on WDDM GPUs (per-GPU ms):");
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
             const int ms = c.ms[i].load();
             if (ms > 0) GGML_CUDA_LOG_INFO(" %d", ms);
@@ -885,20 +885,20 @@ GGML_CALL void ggml_backend_cuda_set_barracuda(const int * intervals, int n_inte
         GGML_CUDA_LOG_INFO("\n");
     } else if (!any && c.t.joinable()) {
         c.stop_thread();
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_barracuda: disabled\n");
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_mem: disabled\n");
     }
 }
 
-// perch=N[,N,...]: autonomous FMA ping per WDDM GPU (0 = off for a GPU). The
+// ping-fma=N[,N,...]: autonomous FMA ping per WDDM GPU (0 = off for a GPU). The
 // core-clock half of the ping load; per-GPU chain length comes from
-// set_orca_ping() (default 8192).
-GGML_CALL void ggml_backend_cuda_set_perch(const int * intervals, int n_intervals) {
-    auto & c = ggml_cuda_perch_ctrl;
-    const bool any = ggml_cuda_ping_set_intervals(c, intervals, n_intervals);
+// set_poller_ping_fma_amplitude() (default 8192).
+GGML_CALL void ggml_backend_cuda_set_poller_ping_fma(const int * intervals, int n_intervals) {
+    auto & c = ggml_cuda_poller_ping_fma_ctrl;
+    const bool any = ggml_cuda_poller_ping_set_intervals(c, intervals, n_intervals);
     if (any && !c.t.joinable()) {
         c.stop = false;
-        c.t = std::thread(ggml_cuda_ping_thread_proc, true, false, std::ref(c.stop), std::ref(c));
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_perch: FMA ping on WDDM GPUs (per-GPU ms):");
+        c.t = std::thread(ggml_cuda_poller_ping_thread_proc, true, false, std::ref(c.stop), std::ref(c));
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_fma: FMA ping on WDDM GPUs (per-GPU ms):");
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
             const int ms = c.ms[i].load();
             if (ms > 0) GGML_CUDA_LOG_INFO(" %d", ms);
@@ -906,19 +906,19 @@ GGML_CALL void ggml_backend_cuda_set_perch(const int * intervals, int n_interval
         GGML_CUDA_LOG_INFO("\n");
     } else if (!any && c.t.joinable()) {
         c.stop_thread();
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_perch: disabled\n");
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_ping_fma: disabled\n");
     }
 }
 
-GGML_CALL void ggml_backend_cuda_set_orca_fmas(const int * fmas, int n) {
+GGML_CALL void ggml_backend_cuda_set_poller_warmup_fma_strength(const int * fmas, int n) {
     // Same per-WDDM-GPU mapping as the other clock flags: a single value
-    // broadcasts to every WDDM GPU (bare --orca = all GPUs at the default), a
+    // broadcasts to every WDDM GPU (bare --poller-warmup-fma = all GPUs at the default), a
     // comma list maps positionally in ggml device order (TCC devices don't
     // consume a slot), 0 in the list disables the warmup on that GPU
-    // (e.g. --orca 0,32768), and missing values keep the default. Negative
+    // (e.g. --poller-warmup-fma 0,32768), and missing values keep the default. Negative
     // values are replaced by the default.
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-        ggml_cuda_orca_fma_override[i] = false;
+        ggml_cuda_poller_warmup_fma_strength_override[i] = false;
     }
     if (n > 1) {
         const int m = std::min(n, GGML_CUDA_MAX_DEVICES);
@@ -928,30 +928,30 @@ GGML_CALL void ggml_backend_cuda_set_orca_fmas(const int * fmas, int n) {
                 GGML_CUDA_LOG_WARN("%s: ignoring negative FMA length %d for WDDM[%d]\n", __func__, fma, i);
                 continue;
             }
-            ggml_cuda_orca_fma[i] = fma;
-            ggml_cuda_orca_fma_override[i] = true;
+            ggml_cuda_poller_warmup_fma_strength[i] = fma;
+            ggml_cuda_poller_warmup_fma_strength_override[i] = true;
         }
     } else if (n == 1) {
-        // Single value (bare --orca = 32768): broadcast to every WDDM GPU.
+        // Single value (bare --poller-warmup-fma = 32768): broadcast to every WDDM GPU.
         // A lone 0 disables the warmup on every GPU (matches the "one value
         // broadcasts" rule and the 0 = off semantics of the list form).
         const int fma = fmas[0];
         if (fma < 0) {
-            GGML_CUDA_LOG_WARN("%s: ignoring negative FMA length %d (bare --orca = default)\n", __func__, fma);
+            GGML_CUDA_LOG_WARN("%s: ignoring negative FMA length %d (bare --poller-warmup-fma = default)\n", __func__, fma);
         } else if (fma >= 0) {
             for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-                ggml_cuda_orca_fma[i] = fma;
-                ggml_cuda_orca_fma_override[i] = true;
+                ggml_cuda_poller_warmup_fma_strength[i] = fma;
+                ggml_cuda_poller_warmup_fma_strength_override[i] = true;
             }
         }
     }
 }
 
-GGML_CALL void ggml_backend_cuda_set_orca_ping(const int * fmas, int n) {
-    // Same per-WDDM-GPU mapping as set_orca_fmas (single value broadcasts,
+GGML_CALL void ggml_backend_cuda_set_poller_ping_fma_amplitude(const int * fmas, int n) {
+    // Same per-WDDM-GPU mapping as set_poller_warmup_fma_strength (single value broadcasts,
     // comma list positional, 0 = off for a GPU, negative -> default).
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-        ggml_cuda_orca_ping_fma_override[i] = false;
+        ggml_cuda_poller_ping_fma_amplitude_override[i] = false;
     }
     if (n > 1) {
         const int m = std::min(n, GGML_CUDA_MAX_DEVICES);
@@ -961,61 +961,61 @@ GGML_CALL void ggml_backend_cuda_set_orca_ping(const int * fmas, int n) {
                 GGML_CUDA_LOG_WARN("%s: ignoring negative ping FMA length %d for WDDM[%d]\n", __func__, fma, i);
                 continue;
             }
-            ggml_cuda_orca_ping_fma[i] = fma;
-            ggml_cuda_orca_ping_fma_override[i] = true;
+            ggml_cuda_poller_ping_fma_amplitude[i] = fma;
+            ggml_cuda_poller_ping_fma_amplitude_override[i] = true;
         }
     } else if (n == 1) {
-        // Single value (bare --orca-ping = 8192): broadcast to every WDDM GPU.
+        // Single value (bare --poller-ping-fma-amplitude = 8192): broadcast to every WDDM GPU.
         // A lone 0 disables the ping on every GPU.
         const int fma = fmas[0];
         if (fma < 0) {
-            GGML_CUDA_LOG_WARN("%s: ignoring negative ping FMA length %d (bare --orca-ping = default)\n", __func__, fma);
+            GGML_CUDA_LOG_WARN("%s: ignoring negative ping FMA length %d (bare --poller-ping-fma-amplitude = default)\n", __func__, fma);
         } else if (fma >= 0) {
             for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-                ggml_cuda_orca_ping_fma[i] = fma;
-                ggml_cuda_orca_ping_fma_override[i] = true;
+                ggml_cuda_poller_ping_fma_amplitude[i] = fma;
+                ggml_cuda_poller_ping_fma_amplitude_override[i] = true;
             }
         }
     }
 }
 
-GGML_CALL void ggml_backend_cuda_set_orca_skip(const bool * skip, int n) {
-    // Same positional WDDM mapping as set_orca_fmas: skip[0] => first WDDM GPU.
+GGML_CALL void ggml_backend_cuda_set_poller_skip(const bool * skip, int n) {
+    // Same positional WDDM mapping as set_poller_warmup_fma_strength: skip[0] => first WDDM GPU.
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-        ggml_cuda_orca_skip[i] = (skip != nullptr) && (i < n) && skip[i];
+        ggml_cuda_poller_skip[i] = (skip != nullptr) && (i < n) && skip[i];
     }
 }
 
 // Set the per-card permanent FMA heat penalty (in 1/256ths of the full budget).
-// Same positional WDDM mapping as set_orca_skip: penalty[0] => first WDDM GPU.
-// Fed by the NVAPI temp monitor (--piranha / --orca): each time a card hits the
+// Same positional WDDM mapping as set_poller_skip: penalty[0] => first WDDM GPU.
+// Fed by the NVAPI temp monitor (--poller-nvapi / --poller-warmup-fma): each time a card hits the
 // pause temp twice in a row, the monitor adds 16 to that card's penalty here.
 // Accumulates, never recovers. Applied to every FMA budget that is subject to
-// the prompt scale - --orca and --orca-ping via ggml_cuda_scale_fma_prompt, and
-// --fisherman via ggml_cuda_fisherman_ping_w - so a penalty that zeroes the
+// the prompt scale - --poller-warmup-fma and --poller-ping-fma-amplitude via ggml_cuda_scale_fma_prompt, and
+// --poller-activity-fma via ggml_cuda_poller_activity_fma_ping_w - so a penalty that zeroes the
 // budget disables that card's FMA entirely.
-GGML_CALL void ggml_backend_cuda_set_orca_penalty(const int * penalty, int n) {
+GGML_CALL void ggml_backend_cuda_set_poller_penalty(const int * penalty, int n) {
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-        ggml_cuda_orca_penalty[i].store((penalty != nullptr) && (i < n) ? penalty[i] : 0);
+        ggml_cuda_poller_penalty[i].store((penalty != nullptr) && (i < n) ? penalty[i] : 0);
     }
 }
 
-GGML_CALL bool ggml_backend_cuda_get_orca(void) {
-    return ggml_cuda_orca;
+GGML_CALL bool ggml_backend_cuda_get_poller_warmup_fma(void) {
+    return ggml_cuda_poller_warmup_fma;
 }
 
-// fisherman=N[,N,...]: per-WDDM-GPU FMA chain length for the decode-solicited
-// probe (--fisherman). Unlike --orca (fires on every TG batch), the burst only
+// activity-fma=N[,N,...]: per-WDDM-GPU FMA chain length for the decode-solicited
+// probe (--poller-activity-fma). Unlike --poller-warmup-fma (fires on every TG batch), the burst only
 // fires on a GPU that actually received compute nodes in the current TG batch -
 // the launch lives in ggml_backend_cuda_graph_compute, which the scheduler calls
 // per device exactly when that device has work in the split graph. A single value
-// broadcasts to every WDDM GPU (bare --fisherman = all GPUs at the default);
+// broadcasts to every WDDM GPU (bare --poller-activity-fma = all GPUs at the default);
 // more values map positionally (0 = off for that GPU); missing values use the
 // default. All zeros or n <= 0 disables.
-GGML_CALL void ggml_backend_cuda_set_fisherman(const int * fmas, int n) {
+GGML_CALL void ggml_backend_cuda_set_poller_activity_fma(const int * fmas, int n) {
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-        ggml_cuda_fisherman[i] = 0;
-        ggml_cuda_fisherman_override[i] = false;
+        ggml_cuda_poller_activity_fma[i] = 0;
+        ggml_cuda_poller_activity_fma_override[i] = false;
     }
     bool any = false;
     if (n > 1) {
@@ -1026,59 +1026,59 @@ GGML_CALL void ggml_backend_cuda_set_fisherman(const int * fmas, int n) {
                 GGML_CUDA_LOG_WARN("%s: ignoring negative FMA length %d for WDDM[%d]\n", __func__, fma, i);
                 continue;
             }
-            ggml_cuda_fisherman[i] = fma;
-            ggml_cuda_fisherman_override[i] = true;
+            ggml_cuda_poller_activity_fma[i] = fma;
+            ggml_cuda_poller_activity_fma_override[i] = true;
             any |= fma > 0;
         }
     } else if (n == 1) {
-        // Single value (bare --fisherman = 8192): broadcast to every WDDM GPU.
+        // Single value (bare --poller-activity-fma = 8192): broadcast to every WDDM GPU.
         const int fma = fmas[0];
         if (fma < 0) {
-            GGML_CUDA_LOG_WARN("%s: ignoring negative FMA length %d (bare --fisherman = default)\n", __func__, fma);
+            GGML_CUDA_LOG_WARN("%s: ignoring negative FMA length %d (bare --poller-activity-fma = default)\n", __func__, fma);
         } else if (fma > 0) {
             for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-                ggml_cuda_fisherman[i] = fma;
-                ggml_cuda_fisherman_override[i] = true;
+                ggml_cuda_poller_activity_fma[i] = fma;
+                ggml_cuda_poller_activity_fma_override[i] = true;
             }
             any = true;
         }
     }
-    ggml_cuda_fisherman_any = any;
+    ggml_cuda_poller_activity_fma_any = any;
     if (any) {
         // Prime the stream at enable time so the first decode-phase burst is not
-        // a cold allocation on the token path (mirrors set_orca / set_cobra).
+        // a cold allocation on the token path (mirrors set_poller_warmup_fma / set_poller_warmup_mem).
         for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
             const int w = ggml_cuda_wddm_pos(i);
-            if (w < 0 || !ggml_cuda_fisherman_override[w] || ggml_cuda_fisherman[w] == 0) continue;
+            if (w < 0 || !ggml_cuda_poller_activity_fma_override[w] || ggml_cuda_poller_activity_fma[w] == 0) continue;
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
                 cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
                 cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
             }
         }
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_fisherman: enabling decode-solicited FMA probe on WDDM GPUs:");
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_activity_fma: enabling decode-solicited FMA probe on WDDM GPUs:");
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-            if (ggml_cuda_fisherman_override[i] && ggml_cuda_fisherman[i] > 0) {
-                GGML_CUDA_LOG_INFO(" %d:%d", i, ggml_cuda_fisherman[i]);
+            if (ggml_cuda_poller_activity_fma_override[i] && ggml_cuda_poller_activity_fma[i] > 0) {
+                GGML_CUDA_LOG_INFO(" %d:%d", i, ggml_cuda_poller_activity_fma[i]);
             }
         }
         GGML_CUDA_LOG_INFO("\n");
     } else {
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_fisherman: disabled\n");
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_activity_fma: disabled\n");
     }
 }
 
-// harpoon=N[,N,...]: per-WDDM-GPU HMMA chain length for the decode-solicited
-// tensor-core probe (--harpoon). Like --fisherman (fires exactly when a GPU
+// activity-mma=N[,N,...]: per-WDDM-GPU HMMA chain length for the decode-solicited
+// tensor-core probe (--poller-activity-mma). Like --poller-activity-fma (fires exactly when a GPU
 // actually receives compute nodes in the current TG batch) but launches the
 // HMMA kernel instead of the scalar-FMA one, so the same wall-clock burst
 // delivers ~1000x the compute work. A single value broadcasts to every WDDM GPU
-// (bare --harpoon = all GPUs at the default); more values map positionally
+// (bare --poller-activity-mma = all GPUs at the default); more values map positionally
 // (0 = off for that GPU); missing values use the default. All zeros or n <= 0
 // disables. Honors the shared skip mask and the permanent heat penalty.
-GGML_CALL void ggml_backend_cuda_set_harpoon(const int * mmas, int n) {
+GGML_CALL void ggml_backend_cuda_set_poller_activity_mma(const int * mmas, int n) {
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-        ggml_cuda_harpoon[i] = 0;
-        ggml_cuda_harpoon_override[i] = false;
+        ggml_cuda_poller_activity_mma[i] = 0;
+        ggml_cuda_poller_activity_mma_override[i] = false;
     }
     bool any = false;
     if (n > 1) {
@@ -1089,60 +1089,60 @@ GGML_CALL void ggml_backend_cuda_set_harpoon(const int * mmas, int n) {
                 GGML_CUDA_LOG_WARN("%s: ignoring negative MMA length %d for WDDM[%d]\n", __func__, mma, i);
                 continue;
             }
-            ggml_cuda_harpoon[i] = mma;
-            ggml_cuda_harpoon_override[i] = true;
+            ggml_cuda_poller_activity_mma[i] = mma;
+            ggml_cuda_poller_activity_mma_override[i] = true;
             any |= mma > 0;
         }
     } else if (n == 1) {
-        // Single value (bare --harpoon = 8192): broadcast to every WDDM GPU.
+        // Single value (bare --poller-activity-mma = 8192): broadcast to every WDDM GPU.
         const int mma = mmas[0];
         if (mma < 0) {
-            GGML_CUDA_LOG_WARN("%s: ignoring negative MMA length %d (bare --harpoon = default)\n", __func__, mma);
+            GGML_CUDA_LOG_WARN("%s: ignoring negative MMA length %d (bare --poller-activity-mma = default)\n", __func__, mma);
         } else if (mma > 0) {
             for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-                ggml_cuda_harpoon[i] = mma;
-                ggml_cuda_harpoon_override[i] = true;
+                ggml_cuda_poller_activity_mma[i] = mma;
+                ggml_cuda_poller_activity_mma_override[i] = true;
             }
             any = true;
         }
     }
-    ggml_cuda_harpoon_any = any;
+    ggml_cuda_poller_activity_mma_any = any;
     if (any) {
         // Prime the stream at enable time so the first decode-phase burst is not
-        // a cold allocation on the token path (mirrors set_fisherman).
+        // a cold allocation on the token path (mirrors set_poller_activity_fma).
         for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
             const int w = ggml_cuda_wddm_pos(i);
-            if (w < 0 || !ggml_cuda_harpoon_override[w] || ggml_cuda_harpoon[w] == 0) continue;
+            if (w < 0 || !ggml_cuda_poller_activity_mma_override[w] || ggml_cuda_poller_activity_mma[w] == 0) continue;
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
                 cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
                 cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
             }
         }
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_harpoon: enabling decode-solicited HMMA probe on WDDM GPUs:");
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_activity_mma: enabling decode-solicited HMMA probe on WDDM GPUs:");
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-            if (ggml_cuda_harpoon_override[i] && ggml_cuda_harpoon[i] > 0) {
-                GGML_CUDA_LOG_INFO(" %d:%d", i, ggml_cuda_harpoon[i]);
+            if (ggml_cuda_poller_activity_mma_override[i] && ggml_cuda_poller_activity_mma[i] > 0) {
+                GGML_CUDA_LOG_INFO(" %d:%d", i, ggml_cuda_poller_activity_mma[i]);
             }
         }
         GGML_CUDA_LOG_INFO("\n");
     } else {
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_harpoon: disabled\n");
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_activity_mma: disabled\n");
     }
 }
 
-// kraken=N[,N,...]: per-WDDM-GPU HMMA chain length for the tensor-core warmup
-// (--kraken). Like --orca (fires on every TG batch) but issues tensor-core MMA
+// warmup-mma=N[,N,...]: per-WDDM-GPU HMMA chain length for the tensor-core warmup
+// (--poller-warmup-mma). Like --poller-warmup-fma (fires on every TG batch) but issues tensor-core MMA
 // instructions instead of scalar FMAs, so the same wall-clock burst delivers
 // ~1000x the compute work - a much denser power pulse for the clock governor.
-// A single value broadcasts to every WDDM GPU (bare --kraken = all GPUs at the
+// A single value broadcasts to every WDDM GPU (bare --poller-warmup-mma = all GPUs at the
 // default); more values map positionally (0 = off for that GPU); missing values
 // use the default. All zeros or n <= 0 disables. Honors the shared skip mask and
 // the prompt-length scale. Requires Volta+ tensor cores (m16n8k8) or Ampere+
 // (m16n8k16); pre-Volta cards fall back to scalar FFMA inside the kernel.
-GGML_CALL void ggml_backend_cuda_set_kraken(const int * mmas, int n) {
+GGML_CALL void ggml_backend_cuda_set_poller_warmup_mma(const int * mmas, int n) {
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-        ggml_cuda_kraken[i] = 0;
-        ggml_cuda_kraken_override[i] = false;
+        ggml_cuda_poller_warmup_mma[i] = 0;
+        ggml_cuda_poller_warmup_mma_override[i] = false;
     }
     bool any = false;
     if (n > 1) {
@@ -1153,55 +1153,55 @@ GGML_CALL void ggml_backend_cuda_set_kraken(const int * mmas, int n) {
                 GGML_CUDA_LOG_WARN("%s: ignoring negative MMA length %d for WDDM[%d]\n", __func__, mma, i);
                 continue;
             }
-            ggml_cuda_kraken[i] = mma;
-            ggml_cuda_kraken_override[i] = true;
+            ggml_cuda_poller_warmup_mma[i] = mma;
+            ggml_cuda_poller_warmup_mma_override[i] = true;
             any |= mma > 0;
         }
     } else if (n == 1) {
-        // Single value (bare --kraken = 8192): broadcast to every WDDM GPU.
+        // Single value (bare --poller-warmup-mma = 8192): broadcast to every WDDM GPU.
         const int mma = mmas[0];
         if (mma < 0) {
-            GGML_CUDA_LOG_WARN("%s: ignoring negative MMA length %d (bare --kraken = default)\n", __func__, mma);
+            GGML_CUDA_LOG_WARN("%s: ignoring negative MMA length %d (bare --poller-warmup-mma = default)\n", __func__, mma);
         } else if (mma > 0) {
             for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-                ggml_cuda_kraken[i] = mma;
-                ggml_cuda_kraken_override[i] = true;
+                ggml_cuda_poller_warmup_mma[i] = mma;
+                ggml_cuda_poller_warmup_mma_override[i] = true;
             }
             any = true;
         }
     }
-    ggml_cuda_kraken_any = any;
+    ggml_cuda_poller_warmup_mma_any = any;
     if (any) {
         // Prime the stream at enable time so the first TG-phase burst is not a
-        // cold allocation on the token path (mirrors set_orca / set_cobra).
+        // cold allocation on the token path (mirrors set_poller_warmup_fma / set_poller_warmup_mem).
         for (int i = 0; i < ggml_cuda_info().device_count; ++i) {
             const int w = ggml_cuda_wddm_pos(i);
-            if (w < 0 || !ggml_cuda_kraken_override[w] || ggml_cuda_kraken[w] == 0) continue;
+            if (w < 0 || !ggml_cuda_poller_warmup_mma_override[w] || ggml_cuda_poller_warmup_mma[w] == 0) continue;
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
                 cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
                 cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
             }
         }
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_kraken: enabling tensor-core warmup on WDDM GPUs:");
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_warmup_mma: enabling tensor-core warmup on WDDM GPUs:");
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-            if (ggml_cuda_kraken_override[i] && ggml_cuda_kraken[i] > 0) {
-                GGML_CUDA_LOG_INFO(" %d:%d", i, ggml_cuda_kraken[i]);
+            if (ggml_cuda_poller_warmup_mma_override[i] && ggml_cuda_poller_warmup_mma[i] > 0) {
+                GGML_CUDA_LOG_INFO(" %d:%d", i, ggml_cuda_poller_warmup_mma[i]);
             }
         }
         GGML_CUDA_LOG_INFO("\n");
     } else {
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_kraken: disabled\n");
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_warmup_mma: disabled\n");
     }
 }
 
-// cobra=N[,N,...]: per-WDDM-GPU on/off mask for the decode-gated mem burst
-// (--cobra). 1 = the mem-clock companion fires on that GPU at every TG batch
-// alongside the (optional) orca FMA warmup; 0 = off for that GPU. A single value
-// broadcasts to every WDDM GPU (bare --cobra = all on); more values map
+// warmup-mem=N[,N,...]: per-WDDM-GPU on/off mask for the decode-gated mem burst
+// (--poller-warmup-mem). 1 = the mem-clock companion fires on that GPU at every TG batch
+// alongside the (optional) warmup-fma; 0 = off for that GPU. A single value
+// broadcasts to every WDDM GPU (bare --poller-warmup-mem = all on); more values map
 // positionally; missing values use the default. All zeros or n <= 0 disables.
-GGML_CALL void ggml_backend_cuda_set_cobra(const int * mask, int n) {
+GGML_CALL void ggml_backend_cuda_set_poller_warmup_mem(const int * mask, int n) {
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-        ggml_cuda_cobra[i] = false;
+        ggml_cuda_poller_warmup_mem[i] = false;
     }
     bool any = false;
     if (n > 1) {
@@ -1211,63 +1211,63 @@ GGML_CALL void ggml_backend_cuda_set_cobra(const int * mask, int n) {
                 GGML_CUDA_LOG_WARN("%s: ignoring value %d for WDDM[%d]: must be 0 or 1\n", __func__, mask[i], i);
                 continue;
             }
-            ggml_cuda_cobra[i] = mask[i] == 1;
-            any |= ggml_cuda_cobra[i];
+            ggml_cuda_poller_warmup_mem[i] = mask[i] == 1;
+            any |= ggml_cuda_poller_warmup_mem[i];
         }
     } else if (n == 1) {
-        // Single value (bare --cobra = 1): broadcast to every WDDM GPU.
+        // Single value (bare --poller-warmup-mem = 1): broadcast to every WDDM GPU.
         if (mask[0] == 0) {
             any = false; // all off => disabled
         } else if (mask[0] == 1) {
             for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-                ggml_cuda_cobra[i] = true;
+                ggml_cuda_poller_warmup_mem[i] = true;
             }
             any = true;
         } else {
-            GGML_CUDA_LOG_WARN("%s: ignoring value %d: must be 0 or 1 (bare --cobra = 1)\n", __func__, mask[0]);
+            GGML_CUDA_LOG_WARN("%s: ignoring value %d: must be 0 or 1 (bare --poller-warmup-mem = 1)\n", __func__, mask[0]);
         }
     }
-    ggml_cuda_cobra_any = any;
+    ggml_cuda_poller_warmup_mem_any = any;
     if (any) {
-        // Prime the streams + mem buffers at enable time (mirrors set_orca), so
+        // Prime the streams + mem buffers at enable time (mirrors set_poller_warmup_fma), so
         // the first TG-phase burst is not a cold allocation on the token path.
-        ggml_cuda_cobra_launch();
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_cobra: enabling mem burst on WDDM GPUs:");
+        ggml_cuda_poller_warmup_mem_launch();
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_warmup_mem: enabling mem burst on WDDM GPUs:");
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-            if (ggml_cuda_cobra[i]) GGML_CUDA_LOG_INFO(" %d", i);
+            if (ggml_cuda_poller_warmup_mem[i]) GGML_CUDA_LOG_INFO(" %d", i);
         }
         GGML_CUDA_LOG_INFO("\n");
     } else {
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_cobra: disabled\n");
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_warmup_mem: disabled\n");
     }
 }
 
 // Set the current prompt length in tokens (called per decode by llama.cpp).
 // n_ctx = the context size; k = floor(256 * prompt / n_ctx) clamped to 255
 // selects the scaling bracket (see ggml_cuda_scale_fma_prompt for the piecewise
-// curve). Both the decode-gated warmup and the autonomous perch ping honor this.
+// curve). Both the decode-gated warmup and the autonomous FMA ping honor this.
 // n_ctx <= 0 or n_prompt <= 0 resets to no scaling (full FMA).
-GGML_CALL void ggml_backend_cuda_set_orca_prompt_len(int n_prompt, int n_ctx) {
+GGML_CALL void ggml_backend_cuda_set_poller_prompt_len(int n_prompt, int n_ctx) {
     int k = 0;
     if (n_ctx > 0 && n_prompt > 0) {
         k = (int) (((int64_t) n_prompt * 256) / n_ctx);
         if (k > 255) k = 255;
     }
-    ggml_cuda_orca_prompt_bracket.store(k);
+    ggml_cuda_poller_prompt_bracket.store(k);
 }
 
 // Update the shared decode-phase gate unconditionally: llama calls this on
-// every decode (TG when n_tokens_all <= 8, PP otherwise), so barracuda/perch
-// stay gated to TG even when orca itself is disabled.
-GGML_CALL void ggml_backend_cuda_set_orca_active(bool val) {
-    ggml_cuda_ping_gate.store(val);
-    if (!ggml_cuda_orca && !ggml_cuda_cobra_any && !ggml_cuda_kraken_any) {
-        // all of orca/cobra/kraken disabled: ignore TG/PP transitions entirely
-        ggml_cuda_orca_active = false;
+// every decode (TG when n_tokens_all <= 8, PP otherwise), so the ping-mem/ping-fma
+// threads stay gated to TG even when the warmup is disabled.
+GGML_CALL void ggml_backend_cuda_set_poller_active(bool val) {
+    ggml_cuda_poller_gate.store(val);
+    if (!ggml_cuda_poller_warmup_fma && !ggml_cuda_poller_warmup_mem_any && !ggml_cuda_poller_warmup_mma_any) {
+        // all of warmup-fma/warmup-mem/warmup-mma disabled: ignore TG/PP transitions entirely
+        ggml_cuda_poller_active = false;
         return;
     }
-    const bool changed = (val != ggml_cuda_orca_active);
-    ggml_cuda_orca_active = val;
+    const bool changed = (val != ggml_cuda_poller_active);
+    ggml_cuda_poller_active = val;
     if (val && !changed) {
         // Launch a warmup burst on every TG batch (llama calls this per decode).
         // Combined with the real decode kernels this sustains SM activity during
@@ -1275,18 +1275,18 @@ GGML_CALL void ggml_backend_cuda_set_orca_active(bool val) {
         // Skip the very first batch of a TG phase: the trailing PP kernels left
         // the GPU at full load and the first decode provides its own activity, so
         // the transition burst would only contend with the first token.
-        if (ggml_cuda_orca) {
-            ggml_cuda_orca_warmup();
+        if (ggml_cuda_poller_warmup_fma) {
+            ggml_cuda_poller_warmup_fma_launch();
         }
-        if (ggml_cuda_kraken_any) {
-            ggml_cuda_kraken_launch();
+        if (ggml_cuda_poller_warmup_mma_any) {
+            ggml_cuda_poller_warmup_mma_launch();
         }
-        if (ggml_cuda_cobra_any) {
-            ggml_cuda_cobra_launch();
+        if (ggml_cuda_poller_warmup_mem_any) {
+            ggml_cuda_poller_warmup_mem_launch();
         }
     }
     if (changed) {
-        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_orca_active: %s\n",
+        GGML_CUDA_LOG_INFO("ggml_backend_cuda_set_poller_active: %s\n",
             val ? "heartbeat active during TG (GPU clocks elevated)"
                 : "heartbeat inactive during PP (GPU clocks may drop)");
     }

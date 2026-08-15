@@ -50,7 +50,7 @@ public:
     }
 
     // Monitor-only mode: the worker only does the per-card temperature check
-    // and publishes hot_state (no NVAPI burst, no CUDA ping). Used by --orca,
+    // and publishes hot_state (no NVAPI burst, no CUDA ping). Used by --poller-warmup-fma,
     // whose heartbeat warmup consumes the published hot_state as its skip mask.
     void set_monitor_only(bool val) { monitor_only = val; }
 

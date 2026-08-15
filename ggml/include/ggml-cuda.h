@@ -71,111 +71,111 @@ GGML_API GGML_CALL int  ggml_backend_cuda_get_pindev(void);
 // loading it (no kernel, no FMA). intervals[] maps positionally to WDDM GPUs in
 // ggml device order (TCC devices don't consume a slot); a single value broadcasts
 // to every WDDM GPU; 0 = off for that GPU. All zeros or n <= 0 disables (default).
-// Independent of shark/orca/piranha: it does not control the heartbeat warmup.
-GGML_API GGML_CALL void ggml_backend_cuda_set_hb(const int * intervals, int n);
+// Independent of shark/poller-warmup-fma/poller-nvapi: it does not control the heartbeat warmup.
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_sync(const int * intervals, int n);
 
-// Autonomous periodic mem-clock stream (--barracuda N[,N,...]). A background
+// Autonomous periodic mem-clock stream (--poller-ping-mem N[,N,...]). A background
 // thread fires the mem-clock companion burst on each non-TCC (WDDM) GPU at its
 // own interval - no NVAPI, no FMA, no temperature dependency. The shared skip
-// mask (set_orca_skip) is honored, so a piranha-fed too-hot card is skipped.
+// mask (set_poller_skip) is honored, so a poller-nvapi-fed too-hot card is skipped.
 // intervals[] maps positionally to WDDM GPUs in ggml device order (TCC devices
 // don't consume a slot); a single value broadcasts to every WDDM GPU; 0 = off
 // for that GPU. n_intervals <= 0 or all zeros disables (default).
-GGML_API GGML_CALL void ggml_backend_cuda_set_barracuda(const int * intervals, int n_intervals);
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_ping_mem(const int * intervals, int n_intervals);
 
-// Autonomous periodic FMA ping (--perch N[,N,...]). A background thread fires
+// Autonomous periodic FMA ping (--poller-ping-fma N[,N,...]). A background thread fires
 // the full-residency FMA burst on each non-TCC (WDDM) GPU at its own interval -
 // the core-clock half of the ping load, no NVAPI. Per-GPU chain length comes
-// from set_orca_ping(); the shared skip mask (set_orca_skip) is honored.
-// Same per-GPU mapping as set_barracuda (single value broadcasts, 0 = off).
-GGML_API GGML_CALL void ggml_backend_cuda_set_perch(const int * intervals, int n_intervals);
+// from set_poller_ping_fma_amplitude(); the shared skip mask (set_poller_skip) is honored.
+// Same per-GPU mapping as set_poller_ping_mem (single value broadcasts, 0 = off).
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_ping_fma(const int * intervals, int n_intervals);
 
-// Enable the CUDA heartbeat warmup (--orca). During TG, launches a full-residency
+// Enable the CUDA heartbeat warmup (--poller-warmup-fma). During TG, launches a full-residency
 // FMA burst per WDDM GPU per decode batch to keep the core clock elevated.
-// FMA-only: the mem-clock companion is --cobra's / --barracuda's job. Default: false.
-GGML_API GGML_CALL void ggml_backend_cuda_set_orca(bool val);
+// FMA-only: the mem-clock companion is --poller-warmup-mem's / --poller-ping-mem's job. Default: false.
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_warmup_fma(bool val);
 
-// Decode-gated mem-clock companion (--cobra). During TG, launches the mem burst
-// per enabled WDDM GPU per decode batch, mirroring the orca FMA warmup cadence
+// Decode-gated mem-clock companion (--poller-warmup-mem). During TG, launches the mem burst
+// per enabled WDDM GPU per decode batch, mirroring the poller-warmup-fma cadence
 // (mem-only, FMA-free). mask[] maps positionally to non-TCC (WDDM) GPUs in ggml
 // device order; 1 = on for that GPU, 0 = off. A single value broadcasts to every
-// WDDM GPU (bare --cobra = all on); all zeros or n <= 0 disables (default). The
-// shared skip mask (set_orca_skip) is honored. Works independently of --orca.
-GGML_API GGML_CALL void ggml_backend_cuda_set_cobra(const int * mask, int n);
+// WDDM GPU (bare --poller-warmup-mem = all on); all zeros or n <= 0 disables (default). The
+// shared skip mask (set_poller_skip) is honored. Works independently of --poller-warmup-fma.
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_warmup_mem(const int * mask, int n);
 
-// Decode-solicited FMA probe (--fisherman). During TG, fires a short FMA burst on
+// Decode-solicited FMA probe (--poller-activity-fma). During TG, fires a short FMA burst on
 // a WDDM GPU exactly when that GPU actually receives compute nodes in the current
 // batch's split graph (the scheduler invokes graph_compute per device that has
-// work). Unlike --orca (fires on every TG batch) it rides along with real kernels,
+// work). Unlike --poller-warmup-fma (fires on every TG batch) it rides along with real kernels,
 // so the default 8192 chain suffices to drag the clock governor to boost. FMA-only;
-// the mem-clock side is --cobra's / --barracuda's job. fmas[] maps positionally to
+// the mem-clock side is --poller-warmup-mem's / --poller-ping-mem's job. fmas[] maps positionally to
 // non-TCC (WDDM) GPUs in ggml device order; 0 = off for that GPU. A single value
-// broadcasts to every WDDM GPU (bare --fisherman = all GPUs at the default); all
-// zeros or n <= 0 disables (default). The shared skip mask (set_orca_skip) is honored.
-GGML_API GGML_CALL void ggml_backend_cuda_set_fisherman(const int * fmas, int n);
+// broadcasts to every WDDM GPU (bare --poller-activity-fma = all GPUs at the default); all
+// zeros or n <= 0 disables (default). The shared skip mask (set_poller_skip) is honored.
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_activity_fma(const int * fmas, int n);
 
-// Tensor-core HMMA warmup (--kraken). Like --orca (fires on every TG batch) but
+// Tensor-core HMMA warmup (--poller-warmup-mma). Like --poller-warmup-fma (fires on every TG batch) but
 // issues tensor-core matrix-multiply-accumulate instructions instead of scalar
 // FMAs: each mma.sync.m16n8k16 fp16 is 2048 FLOPs (m16n8k8 = 1024 on
 // Volta/Turing), so the same wall-clock burst delivers ~1000x the compute work -
 // a much denser power pulse for the clock governor. mmas[] maps positionally to
 // non-TCC (WDDM) GPUs in ggml device order; 0 = off for that GPU. A single value
-// broadcasts to every WDDM GPU (bare --kraken = all GPUs at the default 8192);
+// broadcasts to every WDDM GPU (bare --poller-warmup-mma = all GPUs at the default 8192);
 // all zeros or n <= 0 disables (default). Honors the shared skip mask
-// (set_orca_skip) and the prompt-length scale. Pre-Volta cards fall back to
-// scalar FFMA inside the kernel, so --kraken still works without tensor cores.
-GGML_API GGML_CALL void ggml_backend_cuda_set_kraken(const int * mmas, int n);
+// (set_poller_skip) and the prompt-length scale. Pre-Volta cards fall back to
+// scalar FFMA inside the kernel, so --poller-warmup-mma still works without tensor cores.
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_warmup_mma(const int * mmas, int n);
 
-// Decode-solicited HMMA probe (--harpoon). Like --fisherman but for the tensor
+// Decode-solicited HMMA probe (--poller-activity-mma). Like --poller-activity-fma but for the tensor
 // cores: during TG, fires a short HMMA burst on a WDDM GPU exactly when that GPU
 // actually receives compute nodes in the current batch's split graph (rides
 // along with real kernels). ~1000x the FLOPs per instruction of the FMA probe,
 // so a far denser boost per ms. mmas[] maps positionally to non-TCC (WDDM) GPUs
 // in ggml device order; 0 = off for that GPU. A single value broadcasts to every
-// WDDM GPU (bare --harpoon = all GPUs at the default 8192); all zeros or n <= 0
-// disables (default). Honors the shared skip mask (set_orca_skip) and the
+// WDDM GPU (bare --poller-activity-mma = all GPUs at the default 8192); all zeros or n <= 0
+// disables (default). Honors the shared skip mask (set_poller_skip) and the
 // permanent heat penalty.
-GGML_API GGML_CALL void ggml_backend_cuda_set_harpoon(const int * mmas, int n);
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_activity_mma(const int * mmas, int n);
 
 // Set per-GPU FMA chain length for the heartbeat warmup kernel. A single value
-// broadcasts to every WDDM GPU (bare --orca = all GPUs at the default); more
+// broadcasts to every WDDM GPU (bare --poller-warmup-fma = all GPUs at the default); more
 // values map positionally to non-TCC (WDDM) GPUs in ggml device order (TCC
 // devices skip, so fmas[0] => first WDDM GPU). 0 in the list disables the warmup
-// on that GPU (e.g. --orca 0,32768 disables GPU0; a lone 0 disables all GPUs);
+// on that GPU (e.g. --poller-warmup-fma 0,32768 disables GPU0; a lone 0 disables all GPUs);
 // negative values are replaced by the default; missing values keep the default.
-// Call before or after set_orca(true); it is safe either way (set_orca(true) logs
+// Call before or after set_poller_warmup_fma(true); it is safe either way (set_poller_warmup_fma(true) logs
 // each WDDM GPU with the effective FMA, or that it is disabled).
-GGML_API GGML_CALL void ggml_backend_cuda_set_orca_fmas(const int * fmas, int n);
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_warmup_fma_strength(const int * fmas, int n);
 
-// Set per-GPU FMA chain length for the autonomous FMA ping (--perch). Same
-// broadcast / positional non-TCC (WDDM) mapping and semantics as set_orca_fmas;
+// Set per-GPU FMA chain length for the autonomous FMA ping (--poller-ping-fma). Same
+// broadcast / positional non-TCC (WDDM) mapping and semantics as set_poller_warmup_fma_strength;
 // shorter than the warmup by default (~1 ms), so the ping cycle keeps idle gaps.
-// 0 in the list disables the FMA ping on that GPU (e.g. --orca-ping 0,8192).
-GGML_API GGML_CALL void ggml_backend_cuda_set_orca_ping(const int * fmas, int n);
+// 0 in the list disables the FMA ping on that GPU (e.g. --poller-ping-fma-amplitude 0,8192).
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_ping_fma_amplitude(const int * fmas, int n);
 
 // Set a per-card skip mask for the warmup and the pings. skip[] is indexed by
 // WDDM position (0 = first non-TCC GPU) and, when true, suppresses the warmup
-// (--orca), the mem stream (--barracuda) and the FMA ping (--perch) for that
-// GPU (e.g. a card that is too hot). The NVAPI poller (--piranha) feeds this
+// (--poller-warmup-fma), the mem stream (--poller-ping-mem) and the FMA ping (--poller-ping-fma) for that
+// GPU (e.g. a card that is too hot). The NVAPI poller (--poller-nvapi) feeds this
 // from its per-GPU temperature readings. Pass skip == nullptr to clear it.
-GGML_API GGML_CALL void ggml_backend_cuda_set_orca_skip(const bool * skip, int n);
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_skip(const bool * skip, int n);
 
 // Set the per-card permanent FMA heat penalty (in 1/256ths of the full budget),
 // indexed by WDDM position like the skip mask. Fed by the NVAPI temp monitor
-// (--piranha / --orca): each time a card hits the pause temp twice in a row, the
+// (--poller-nvapi / --poller-warmup-fma): each time a card hits the pause temp twice in a row, the
 // monitor adds 16 here for that card. Accumulates, never recovers, and lowers
-// the FMA of --orca / --orca-ping / --fisherman (a penalty that zeroes the
+// the FMA of --poller-warmup-fma / --poller-ping-fma-amplitude / --poller-activity-fma (a penalty that zeroes the
 // budget disables that card's FMA). Pass penalty == nullptr to clear it.
-GGML_API GGML_CALL void ggml_backend_cuda_set_orca_penalty(const int * penalty, int n);
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_penalty(const int * penalty, int n);
 
-// Get current orca (heartbeat warmup) setting
-GGML_API GGML_CALL bool ggml_backend_cuda_get_orca(void);
+// Get current poller-warmup-fma (heartbeat warmup) setting
+GGML_API GGML_CALL bool ggml_backend_cuda_get_poller_warmup_fma(void);
 
-// Set orca warmup active phase (TG=true, PP=false). Only issue the warmup when active.
+// Set poller-warmup-fma active phase (TG=true, PP=false). Only issue the warmup when active.
 // Called from llama.cpp at the same points as the shark_callback.
-GGML_API GGML_CALL void ggml_backend_cuda_set_orca_active(bool val);
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_active(bool val);
 
-// Set the current prompt length (tokens) so the --orca / --orca-ping FMA scales
+// Set the current prompt length (tokens) so the --poller-warmup-fma / --poller-ping-fma-amplitude FMA scales
 // down as the prompt fills the context. The 256 brackets are split in 8 slices
 // of 32 (scale is in 1/256ths of the full budget, j = bracket within a slice):
 //   slice 1 (k 0..31):   256 - 2*j   2x faster than baseline   (256 -> 194)
@@ -190,9 +190,9 @@ GGML_API GGML_CALL void ggml_backend_cuda_set_orca_active(bool val);
 // already busy with real attention work, so the last slice needs no artificial
 // pulse. Called per decode by llama.cpp; n_ctx <= 0 or n_prompt <= 0 keeps full
 // FMA. A per-card permanent heat penalty is also subtracted (see
-// ggml_backend_cuda_set_orca_penalty); a budget below 32 or a result below 1024
+// ggml_backend_cuda_set_poller_penalty); a budget below 32 or a result below 1024
 // FMA disables the pulse entirely.
-GGML_API GGML_CALL void ggml_backend_cuda_set_orca_prompt_len(int n_prompt, int n_ctx);
+GGML_API GGML_CALL void ggml_backend_cuda_set_poller_prompt_len(int n_prompt, int n_ctx);
 
 // Set stream-k efficiency threshold (0-100, default 75)
 // Lower values use stream-k more aggressively, higher values prefer wave attention
