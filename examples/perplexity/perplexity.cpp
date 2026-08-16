@@ -2170,6 +2170,77 @@ static void tinylog_print_timings(struct llama_context * ctx) {
     tinylog_printf("llama_print_timings:       total time = %10.2f ms / %5d tokens\n", (timings.t_end_ms - timings.t_start_ms), (timings.n_p_eval + timings.n_eval));
 }
 
+// Runtime overrides for an additional perplexity run (see --ppl-run-params).
+struct ppl_run_spec {
+    int32_t n_ctx         = -1; // context size, -1 = keep the previous run's value
+    int32_t n_expert_used = -1; // expert_used_count, -1 = keep the previous run's value
+};
+
+// Parses a "key=value,key=value" run spec. Supported keys: ctx, experts.
+static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
+    const auto parts = string_split<std::string>(spec, ',');
+    for (const auto & part : parts) {
+        const auto eq = part.find('=');
+        if (eq == std::string::npos || eq == 0 || eq + 1 == part.size()) {
+            fprintf(stderr, "%s: invalid --ppl-run-params entry '%s' (expected key=value)\n", __func__, part.c_str());
+            return false;
+        }
+        const std::string key   = part.substr(0, eq);
+        const std::string value = part.substr(eq + 1);
+        int val = 0;
+        try {
+            val = std::stoi(value);
+        } catch (...) {
+            fprintf(stderr, "%s: invalid --ppl-run-params value '%s' for key '%s'\n", __func__, value.c_str(), key.c_str());
+            return false;
+        }
+        if (key == "ctx" || key == "n_ctx") {
+            if (val <= 0) {
+                fprintf(stderr, "%s: --ppl-run-params ctx must be > 0, got %d\n", __func__, val);
+                return false;
+            }
+            run.n_ctx = val;
+        } else if (key == "experts" || key == "expert_used_count") {
+            if (val <= 0) {
+                fprintf(stderr, "%s: --ppl-run-params experts must be > 0, got %d\n", __func__, val);
+                return false;
+            }
+            run.n_expert_used = val;
+        } else {
+            fprintf(stderr, "%s: unknown --ppl-run-params key '%s' (supported: ctx, experts)\n", __func__, key.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+
+// Applies the context-size adjustments perplexity requires before the context is
+// created (parallel sequences for small contexts, batch capping and the strided
+// perplexity context bump). n_ctx is the base user-specified context size.
+static void adjust_ppl_ctx_params(gpt_params & params, int32_t n_ctx, int32_t n_batch_orig, bool ppl) {
+    if (ppl) {
+        const int32_t n_seq = std::max(1, n_batch_orig / n_ctx);
+        const int32_t n_kv = n_seq * n_ctx;
+        params.n_parallel = n_seq;
+        params.n_ctx      = n_kv;
+        params.n_batch    = std::min(n_batch_orig, n_kv);
+    } else {
+        params.n_ctx   = n_ctx;
+        params.n_batch = std::min(n_batch_orig, n_ctx);
+        if (params.kl_divergence) {
+            params.n_parallel = 1;
+        } else {
+            // ensure there's at least enough seq_ids for HellaSwag
+            params.n_parallel = std::max(4, params.n_parallel);
+        }
+    }
+    if (params.ppl_stride > 0) {
+        fprintf(stderr, "Will perform strided perplexity calculation -> adjusting context size from %d to %d\n",
+                params.n_ctx, params.n_ctx + params.ppl_stride/2);
+        params.n_ctx += params.ppl_stride/2;
+    }
+}
+
 int main(int argc, char ** argv) {
     g_argc = argc;
     g_argv = argv;
@@ -2209,29 +2280,9 @@ int main(int argc, char ** argv) {
 
     const bool ppl = !params.hellaswag && !params.winogrande && !params.multiple_choice && !params.kl_divergence;
 
-    if (ppl) {
-        const int32_t n_seq = std::max(1, params.n_batch / n_ctx);
-        const int32_t n_kv = n_seq * n_ctx;
+    const int32_t n_batch_orig = params.n_batch;
 
-        params.n_parallel = n_seq;
-        params.n_ctx      = n_kv;
-
-        params.n_batch = std::min(params.n_batch, n_kv);
-    } else {
-        params.n_batch = std::min(params.n_batch, params.n_ctx);
-        if (params.kl_divergence) {
-            params.n_parallel = 1;
-        } else {
-            // ensure there's at least enough seq_ids for HellaSwag
-            params.n_parallel = std::max(4, params.n_parallel);
-        }
-    }
-
-    if (params.ppl_stride > 0) {
-        fprintf(stderr, "Will perform strided perplexity calculation -> adjusting context size from %d to %d\n",
-                params.n_ctx, params.n_ctx + params.ppl_stride/2);
-        params.n_ctx += params.ppl_stride/2;
-    }
+    adjust_ppl_ctx_params(params, n_ctx, n_batch_orig, ppl);
 
     print_build_info();
 
@@ -2300,109 +2351,177 @@ int main(int argc, char ** argv) {
         hotswap_write_status(hotswap_stat, "computing", hotswap_iter, hotswap_seq);
     }
 
-    while (true) {
-        struct results_perplexity results;
-        if (params.hellaswag) {
-            hellaswag_score(ctx, params);
-        } else if (params.winogrande) {
-            winogrande_score(ctx, params);
-        } else if (params.multiple_choice) {
-            multiple_choice_score(ctx, params);
-        } else if (params.kl_divergence) {
-            kl_divergence(ctx, params);
-        } else {
-            results = perplexity(ctx, params, n_ctx);
+    // Build the list of runs: the base run from the main CLI parameters plus one
+    // run per --ppl-run-params override. All runs share the already loaded model;
+    // the context is recreated only when a run changes the context size.
+    std::vector<ppl_run_spec> runs;
+    runs.push_back(ppl_run_spec());
+    for (const auto & spec : params.ppl_run_params) {
+        ppl_run_spec run;
+        if (!parse_ppl_run_spec(spec, run)) {
+            fprintf(stderr, "%s: error: invalid --ppl-run-params: '%s'\n", __func__, spec.c_str());
+            llama_free(ctx);
+            llama_free_model(model);
+            llama_backend_free();
+            return 1;
+        }
+        runs.push_back(run);
+    }
+
+    const size_t n_runs = runs.size();
+    if (n_runs > 1) {
+        fprintf(stderr, "%s: will run %zu perplexity computations in this process\n", __func__, n_runs);
+    }
+
+    int32_t  cur_n_ctx        = n_ctx; // context size used by the current context
+    uint32_t cur_n_expert_used = llama_n_expert_used(model); // experts used by the current model
+
+    for (size_t irun = 0; irun < n_runs; ++irun) {
+        const ppl_run_spec & run = runs[irun];
+
+        // override the number of experts used for this run; the model stays loaded
+        if (run.n_expert_used > 0 && run.n_expert_used != (int32_t) cur_n_expert_used) {
+            if (!llama_model_set_n_expert_used(model, run.n_expert_used)) {
+                fprintf(stderr, "%s: error: failed to set expert_used_count to %d (n_expert = %u)\n",
+                        __func__, run.n_expert_used, llama_n_expert(model));
+                break;
+            }
+            cur_n_expert_used = run.n_expert_used;
+            fprintf(stderr, "%s: run %zu/%zu: expert_used_count set to %d\n", __func__, irun + 1, n_runs, run.n_expert_used);
         }
 
-        tinylog_print_timings(ctx);
-        write_logfile(ctx, params, model, results);
+        // the base context size this run is computed with
+        const int32_t this_n_ctx = run.n_ctx > 0 ? run.n_ctx : cur_n_ctx;
 
-        if (hotswap_signal_mode) {
-            fprintf(stderr, "%s: hot-swap iteration %d finished, waiting for the next command\n", __func__, hotswap_iter);
-            fflush(stdout);
-            fflush(stderr);
-            hotswap_write_status(hotswap_stat, "done", hotswap_iter, hotswap_seq);
-
-            bool terminate = false;
-            while (true) {
-                std::string cmd;
-                int seq = -1;
-                if (!hotswap_read_command(hotswap_ctrl, cmd, seq)) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                    continue;
-                }
-                if (seq >= 0 && seq <= hotswap_seq) {
-                    fprintf(stderr, "%s: ignoring stale hot-swap command '%s' (seq %d <= %d)\n",
-                            __func__, cmd.c_str(), seq, hotswap_seq);
-                    continue;
-                }
-                if (seq >= 0) {
-                    hotswap_seq = seq;
-                }
-                fprintf(stderr, "%s: hot-swap command received: %s\n", __func__, cmd.c_str());
-                if (cmd == "exit" || cmd == "quit" || cmd == "stop") {
-                    terminate = true;
-                    break;
-                }
-                if (cmd == "reload") {
-                    if (llama_reload_changed_tensors(ctx)) {
-                        break;
-                    }
-                    fprintf(stderr, "%s: hot-swap reload requested, but no tensor has changed on disk\n", __func__);
-                    fflush(stderr);
-                    hotswap_write_status(hotswap_stat, "reload_failed", hotswap_iter, hotswap_seq);
-                    continue;
-                }
-                if (cmd == "compute") {
-                    break; // recompute without reloading
-                }
-                fprintf(stderr, "%s: unknown hot-swap command '%s' ignored\n", __func__, cmd.c_str());
-                fflush(stderr);
+        // recreate the context when the context size changes
+        if (this_n_ctx != cur_n_ctx) {
+            fprintf(stderr, "%s: run %zu/%zu: recreating context with n_ctx = %d\n", __func__, irun + 1, n_runs, this_n_ctx);
+            llama_free(ctx);
+            ctx = nullptr;
+            adjust_ppl_ctx_params(params, this_n_ctx, n_batch_orig, ppl);
+            ctx = common_create_context(model, params);
+            if (ctx == NULL) {
+                fprintf(stderr, "%s: error: failed to create context with n_ctx = %d\n", __func__, this_n_ctx);
+                break;
             }
-            if (terminate) {
-                fprintf(stderr, "%s: hot-swap exit requested, terminating\n", __func__);
+            if (!params.lora_init_without_apply) {
+                llama_lora_adapters_apply(ctx, llama_init.lora_adapters);
+            }
+            cur_n_ctx = this_n_ctx;
+        }
+
+        bool terminate_process = false;
+        while (true) {
+            struct results_perplexity results;
+            if (params.hellaswag) {
+                hellaswag_score(ctx, params);
+            } else if (params.winogrande) {
+                winogrande_score(ctx, params);
+            } else if (params.multiple_choice) {
+                multiple_choice_score(ctx, params);
+            } else if (params.kl_divergence) {
+                kl_divergence(ctx, params);
+            } else {
+                results = perplexity(ctx, params, this_n_ctx);
+            }
+
+            tinylog_print_timings(ctx);
+            write_logfile(ctx, params, model, results);
+
+            if (hotswap_signal_mode) {
+                fprintf(stderr, "%s: hot-swap iteration %d finished, waiting for the next command\n", __func__, hotswap_iter);
                 fflush(stdout);
                 fflush(stderr);
-                hotswap_write_status(hotswap_stat, "exiting", hotswap_iter, hotswap_seq);
-                break;
-            }
+                hotswap_write_status(hotswap_stat, "done", hotswap_iter, hotswap_seq);
 
-            hotswap_iter++;
-            llama_reset_timings(ctx); // per-iteration timings, like separate runs would report
-            hotswap_write_status(hotswap_stat, "computing", hotswap_iter, hotswap_seq);
-            continue;
-        }
-
-        if (pre_script) {
-            fprintf(stderr, "%s: executing pre-reload script: %s\n", __func__, pre_script);
-#ifdef _WIN32
-            FILE * fp = _popen(pre_script, "r");
-#else
-            FILE * fp = popen(pre_script, "r");
-#endif
-            if (fp) {
-                char buf[256];
-                while (fgets(buf, sizeof(buf), fp)) {
-                    size_t len = strlen(buf);
-                    if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
-                    fprintf(stderr, "%s: [pre-reload] %s\n", __func__, buf);
+                bool terminate = false;
+                while (true) {
+                    std::string cmd;
+                    int seq = -1;
+                    if (!hotswap_read_command(hotswap_ctrl, cmd, seq)) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                        continue;
+                    }
+                    if (seq >= 0 && seq <= hotswap_seq) {
+                        fprintf(stderr, "%s: ignoring stale hot-swap command '%s' (seq %d <= %d)\n",
+                                __func__, cmd.c_str(), seq, hotswap_seq);
+                        continue;
+                    }
+                    if (seq >= 0) {
+                        hotswap_seq = seq;
+                    }
+                    fprintf(stderr, "%s: hot-swap command received: %s\n", __func__, cmd.c_str());
+                    if (cmd == "exit" || cmd == "quit" || cmd == "stop") {
+                        terminate = true;
+                        break;
+                    }
+                    if (cmd == "reload") {
+                        if (llama_reload_changed_tensors(ctx)) {
+                            break;
+                        }
+                        fprintf(stderr, "%s: hot-swap reload requested, but no tensor has changed on disk\n", __func__);
+                        fflush(stderr);
+                        hotswap_write_status(hotswap_stat, "reload_failed", hotswap_iter, hotswap_seq);
+                        continue;
+                    }
+                    if (cmd == "compute") {
+                        break; // recompute without reloading
+                    }
+                    fprintf(stderr, "%s: unknown hot-swap command '%s' ignored\n", __func__, cmd.c_str());
+                    fflush(stderr);
                 }
-#ifdef _WIN32
-                _pclose(fp);
-#else
-                pclose(fp);
-#endif
-            } else {
-                fprintf(stderr, "%s: failed to execute pre-reload script: %s\n", __func__, pre_script);
-            }
-        }
+                if (terminate) {
+                    fprintf(stderr, "%s: hot-swap exit requested, terminating\n", __func__);
+                    fflush(stdout);
+                    fflush(stderr);
+                    hotswap_write_status(hotswap_stat, "exiting", hotswap_iter, hotswap_seq);
+                    terminate_process = true;
+                    break;
+                }
 
-        if (hotswap_env) {
-            if (!llama_reload_changed_tensors(ctx)) {
+                hotswap_iter++;
+                llama_reset_timings(ctx); // per-iteration timings, like separate runs would report
+                hotswap_write_status(hotswap_stat, "computing", hotswap_iter, hotswap_seq);
+                continue;
+            }
+            if (terminate_process) {
                 break;
             }
-        } else {
-            break;
+
+            if (pre_script) {
+                fprintf(stderr, "%s: executing pre-reload script: %s\n", __func__, pre_script);
+#ifdef _WIN32
+                FILE * fp = _popen(pre_script, "r");
+#else
+                FILE * fp = popen(pre_script, "r");
+#endif
+                if (fp) {
+                    char buf[256];
+                    while (fgets(buf, sizeof(buf), fp)) {
+                        size_t len = strlen(buf);
+                        if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
+                        fprintf(stderr, "%s: [pre-reload] %s\n", __func__, buf);
+                    }
+#ifdef _WIN32
+                    _pclose(fp);
+#else
+                    pclose(fp);
+#endif
+                } else {
+                    fprintf(stderr, "%s: failed to execute pre-reload script: %s\n", __func__, pre_script);
+                }
+            }
+
+            if (hotswap_env) {
+                if (!llama_reload_changed_tensors(ctx)) {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        if (terminate_process) {
+            break; // hot-swap exit requested, stop all runs
         }
     }
 
