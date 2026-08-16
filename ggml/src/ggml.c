@@ -14670,7 +14670,10 @@ static void ggml_compute_forward_add_id_f32(
         // src1 indices
         const int i11 = *(int32_t *) ((char *) src2->data + i1*nb20 + i2*nb21);
 
-        GGML_ASSERT(i11 >= 0 && i11 < ne11);
+        if (i11 < 0 || i11 >= ne11) {
+            // dropped expert (SER sentinel): leave the (already zeroed) output unchanged
+            continue;
+        }
 
         ggml_vec_add_f32(ne0,
                 (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 ),
