@@ -3463,7 +3463,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "perplexity",  "       --ppl-stride N",         "stride for perplexity calculation (default: %d)", params.ppl_stride });
     options.push_back({ "perplexity",  "       --ppl-output-type {0,1}",
                                                                         "output type for perplexity calculation (default: %d)", params.ppl_output_type });
-    options.push_back({ "perplexity",  "       --ppl-run-params S",      "additional test run on the same loaded model (repeatable); S is a comma-separated list of overrides, e.g. \"ctx=4096,experts=8\" or \"file=french.txt\" or \"file=arc.bin,mode=mc\" (keys: ctx, experts, file, mode)" });
+    options.push_back({ "perplexity",  "       --ppl-run-params S",      "additional test run on the same loaded model (repeatable); S is a comma-separated list of overrides, e.g. \"ctx=4096,experts=8\" or \"file=french.txt\" or \"file=arc.bin,mode=mc\" or \"ctk=q8_0,ctv=q8_0,khad=1,vhad=1\" (keys: ctx, experts, file, mode, k_cache/ctk, v_cache/ctv, k_hadamard/khad, v_hadamard/vhad)" });
 
     options.push_back({ "parallel" });
     options.push_back({ "*",           "-dt,   --defrag-thold N",       "KV cache defragmentation threshold (default: %.1f, < 0 - disabled)", (double)params.defrag_thold });
