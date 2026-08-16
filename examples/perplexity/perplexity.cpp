@@ -2186,9 +2186,14 @@ struct ppl_run_spec {
     int32_t n_expert_used = -1; // expert_used_count, -1 = keep the previous run's value
     std::string file;           // data file for this run, empty = keep the base prompt
     int mode = PPL_RUN_DEFAULT; // test type for this run
+    std::string cache_type_k;   // KV cache data type for K, empty = keep the previous run's value
+    std::string cache_type_v;   // KV cache data type for V, empty = keep the previous run's value
+    int k_hadamard = -1;        // Hadamard transform for K-cache, -1 = keep the previous run's value
+    int v_hadamard = -1;        // Hadamard transform for V-cache, -1 = keep the previous run's value
 };
 
-// Parses a "key=value,key=value" run spec. Supported keys: ctx, experts, file, mode.
+// Parses a "key=value,key=value" run spec. Supported keys: ctx, experts, file, mode,
+// k_cache, v_cache, k_hadamard, v_hadamard.
 static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
     const auto parts = string_split<std::string>(spec, ',');
     for (const auto & part : parts) {
@@ -2199,6 +2204,13 @@ static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
         }
         const std::string key   = part.substr(0, eq);
         const std::string value = part.substr(eq + 1);
+
+        // valid KV cache data types (see kv_cache_type_from_str in common.cpp)
+        const auto valid_cache_type = [](const std::string & s) {
+            return s == "f32" || s == "f16" || s == "bf16" || s == "q8_0" || s == "q4_0" ||
+                   s == "q4_1" || s == "iq4_nl" || s == "q5_0" || s == "q5_1" || s == "q6_0" ||
+                   s == "q6_1" || s == "q8_KV";
+        };
 
         if (key == "file") {
             std::ifstream file(value);
@@ -2226,6 +2238,38 @@ static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
             }
             continue;
         }
+        if (key == "k_cache" || key == "cache_type_k" || key == "ctk") {
+            if (!valid_cache_type(value)) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, key.c_str(), value.c_str());
+                return false;
+            }
+            run.cache_type_k = value;
+            continue;
+        }
+        if (key == "v_cache" || key == "cache_type_v" || key == "ctv") {
+            if (!valid_cache_type(value)) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, key.c_str(), value.c_str());
+                return false;
+            }
+            run.cache_type_v = value;
+            continue;
+        }
+        if (key == "k_hadamard" || key == "khad") {
+            if (value != "0" && value != "1" && value != "true" && value != "false") {
+                fprintf(stderr, "%s: --ppl-run-params %s must be 0 or 1, got '%s'\n", __func__, key.c_str(), value.c_str());
+                return false;
+            }
+            run.k_hadamard = (value == "1" || value == "true") ? 1 : 0;
+            continue;
+        }
+        if (key == "v_hadamard" || key == "vhad") {
+            if (value != "0" && value != "1" && value != "true" && value != "false") {
+                fprintf(stderr, "%s: --ppl-run-params %s must be 0 or 1, got '%s'\n", __func__, key.c_str(), value.c_str());
+                return false;
+            }
+            run.v_hadamard = (value == "1" || value == "true") ? 1 : 0;
+            continue;
+        }
 
         int val = 0;
         try {
@@ -2247,7 +2291,7 @@ static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
             }
             run.n_expert_used = val;
         } else {
-            fprintf(stderr, "%s: unknown --ppl-run-params key '%s' (supported: ctx, experts, file, mode)\n", __func__, key.c_str());
+            fprintf(stderr, "%s: unknown --ppl-run-params key '%s' (supported: ctx, experts, file, mode, k_cache, v_cache, k_hadamard, v_hadamard)\n", __func__, key.c_str());
             return false;
         }
     }
@@ -2442,6 +2486,12 @@ int main(int argc, char ** argv) {
     int      cur_mode         = base_mode; // test type used by the current context
     uint32_t cur_n_expert_used = llama_n_expert_used(model); // experts used by the current model
 
+    // KV cache settings used by the current context
+    std::string cur_cache_type_k = params.cache_type_k;
+    std::string cur_cache_type_v = params.cache_type_v;
+    bool        cur_k_hadamard   = params.k_cache_hadamard;
+    bool        cur_v_hadamard   = params.v_cache_hadamard;
+
     // base prompt (from -f/-bf/--prompt), restored for runs that don't specify a file
     const std::string base_prompt       = params.prompt;
     const std::string base_prompt_file  = params.prompt_file;
@@ -2452,6 +2502,12 @@ int main(int argc, char ** argv) {
 
         // the effective test type for this run
         const int this_mode = run.mode != PPL_RUN_DEFAULT ? run.mode : base_mode;
+
+        // the KV cache settings for this run (overrides the base settings)
+        const std::string this_cache_type_k = run.cache_type_k.empty() ? cur_cache_type_k : run.cache_type_k;
+        const std::string this_cache_type_v = run.cache_type_v.empty() ? cur_cache_type_v : run.cache_type_v;
+        const bool        this_k_hadamard   = run.k_hadamard < 0 ? cur_k_hadamard : run.k_hadamard != 0;
+        const bool        this_v_hadamard   = run.v_hadamard < 0 ? cur_v_hadamard : run.v_hadamard != 0;
 
         // restore the base prompt, then load a data file for this run, if any
         params.prompt           = base_prompt;
@@ -2491,15 +2547,33 @@ int main(int argc, char ** argv) {
         // the base context size this run is computed with
         const int32_t this_n_ctx = run.n_ctx > 0 ? run.n_ctx : cur_n_ctx;
 
-        // recreate the context when the context size or the test type changes
-        // (the per-mode context sizing differs, e.g. ppl expands the context into
-        // n_seq parallel sequences while the other tests use the context as-is)
-        if (this_n_ctx != cur_n_ctx || this_mode != cur_mode) {
-            fprintf(stderr, "%s: run %zu/%zu: recreating context with n_ctx = %d, mode = %d\n", __func__, irun + 1, n_runs, this_n_ctx, this_mode);
+        // recreate the context when the context size, the test type or the KV cache
+        // settings change (the per-mode context sizing differs, e.g. ppl expands the
+        // context into n_seq parallel sequences while the other tests use the context
+        // as-is; the KV cache type/Hadamard are fixed at context creation)
+        if (this_n_ctx != cur_n_ctx || this_mode != cur_mode ||
+            this_cache_type_k != cur_cache_type_k || this_cache_type_v != cur_cache_type_v ||
+            this_k_hadamard != cur_k_hadamard || this_v_hadamard != cur_v_hadamard) {
+            fprintf(stderr, "%s: run %zu/%zu: recreating context with n_ctx = %d, mode = %d, ctk = %s, ctv = %s, khad = %d, vhad = %d\n",
+                    __func__, irun + 1, n_runs, this_n_ctx, this_mode,
+                    this_cache_type_k.c_str(), this_cache_type_v.c_str(), this_k_hadamard, this_v_hadamard);
             llama_free(ctx);
             ctx = nullptr;
             adjust_ppl_ctx_params(params, this_n_ctx, n_batch_orig, this_mode);
+            // apply this run's KV cache settings for context creation
+            const std::string saved_ctk = params.cache_type_k;
+            const std::string saved_ctv = params.cache_type_v;
+            const bool        saved_kh  = params.k_cache_hadamard;
+            const bool        saved_vh  = params.v_cache_hadamard;
+            params.cache_type_k   = this_cache_type_k;
+            params.cache_type_v   = this_cache_type_v;
+            params.k_cache_hadamard = this_k_hadamard;
+            params.v_cache_hadamard = this_v_hadamard;
             ctx = common_create_context(model, params);
+            params.cache_type_k   = saved_ctk;
+            params.cache_type_v   = saved_ctv;
+            params.k_cache_hadamard = saved_kh;
+            params.v_cache_hadamard = saved_vh;
             if (ctx == NULL) {
                 fprintf(stderr, "%s: error: failed to create context with n_ctx = %d\n", __func__, this_n_ctx);
                 break;
@@ -2509,6 +2583,10 @@ int main(int argc, char ** argv) {
             }
             cur_n_ctx  = this_n_ctx;
             cur_mode   = this_mode;
+            cur_cache_type_k = this_cache_type_k;
+            cur_cache_type_v = this_cache_type_v;
+            cur_k_hadamard   = this_k_hadamard;
+            cur_v_hadamard   = this_v_hadamard;
         }
 
         bool terminate_process = false;
