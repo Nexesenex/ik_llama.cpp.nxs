@@ -1605,9 +1605,17 @@ llm_expert_gating_func_type   gating_op,
             auto& hparams = lctx.model.hparams;
             selected_experts = ggml_grouped_topk(ctx, selection_probs, hparams.n_expert_groups, hparams.n_group_used, 2, n_expert_used);
         } else {
-            //selected_experts = ggml_top_k_thresh(ctx, selection_probs, n_expert_used,
-            //        lctx.cparams.min_experts, lctx.cparams.thresh_experts); // [n_expert_used, n_tokens]
-            selected_experts = ggml_top_k(ctx, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
+            // smart expert reduction (SER): drop experts whose routing weight is below
+            // max*thresh, keeping at least min_experts per token; dropped experts are
+            // marked with -1 and zeroed downstream (get_rows, mul_mat_id, add_id)
+            const bool ser = lctx.cparams.min_experts > 0 && lctx.cparams.thresh_experts > 0 &&
+                             gating_op != LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT;
+            if (ser) {
+                selected_experts = ggml_top_k_thresh(ctx, selection_probs, n_expert_used,
+                        lctx.cparams.min_experts, lctx.cparams.thresh_experts); // [n_expert_used, n_tokens]
+            } else {
+                selected_experts = ggml_top_k(ctx, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
+            }
         }
     }
     cb(selected_experts, "ffn_moe_topk", il);
