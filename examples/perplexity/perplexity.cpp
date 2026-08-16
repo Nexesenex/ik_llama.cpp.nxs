@@ -2170,13 +2170,25 @@ static void tinylog_print_timings(struct llama_context * ctx) {
     tinylog_printf("llama_print_timings:       total time = %10.2f ms / %5d tokens\n", (timings.t_end_ms - timings.t_start_ms), (timings.n_p_eval + timings.n_eval));
 }
 
+// Test type for a ppl run (see --ppl-run-params mode=).
+enum ppl_run_mode {
+    PPL_RUN_DEFAULT    = 0, // use the global mode flags (-sw, -wg, -mc, -kl)
+    PPL_RUN_PPL        = 1,
+    PPL_RUN_HELLASWAG  = 2,
+    PPL_RUN_WINOGRANDE = 3,
+    PPL_RUN_MC         = 4,
+    PPL_RUN_KL         = 5,
+};
+
 // Runtime overrides for an additional perplexity run (see --ppl-run-params).
 struct ppl_run_spec {
     int32_t n_ctx         = -1; // context size, -1 = keep the previous run's value
     int32_t n_expert_used = -1; // expert_used_count, -1 = keep the previous run's value
+    std::string file;           // data file for this run, empty = keep the base prompt
+    int mode = PPL_RUN_DEFAULT; // test type for this run
 };
 
-// Parses a "key=value,key=value" run spec. Supported keys: ctx, experts.
+// Parses a "key=value,key=value" run spec. Supported keys: ctx, experts, file, mode.
 static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
     const auto parts = string_split<std::string>(spec, ',');
     for (const auto & part : parts) {
@@ -2187,6 +2199,34 @@ static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
         }
         const std::string key   = part.substr(0, eq);
         const std::string value = part.substr(eq + 1);
+
+        if (key == "file") {
+            std::ifstream file(value);
+            if (!file) {
+                fprintf(stderr, "%s: --ppl-run-params failed to open file '%s'\n", __func__, value.c_str());
+                return false;
+            }
+            run.file = value;
+            continue;
+        }
+        if (key == "mode") {
+            if (value == "ppl") {
+                run.mode = PPL_RUN_PPL;
+            } else if (value == "hellaswag" || value == "hs") {
+                run.mode = PPL_RUN_HELLASWAG;
+            } else if (value == "winogrande" || value == "wg") {
+                run.mode = PPL_RUN_WINOGRANDE;
+            } else if (value == "mc" || value == "multiple_choice" || value == "multiple-choice") {
+                run.mode = PPL_RUN_MC;
+            } else if (value == "kl" || value == "kl_divergence" || value == "kl-divergence") {
+                run.mode = PPL_RUN_KL;
+            } else {
+                fprintf(stderr, "%s: unknown --ppl-run-params mode '%s' (supported: ppl, hellaswag, winogrande, mc, kl)\n", __func__, value.c_str());
+                return false;
+            }
+            continue;
+        }
+
         int val = 0;
         try {
             val = std::stoi(value);
@@ -2207,18 +2247,41 @@ static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
             }
             run.n_expert_used = val;
         } else {
-            fprintf(stderr, "%s: unknown --ppl-run-params key '%s' (supported: ctx, experts)\n", __func__, key.c_str());
+            fprintf(stderr, "%s: unknown --ppl-run-params key '%s' (supported: ctx, experts, file, mode)\n", __func__, key.c_str());
             return false;
         }
     }
     return true;
 }
 
+// Resolves the effective test type for a run: an explicit mode= override wins,
+// otherwise the global mode flags decide.
+static int resolve_ppl_mode(const ppl_run_spec & run, const gpt_params & params) {
+    if (run.mode != PPL_RUN_DEFAULT) return run.mode;
+    if (params.hellaswag)       return PPL_RUN_HELLASWAG;
+    if (params.winogrande)      return PPL_RUN_WINOGRANDE;
+    if (params.multiple_choice) return PPL_RUN_MC;
+    if (params.kl_divergence)   return PPL_RUN_KL;
+    return PPL_RUN_PPL;
+}
+
+// Runs the selected test type for one run.
+static void run_ppl_test(llama_context * ctx, const gpt_params & params, int mode, const int32_t n_ctx, results_perplexity & results) {
+    switch (mode) {
+        case PPL_RUN_PPL:        results = perplexity(ctx, params, n_ctx); break;
+        case PPL_RUN_HELLASWAG:  hellaswag_score(ctx, params); break;
+        case PPL_RUN_WINOGRANDE: winogrande_score(ctx, params); break;
+        case PPL_RUN_MC:         multiple_choice_score(ctx, params); break;
+        case PPL_RUN_KL:         kl_divergence(ctx, params); break;
+        default: GGML_ASSERT(false); break;
+    }
+}
+
 // Applies the context-size adjustments perplexity requires before the context is
 // created (parallel sequences for small contexts, batch capping and the strided
 // perplexity context bump). n_ctx is the base user-specified context size.
-static void adjust_ppl_ctx_params(gpt_params & params, int32_t n_ctx, int32_t n_batch_orig, bool ppl) {
-    if (ppl) {
+static void adjust_ppl_ctx_params(gpt_params & params, int32_t n_ctx, int32_t n_batch_orig, int mode) {
+    if (mode == PPL_RUN_PPL) {
         const int32_t n_seq = std::max(1, n_batch_orig / n_ctx);
         const int32_t n_kv = n_seq * n_ctx;
         params.n_parallel = n_seq;
@@ -2227,7 +2290,7 @@ static void adjust_ppl_ctx_params(gpt_params & params, int32_t n_ctx, int32_t n_
     } else {
         params.n_ctx   = n_ctx;
         params.n_batch = std::min(n_batch_orig, n_ctx);
-        if (params.kl_divergence) {
+        if (mode == PPL_RUN_KL) {
             params.n_parallel = 1;
         } else {
             // ensure there's at least enough seq_ids for HellaSwag
@@ -2278,11 +2341,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    const bool ppl = !params.hellaswag && !params.winogrande && !params.multiple_choice && !params.kl_divergence;
+    const ppl_run_spec base_run; // base run uses the global mode flags
+
+    const int base_mode = resolve_ppl_mode(base_run, params);
 
     const int32_t n_batch_orig = params.n_batch;
 
-    adjust_ppl_ctx_params(params, n_ctx, n_batch_orig, ppl);
+    adjust_ppl_ctx_params(params, n_ctx, n_batch_orig, base_mode);
 
     print_build_info();
 
@@ -2370,14 +2435,47 @@ int main(int argc, char ** argv) {
 
     const size_t n_runs = runs.size();
     if (n_runs > 1) {
-        fprintf(stderr, "%s: will run %zu perplexity computations in this process\n", __func__, n_runs);
+        fprintf(stderr, "%s: will run %zu test runs in this process\n", __func__, n_runs);
     }
 
     int32_t  cur_n_ctx        = n_ctx; // context size used by the current context
+    int      cur_mode         = base_mode; // test type used by the current context
     uint32_t cur_n_expert_used = llama_n_expert_used(model); // experts used by the current model
+
+    // base prompt (from -f/-bf/--prompt), restored for runs that don't specify a file
+    const std::string base_prompt       = params.prompt;
+    const std::string base_prompt_file  = params.prompt_file;
+    const bool        base_prompt_binary = params.prompt_is_binary;
 
     for (size_t irun = 0; irun < n_runs; ++irun) {
         const ppl_run_spec & run = runs[irun];
+
+        // the effective test type for this run
+        const int this_mode = run.mode != PPL_RUN_DEFAULT ? run.mode : base_mode;
+
+        // restore the base prompt, then load a data file for this run, if any
+        params.prompt           = base_prompt;
+        params.prompt_file      = base_prompt_file;
+        params.prompt_is_binary = base_prompt_binary;
+        if (!run.file.empty()) {
+            const bool is_binary = this_mode == PPL_RUN_MC;
+            std::ifstream file(run.file.c_str(), is_binary ? std::ios::binary : std::ios::in);
+            if (!file) {
+                fprintf(stderr, "%s: error: run %zu/%zu: failed to open file '%s'\n",
+                        __func__, irun + 1, n_runs, run.file.c_str());
+                break;
+            }
+            std::ostringstream ss;
+            ss << file.rdbuf();
+            params.prompt = ss.str();
+            if (!is_binary && !params.prompt.empty() && params.prompt.back() == '\n') {
+                params.prompt.pop_back();
+            }
+            params.prompt_file      = run.file;
+            params.prompt_is_binary = is_binary;
+            fprintf(stderr, "%s: run %zu/%zu: loaded data file '%s' (%zu bytes, mode = %d)\n",
+                    __func__, irun + 1, n_runs, run.file.c_str(), params.prompt.size(), this_mode);
+        }
 
         // override the number of experts used for this run; the model stays loaded
         if (run.n_expert_used > 0 && run.n_expert_used != (int32_t) cur_n_expert_used) {
@@ -2393,12 +2491,14 @@ int main(int argc, char ** argv) {
         // the base context size this run is computed with
         const int32_t this_n_ctx = run.n_ctx > 0 ? run.n_ctx : cur_n_ctx;
 
-        // recreate the context when the context size changes
-        if (this_n_ctx != cur_n_ctx) {
-            fprintf(stderr, "%s: run %zu/%zu: recreating context with n_ctx = %d\n", __func__, irun + 1, n_runs, this_n_ctx);
+        // recreate the context when the context size or the test type changes
+        // (the per-mode context sizing differs, e.g. ppl expands the context into
+        // n_seq parallel sequences while the other tests use the context as-is)
+        if (this_n_ctx != cur_n_ctx || this_mode != cur_mode) {
+            fprintf(stderr, "%s: run %zu/%zu: recreating context with n_ctx = %d, mode = %d\n", __func__, irun + 1, n_runs, this_n_ctx, this_mode);
             llama_free(ctx);
             ctx = nullptr;
-            adjust_ppl_ctx_params(params, this_n_ctx, n_batch_orig, ppl);
+            adjust_ppl_ctx_params(params, this_n_ctx, n_batch_orig, this_mode);
             ctx = common_create_context(model, params);
             if (ctx == NULL) {
                 fprintf(stderr, "%s: error: failed to create context with n_ctx = %d\n", __func__, this_n_ctx);
@@ -2407,23 +2507,14 @@ int main(int argc, char ** argv) {
             if (!params.lora_init_without_apply) {
                 llama_lora_adapters_apply(ctx, llama_init.lora_adapters);
             }
-            cur_n_ctx = this_n_ctx;
+            cur_n_ctx  = this_n_ctx;
+            cur_mode   = this_mode;
         }
 
         bool terminate_process = false;
         while (true) {
             struct results_perplexity results;
-            if (params.hellaswag) {
-                hellaswag_score(ctx, params);
-            } else if (params.winogrande) {
-                winogrande_score(ctx, params);
-            } else if (params.multiple_choice) {
-                multiple_choice_score(ctx, params);
-            } else if (params.kl_divergence) {
-                kl_divergence(ctx, params);
-            } else {
-                results = perplexity(ctx, params, this_n_ctx);
-            }
+            run_ppl_test(ctx, params, this_mode, this_n_ctx, results);
 
             tinylog_print_timings(ctx);
             write_logfile(ctx, params, model, results);
