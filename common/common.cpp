@@ -762,6 +762,23 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
 
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
+
+        // a commented line (batch files etc.): REM, rem or # as the first non-space/tab
+        // character of the first argument marks the whole command line as a comment, so it
+        // must neither be executed nor rejected as unknown - skip the remaining arguments
+        if (i == 1) {
+            const size_t ns = arg.find_first_not_of(" \t");
+            if (ns != std::string::npos &&
+                (arg[ns] == '#' || arg.compare(ns, 3, "REM") == 0 || arg.compare(ns, 3, "rem") == 0)) {
+                fprintf(stderr, "warning: skipping commented line: %s", argv[i]);
+                for (int j = i + 1; j < argc; j++) {
+                    fprintf(stderr, " %s", argv[j]);
+                }
+                fprintf(stderr, "\n");
+                break;
+            }
+        }
+
         if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
             std::replace(arg.begin(), arg.end(), '_', '-');
         }
