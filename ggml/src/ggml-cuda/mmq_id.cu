@@ -50,7 +50,10 @@ static __global__ void mmq_ids_helper(
             int iex_used = -1; // The index at which the expert is used, if any.
             for (int iex = threadIdx.x; iex < n_expert_used; iex += warp_size) {
                 const int expert_used = ids[it*si1 + iex];
-                nex_prev += expert_used < expert;
+                // Dropped experts (SER) are marked with -1: they must not count toward
+                // the number of rows of lower-indexed experts, otherwise the compacted
+                // ids_src1/ids_dst offsets and expert_bounds are shifted out of bounds.
+                nex_prev += expert_used >= 0 && expert_used < expert;
                 if (expert_used == expert) {
                     iex_used = iex;
                 }
@@ -75,7 +78,9 @@ static __global__ void mmq_ids_helper(
             const int expert_used = (neu_padded == n_expert_used || iex < n_expert_used) && it < n_tokens ?
                 ids[it*si1 + iex] : INT_MAX;
             const int iex_used = expert_used == expert ? iex : -1;
-            nex_prev += expert_used < expert;
+            // Dropped experts (SER) are marked with -1: exclude them from the lower-expert
+            // row count so the compacted ids_src1/ids_dst offsets stay in bounds.
+            nex_prev += expert_used >= 0 && expert_used < expert;
 
             // Whether the threads at this token position have used the expert:
             const int it_compact_add_self = warp_reduce_any<neu_padded>(iex_used != -1);
@@ -132,6 +137,12 @@ static void launch_mmq_ids_helper(
     const int warp_size = ggml_cuda_get_physical_warp_size_host(); //ggml_cuda_info().devices[id].warp_size;
     const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
     CUDA_SET_SHARED_MEMORY_LIMIT(mmq_ids_helper<n_expert_used_template>, smpbo);
+
+    // ids_src1 is only filled for the compacted (non-dropped) experts; with SER the remaining
+    // entries would be uninitialized pool memory, and quantize_mmq_q8_1_cuda_id reads ALL of them
+    // (ne12*n_expert_used rows), causing out-of-bounds reads of src1. Zero them so dropped rows
+    // map to src1 row 0 (valid reads; those q8_1 rows are never consumed by mul_mat_q_id).
+    CUDA_CHECK(cudaMemsetAsync(ids_src1, 0, n_tokens*n_expert_used_var*sizeof(int32_t), stream));
 
     const dim3 num_blocks(n_experts, 1, 1);
     const dim3 block_size(warp_size, 1, 1);

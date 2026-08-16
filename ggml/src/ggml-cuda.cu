@@ -2976,6 +2976,9 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                 if (next_src0_ctx->device == device_id &&
                     next_dst_ctx->device  == device_id) {
                     local_dst.data = next->data;
+                    // Dropped experts (SER) are skipped by the fused kernel, so their rows in next->data
+                    // would stay uninitialized; zero them so they contribute 0 after the weight multiply.
+                    CUDA_CHECK(cudaMemsetAsync((char *)next->data, 0, ggml_nbytes(next), stream));
                     ggml_cuda_op_mul_mat_vec_q_id(ctx, next->src[0], &local_src1, ids, &local_dst, nullptr,
                         (const char *)next->src[0]->data, nullptr, src1_quantized.get(), (float *)next->data,
                         0, src0->ne[1], 1, src1_padded_col_size, stream);
@@ -3250,6 +3253,18 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
 
             //printf("next: %ld x %ld x %ld x %ld,    %zu x %zu x %zu x %zu\n", next->ne[0], next->ne[1], next->ne[2], next->ne[3], next->nb[0], next->nb[1], next->nb[2], next->nb[3]);
 
+            if (i+2 < graph->n_nodes &&
+                graph->nodes[i+2]->op == GGML_OP_ADD_ID &&
+                graph->nodes[i+2]->src[0] == next &&
+                graph->nodes[i+2]->src[2] == ids) {
+                // Dropped experts (SER) are skipped by the fused kernel, so their rows in the ADD_ID dst
+                // would stay uninitialized; zero them so they contribute 0 after the weight multiply.
+                CUDA_CHECK(cudaMemsetAsync((float *)graph->nodes[i+2]->data, 0, sizeof(float)*ggml_nelements(graph->nodes[i+2]), stream));
+            } else {
+                // Same for the (non-ADD_ID) down matmul output in next->data.
+                CUDA_CHECK(cudaMemsetAsync((float *)next->data, 0, sizeof(float)*ggml_nelements(next), stream));
+            }
+
             for (int iy = 0; iy < Ny; ++iy) {
                 local_ids.data  = (char *)ids->data + iy*ids->nb[1];
                 auto this_dst_quantized = dst_quantized.get() + iy*dst_ddq_size;
@@ -3320,6 +3335,11 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         ggml_cuda_pool_alloc<char> dst_up_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
         ggml_cuda_pool_alloc<char> dst_gate_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
 
+        // Dropped experts (SER) are excluded from the compacted ids_dst, so their rows in the
+        // contiguous dst are not written by the mmq kernels; zero them so they contribute 0.
+        CUDA_CHECK(cudaMemsetAsync(dst_up_contiguous.get(),   0, sizeof(float)*ggml_nelements(dst), stream));
+        CUDA_CHECK(cudaMemsetAsync(dst_gate_contiguous.get(), 0, sizeof(float)*ggml_nelements(dst), stream));
+
         dst_row.data = dst_up_contiguous.get();
         ggml_cuda_mul_mat_q_id(ctx, src0_1, src1, ids, &dst_row, (char *)ids_device.get(), src1_quantized.get());
         if (dst->src[4]) {
@@ -3354,6 +3374,9 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
 
             ggml_cuda_pool_alloc<char> dst_up_gate_contiguous(ctx.pool(), 2*sizeof(float)*ggml_nelements(dst));
             ggml_cuda_pool_alloc<char> dst_gate_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
+            // Dropped experts (SER) are excluded from the compacted ids_dst, so their rows in the
+            // contiguous dst are not written by the mmq kernels; zero them so they contribute 0.
+            CUDA_CHECK(cudaMemsetAsync(dst_up_gate_contiguous.get(), 0, 2*sizeof(float)*ggml_nelements(dst), stream));
             dst_row.ne[0] *= 2;
             dst_row.nb[1] *= 2;
             dst_row.nb[2] *= 2;
@@ -3384,6 +3407,9 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
 
         if (next && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
             ggml_cuda_should_use_mmq(next->src[0]->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
+            // Dropped experts (SER) are excluded from the compacted ids_dst, so their rows in next->data
+            // are not written by the mmq kernel; zero them so they contribute 0 after the weight multiply.
+            CUDA_CHECK(cudaMemsetAsync((char *)next->data, 0, ggml_nbytes(next), stream));
             //ggml_cuda_mul_mat_q_id(ctx, next->src[0], dst, ids, next, (char *)ids_device.get(), nullptr);
             ggml_cuda_mul_mat_q_id(ctx, next->src[0], dst, ids, next, nullptr, nullptr);
             return i+1;
