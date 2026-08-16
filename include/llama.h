@@ -656,6 +656,19 @@ extern "C" {
 
     LLAMA_API int32_t llama_n_layer    (const struct llama_model * model);
 
+    // Number of experts per MoE layer (0 for non-MoE models)
+    LLAMA_API uint32_t llama_n_expert   (const struct llama_model * model);
+
+    // Number of experts used per token in MoE layers
+    LLAMA_API uint32_t llama_n_expert_used(const struct llama_model * model);
+
+    // Override the number of experts used per token in MoE layers at runtime.
+    // This allows e.g. benchmarking different expert_used_count values on an
+    // already loaded model without reloading it. The graph builder picks up the
+    // new value on the next decode. Returns false if the model has no expert
+    // layers or the requested count is outside the valid range [1, n_expert].
+    LLAMA_API bool     llama_model_set_n_expert_used(struct llama_model * model, uint32_t n_expert_used);
+
     // Compat
     LLAMA_API bool        llama_vocab_get_add_bos(const struct llama_vocab * vocab);
     LLAMA_API bool        llama_vocab_get_add_eos(const struct llama_vocab * vocab);
