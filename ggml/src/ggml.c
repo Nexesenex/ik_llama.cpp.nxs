@@ -29384,8 +29384,8 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
     switch (tensor->op) {
         case GGML_OP_REDUCE:
             {
-                iqk_reduce(tensor, params->ith, params->nth);
-            } break;
+                GGML_ABORT("REDUCE not implemented");
+            }
         case GGML_OP_FAKE_CPY:
             {
                 GGML_ABORT("FAKE_CPY not implemented");
