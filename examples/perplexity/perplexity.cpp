@@ -2190,13 +2190,33 @@ struct ppl_run_spec {
     std::string cache_type_v;   // KV cache data type for V, empty = keep the previous run's value
     int k_hadamard = -1;        // Hadamard transform for K-cache, -1 = keep the previous run's value
     int v_hadamard = -1;        // Hadamard transform for V-cache, -1 = keep the previous run's value
+    std::string type_k_first;   // KV cache data type for the first n_k_first layers of K
+    int32_t n_k_first = -2;     // number of first K layers with type_k_first, -2 = keep the previous run's value
+    std::string type_k_last;    // KV cache data type for the last n_k_last layers of K
+    int32_t n_k_last = -2;      // number of last K layers with type_k_last, -2 = keep the previous run's value
+    std::string type_v_first;   // KV cache data type for the first n_v_first layers of V
+    int32_t n_v_first = -2;     // number of first V layers with type_v_first, -2 = keep the previous run's value
+    std::string type_v_last;    // KV cache data type for the last n_v_last layers of V
+    int32_t n_v_last = -2;      // number of last V layers with type_v_last, -2 = keep the previous run's value
 };
 
 // Parses a "key=value,key=value" run spec. Supported keys: ctx, experts, file, mode,
-// k_cache, v_cache, k_hadamard, v_hadamard.
+// k_cache, v_cache, k_hadamard, v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last.
 static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
-    const auto parts = string_split<std::string>(spec, ',');
-    for (const auto & part : parts) {
+    // join continuation parts into the previous entry so that values containing a
+    // comma (e.g. "ctk_first=q8_0,16") survive the comma split of the spec
+    std::vector<std::string> entries;
+    {
+        const auto parts = string_split<std::string>(spec, ',');
+        for (const auto & part : parts) {
+            if (part.find('=') == std::string::npos && !entries.empty()) {
+                entries.back() += "," + part;
+            } else {
+                entries.push_back(part);
+            }
+        }
+    }
+    for (const auto & part : entries) {
         const auto eq = part.find('=');
         if (eq == std::string::npos || eq == 0 || eq + 1 == part.size()) {
             fprintf(stderr, "%s: invalid --ppl-run-params entry '%s' (expected key=value)\n", __func__, part.c_str());
@@ -2271,6 +2291,43 @@ static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
             continue;
         }
 
+        // TYPE,N keys (e.g. "ctk-first=q8_0,16"): cache type for the first/last N layers
+        const auto parse_type_n = [&](const std::string & k, std::string & type, int32_t & n) {
+            const auto p = string_split(value, ",");
+            if (p.size() != 2) {
+                fprintf(stderr, "%s: --ppl-run-params %s must be in the form TYPE,N, got '%s'\n", __func__, k.c_str(), value.c_str());
+                return false;
+            }
+            if (!valid_cache_type(p[0])) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, k.c_str(), p[0].c_str());
+                return false;
+            }
+            try {
+                n = std::stoi(p[1]);
+            } catch (...) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid layer count '%s'\n", __func__, k.c_str(), p[1].c_str());
+                return false;
+            }
+            type = p[0];
+            return true;
+        };
+        if (key == "ctk_first" || key == "ctk-first" || key == "cache_type_k_first") {
+            if (!parse_type_n(key, run.type_k_first, run.n_k_first)) return false;
+            continue;
+        }
+        if (key == "ctk_last" || key == "ctk-last" || key == "cache_type_k_last") {
+            if (!parse_type_n(key, run.type_k_last, run.n_k_last)) return false;
+            continue;
+        }
+        if (key == "ctv_first" || key == "ctv-first" || key == "cache_type_v_first") {
+            if (!parse_type_n(key, run.type_v_first, run.n_v_first)) return false;
+            continue;
+        }
+        if (key == "ctv_last" || key == "ctv-last" || key == "cache_type_v_last") {
+            if (!parse_type_n(key, run.type_v_last, run.n_v_last)) return false;
+            continue;
+        }
+
         int val = 0;
         try {
             val = std::stoi(value);
@@ -2291,7 +2348,7 @@ static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
             }
             run.n_expert_used = val;
         } else {
-            fprintf(stderr, "%s: unknown --ppl-run-params key '%s' (supported: ctx, experts, file, mode, k_cache, v_cache, k_hadamard, v_hadamard)\n", __func__, key.c_str());
+            fprintf(stderr, "%s: unknown --ppl-run-params key '%s' (supported: ctx, experts, file, mode, k_cache, v_cache, k_hadamard, v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last)\n", __func__, key.c_str());
             return false;
         }
     }
@@ -2492,6 +2549,16 @@ int main(int argc, char ** argv) {
     bool        cur_k_hadamard   = params.k_cache_hadamard;
     bool        cur_v_hadamard   = params.v_cache_hadamard;
 
+    // per-layer KV cache overrides used by the current context
+    std::string cur_type_k_first = params.type_k_first;
+    std::string cur_type_k_last  = params.type_k_last;
+    std::string cur_type_v_first = params.type_v_first;
+    std::string cur_type_v_last  = params.type_v_last;
+    int32_t     cur_n_k_first    = params.n_k_first;
+    int32_t     cur_n_k_last     = params.n_k_last;
+    int32_t     cur_n_v_first    = params.n_v_first;
+    int32_t     cur_n_v_last     = params.n_v_last;
+
     // base prompt (from -f/-bf/--prompt), restored for runs that don't specify a file
     const std::string base_prompt       = params.prompt;
     const std::string base_prompt_file  = params.prompt_file;
@@ -2508,6 +2575,14 @@ int main(int argc, char ** argv) {
         const std::string this_cache_type_v = run.cache_type_v.empty() ? cur_cache_type_v : run.cache_type_v;
         const bool        this_k_hadamard   = run.k_hadamard < 0 ? cur_k_hadamard : run.k_hadamard != 0;
         const bool        this_v_hadamard   = run.v_hadamard < 0 ? cur_v_hadamard : run.v_hadamard != 0;
+        const std::string this_type_k_first = run.n_k_first < -1 ? cur_type_k_first : run.type_k_first;
+        const std::string this_type_k_last  = run.n_k_last  < -1 ? cur_type_k_last  : run.type_k_last;
+        const std::string this_type_v_first = run.n_v_first < -1 ? cur_type_v_first : run.type_v_first;
+        const std::string this_type_v_last  = run.n_v_last  < -1 ? cur_type_v_last  : run.type_v_last;
+        const int32_t     this_n_k_first    = run.n_k_first < -1 ? cur_n_k_first : run.n_k_first;
+        const int32_t     this_n_k_last     = run.n_k_last  < -1 ? cur_n_k_last  : run.n_k_last;
+        const int32_t     this_n_v_first    = run.n_v_first < -1 ? cur_n_v_first : run.n_v_first;
+        const int32_t     this_n_v_last     = run.n_v_last  < -1 ? cur_n_v_last  : run.n_v_last;
 
         // restore the base prompt, then load a data file for this run, if any
         params.prompt           = base_prompt;
@@ -2553,10 +2628,18 @@ int main(int argc, char ** argv) {
         // as-is; the KV cache type/Hadamard are fixed at context creation)
         if (this_n_ctx != cur_n_ctx || this_mode != cur_mode ||
             this_cache_type_k != cur_cache_type_k || this_cache_type_v != cur_cache_type_v ||
-            this_k_hadamard != cur_k_hadamard || this_v_hadamard != cur_v_hadamard) {
-            fprintf(stderr, "%s: run %zu/%zu: recreating context with n_ctx = %d, mode = %d, ctk = %s, ctv = %s, khad = %d, vhad = %d\n",
+            this_k_hadamard != cur_k_hadamard || this_v_hadamard != cur_v_hadamard ||
+            this_type_k_first != cur_type_k_first || this_type_k_last != cur_type_k_last ||
+            this_type_v_first != cur_type_v_first || this_type_v_last != cur_type_v_last ||
+            this_n_k_first != cur_n_k_first || this_n_k_last != cur_n_k_last ||
+            this_n_v_first != cur_n_v_first || this_n_v_last != cur_n_v_last) {
+            fprintf(stderr, "%s: run %zu/%zu: recreating context with n_ctx = %d, mode = %d, ctk = %s, ctv = %s, khad = %d, vhad = %d, ctkl1 = %s/%d, ctkl2 = %s/%d, ctvl1 = %s/%d, ctvl2 = %s/%d\n",
                     __func__, irun + 1, n_runs, this_n_ctx, this_mode,
-                    this_cache_type_k.c_str(), this_cache_type_v.c_str(), this_k_hadamard, this_v_hadamard);
+                    this_cache_type_k.c_str(), this_cache_type_v.c_str(), this_k_hadamard, this_v_hadamard,
+                    this_type_k_first.c_str(), this_n_k_first,
+                    this_type_k_last.c_str(),  this_n_k_last,
+                    this_type_v_first.c_str(), this_n_v_first,
+                    this_type_v_last.c_str(),  this_n_v_last);
             llama_free(ctx);
             ctx = nullptr;
             adjust_ppl_ctx_params(params, this_n_ctx, n_batch_orig, this_mode);
@@ -2565,15 +2648,39 @@ int main(int argc, char ** argv) {
             const std::string saved_ctv = params.cache_type_v;
             const bool        saved_kh  = params.k_cache_hadamard;
             const bool        saved_vh  = params.v_cache_hadamard;
+            const std::string saved_tkf = params.type_k_first;
+            const std::string saved_tkl = params.type_k_last;
+            const std::string saved_tvf = params.type_v_first;
+            const std::string saved_tvl = params.type_v_last;
+            const int32_t     saved_nkf = params.n_k_first;
+            const int32_t     saved_nkl = params.n_k_last;
+            const int32_t     saved_nvf = params.n_v_first;
+            const int32_t     saved_nvl = params.n_v_last;
             params.cache_type_k   = this_cache_type_k;
             params.cache_type_v   = this_cache_type_v;
             params.k_cache_hadamard = this_k_hadamard;
             params.v_cache_hadamard = this_v_hadamard;
+            params.type_k_first = this_type_k_first;
+            params.type_k_last  = this_type_k_last;
+            params.type_v_first = this_type_v_first;
+            params.type_v_last  = this_type_v_last;
+            params.n_k_first    = this_n_k_first;
+            params.n_k_last     = this_n_k_last;
+            params.n_v_first    = this_n_v_first;
+            params.n_v_last     = this_n_v_last;
             ctx = common_create_context(model, params);
             params.cache_type_k   = saved_ctk;
             params.cache_type_v   = saved_ctv;
             params.k_cache_hadamard = saved_kh;
             params.v_cache_hadamard = saved_vh;
+            params.type_k_first = saved_tkf;
+            params.type_k_last  = saved_tkl;
+            params.type_v_first = saved_tvf;
+            params.type_v_last  = saved_tvl;
+            params.n_k_first    = saved_nkf;
+            params.n_k_last     = saved_nkl;
+            params.n_v_first    = saved_nvf;
+            params.n_v_last     = saved_nvl;
             if (ctx == NULL) {
                 fprintf(stderr, "%s: error: failed to create context with n_ctx = %d\n", __func__, this_n_ctx);
                 break;
@@ -2587,6 +2694,14 @@ int main(int argc, char ** argv) {
             cur_cache_type_v = this_cache_type_v;
             cur_k_hadamard   = this_k_hadamard;
             cur_v_hadamard   = this_v_hadamard;
+            cur_type_k_first = this_type_k_first;
+            cur_type_k_last  = this_type_k_last;
+            cur_type_v_first = this_type_v_first;
+            cur_type_v_last  = this_type_v_last;
+            cur_n_k_first    = this_n_k_first;
+            cur_n_k_last     = this_n_k_last;
+            cur_n_v_first    = this_n_v_first;
+            cur_n_v_last     = this_n_v_last;
         }
 
         // -ppl-run reuse the same context, so reset the timing accumulators to report
