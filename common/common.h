@@ -441,7 +441,8 @@ struct gpt_params {
     // Additional perplexity runs executed on the same loaded model after the main one.
     // Each entry is a comma-separated "key=value" list overriding a parameter for one
     // extra run, e.g. "ctx=4096,experts=8". Supported keys: ctx (context size),
-    // experts (expert_used_count). Both are optional per entry.
+    // experts (expert_used_count), file (data file, text unless mode=mc),
+    // mode (test type: ppl, hellaswag, winogrande, mc, kl). All are optional per entry.
     std::vector<std::string> ppl_run_params;
 
     bool usage             = false; // print usage
