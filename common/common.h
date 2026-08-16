@@ -439,6 +439,12 @@ struct gpt_params {
 
     bool   kl_divergence    = false; // compute KL divergence
 
+    // Additional perplexity runs executed on the same loaded model after the main one.
+    // Each entry is a comma-separated "key=value" list overriding a parameter for one
+    // extra run, e.g. "ctx=4096,experts=8". Supported keys: ctx (context size),
+    // experts (expert_used_count). Both are optional per entry.
+    std::vector<std::string> ppl_run_params;
+
     bool usage             = false; // print usage
     bool use_color         = false; // use color to distinguish generations and inputs
     bool special           = false; // enable special token output
@@ -776,6 +782,13 @@ struct llama_init_result {
 };
 
 struct llama_init_result    llama_init_from_gpt_params(gpt_params & params);
+
+// Create a llama context from an already loaded model, applying the same post-load
+// setup as llama_init_from_gpt_params (offload policies and control vectors; LoRA
+// adapters are applied by the caller via llama_lora_adapters_apply). Returns NULL
+// on failure. Intended for re-creating a context for the same model, e.g. with a
+// different context size.
+struct llama_context * common_create_context(struct llama_model * model, const gpt_params & params);
 
 struct llama_model_params   common_model_params_to_llama  (const gpt_params & params);
 struct llama_context_params common_context_params_to_llama(const gpt_params & params);

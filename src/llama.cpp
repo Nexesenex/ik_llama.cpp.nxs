@@ -9934,6 +9934,25 @@ int32_t llama_n_layer(const struct llama_model * model) {
     return model->hparams.n_layer;
 }
 
+uint32_t llama_n_expert(const struct llama_model * model) {
+    return model->hparams.n_expert;
+}
+
+uint32_t llama_n_expert_used(const struct llama_model * model) {
+    return model->hparams.n_expert_used;
+}
+
+bool llama_model_set_n_expert_used(struct llama_model * model, uint32_t n_expert_used) {
+    if (!model || model->hparams.n_expert == 0) {
+        return false;
+    }
+    if (n_expert_used == 0 || n_expert_used > model->hparams.n_expert) {
+        return false;
+    }
+    model->hparams.n_expert_used = n_expert_used;
+    return true;
+}
+
 float llama_rope_freq_scale_train(const struct llama_model * model) {
     return model->hparams.rope_freq_scale_train;
 }
