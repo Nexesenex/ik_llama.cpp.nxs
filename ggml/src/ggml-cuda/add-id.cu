@@ -13,6 +13,17 @@ static __global__ void add_id_kernel(
 
     const int i11 = *(int32_t *) ((char *) src2 + i1*sizeof(int32_t) + i2*nb21);
 
+    if (i11 < 0) {
+        // dropped expert (SER sentinel): the expert contributes nothing, write zeros
+        const size_t nb1 = ne0 * sizeof(float);
+        const size_t nb2 = ne1 * nb1;
+        float * dst_row_zero = (float *)((char *)dst + i1*nb1 + i2*nb2);
+        for (int64_t i0 = threadIdx.x; i0 < ne0; i0 += blockDim.x) {
+            dst_row_zero[i0] = 0.0f;
+        }
+        return;
+    }
+
     const size_t nb1 = ne0 * sizeof(float);
     const size_t nb2 = ne1 * nb1;
 
