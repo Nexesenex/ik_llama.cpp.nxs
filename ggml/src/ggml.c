@@ -14671,7 +14671,8 @@ static void ggml_compute_forward_add_id_f32(
         const int i11 = *(int32_t *) ((char *) src2->data + i1*nb20 + i2*nb21);
 
         if (i11 < 0 || i11 >= ne11) {
-            // dropped expert (SER sentinel): leave the (already zeroed) output unchanged
+            // dropped expert (SER sentinel): the expert contributes nothing, write zeros
+            memset((char *) dst->data + i3*nb3 + i2*nb2 + i1*nb1, 0, ne0*sizeof(float));
             continue;
         }
 
