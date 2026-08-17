@@ -2614,7 +2614,7 @@ static int resolve_ppl_mode(const ppl_run_spec & run, const gpt_params & params)
 static void run_ppl_test(llama_context * ctx, const gpt_params & params, int mode, const int32_t n_ctx, results_perplexity & results) {
     // SER expert-usage accounting: enabled only when smart expert reduction is
     // active, so the counting hooks inside llama_decode() cost nothing otherwise.
-    const bool ser_active = params.min_experts > 0 && params.thresh_experts > 0;
+    const bool ser_active = (params.min_experts > 0 && params.thresh_experts > 0) || params.ser_n_tiers >= 2;
     llama_context_set_count_experts_used(ctx, ser_active);
     llama_context_reset_experts_used(ctx);
 
