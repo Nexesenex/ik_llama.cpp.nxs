@@ -25627,8 +25627,10 @@ static void ggml_compute_forward_argsort_thresh_f32(
             }
         } else {
             // cascade: scan tiers from the most conservative (largest c) down.
-            // keep c_i only if at least c_i experts exceed max*thresh_i, else fall
-            // to the next tier; the last tier's c is the absolute floor.
+            // tier (c,t) passes iff at least c experts exceed max*t; when it passes,
+            // keep ALL experts that clear max*t (variable count, bounded above by the
+            // top-k view) to match the original SER behavior; if no tier passes, the
+            // last tier's c is the absolute floor.
             int keep = min_entries[n_tiers-1];
             for (int ti = 0; ti < n_tiers; ++ti) {
                 int cnt = 0;
@@ -25636,7 +25638,7 @@ static void ggml_compute_forward_argsort_thresh_f32(
                     cnt++;
                 }
                 if (cnt >= min_entries[ti]) {
-                    keep = min_entries[ti];
+                    keep = cnt;
                     break;
                 }
             }

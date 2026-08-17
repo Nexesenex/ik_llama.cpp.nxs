@@ -90,8 +90,10 @@ static __global__ void k_argsort_f32_T(const float * x, dst_t * dst, const int n
                     dst[row * ntop + col] = col < s.min_experts[0] || x_row[dst_row[col]] >= s.thresh_experts[0]*max_val ? dst_row[col] : -1;
                 } else {
                     // cascade: scan tiers from the most conservative (largest c) down.
-                    // keep c_i only if at least c_i experts exceed max*thresh_i, else
-                    // fall to the next tier; the last tier's c is the absolute floor.
+                    // tier (c,t) passes iff at least c experts exceed max*t; when it
+                    // passes, keep ALL experts that clear max*t (variable count, bounded
+                    // above by the top-k view) to match the original SER behavior; if no
+                    // tier passes, the last tier's c is the absolute floor.
                     int keep = s.min_experts[s.n_tiers-1];
                     for (int ti = 0; ti < s.n_tiers; ++ti) {
                         int cnt = 0;
@@ -99,7 +101,7 @@ static __global__ void k_argsort_f32_T(const float * x, dst_t * dst, const int n
                             cnt++;
                         }
                         if (cnt >= s.min_experts[ti]) {
-                            keep = s.min_experts[ti];
+                            keep = cnt;
                             break;
                         }
                     }
@@ -116,7 +118,7 @@ static __global__ void k_argsort_f32_T(const float * x, dst_t * dst, const int n
                             cnt++;
                         }
                         if (cnt >= s.min_experts[ti]) {
-                            keep = s.min_experts[ti];
+                            keep = cnt;
                             break;
                         }
                     }
