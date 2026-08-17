@@ -512,6 +512,13 @@ extern "C" {
         int  dsa_top_k;         // DSA top-k override (<0 => model's configured indexer_top_k) [EXPERIMENTAL]
         int  min_experts;
         float thresh_experts;
+        // smart expert reduction (SER) cascade: >=2 tiers of (min_experts, thresh)
+        // applied per token, scanned from the most conservative (largest min) down;
+        // the last tier's min is the absolute floor. 0 tiers = single-pair mode
+        // controlled by min_experts/thresh_experts above.
+        int   ser_n_tiers;
+        int   ser_min_experts[GGML_MAX_SER_TIERS];
+        float ser_thresh_experts[GGML_MAX_SER_TIERS];
         bool only_active_experts;
         bool prefetch_experts;  // if true, stream mmap'd MoE expert weights into the page cache (Linux only)
         int  prefetch_experts_threads; // number of expert prefetch workers (<=0 = auto)

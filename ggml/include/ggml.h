@@ -248,6 +248,7 @@
 #define GGML_MAX_NAME           64
 #endif
 #define GGML_MAX_OP_PARAMS      64
+#define GGML_MAX_SER_TIERS      7
 #define GGML_DEFAULT_N_THREADS  4
 #define GGML_DEFAULT_GRAPH_SIZE 2048
 #if UINTPTR_MAX == 0xFFFFFFFF
@@ -2464,6 +2465,13 @@ extern "C" {
             int                   min_entries,
             float                 threshold);
 
+    GGML_API struct ggml_tensor * ggml_argsort_thresh_cascade(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   n_tiers,
+            const int           * min_entries,
+            const float         * thresh);
+
     GGML_API struct ggml_tensor * ggml_arange(
             struct ggml_context * ctx,
             float                 start,
@@ -2481,6 +2489,13 @@ extern "C" {
             int                   k,
             int                   min_entries,
             float                 thresh);
+    GGML_API struct ggml_tensor * ggml_top_k_thresh_cascade(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   k,
+            int                   n_tiers,
+            const int           * min_entries,
+            const float         * thresh);
     GGML_API struct ggml_tensor * ggml_grouped_topk(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,

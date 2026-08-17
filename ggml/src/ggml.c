@@ -10756,8 +10756,36 @@ struct ggml_tensor * ggml_argsort_thresh(
     //printf("%s: min_entries = %d, thresh = %g\n", __func__, min_entries, (double)thresh);
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_I32, GGML_MAX_DIMS, a->ne);
 
-    ggml_set_op_params_i32(result, 0, (int32_t) min_entries);
-    ggml_set_op_params_f32(result, 1, thresh);
+    ggml_set_op_params_i32(result, 0, 1); // n_tiers
+    ggml_set_op_params_i32(result, 1, (int32_t) min_entries);
+    ggml_set_op_params_f32(result, 2, thresh);
+
+    result->op   = GGML_OP_ARGSORT_THRESH;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_argsort_thresh_cascade(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   n_tiers,
+        const int           * min_entries,
+        const float         * thresh) {
+    bool is_node = false;
+
+    GGML_ASSERT(n_tiers >= 2 && n_tiers <= GGML_MAX_SER_TIERS);
+
+    //printf("%s: n_tiers = %d\n", __func__, n_tiers);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_I32, GGML_MAX_DIMS, a->ne);
+
+    ggml_set_op_params_i32(result, 0, (int32_t) n_tiers);
+    for (int i = 0; i < n_tiers; ++i) {
+        GGML_ASSERT(min_entries[i] >= 1 && min_entries[i] <= a->ne[0]);
+        ggml_set_op_params_i32(result, 1 + 2*i, (int32_t) min_entries[i]);
+        ggml_set_op_params_f32(result, 2 + 2*i, thresh[i]);
+    }
 
     result->op   = GGML_OP_ARGSORT_THRESH;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -10845,7 +10873,24 @@ struct ggml_tensor * ggml_top_k_thresh(
     return result;
 }
 
-// ggml_latent_attn_ext_impl
+struct ggml_tensor * ggml_top_k_thresh_cascade(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   k,
+        int                   n_tiers,
+        const int           * min_entries,
+        const float         * thresh) {
+    GGML_ASSERT(a->ne[0] >= k);
+
+    struct ggml_tensor * result = ggml_argsort_thresh_cascade(ctx, a, n_tiers, min_entries, thresh);
+
+    result = ggml_view_4d(ctx, result,
+                k, result->ne[1], result->ne[2], result->ne[3],
+                   result->nb[1], result->nb[2], result->nb[3],
+                0);
+
+    return result;
+}
 
 static struct ggml_tensor * ggml_latent_attn_ext_impl(
         struct ggml_context * ctx,
@@ -23070,10 +23115,16 @@ static void ggml_compute_forward_argsort_thresh_f32(
 
     const int64_t nr = ggml_nrows(src0);
 
-    int min_entries = ggml_get_op_params_i32(dst, 0);
-    float thresh    = ggml_get_op_params_f32(dst, 1);
+    const int n_tiers = ggml_get_op_params_i32(dst, 0);
+    int    min_entries[GGML_MAX_SER_TIERS];
+    float  thresh[GGML_MAX_SER_TIERS];
+    for (int i = 0; i < n_tiers; ++i) {
+        min_entries[i] = ggml_get_op_params_i32(dst, 1 + 2*i);
+        thresh[i]      = ggml_get_op_params_f32(dst, 2 + 2*i);
+    }
+    GGML_ASSERT(n_tiers >= 1 && n_tiers <= GGML_MAX_SER_TIERS);
 
-    //if (ith == 0) printf("%s: min_entries = %d, thresh = %g\n", __func__, min_entries, (double)thresh);
+    //if (ith == 0) printf("%s: n_tiers = %d, min_entries = %d, thresh = %g\n", __func__, n_tiers, min_entries[0], (double)thresh[0]);
 
     for (int64_t i = ith; i < nr; i += nth) {
         int32_t * dst_data = (int32_t *)((char *) dst->data + i*nb1);
@@ -23094,10 +23145,32 @@ static void ggml_compute_forward_argsort_thresh_f32(
             }
         }
         float max_value = src_data[dst_data[0]];
-        //printf("Row %ld: max_value is %g, next is %g\n", i, (double)max_value, (double)src_data[dst_data[1]]);
-        for (int j = min_entries; j < ne0; ++j) {
-            if (src_data[dst_data[j]] < max_value*thresh) {
-                //printf("    row %ld: turning off expert %d(%d) with value %g\n", i, j, dst_data[j], (double)src_data[dst_data[j]]);
+        if (n_tiers == 1) {
+            // single tier: keep the first min_entries always, drop the rest below max*thresh
+            //printf("Row %ld: max_value is %g, next is %g\n", i, (double)max_value, (double)src_data[dst_data[1]]);
+            for (int j = min_entries[0]; j < ne0; ++j) {
+                if (src_data[dst_data[j]] < max_value*thresh[0]) {
+                    //printf("    row %ld: turning off expert %d(%d) with value %g\n", i, j, dst_data[j], (double)src_data[dst_data[j]]);
+                    dst_data[j] = -1;
+                }
+            }
+        } else {
+            // cascade: scan tiers from the most conservative (largest c) down.
+            // keep c_i only if at least c_i experts exceed max*thresh_i, else fall
+            // to the next tier; the last tier's c is the absolute floor.
+            int keep = min_entries[n_tiers-1];
+            for (int ti = 0; ti < n_tiers; ++ti) {
+                int cnt = 0;
+                for (int j = 0; j < ne0 && src_data[dst_data[j]] >= max_value*thresh[ti]; ++j) {
+                    cnt++;
+                }
+                if (cnt >= min_entries[ti]) {
+                    keep = min_entries[ti];
+                    break;
+                }
+            }
+            //printf("    row %ld: cascade keep = %d (tiers %d)\n", i, keep, n_tiers);
+            for (int j = keep; j < ne0; ++j) {
                 dst_data[j] = -1;
             }
         }

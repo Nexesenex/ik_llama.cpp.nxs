@@ -2102,12 +2102,37 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-ser" || arg == "--smart-expert-reduction") {
         CHECK_ARG
-        auto values = string_split_pairs<int,float>(argv[i], ',');
-        if (values.size() == 1) {
-            params.min_experts    = values.front().first;
-            params.thresh_experts = values.front().second;
+        // cascade syntax: "c:t,c:t,..." (>=2 tiers) - colon between count and
+        // threshold, comma between tiers. Legacy single-pair syntax: "c,t".
+        const std::string val = argv[i];
+        if (val.find(':') != std::string::npos) {
+            auto parts = string_split(val, ',');
+            if (parts.size() < 2 || parts.size() > GGML_MAX_SER_TIERS) {
+                invalid_param = true;
+                return true;
+            }
+            params.ser_n_tiers = (int) parts.size();
+            for (size_t k = 0; k < parts.size(); ++k) {
+                auto tier = string_split(parts[k], ':');
+                if (tier.size() != 2) {
+                    invalid_param = true;
+                    return true;
+                }
+                params.ser_min_experts[k]   = std::stoi(tier[0]);
+                params.ser_thresh_experts[k] = std::stof(tier[1]);
+                if (params.ser_min_experts[k] <= 0 || params.ser_thresh_experts[k] <= 0) {
+                    invalid_param = true;
+                    return true;
+                }
+            }
         } else {
-            invalid_param = true;
+            auto values = string_split_pairs<int,float>(argv[i], ',');
+            if (values.size() == 1) {
+                params.min_experts    = values.front().first;
+                params.thresh_experts = values.front().second;
+            } else {
+                invalid_param = true;
+            }
         }
         return true;
     }
@@ -3364,7 +3389,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
     options.push_back({ "*",           "-gr, --graph-reuse",            "enable graph reuse (default: %s)", params.graph_reuse ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-gr, --no-graph-reuse",      "disable graph reuse (default: %s)", !params.graph_reuse ? "enabled" : "disabled" });
-    options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
+    options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction, single pair c,t or cascade c:t,c:t,... (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",         "-muge,  --merge-up-gate-experts","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
@@ -4800,6 +4825,11 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.sched_max_copies  = params.sched_max_copies;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
+    cparams.ser_n_tiers       = params.ser_n_tiers;
+    for (int i = 0; i < GGML_MAX_SER_TIERS; ++i) {
+        cparams.ser_min_experts[i]   = params.ser_min_experts[i];
+        cparams.ser_thresh_experts[i] = params.ser_thresh_experts[i];
+    }
     cparams.only_active_experts = params.only_active_exps;
     cparams.prefetch_experts  = params.prefetch_experts;
     cparams.prefetch_experts_threads = params.prefetch_experts_threads;
@@ -6001,7 +6031,15 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");
-    fprintf(stream, "ser: %d,%g # default: -1,0\n", params.min_experts, params.thresh_experts);
+    if (params.ser_n_tiers >= 2) {
+        fprintf(stream, "ser: cascade");
+        for (int i = 0; i < params.ser_n_tiers; ++i) {
+            fprintf(stream, " %d:%g", params.ser_min_experts[i], (double) params.ser_thresh_experts[i]);
+        }
+        fprintf(stream, " # default: -1,0\n");
+    } else {
+        fprintf(stream, "ser: %d,%g # default: -1,0\n", params.min_experts, params.thresh_experts);
+    }
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 
     const std::vector<float> tensor_split_vector(params.tensor_split, params.tensor_split + llama_max_devices());
