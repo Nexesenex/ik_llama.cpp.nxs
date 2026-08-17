@@ -2589,6 +2589,13 @@ int main(int argc, char ** argv) {
             cur_v_hadamard   = this_v_hadamard;
         }
 
+        // -ppl-run reuse the same context, so reset the timing accumulators to report
+        // per-run numbers (like the hot-swap path does); the base run keeps its own
+        // full-context timings
+        if (irun > 0) {
+            llama_reset_timings(ctx);
+        }
+
         bool terminate_process = false;
         while (true) {
             struct results_perplexity results;
