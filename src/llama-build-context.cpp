@@ -1609,8 +1609,9 @@ llm_expert_gating_func_type   gating_op,
             // max*thresh, keeping at least min_experts per token; dropped experts are
             // marked with -1 and zeroed downstream (get_rows, mul_mat_id, add_id).
             // A cascade (>=2 tiers) is scanned per token from the most conservative
-            // (largest min) down: keep c_i only if at least c_i experts exceed max*t_i,
-            // else fall to the next tier; the last tier's c is the absolute floor.
+            // (largest min) down: tier (c,t) passes iff at least c experts exceed max*t,
+            // in which case ALL experts clearing max*t are kept (variable count, bounded
+            // by the top-k view); if no tier passes, the last tier's c is the floor.
             const bool ser = gating_op != LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT &&
                              ((lctx.cparams.min_experts > 0 && lctx.cparams.thresh_experts > 0) ||
                               lctx.cparams.ser_n_tiers >= 2);
