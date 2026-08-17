@@ -543,7 +543,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
 
         if (i == 0) {
             const float t_total = std::chrono::duration<float>(t_end - t_start).count();
-            fprintf(stderr, "%s: %.2f seconds per pass - ETA ", __func__, t_total);
+            fprintf(stderr, "%s: estimated %.2f seconds per pass - approximate ETA ", __func__, t_total);
             int total_seconds = (int)(t_total * n_chunk);
             if (total_seconds >= 60*60) {
                 fprintf(stderr, "%d hours ", total_seconds / (60*60));
@@ -739,7 +739,7 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
             llama_synchronize(ctx);
             const auto t_end = std::chrono::high_resolution_clock::now();
             const float t_total = std::chrono::duration<float>(t_end - t_start).count();
-            fprintf(stderr, "%s: %.2f seconds per pass - ETA ", __func__, t_total);
+            fprintf(stderr, "%s: estimated %.2f seconds per pass - approximate ETA ", __func__, t_total);
             int total_seconds = (int)(t_total*n_chunk/n_seq);
             if (total_seconds >= 60*60) {
                 fprintf(stderr, "%d hours ", total_seconds / (60*60));
@@ -1928,7 +1928,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
 
         if (i == 0) {
             const float t_total = std::chrono::duration<float>(t_end - t_start).count();
-            fprintf(stderr, "%s: %.2f seconds per pass - ETA ", __func__, t_total);
+            fprintf(stderr, "%s: estimated %.2f seconds per pass - approximate ETA ", __func__, t_total);
             int total_seconds = (int)(t_total * n_chunk);
             if (total_seconds >= 60*60) {
                 fprintf(stderr, "%d hours ", total_seconds / (60*60));
