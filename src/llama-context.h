@@ -391,6 +391,15 @@ struct llama_context {
     int32_t n_outputs   = 0; // number of actually-used outputs in the current ubatch or last logical batch
     int32_t n_outputs_embd = 0; // number of embedding rows produced for the current logical batch
 
+    // SER expert-usage accounting. When enabled, llama_decode_internal walks the
+    // computed graph for ARGSORT_THRESH nodes and counts, per token, how many of
+    // the selected top-k experts are actually kept (non-negative = not dropped).
+    // n_experts_used_total is the sum over counted tokens of kept experts;
+    // n_expert_slots_total is the number of counted (token, MoE layer) pairs.
+    bool     count_experts_used   = false;
+    uint64_t n_experts_used_total = 0;
+    uint64_t n_expert_slots_total = 0;
+
     bool logits_all = false;
 
     // embeddings output (2-dimensional array: [n_outputs][n_embd])

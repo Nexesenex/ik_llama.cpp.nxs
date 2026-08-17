@@ -2367,6 +2367,12 @@ static int resolve_ppl_mode(const ppl_run_spec & run, const gpt_params & params)
 
 // Runs the selected test type for one run.
 static void run_ppl_test(llama_context * ctx, const gpt_params & params, int mode, const int32_t n_ctx, results_perplexity & results) {
+    // SER expert-usage accounting: enabled only when smart expert reduction is
+    // active, so the counting hooks inside llama_decode() cost nothing otherwise.
+    const bool ser_active = params.min_experts > 0 && params.thresh_experts > 0;
+    llama_context_set_count_experts_used(ctx, ser_active);
+    llama_context_reset_experts_used(ctx);
+
     switch (mode) {
         case PPL_RUN_PPL:        results = perplexity(ctx, params, n_ctx); break;
         case PPL_RUN_HELLASWAG:  hellaswag_score(ctx, params); break;
@@ -2374,6 +2380,20 @@ static void run_ppl_test(llama_context * ctx, const gpt_params & params, int mod
         case PPL_RUN_MC:         multiple_choice_score(ctx, params); break;
         case PPL_RUN_KL:         kl_divergence(ctx, params); break;
         default: GGML_ASSERT(false); break;
+    }
+
+    if (ser_active) {
+        uint64_t n_experts_used  = 0;
+        uint64_t n_expert_slots  = 0;
+        llama_context_get_experts_used(ctx, &n_experts_used, &n_expert_slots);
+        if (n_expert_slots > 0) {
+            const double avg = (double) n_experts_used / (double) n_expert_slots;
+            fprintf(stderr, "%s: average experts used per token: %.4f (%llu experts over %llu token-layer slots, configured top-k %u)\n",
+                    __func__, avg, (unsigned long long) n_experts_used, (unsigned long long) n_expert_slots,
+                    llama_n_expert_used(llama_get_model(ctx)));
+        } else {
+            fprintf(stderr, "%s: no expert routing tensors evaluated (model has no MoE layers?)\n", __func__);
+        }
     }
 }
 

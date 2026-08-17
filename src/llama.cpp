@@ -7245,6 +7245,42 @@ static int llama_decode_internal(
         //fprintf(stderr, "%s: invoking llama_graph_compute\n", __func__);
         llama_graph_compute(lctx, gf, n_threads);
 
+        if (lctx.count_experts_used) {
+            // SER: count how many selected experts per token are actually kept.
+            // ARGSORT_THRESH nodes hold the full sorted [n_expert, n_tokens] int32
+            // result; entries whose position is dropped are -1. The consumer view
+            // keeps the first n_expert_used rows, so count non-negative entries
+            // among those first rows of each column.
+            const int64_t n_expert_used = lctx.model.hparams.n_expert_used;
+            for (int i = 0; i < gf->n_nodes; ++i) {
+                ggml_tensor * node = gf->nodes[i];
+                if (node->op != GGML_OP_ARGSORT_THRESH) {
+                    continue;
+                }
+                const int64_t n_expert = node->ne[0];
+                const int64_t n_tokens = node->ne[1];
+                const int64_t k = std::min<int64_t>(n_expert_used, n_expert);
+                if (k <= 0 || n_tokens <= 0) {
+                    continue;
+                }
+                std::vector<int32_t> ids(n_expert*n_tokens);
+                ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(lctx.sched, node);
+                GGML_ASSERT(backend != nullptr);
+                ggml_backend_tensor_get_async(backend, node, ids.data(), 0, ids.size()*sizeof(int32_t));
+                ggml_backend_synchronize(backend);
+                for (int64_t j = 0; j < n_tokens; ++j) {
+                    int64_t used = 0;
+                    for (int64_t e = 0; e < k; ++e) {
+                        if (ids[e + j*n_expert] >= 0) {
+                            used++;
+                        }
+                    }
+                    lctx.n_experts_used_total += used;
+                }
+                lctx.n_expert_slots_total += n_tokens;
+            }
+        }
+
         if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 &&
             lctx.cparams.mtp_op_type == MTP_OP_NONE &&
             lctx.kv_self.ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_PER_STEP &&
@@ -9951,6 +9987,24 @@ bool llama_model_set_n_expert_used(struct llama_model * model, uint32_t n_expert
     }
     model->hparams.n_expert_used = n_expert_used;
     return true;
+}
+
+void llama_context_set_count_experts_used(struct llama_context * ctx, bool enable) {
+    ctx->count_experts_used = enable;
+    if (!enable) {
+        ctx->n_experts_used_total = 0;
+        ctx->n_expert_slots_total = 0;
+    }
+}
+
+void llama_context_reset_experts_used(struct llama_context * ctx) {
+    ctx->n_experts_used_total = 0;
+    ctx->n_expert_slots_total = 0;
+}
+
+void llama_context_get_experts_used(const struct llama_context * ctx, uint64_t * n_experts_used, uint64_t * n_expert_slots) {
+    *n_experts_used  = ctx->n_experts_used_total;
+    *n_expert_slots  = ctx->n_expert_slots_total;
 }
 
 float llama_rope_freq_scale_train(const struct llama_model * model) {
