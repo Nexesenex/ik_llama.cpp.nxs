@@ -669,6 +669,21 @@ extern "C" {
     // layers or the requested count is outside the valid range [1, n_expert].
     LLAMA_API bool     llama_model_set_n_expert_used(struct llama_model * model, uint32_t n_expert_used);
 
+    // Enable or disable SER expert-usage accounting on a context.
+    // When enabled, each llama_decode() counts, per token, how many of the
+    // selected top-k experts are actually kept (smart expert reduction), and
+    // accumulates the totals inside the context.
+    LLAMA_API void llama_context_set_count_experts_used(struct llama_context * ctx, bool enable);
+
+    // Reset the SER expert-usage counters accumulated on the context.
+    LLAMA_API void llama_context_reset_experts_used(struct llama_context * ctx);
+
+    // Query the SER expert-usage counters accumulated on the context.
+    // Returns the total number of kept experts across all counted tokens and
+    // the total number of counted (token, MoE layer) pairs. The average number
+    // of experts used per token is n_experts_used / n_expert_slots.
+    LLAMA_API void llama_context_get_experts_used(const struct llama_context * ctx, uint64_t * n_experts_used, uint64_t * n_expert_slots);
+
     // Compat
     LLAMA_API bool        llama_vocab_get_add_bos(const struct llama_vocab * vocab);
     LLAMA_API bool        llama_vocab_get_add_eos(const struct llama_vocab * vocab);
