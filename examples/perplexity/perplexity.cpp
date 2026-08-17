@@ -3041,7 +3041,11 @@ int main(int argc, char ** argv) {
             run_ppl_test(ctx, params, this_mode, this_n_ctx, results);
 
             tinylog_print_timings(ctx);
-            tinylog_printf("CLI used : (%s)\n", get_cli_cmd(g_argc, g_argv).c_str());
+            // the base run is the only one that shows the CLI command line; the
+            // -ppl-run overrides re-use the same CLI, so a per-run repeat is noise
+            if (irun == 0) {
+                tinylog_printf("CLI used : (%s)\n", get_cli_cmd(g_argc, g_argv).c_str());
+            }
             write_logfile(ctx, params, model, results);
 
             if (hotswap_signal_mode) {
