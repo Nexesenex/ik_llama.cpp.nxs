@@ -788,7 +788,6 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     if (nll2 > 0) {
         nll2 = sqrt(nll2/(count-1));
         tinylog_printf("Final estimate: PPL over %d chunks for n_ctx=%d = %.4lf +/- %.5lf\n", n_chunk, n_ctx, ppl, nll2*ppl);
-        tinylog_printf("CLI used : (%s)\n", get_cli_cmd(g_argc, g_argv).c_str());
     } else {
         tinylog_printf("Unexpected negative standard deviation of log(prob)\n");
     }
@@ -2717,6 +2716,7 @@ int main(int argc, char ** argv) {
             run_ppl_test(ctx, params, this_mode, this_n_ctx, results);
 
             tinylog_print_timings(ctx);
+            tinylog_printf("CLI used : (%s)\n", get_cli_cmd(g_argc, g_argv).c_str());
             write_logfile(ctx, params, model, results);
 
             if (hotswap_signal_mode) {
