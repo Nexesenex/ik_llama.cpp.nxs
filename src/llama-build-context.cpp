@@ -1617,12 +1617,21 @@ llm_expert_gating_func_type   gating_op,
         } else {
             // smart expert reduction (SER): drop experts whose routing weight is below
             // max*thresh, keeping at least min_experts per token; dropped experts are
-            // marked with -1 and zeroed downstream (get_rows, mul_mat_id, add_id)
-            const bool ser = lctx.cparams.min_experts > 0 && lctx.cparams.thresh_experts > 0 &&
-                             gating_op != LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT;
+            // marked with -1 and zeroed downstream (get_rows, mul_mat_id, add_id).
+            // A cascade (>=2 tiers) is scanned per token from the most conservative
+            // (largest min) down: keep c_i only if at least c_i experts exceed max*t_i,
+            // else fall to the next tier; the last tier's c is the absolute floor.
+            const bool ser = gating_op != LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT &&
+                             ((lctx.cparams.min_experts > 0 && lctx.cparams.thresh_experts > 0) ||
+                              lctx.cparams.ser_n_tiers >= 2);
             if (ser) {
-                selected_experts = ggml_top_k_thresh(ctx, selection_probs, n_expert_used,
-                        lctx.cparams.min_experts, lctx.cparams.thresh_experts); // [n_expert_used, n_tokens]
+                if (lctx.cparams.ser_n_tiers >= 2) {
+                    selected_experts = ggml_top_k_thresh_cascade(ctx, selection_probs, n_expert_used,
+                            lctx.cparams.ser_n_tiers, lctx.cparams.ser_min_experts, lctx.cparams.ser_thresh_experts); // [n_expert_used, n_tokens]
+                } else {
+                    selected_experts = ggml_top_k_thresh(ctx, selection_probs, n_expert_used,
+                            lctx.cparams.min_experts, lctx.cparams.thresh_experts); // [n_expert_used, n_tokens]
+                }
             } else {
                 selected_experts = ggml_top_k(ctx, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
             }
