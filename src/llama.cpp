@@ -9794,6 +9794,23 @@ void llama_context_get_experts_used(const struct llama_context * ctx, uint64_t *
     *n_expert_slots  = ctx->n_expert_slots_total;
 }
 
+void llama_context_set_ser(struct llama_context * ctx, int min_experts, float thresh_experts,
+        int ser_n_tiers, const int * ser_min_experts, const float * ser_thresh_experts) {
+    if (ser_n_tiers < 0 || ser_n_tiers > GGML_MAX_SER_TIERS) {
+        return;
+    }
+    ctx->cparams.min_experts   = min_experts;
+    ctx->cparams.thresh_experts = thresh_experts;
+    ctx->cparams.ser_n_tiers    = ser_n_tiers;
+    for (int i = 0; i < ser_n_tiers; ++i) {
+        ctx->cparams.ser_min_experts[i]    = ser_min_experts[i];
+        ctx->cparams.ser_thresh_experts[i] = ser_thresh_experts[i];
+    }
+    // the SER settings are baked into the graph's op_params at build time, so drop
+    // any cached graph to force a rebuild with the new settings on the next decode
+    ctx->reset_scheduler();
+}
+
 float llama_rope_freq_scale_train(const struct llama_model * model) {
     return model->hparams.rope_freq_scale_train;
 }

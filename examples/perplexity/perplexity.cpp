@@ -2197,10 +2197,77 @@ struct ppl_run_spec {
     int32_t n_v_first = -2;     // number of first V layers with type_v_first, -2 = keep the previous run's value
     std::string type_v_last;    // KV cache data type for the last n_v_last layers of V
     int32_t n_v_last = -2;      // number of last V layers with type_v_last, -2 = keep the previous run's value
+    bool ser_set = false;       // true when an explicit ser= override is present
+    int   ser_min_experts   = -1; // SER single-pair min experts (legacy)
+    float ser_thresh_experts = 0; // SER single-pair threshold (legacy)
+    int   ser_n_tiers       = 0;  // SER cascade tier count, 0 = single pair
+    int   ser_min_experts_tiers[GGML_MAX_SER_TIERS]   = { 0 };
+    float ser_thresh_experts_tiers[GGML_MAX_SER_TIERS] = { 0.0f };
 };
 
+// Parses a ser= override value: "off" (or "0") disables SER, "c,t" is the legacy
+// single pair, "c:t,c:t,..." is the cascade (>= 2 tiers). Fills the run spec.
+static bool parse_ser_override(const std::string & value, ppl_run_spec & run) {
+    if (value == "off" || value == "none" || value == "0") {
+        run.ser_set = true;
+        run.ser_min_experts   = -1;
+        run.ser_thresh_experts = 0;
+        run.ser_n_tiers = 0;
+        return true;
+    }
+    if (value.find(':') != std::string::npos) {
+        const auto parts = string_split<std::string>(value, ',');
+        if (parts.size() < 2 || parts.size() > GGML_MAX_SER_TIERS) {
+            fprintf(stderr, "%s: --ppl-run-params ser: cascade needs 2..%d tiers, got '%s'\n", __func__, GGML_MAX_SER_TIERS, value.c_str());
+            return false;
+        }
+        run.ser_set = true;
+        run.ser_n_tiers = (int) parts.size();
+        run.ser_min_experts   = -1;
+        run.ser_thresh_experts = 0;
+        for (size_t k = 0; k < parts.size(); ++k) {
+            const auto tier = string_split<std::string>(parts[k], ':');
+            if (tier.size() != 2) {
+                fprintf(stderr, "%s: --ppl-run-params ser: invalid tier '%s' (expected c:t)\n", __func__, parts[k].c_str());
+                return false;
+            }
+            try {
+                run.ser_min_experts_tiers[k]   = std::stoi(tier[0]);
+                run.ser_thresh_experts_tiers[k] = std::stof(tier[1]);
+            } catch (...) {
+                fprintf(stderr, "%s: --ppl-run-params ser: invalid tier '%s' (expected c:t)\n", __func__, parts[k].c_str());
+                return false;
+            }
+            if (run.ser_min_experts_tiers[k] <= 0 || run.ser_thresh_experts_tiers[k] <= 0) {
+                fprintf(stderr, "%s: --ppl-run-params ser: tier c and t must be > 0, got '%s'\n", __func__, parts[k].c_str());
+                return false;
+            }
+        }
+        return true;
+    }
+    const auto values = string_split<std::string>(value, ',');
+    if (values.size() != 2) {
+        fprintf(stderr, "%s: --ppl-run-params ser: expected 'c,t' or 'c:t,c:t,...' or 'off', got '%s'\n", __func__, value.c_str());
+        return false;
+    }
+    try {
+        run.ser_min_experts   = std::stoi(values[0]);
+        run.ser_thresh_experts = std::stof(values[1]);
+    } catch (...) {
+        fprintf(stderr, "%s: --ppl-run-params ser: invalid pair '%s' (expected c,t)\n", __func__, value.c_str());
+        return false;
+    }
+    if (run.ser_min_experts <= 0 || run.ser_thresh_experts <= 0) {
+        fprintf(stderr, "%s: --ppl-run-params ser: c and t must be > 0, got '%s'\n", __func__, value.c_str());
+        return false;
+    }
+    run.ser_set = true;
+    run.ser_n_tiers = 0;
+    return true;
+}
+
 // Parses a "key=value,key=value" run spec. Supported keys: ctx, experts, file, mode,
-// k_cache, v_cache, k_hadamard, v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last.
+// k_cache, v_cache, k_hadamard, v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last, ser.
 static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
     // join continuation parts into the previous entry so that values containing a
     // comma (e.g. "ctk_first=q8_0,16") survive the comma split of the spec
@@ -2271,6 +2338,12 @@ static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
                 return false;
             }
             run.cache_type_v = value;
+            continue;
+        }
+        if (key == "ser" || key == "ser_experts") {
+            if (!parse_ser_override(value, run)) {
+                return false;
+            }
             continue;
         }
         if (key == "k_hadamard" || key == "khad") {
@@ -2347,7 +2420,7 @@ static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
             }
             run.n_expert_used = val;
         } else {
-            fprintf(stderr, "%s: unknown --ppl-run-params key '%s' (supported: ctx, experts, file, mode, k_cache, v_cache, k_hadamard, v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last)\n", __func__, key.c_str());
+            fprintf(stderr, "%s: unknown --ppl-run-params key '%s' (supported: ctx, experts, file, mode, k_cache, v_cache, k_hadamard, v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last, ser)\n", __func__, key.c_str());
             return false;
         }
     }
@@ -2578,6 +2651,17 @@ int main(int argc, char ** argv) {
     int32_t     cur_n_v_first    = params.n_v_first;
     int32_t     cur_n_v_last     = params.n_v_last;
 
+    // smart expert reduction settings used by the current context
+    int   cur_ser_min_experts   = params.min_experts;
+    float cur_ser_thresh_experts = params.thresh_experts;
+    int   cur_ser_n_tiers       = params.ser_n_tiers;
+    int   cur_ser_min_experts_tiers[GGML_MAX_SER_TIERS];
+    float cur_ser_thresh_experts_tiers[GGML_MAX_SER_TIERS];
+    for (int i = 0; i < GGML_MAX_SER_TIERS; ++i) {
+        cur_ser_min_experts_tiers[i]    = params.ser_min_experts[i];
+        cur_ser_thresh_experts_tiers[i] = params.ser_thresh_experts[i];
+    }
+
     // base prompt (from -f/-bf/--prompt), restored for runs that don't specify a file
     const std::string base_prompt       = params.prompt;
     const std::string base_prompt_file  = params.prompt_file;
@@ -2636,6 +2720,55 @@ int main(int argc, char ** argv) {
             }
             cur_n_expert_used = run.n_expert_used;
             fprintf(stderr, "%s: run %zu/%zu: expert_used_count set to %d\n", __func__, irun + 1, n_runs, run.n_expert_used);
+        }
+
+        // override the smart expert reduction settings for this run; the context stays
+        // loaded, llama_context_set_ser() updates cparams and invalidates the cached graph
+        if (run.ser_set) {
+            bool changed = run.ser_min_experts != cur_ser_min_experts ||
+                           run.ser_thresh_experts != cur_ser_thresh_experts ||
+                           run.ser_n_tiers != cur_ser_n_tiers;
+            if (!changed && run.ser_n_tiers >= 2) {
+                for (int i = 0; i < run.ser_n_tiers; ++i) {
+                    if (run.ser_min_experts_tiers[i]    != cur_ser_min_experts_tiers[i] ||
+                        run.ser_thresh_experts_tiers[i] != cur_ser_thresh_experts_tiers[i]) {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            if (changed) {
+                llama_context_set_ser(ctx, run.ser_min_experts, run.ser_thresh_experts,
+                        run.ser_n_tiers, run.ser_min_experts_tiers, run.ser_thresh_experts_tiers);
+                cur_ser_min_experts    = run.ser_min_experts;
+                cur_ser_thresh_experts = run.ser_thresh_experts;
+                cur_ser_n_tiers        = run.ser_n_tiers;
+                for (int i = 0; i < GGML_MAX_SER_TIERS; ++i) {
+                    cur_ser_min_experts_tiers[i]    = run.ser_min_experts_tiers[i];
+                    cur_ser_thresh_experts_tiers[i] = run.ser_thresh_experts_tiers[i];
+                }
+            }
+            // mirror the effective SER state into params so run_ppl_test() accounts
+            // experts correctly and a recreated context picks up the override
+            params.min_experts   = cur_ser_min_experts;
+            params.thresh_experts = cur_ser_thresh_experts;
+            params.ser_n_tiers   = cur_ser_n_tiers;
+            for (int i = 0; i < GGML_MAX_SER_TIERS; ++i) {
+                params.ser_min_experts[i]    = cur_ser_min_experts_tiers[i];
+                params.ser_thresh_experts[i] = cur_ser_thresh_experts_tiers[i];
+            }
+            if (run.ser_n_tiers >= 2) {
+                std::string ser = "cascade:";
+                for (int i = 0; i < run.ser_n_tiers; ++i) {
+                    ser += " " + std::to_string(run.ser_min_experts_tiers[i]) + ":" + std::to_string(run.ser_thresh_experts_tiers[i]);
+                }
+                fprintf(stderr, "%s: run %zu/%zu: ser set to %s\n", __func__, irun + 1, n_runs, ser.c_str());
+            } else if (run.ser_min_experts > 0) {
+                fprintf(stderr, "%s: run %zu/%zu: ser set to %d,%g\n", __func__, irun + 1, n_runs,
+                        run.ser_min_experts, (double) run.ser_thresh_experts);
+            } else {
+                fprintf(stderr, "%s: run %zu/%zu: ser disabled\n", __func__, irun + 1, n_runs);
+            }
         }
 
         // the base context size this run is computed with

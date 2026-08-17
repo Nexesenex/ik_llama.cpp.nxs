@@ -684,6 +684,21 @@ extern "C" {
     // of experts used per token is n_experts_used / n_expert_slots.
     LLAMA_API void llama_context_get_experts_used(const struct llama_context * ctx, uint64_t * n_experts_used, uint64_t * n_expert_slots);
 
+    // Update the smart expert reduction (SER) settings of an already created
+    // context, without recreating it. The graph builder picks the new values up
+    // on the next decode (the cached reusable graph, if any, is invalidated).
+    // Legacy single-pair mode uses min_experts/thresh_experts (ser_n_tiers == 0);
+    // cascade mode uses ser_n_tiers >= 2 with the per-tier arrays. Pass
+    // ser_n_tiers == 0 and min_experts <= 0 to disable SER. This allows e.g.
+    // comparing different -ser settings on an already loaded model.
+    LLAMA_API void llama_context_set_ser(
+            struct llama_context * ctx,
+            int                   min_experts,
+            float                 thresh_experts,
+            int                   ser_n_tiers,
+            const int           * ser_min_experts,
+            const float         * ser_thresh_experts);
+
     // Compat
     LLAMA_API bool        llama_vocab_get_add_bos(const struct llama_vocab * vocab);
     LLAMA_API bool        llama_vocab_get_add_eos(const struct llama_vocab * vocab);
