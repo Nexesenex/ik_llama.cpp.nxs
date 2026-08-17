@@ -75,6 +75,9 @@ struct llama_cparams {
     int  sched_max_copies;
     int  min_experts;
     float thresh_experts;
+    int  ser_n_tiers;                     // >=2 = multi-tier SER cascade
+    int  ser_min_experts[GGML_MAX_SER_TIERS];
+    float ser_thresh_experts[GGML_MAX_SER_TIERS];
     bool mtp;
     int  worst_graph_tokens;
 

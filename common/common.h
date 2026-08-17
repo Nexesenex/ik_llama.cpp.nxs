@@ -490,6 +490,12 @@ struct gpt_params {
     int  dsa_top_k         = -1;    // DSA top-k override (<0 => use the model's configured indexer_top_k)
     int  min_experts       = -1;
     float thresh_experts   = 0;
+    // SER cascade tiers: >=2 (c, t) pairs, scanned per token from the most
+    // conservative (largest c) down; the last c is the absolute floor.
+    // ser_n_tiers == 0 => single-pair mode via min_experts/thresh_experts.
+    int   ser_n_tiers      = 0;
+    int   ser_min_experts[GGML_MAX_SER_TIERS]  = { 0 };
+    float ser_thresh_experts[GGML_MAX_SER_TIERS] = { 0.0f };
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool ignore_eos        = false; // ignore generated EOS tokens

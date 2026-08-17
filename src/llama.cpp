@@ -8383,6 +8383,9 @@ struct llama_context_params llama_context_default_params() {
         /*.dsa_top_k                   =*/ -1,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
+        /*.ser_n_tiers                 =*/ 0,
+        /*.ser_min_experts             =*/ { 0 },
+        /*.ser_thresh_experts          =*/ { 0.0f },
         /*.only_active_experts         =*/ false,
         /*.prefetch_experts            =*/ false,
         /*.prefetch_experts_threads    =*/ 0,
@@ -9095,6 +9098,11 @@ struct llama_context * llama_init_from_model(
     cparams.sched_max_copies = params.sched_max_copies;
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
+    cparams.ser_n_tiers      = params.ser_n_tiers;
+    for (int i = 0; i < GGML_MAX_SER_TIERS; ++i) {
+        cparams.ser_min_experts[i]   = params.ser_min_experts[i];
+        cparams.ser_thresh_experts[i] = params.ser_thresh_experts[i];
+    }
     cparams.cuda_params      = params.cuda_params;
     cparams.mtp              = params.mtp;
     cparams.worst_graph_tokens = params.worst_case_tokens;
@@ -9244,7 +9252,15 @@ struct llama_context * llama_init_from_model(
     //LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
     LLAMA_LOG_INFO("%s: reduce_type   = %s\n",     __func__, ggml_type_name(cparams.reduce_type));
     LLAMA_LOG_INFO("%s: sched_async   = %d\n",     __func__, cparams.scheduler_async);
-    LLAMA_LOG_INFO("%s: ser           = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
+    if (cparams.ser_n_tiers >= 2) {
+        std::string ser = "cascade:";
+        for (int i = 0; i < cparams.ser_n_tiers; ++i) {
+            ser += " " + std::to_string(cparams.ser_min_experts[i]) + ":" + std::to_string(cparams.ser_thresh_experts[i]);
+        }
+        LLAMA_LOG_INFO("%s: ser           = %s\n", __func__, ser.c_str());
+    } else {
+        LLAMA_LOG_INFO("%s: ser           = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
+    }
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",     __func__, cparams.rope_freq_scale);
     if (cparams.cuda_params) {
