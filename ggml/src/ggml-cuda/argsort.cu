@@ -759,6 +759,98 @@ void ggml_cuda_op_grouped_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 
 }
 
+// apply SER thresholding on top of an already-selected top-k set of expert ids
+// (e.g. the output of ggml_grouped_topk). src0 = ids [n_expert_used, n_tokens] I32,
+// src1 = routing weights [n_expert, n_tokens] F32, dst = ids with dropped experts -1.
+static __global__ void k_ser_mask(
+        const int32_t * __restrict__ ids,   // [n_expert_used, n_tokens]
+        const float   * __restrict__ wts,   // [n_expert, n_tokens]
+        int32_t       * __restrict__ dst,   // [n_expert_used, n_tokens]
+        const int n_expert_used,
+        const int n_expert,
+        const int n_tiers,
+        const store_ser ser) {
+
+    const int token = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n_tokens = gridDim.x * blockDim.x;
+    if (token >= n_tokens) {
+        return;
+    }
+
+    const int32_t * ids_row = ids + token*n_expert_used;
+    const float   * wts_row = wts + token*n_expert;
+    int32_t       * dst_row = dst + token*n_expert_used;
+
+    // max routing weight among the selected experts (the grouped selection is
+    // already sorted descending; both the ids and their weights are unmodified
+    // on every backend, unlike the full weight row which the CUDA grouped_topk
+    // mutates in place by masking discarded groups to -INFINITY)
+    float max_value = -INFINITY;
+    for (int j = 0; j < n_expert_used; ++j) {
+        max_value = fmaxf(max_value, wts_row[ids_row[j]]);
+    }
+
+    if (n_tiers == 1) {
+        // single tier: keep the first min_entries always, drop the rest below max*thresh
+        for (int j = 0; j < n_expert_used; ++j) {
+            const int32_t id = ids_row[j];
+            dst_row[j] = (j >= ser.min_experts[0] && wts_row[id] < max_value*ser.thresh_experts[0]) ? -1 : id;
+        }
+    } else {
+        // cascade: same semantics as argsort_thresh over the selected set (which is
+        // sorted by weight descending)
+        int keep = ser.min_experts[n_tiers-1];
+        for (int ti = 0; ti < n_tiers; ++ti) {
+            int cnt = 0;
+            for (int j = 0; j < n_expert_used && wts_row[ids_row[j]] >= max_value*ser.thresh_experts[ti]; ++j) {
+                cnt++;
+            }
+            if (cnt >= ser.min_experts[ti]) {
+                keep = cnt;
+                break;
+            }
+        }
+        for (int j = 0; j < n_expert_used; ++j) {
+            dst_row[j] = j < keep ? ids_row[j] : -1;
+        }
+    }
+}
+
+void ggml_cuda_op_ser_mask(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0]; // ids
+    const ggml_tensor * src1 = dst->src[1]; // weights
+
+    GGML_ASSERT(src0->type == GGML_TYPE_I32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_I32);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(src1));
+
+    const int n_expert_used = src0->ne[0];
+    const int n_expert      = src1->ne[0];
+    const int n_tokens      = src0->ne[1];
+    GGML_ASSERT(n_expert_used <= n_expert);
+    GGML_ASSERT(src1->ne[1] == n_tokens);
+
+    const int n_tiers = dst->op_params[0];
+    GGML_ASSERT(n_tiers >= 1 && n_tiers <= GGML_MAX_SER_TIERS);
+
+    int     min_experts[GGML_MAX_SER_TIERS];
+    float   thresh_experts[GGML_MAX_SER_TIERS];
+    for (int i = 0; i < n_tiers; ++i) {
+        min_experts[i]    = dst->op_params[1 + 2*i];
+        memcpy(&thresh_experts[i], dst->op_params + 2 + 2*i, sizeof(float));
+    }
+    const store_ser ser(n_tiers, min_experts, thresh_experts);
+
+    const dim3 block_dims(256);
+    const dim3 block_nums((n_tokens + 255)/256);
+
+    k_ser_mask<<<block_nums, block_dims, 0, ctx.stream()>>>(
+            (const int32_t *) src0->data, (const float *) src1->data, (int32_t *) dst->data,
+            n_expert_used, n_expert, n_tiers, ser);
+}
+
 void cuda_bailingmoev2_experts(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * topk) {
     auto topk_src = topk->src[0];
     auto probs    = topk_src->src[0]->src[0];
