@@ -4292,6 +4292,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_GROUPED_TOPK:
             ggml_cuda_op_grouped_topk(ctx, dst);
             break;
+        case GGML_OP_SER_MASK:
+            ggml_cuda_op_ser_mask(ctx, dst);
+            break;
         case GGML_OP_SSM_CONV:
             ggml_cuda_op_ssm_conv(ctx, dst);
             break;
@@ -5191,6 +5194,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_POOL_2D:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_GROUPED_TOPK:
+        case GGML_OP_SER_MASK:
         case GGML_OP_ACC:
         case GGML_OP_GROUP_NORM:
         case GGML_OP_UPSCALE:
