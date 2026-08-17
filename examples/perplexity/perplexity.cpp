@@ -2184,6 +2184,7 @@ struct ppl_run_spec {
     int32_t n_ctx         = -1; // context size, -1 = keep the previous run's value
     int32_t n_expert_used = -1; // expert_used_count, -1 = keep the previous run's value
     std::string file;           // data file for this run, empty = keep the base prompt
+    bool file_is_binary  = false; // read the data file in binary mode (from -bf/--binary-file)
     int mode = PPL_RUN_DEFAULT; // test type for this run
     std::string cache_type_k;   // KV cache data type for K, empty = keep the previous run's value
     std::string cache_type_v;   // KV cache data type for V, empty = keep the previous run's value
@@ -2266,9 +2267,180 @@ static bool parse_ser_override(const std::string & value, ppl_run_spec & run) {
     return true;
 }
 
+// Parses a --ppl-run-params value given as a copy-paste of the actual llama.cpp
+// CLI flags, e.g. "-ser 7:0.03,6:0.06,5:0.1" or "-c 4096 -ctk q8_0 -khad" or
+// "-bf arc.bin". Flags that take a value consume the next whitespace-separated
+// token; the boolean flags (-khad, -vhad, --hellaswag, ...) take none. Supports
+// the same overrides as the legacy "key=value" list: ctx, experts (via -okv
+// <arch>.expert_used_count=int:N), file, mode, k_cache, v_cache, k_hadamard,
+// v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last, ser.
+static bool parse_ppl_run_spec_cli(const std::string & spec, ppl_run_spec & run) {
+    const auto valid_cache_type = [](const std::string & s) {
+        return s == "f32" || s == "f16" || s == "bf16" || s == "q8_0" || s == "q4_0" ||
+               s == "q4_1" || s == "iq4_nl" || s == "q5_0" || s == "q5_1" || s == "q6_0" ||
+               s == "q6_1" || s == "q8_KV";
+    };
+    const auto parse_type_n = [&](const std::string & flag, const std::string & value, std::string & type, int32_t & n) {
+        const auto p = string_split<std::string>(value, ',');
+        if (p.size() != 2) {
+            fprintf(stderr, "%s: --ppl-run-params %s must be in the form TYPE,N, got '%s'\n", __func__, flag.c_str(), value.c_str());
+            return false;
+        }
+        if (!valid_cache_type(p[0])) {
+            fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, flag.c_str(), p[0].c_str());
+            return false;
+        }
+        try {
+            n = std::stoi(p[1]);
+        } catch (...) {
+            fprintf(stderr, "%s: --ppl-run-params %s: invalid layer count '%s'\n", __func__, flag.c_str(), p[1].c_str());
+            return false;
+        }
+        type = p[0];
+        return true;
+    };
+
+    // split on whitespace, skipping empty tokens (double spaces, tabs)
+    std::vector<std::string> tokens;
+    {
+        const auto raw = string_split<std::string>(spec, ' ');
+        for (const auto & t : raw) {
+            if (!t.empty()) {
+                tokens.push_back(t);
+            }
+        }
+    }
+
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        const std::string & arg = tokens[i];
+        auto need_value = [&](std::string & out) -> bool {
+            if (i + 1 >= tokens.size()) {
+                fprintf(stderr, "%s: --ppl-run-params: missing value for '%s'\n", __func__, arg.c_str());
+                return false;
+            }
+            out = tokens[++i];
+            return true;
+        };
+
+        std::string value;
+        if (arg == "-c" || arg == "--ctx-size") {
+            if (!need_value(value)) return false;
+            try {
+                run.n_ctx = std::stoi(value);
+            } catch (...) {
+                fprintf(stderr, "%s: --ppl-run-params -c: invalid context size '%s'\n", __func__, value.c_str());
+                return false;
+            }
+            if (run.n_ctx <= 0) {
+                fprintf(stderr, "%s: --ppl-run-params -c: must be > 0, got '%s'\n", __func__, value.c_str());
+                return false;
+            }
+        } else if (arg == "-f" || arg == "--file") {
+            if (!need_value(value)) return false;
+            std::ifstream file(value);
+            if (!file) {
+                fprintf(stderr, "%s: --ppl-run-params failed to open file '%s'\n", __func__, value.c_str());
+                return false;
+            }
+            run.file = value;
+            run.file_is_binary = false;
+        } else if (arg == "-bf" || arg == "--binary-file") {
+            if (!need_value(value)) return false;
+            std::ifstream file(value, std::ios::binary);
+            if (!file) {
+                fprintf(stderr, "%s: --ppl-run-params failed to open binary file '%s'\n", __func__, value.c_str());
+                return false;
+            }
+            run.file = value;
+            run.file_is_binary = true;
+        } else if (arg == "-ctk" || arg == "--cache-type-k") {
+            if (!need_value(value)) return false;
+            if (!valid_cache_type(value)) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+            run.cache_type_k = value;
+        } else if (arg == "-ctv" || arg == "--cache-type-v") {
+            if (!need_value(value)) return false;
+            if (!valid_cache_type(value)) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid KV cache type '%s'\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+            run.cache_type_v = value;
+        } else if (arg == "-khad" || arg == "--k-cache-hadamard") {
+            run.k_hadamard = 1;
+        } else if (arg == "-vhad" || arg == "--v-cache-hadamard") {
+            run.v_hadamard = 1;
+        } else if (arg == "-ctk-first" || arg == "--cache-type-k-first") {
+            if (!need_value(value)) return false;
+            if (!parse_type_n(arg, value, run.type_k_first, run.n_k_first)) return false;
+        } else if (arg == "-ctk-last" || arg == "--cache-type-k-last") {
+            if (!need_value(value)) return false;
+            if (!parse_type_n(arg, value, run.type_k_last, run.n_k_last)) return false;
+        } else if (arg == "-ctv-first" || arg == "--cache-type-v-first") {
+            if (!need_value(value)) return false;
+            if (!parse_type_n(arg, value, run.type_v_first, run.n_v_first)) return false;
+        } else if (arg == "-ctv-last" || arg == "--cache-type-v-last") {
+            if (!need_value(value)) return false;
+            if (!parse_type_n(arg, value, run.type_v_last, run.n_v_last)) return false;
+        } else if (arg == "-ser" || arg == "--smart-expert-reduction") {
+            if (!need_value(value)) return false;
+            if (!parse_ser_override(value, run)) return false;
+        } else if (arg == "--hellaswag") {
+            run.mode = PPL_RUN_HELLASWAG;
+        } else if (arg == "--winogrande") {
+            run.mode = PPL_RUN_WINOGRANDE;
+        } else if (arg == "--multiple-choice") {
+            run.mode = PPL_RUN_MC;
+        } else if (arg == "--kl-divergence") {
+            run.mode = PPL_RUN_KL;
+        } else if (arg == "-okv" || arg == "--override-kv") {
+            // only the expert_used_count override is supported here
+            if (!need_value(value)) return false;
+            const auto eq = value.find('=');
+            if (eq == std::string::npos) {
+                fprintf(stderr, "%s: --ppl-run-params %s: malformed override '%s' (expected <arch>.expert_used_count=int:N)\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+            const std::string key = value.substr(0, eq);
+            const std::string val = value.substr(eq + 1);
+            const std::string suffix = "expert_used_count";
+            const bool is_exp = key.size() >= suffix.size() + 1 &&
+                key.compare(key.size() - suffix.size(), suffix.size(), suffix) == 0;
+            if (!is_exp || val.rfind("int:", 0) != 0) {
+                fprintf(stderr, "%s: --ppl-run-params %s: only '<arch>.expert_used_count=int:N' is supported, got '%s'\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+            try {
+                run.n_expert_used = std::stoi(val.substr(4));
+            } catch (...) {
+                fprintf(stderr, "%s: --ppl-run-params %s: invalid expert_used_count '%s'\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+            if (run.n_expert_used <= 0) {
+                fprintf(stderr, "%s: --ppl-run-params %s: expert_used_count must be > 0, got '%s'\n", __func__, arg.c_str(), value.c_str());
+                return false;
+            }
+        } else {
+            fprintf(stderr, "%s: unknown --ppl-run-params flag '%s' (supported: -c/--ctx-size, -f/--file, -bf/--binary-file, -ctk/--cache-type-k, -ctv/--cache-type-v, -khad/--k-cache-hadamard, -vhad/--v-cache-hadamard, -ctk-first, -ctk-last, -ctv-first, -ctv-last, -ser/--smart-expert-reduction, --hellaswag, --winogrande, --multiple-choice, --kl-divergence, -okv/--override-kv <arch>.expert_used_count=int:N)\n", __func__, arg.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+
 // Parses a "key=value,key=value" run spec. Supported keys: ctx, experts, file, mode,
 // k_cache, v_cache, k_hadamard, v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last, ser.
 static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
+    // a spec that starts with a dash is a copy-paste of the actual llama.cpp CLI
+    // flags (e.g. "-ser 7:0.03,6:0.06,5:0.1"); otherwise it's the legacy
+    // "key=value,key=value" list
+    {
+        const size_t first = spec.find_first_not_of(" \t");
+        if (first != std::string::npos && spec[first] == '-') {
+            return parse_ppl_run_spec_cli(spec, run);
+        }
+    }
     // join continuation parts into the previous entry so that values containing a
     // comma (e.g. "ctk_first=q8_0,16") survive the comma split of the spec
     std::vector<std::string> entries;
@@ -2692,7 +2864,7 @@ int main(int argc, char ** argv) {
         params.prompt_file      = base_prompt_file;
         params.prompt_is_binary = base_prompt_binary;
         if (!run.file.empty()) {
-            const bool is_binary = this_mode == PPL_RUN_MC;
+            const bool is_binary = run.file_is_binary || this_mode == PPL_RUN_MC;
             std::ifstream file(run.file.c_str(), is_binary ? std::ios::binary : std::ios::in);
             if (!file) {
                 fprintf(stderr, "%s: error: run %zu/%zu: failed to open file '%s'\n",
