@@ -10317,12 +10317,29 @@ static int llama_count_experts_eval_cb(struct ggml_tensor * t, bool ask, void * 
         return false;
     }
 
-    if (t->op != GGML_OP_ARGSORT_THRESH) {
+    if (t->op != GGML_OP_ARGSORT_THRESH && t->op != GGML_OP_SER_MASK && t->op != GGML_OP_GROUPED_TOPK) {
         // delegate to the previous callback, if any (e.g. dflash capture)
         if (ctx->prev_cb_eval != nullptr) {
             return ctx->prev_cb_eval(t, ask, ctx->prev_cb_eval_user_data);
         }
         return ask ? 0 : 1;
+    }
+
+    if (t->op == GGML_OP_GROUPED_TOPK) {
+        // when SER is configured the graph also contains a SER_MASK node on top of the
+        // grouped selection, which carries the actual dropped (-1) entries; counting the
+        // raw GROUPED_TOPK output as well would double-count the kept experts. Mirror the
+        // builder's SER eligibility (gating != SOFTMAX_WEIGHT) so SOFTMAX_WEIGHT models
+        // (no SER) still count the plain GROUPED_TOPK output.
+        const bool ser = ctx->model.hparams.expert_gating_func != LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT &&
+                         ((ctx->cparams.min_experts > 0 && ctx->cparams.thresh_experts > 0) ||
+                          ctx->cparams.ser_n_tiers >= 2);
+        if (ser) {
+            if (ctx->prev_cb_eval != nullptr) {
+                return ctx->prev_cb_eval(t, ask, ctx->prev_cb_eval_user_data);
+            }
+            return ask ? 0 : 1;
+        }
     }
 
     if (ask) {
@@ -10334,6 +10351,8 @@ static int llama_count_experts_eval_cb(struct ggml_tensor * t, bool ask, void * 
     // the node was just computed and the backend was synchronized: read the
     // full sorted [n_expert, n_tokens] int32 result and count how many of the
     // first n_expert_used entries per token are kept (non-negative = kept).
+    // SER_MASK/GROUPED_TOPK output is already [n_expert_used, n_tokens] with
+    // the same layout.
     const int64_t n_expert = t->ne[0];
     const int64_t n_tokens = t->ne[1];
     const int64_t k = std::min<int64_t>(ctx->model.hparams.n_expert_used, n_expert);

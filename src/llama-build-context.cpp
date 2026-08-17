@@ -1611,20 +1611,30 @@ llm_expert_gating_func_type   gating_op,
     if (selected_experts == nullptr) {
         const bool grouped_routing = lctx.cparams.grouped_expert_routing &&
                 (lctx.model.arch == LLM_ARCH_BAILINGMOE2 || lctx.model.arch == LLM_ARCH_BAILINGMOE3);
+        // smart expert reduction (SER): drop experts whose routing weight is below
+        // max*thresh, keeping at least min_experts per token; dropped experts are
+        // marked with -1 and zeroed downstream (get_rows, mul_mat_id, add_id).
+        // A cascade (>=2 tiers) is scanned per token from the most conservative
+        // (largest min) down: tier (c,t) passes iff at least c experts exceed max*t,
+        // in which case ALL experts clearing max*t are kept (variable count, bounded
+        // by the top-k view); if no tier passes, the last tier's c is the floor.
+        const bool ser = gating_op != LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT &&
+                         ((lctx.cparams.min_experts > 0 && lctx.cparams.thresh_experts > 0) ||
+                          lctx.cparams.ser_n_tiers >= 2);
         if (grouped_routing && n_tokens > 0) {
             auto& hparams = lctx.model.hparams;
             selected_experts = ggml_grouped_topk(ctx, selection_probs, hparams.n_expert_groups, hparams.n_group_used, 2, n_expert_used);
+            if (ser) {
+                // apply SER on top of the grouped top-k selection
+                if (lctx.cparams.ser_n_tiers >= 2) {
+                    selected_experts = ggml_ser_mask(ctx, selected_experts, selection_probs,
+                            lctx.cparams.ser_n_tiers, lctx.cparams.ser_min_experts, lctx.cparams.ser_thresh_experts); // [n_expert_used, n_tokens]
+                } else {
+                    selected_experts = ggml_ser_mask(ctx, selected_experts, selection_probs,
+                            1, &lctx.cparams.min_experts, &lctx.cparams.thresh_experts); // [n_expert_used, n_tokens]
+                }
+            }
         } else {
-            // smart expert reduction (SER): drop experts whose routing weight is below
-            // max*thresh, keeping at least min_experts per token; dropped experts are
-            // marked with -1 and zeroed downstream (get_rows, mul_mat_id, add_id).
-            // A cascade (>=2 tiers) is scanned per token from the most conservative
-            // (largest min) down: tier (c,t) passes iff at least c experts exceed max*t,
-            // in which case ALL experts clearing max*t are kept (variable count, bounded
-            // by the top-k view); if no tier passes, the last tier's c is the floor.
-            const bool ser = gating_op != LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT &&
-                             ((lctx.cparams.min_experts > 0 && lctx.cparams.thresh_experts > 0) ||
-                              lctx.cparams.ser_n_tiers >= 2);
             if (ser) {
                 if (lctx.cparams.ser_n_tiers >= 2) {
                     selected_experts = ggml_top_k_thresh_cascade(ctx, selection_probs, n_expert_used,

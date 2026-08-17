@@ -4837,6 +4837,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "ARGSORT",
     "ARGSORT_THRESH",
     "GROUPED_TOPK",
+    "SER_MASK",
     "LEAKY_RELU",
     "SOFTCAP",
     "SOFT_CAP_MAX",
@@ -4893,7 +4894,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DS4_COMP",
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4966,6 +4967,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "argsort(x)",
     "argsort_thresh(x)",
     "grouped_topk(x)",
+    "ser_mask(x,y)",
     "leaky_relu(x)",
     "k2*tanh(k1*x)",
     "soft_max(k2*tanh(k1*x))",
@@ -5023,7 +5025,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -11490,6 +11492,44 @@ struct ggml_tensor * ggml_grouped_topk(
     result->op   = GGML_OP_GROUPED_TOPK;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
     result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_ser_mask(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,       // selected expert ids [n_expert_used, n_tokens] I32
+            struct ggml_tensor  * b,       // routing weights [n_expert, n_tokens] F32
+            int                   n_tiers,
+            const int           * min_entries,
+            const float         * thresh) {
+
+    GGML_ASSERT(a->type == GGML_TYPE_I32);
+    GGML_ASSERT(b->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(a));
+    GGML_ASSERT(ggml_is_contiguous(b));
+    GGML_ASSERT(a->ne[1] == b->ne[1]);
+    GGML_ASSERT(b->ne[0] >= a->ne[0]);
+    GGML_ASSERT(n_tiers >= 1 && n_tiers <= GGML_MAX_SER_TIERS);
+
+    bool is_node = false;
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_I32, GGML_MAX_DIMS, a->ne);
+
+    ggml_set_op_params_i32(result, 0, (int32_t) n_tiers);
+    for (int i = 0; i < n_tiers; ++i) {
+        // min_entries is bounded by the full expert count (like argsort_thresh), not
+        // by the already-selected n_expert_used; values beyond n_expert_used simply
+        // keep all selected experts.
+        GGML_ASSERT(min_entries[i] >= 0 && min_entries[i] <= b->ne[0]);
+        ggml_set_op_params_i32(result, 1 + 2*i, (int32_t) min_entries[i]);
+        ggml_set_op_params_f32(result, 2 + 2*i, thresh[i]);
+    }
+
+    result->op   = GGML_OP_SER_MASK;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = b;
 
     return result;
 }
@@ -25668,6 +25708,87 @@ static void ggml_compute_forward_argsort_thresh(
     }
 }
 
+// ggml_compute_forward_ser_mask
+// src0: selected expert ids [n_expert_used, n_tokens] I32 (from ggml_grouped_topk)
+// src1: routing weights [n_expert, n_tokens] F32
+// dst:  I32 [n_expert_used, n_tokens], same as src0 with dropped experts marked -1
+
+static void ggml_compute_forward_ser_mask_f32(
+    const struct ggml_compute_params * params,
+    struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0]; // ids
+    const struct ggml_tensor * src1 = dst->src[1]; // weights
+
+    GGML_ASSERT(src0->type == GGML_TYPE_I32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(src1));
+
+    const int64_t n_expert_used = src0->ne[0];
+    const int64_t n_expert      = src1->ne[0];
+    const int64_t n_tokens      = src0->ne[1];
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int n_tiers = ggml_get_op_params_i32(dst, 0);
+    int    min_entries[GGML_MAX_SER_TIERS];
+    float  thresh[GGML_MAX_SER_TIERS];
+    for (int i = 0; i < n_tiers; ++i) {
+        min_entries[i] = ggml_get_op_params_i32(dst, 1 + 2*i);
+        thresh[i]      = ggml_get_op_params_f32(dst, 2 + 2*i);
+    }
+    GGML_ASSERT(n_tiers >= 1 && n_tiers <= GGML_MAX_SER_TIERS);
+
+    for (int64_t t = ith; t < n_tokens; t += nth) {
+        const int32_t * ids = (const int32_t *)((const char *) src0->data + t*src0->nb[1]);
+        const float   * wts = (const float   *)((const char *) src1->data + t*src1->nb[1]);
+        int32_t       * dst_data = (int32_t *)      ((char *) dst->data + t*dst->nb[1]);
+
+        // max routing weight among the selected experts (the grouped selection is
+        // already sorted descending; both the ids and their weights are unmodified
+        // on every backend, unlike the full weight row which the CUDA grouped_topk
+        // mutates in place by masking discarded groups to -INFINITY)
+        float max_value = -INFINITY;
+        for (int64_t j = 0; j < n_expert_used; ++j) {
+            GGML_ASSERT(ids[j] >= 0 && ids[j] < n_expert);
+            max_value = MAX(max_value, wts[ids[j]]);
+        }
+
+        if (n_tiers == 1) {
+            // single tier: keep the first min_entries always, drop the rest below max*thresh
+            for (int64_t j = 0; j < n_expert_used; ++j) {
+                dst_data[j] = (j >= min_entries[0] && wts[ids[j]] < max_value*thresh[0]) ? -1 : ids[j];
+            }
+        } else {
+            // cascade: same semantics as argsort_thresh over the selected set (which is
+            // sorted by weight descending)
+            int keep = min_entries[n_tiers-1];
+            for (int ti = 0; ti < n_tiers; ++ti) {
+                int cnt = 0;
+                for (int64_t j = 0; j < n_expert_used && wts[ids[j]] >= max_value*thresh[ti]; ++j) {
+                    cnt++;
+                }
+                if (cnt >= min_entries[ti]) {
+                    keep = cnt;
+                    break;
+                }
+            }
+            for (int64_t j = 0; j < n_expert_used; ++j) {
+                dst_data[j] = j < keep ? ids[j] : -1;
+            }
+        }
+    }
+}
+
+static void ggml_compute_forward_ser_mask(
+    const struct ggml_compute_params * params,
+    struct ggml_tensor * dst) {
+
+    ggml_compute_forward_ser_mask_f32(params, dst);
+}
+
 static void ggml_compute_forward_grouped_topk(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
@@ -29819,6 +29940,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_grouped_topk(params, tensor);
             } break;
+        case GGML_OP_SER_MASK:
+            {
+                ggml_compute_forward_ser_mask(params, tensor);
+            } break;
         case GGML_OP_LEAKY_RELU:
             {
                 ggml_compute_forward_leaky_relu(params, tensor);
@@ -30949,6 +31074,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
+        case GGML_OP_SER_MASK:
+            {
+                GGML_ABORT("fatal error"); // TODO: not implemented
+            }
         case GGML_OP_LEAKY_RELU:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
@@ -31784,6 +31913,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_ARGSORT:
         case GGML_OP_ARGSORT_THRESH:
         case GGML_OP_GROUPED_TOPK:
+        case GGML_OP_SER_MASK:
         case GGML_OP_FLASH_ATTN_EXT:
         case GGML_OP_FLASH_ATTN_BACK:
         case GGML_OP_SSM_CONV:

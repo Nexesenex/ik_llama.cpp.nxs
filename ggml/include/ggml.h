@@ -667,6 +667,7 @@ extern "C" {
         GGML_OP_ARGSORT,
         GGML_OP_ARGSORT_THRESH,
         GGML_OP_GROUPED_TOPK,
+        GGML_OP_SER_MASK,
         GGML_OP_LEAKY_RELU,
         GGML_OP_SOFTCAP,
         GGML_OP_SOFT_CAP_MAX,
@@ -2536,6 +2537,19 @@ extern "C" {
 #else
 #define GGML_KQ_MASK_PAD 16
 #endif
+
+    // apply smart expert reduction (SER) thresholding on top of an already-selected
+    // top-k set of expert ids (e.g. from ggml_grouped_topk): per token, experts whose
+    // routing weight is below max*thresh (relative to the token's max routing weight)
+    // are dropped (marked -1), keeping at least min_experts. cascade form: see
+    // ggml_argsort_thresh_cascade for the multi-tier semantics.
+    GGML_API struct ggml_tensor * ggml_ser_mask(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,       // selected expert ids [n_expert_used, n_tokens] I32
+            struct ggml_tensor  * b,       // routing weights [n_expert, n_tokens] F32
+            int                   n_tiers, // 1 for single-tier, >=2 for cascade
+            const int           * min_entries,
+            const float         * thresh);
 
     // q:    [n_embd, n_batch,     n_head,    1]
     // k:    [n_embd, n_kv,        n_head_kv, 1]
