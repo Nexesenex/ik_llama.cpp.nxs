@@ -527,6 +527,21 @@ struct llama_model {
     struct ggml_tensor * output;
     struct ggml_tensor * output_b;
     struct ggml_tensor * output_norm_enc;
+
+    // optional allowlist optimization: only these rows of the output tensor are used for the logits
+    // computation; the logits of all other rows are set to -inf in the graph
+    struct ggml_tensor * output_subset      = nullptr; // [n_embd, n_subset] copy of the allowlisted rows
+    struct ggml_tensor * output_subset_ids  = nullptr; // I32 [n_subset] original vocab ids of the subset rows
+    struct ggml_context * ctx_output_subset = nullptr; // subset weight (allocated in the split buffer when -sot)
+    ggml_backend_buffer_t buf_output_subset = nullptr;
+    struct ggml_context * ctx_output_subset_ids = nullptr; // subset ids (never split)
+    ggml_backend_buffer_t buf_output_subset_ids = nullptr;
+    struct ggml_context * ctx_output_subset_splits = nullptr; // per-device split metadata, never allocated
+    llama_split_tensor    split_output_subset;            // per-device splits when the subset lives in the split buffer
+
+    bool output_subset_host = false; // keep the full output in host memory (CUDA_Host with CUDA, CPU otherwise) once the subset is set
+    bool output_full_host   = false; // the full output tensor currently lives in host memory (its GPU buffer was freed)
+    bool output_subset_split = false; // the subset was last extracted using the split output tensor's per-device splits
     struct ggml_tensor * output_mtp = nullptr;
     struct ggml_tensor * hc_head_base = nullptr;
     struct ggml_tensor * hc_head_fn = nullptr;
@@ -562,6 +577,7 @@ struct llama_model {
     float split_adjust_step_frequency = 0.5f; // < 1: legacy formula (inverted), >= 1: direct layer count
     int n_gpu_layers;
     int split_output_tensor = 0;  // 0=off, 1=split on all GPUs, N>1=split on top N GPUs by VRAM
+    int split_output_tensor_subset = 0; // 0=off, 1=split the allowlist output logits subset on all output GPUs, N>1=top N output GPUs (requires split_output_tensor)
     bool mtp; // use mtp if is supported by the Model
     bool swa_compress = false; // value the cache-size fit was computed with
 

@@ -377,6 +377,24 @@ void server_context::init() {
         slots.push_back(std::move(slot));
     }
 
+    // restrict the output logits computation to the union of the allowlist-allowed tokens
+    // (Option A). opt-in via --allowlist-subset. the subset is computed from the CLI-level allowlist
+    // rules/pieces; per-request allowlist_piece_array overrides that fall outside of this union are a
+    // known limitation.
+    if (params_base.allow_subset && params_base.allow_rules.empty()) {
+        LLAMA_LOG_WARN("%s: --allowlist-subset given without --allowlist-unicode-rule, ignoring\n", __func__);
+    }
+    if (!params_base.allow_rules.empty() && params_base.allow_subset) {
+        const int32_t n_vocab = populate_vocab_pieces();
+        const auto ids = common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces);
+        if (!ids.empty() && llama_model_set_output_subset(model, ids.data(), (int32_t) ids.size()) == 0) {
+            LLAMA_LOG_INFO("%s: output logits restricted to %d/%d vocab rows by the allowlist\n",
+                    __func__, (int32_t) ids.size(), n_vocab);
+        } else {
+            LLAMA_LOG_WARN("%s: output logits subset not enabled (allowlist active, subset unsupported)\n", __func__);
+        }
+    }
+
     default_generation_settings_for_props = get_formatted_generation(slots.front());
     default_generation_settings_for_props["seed"] = -1;
 
@@ -1793,41 +1811,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             LLAMA_LOG_DEBUG("%s: allowlist %zu is new\n", __func__, i);
 
             auto& biases = slot.allow_biasess[i];
-            biases.resize(n_vocab);
-
-            std::vector<uint32_t> cpts;
-            std::vector<std::string> scripts;
-            for (size_t id = 0; id < n_vocab; ++id) {
-                const size_t n_cpt = llama_fill_from_utf8(&vocab_pieces[id], &cpts, &scripts);
-                float bias = -INFINITY;
-
-                // each codepoint must be found in
-                for (size_t j = 0; j < n_cpt; ++j) {
-                    bool in_rule = false;
-
-                    // at least one rule
-                    for (const auto& rule: rules) {
-                        const bool in_range = (std::get<0>(rule) <= cpts[j]) && (cpts[j] <= std::get<1>(rule));
-                        in_rule = in_range && ((std::get<2>(rule) == "*") || std::get<2>(rule) == scripts[j]);
-                        if (in_rule) {
-                            // earlier rule has higher priority
-                            bias = std::max(bias, std::get<3>(rule));
-                            break;
-                        }
-                    }
-                    if (!in_rule) {
-                        if ((scripts[j] == "common") || (scripts[j] == "inherited")) {
-                            // for common or inherited codepoints (e.g. whitespace), defer to other codepoints in the token
-                            continue;
-                        }
-
-                        // to shadow realm
-                        bias = -INFINITY;
-                        break;
-                    }
-                }
-                biases[id] = bias;
-            }
+            biases = common_allowlist_set_bias(vocab_pieces, rules);
 
             float max_bias = -INFINITY;
             for (const auto& rule: rules) {

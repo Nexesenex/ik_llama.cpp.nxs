@@ -2640,7 +2640,7 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
 ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur,
         ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb, bool add_normed_name) {
     // lm_head
-    if (output->extra) {
+    if (output->extra && !(output == lctx.model.output && lctx.model.output_subset != nullptr)) {
         auto split_output = (ggml_split_tensor_t *)output->extra;
         auto split_output_norm = output_norm && output_norm->extra ? (ggml_split_tensor_t *)output_norm->extra : nullptr;
         std::vector<ggml_tensor *> o;
@@ -2690,7 +2690,50 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
                 cb(cur, "result_norm", -1);
             }
         }
-        cur = llm_build_context::llm_build_lora_mm(lctx, ctx, output, cur);
+        if (output == lctx.model.output && lctx.model.output_subset != nullptr) {
+            // allowlist optimization: compute the logits only for the allowlisted subset of vocab
+            // rows, then scatter them into a full-size logits vector filled with -inf so the
+            // disallowed rows can never be sampled
+            ggml_tensor * logits_sub = nullptr;
+            if (lctx.model.output_subset->extra != nullptr) {
+                // the subset weight lives in the split buffer: per-device mm + concat, like the split output path
+                auto split_subset = (ggml_split_tensor_t *) lctx.model.output_subset->extra;
+                std::vector<ggml_tensor *> o;
+                o.reserve(split_subset->n_device);
+                for (int id = 0; id < split_subset->n_device; ++id) {
+                    auto split = split_subset->splits[id];
+                    if (!split) {
+                        continue;
+                    }
+                    auto cur_id = get_input_tensor_sm_graph(ctx, cur, id);
+                    o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur_id));
+                    cb(o.back(), "output_subset", id);
+                }
+                GGML_ASSERT(!o.empty());
+                if (o.size() == 1) {
+                    logits_sub = o.front();
+                } else {
+                    logits_sub = ggml_concat(ctx, o[0], o[1], 0);
+                    for (int id = 2; id < int(o.size()); ++id) {
+                        logits_sub = ggml_concat(ctx, logits_sub, o[id], 0);
+                    }
+                }
+            } else {
+                logits_sub = llm_build_context::llm_build_lora_mm(lctx, ctx, lctx.model.output_subset, cur);
+            }
+            if (logits_sub->type != GGML_TYPE_F32) {
+                logits_sub = ggml_cast(ctx, logits_sub, GGML_TYPE_F32);
+            }
+            const int64_t n_vocab  = lctx.model.hparams.n_vocab;
+            const int64_t n_subset = lctx.model.output_subset->ne[1];
+            ggml_tensor * logits_full = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_vocab, logits_sub->ne[1]);
+            logits_full = ggml_fill(ctx, logits_full, -INFINITY);
+            ggml_tensor * logits_sub_3d = ggml_reshape_3d(ctx, logits_sub, 1, n_subset, logits_sub->ne[1]);
+            cur = ggml_set_rows(ctx, logits_full, logits_sub_3d, lctx.model.output_subset_ids);
+            cur = ggml_reshape_2d(ctx, cur, n_vocab, logits_sub->ne[1]);
+        } else {
+            cur = llm_build_context::llm_build_lora_mm(lctx, ctx, output, cur);
+        }
     }
     return cur;
 }
