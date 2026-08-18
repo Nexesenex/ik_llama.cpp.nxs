@@ -2384,6 +2384,24 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "-sot-s" || arg == "--split-output-tensor-subset") {
+        if (i + 1 < argc && argv[i + 1][0] != '-') {
+            ++i;
+            try {
+                params.split_output_tensor_subset = std::max(1, std::stoi(argv[i]));
+            } catch (...) {
+                invalid_param = true;
+                return true;
+            }
+        } else {
+            params.split_output_tensor_subset = -1; // follow -sot
+        }
+        return true;
+    }
+    if (arg == "-soh" || arg == "--output-subset-host") {
+        params.output_subset_host = true;
+        return true;
+    }
     if (arg == "-sas" || arg == "--scheduler-async") {
         params.scheduler_async = true;
         return true;
@@ -2505,6 +2523,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--allowlist-pieces") {
         CHECK_ARG
         params.allow_pieces.push_back(argv[i]);
+        return true;
+    }
+    if (arg == "--allowlist-subset") {
+        params.allow_subset = true;
         return true;
     }
     if (arg == "--allowlist-keyword") {
@@ -3303,6 +3325,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-gap, --graph-attn-precision",    "Flash-attn precision under -sm graph (default: %s)", "f16"});
     options.push_back({ "*",         "-smtps, -smgs, --split-mode-tensor-parallel-scheduling, --split-mode-graph-scheduling,", "Force Split Mode Tensor Parallel (Graph) Scheduling (default: %d)", params.split_mode_tensor_parallel_scheduling});
     options.push_back({ "*",         "-sot, --split-output-tensor [N]", "Split output tensor (no arg=all GPUs, N=top N GPUs by VRAM) (default: %d)", params.split_output_tensor});
+    options.push_back({ "*",         "-sot-s, --split-output-tensor-subset [N]", "Split the allowlist output logits subset across the output GPUs (no arg=follow -sot, 1=all output GPUs, N>1=top N output GPUs; requires -sot) (default: %d)", params.split_output_tensor_subset});
+    options.push_back({ "*",         "-soh,  --output-subset-host",            "Keep the full output tensor in host memory (CUDA_Host with CUDA, CPU otherwise) and free its GPU buffer once the allowlist output logits subset is set (requires --allowlist-subset) (default: %d)", params.output_subset_host});
     options.push_back({ "*",         "-sas,  --scheduler-async",        "Async evaluation of compute graphs (default: %d)", params.scheduler_async});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
@@ -3393,6 +3417,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
     options.push_back({ "*",           "       --allowlist-keyword-delay",
                                                                         "# tokens to delay matching for the first keyword (default: %zu)", params.allow_kw_delay });
+    options.push_back({ "*",           "       --allowlist-subset",     "restrict the output logits computation to the allowlisted vocab rows (Option A). requires at least one --allowlist-unicode-rule" });
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
@@ -4598,6 +4623,16 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.check_tensors   = params.check_tensors;
     mparams.repack_tensors  = params.repack_tensors;
     mparams.split_output_tensor = params.split_output_tensor;
+    mparams.split_output_tensor_subset = params.split_output_tensor_subset < 0 ? params.split_output_tensor : params.split_output_tensor_subset;
+    if (params.split_output_tensor_subset != 0 && params.split_output_tensor == 0) {
+        LLAMA_LOG_WARN("gpt_params: -sot-s requires -sot, disabling the output logits subset split\n");
+        mparams.split_output_tensor_subset = 0;
+    }
+    mparams.output_subset_host = params.output_subset_host;
+    if (params.output_subset_host && !params.allow_subset) {
+        LLAMA_LOG_WARN("gpt_params: -soh requires the allowlist output logits subset, ignoring -soh (pass --allowlist-subset)\n");
+        mparams.output_subset_host = false;
+    }
     mparams.use_thp         = params.use_thp;
     mparams.validate_quants = params.validate_quants;
     mparams.merge_qkv       = params.merge_qkv;
@@ -5171,6 +5206,80 @@ std::vector<llama_token> common_tokenize(
     bool   parse_special){
 
     return llama_tokenize(vocab, text, add_special, parse_special);
+}
+
+std::vector<float> common_allowlist_set_bias(
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & rules) {
+    const int32_t n_vocab = (int32_t) vocab_pieces.size();
+    std::vector<float> biases(n_vocab);
+
+    std::vector<uint32_t> cpts;
+    std::vector<std::string> scripts;
+    for (int32_t id = 0; id < n_vocab; ++id) {
+        const size_t n_cpt = llama_fill_from_utf8((void *) &vocab_pieces[id], &cpts, &scripts);
+        float bias = -INFINITY;
+
+        // each codepoint must be found in at least one rule
+        for (size_t j = 0; j < n_cpt; ++j) {
+            bool in_rule = false;
+            for (const auto & rule: rules) {
+                const bool in_range = (std::get<0>(rule) <= cpts[j]) && (cpts[j] <= std::get<1>(rule));
+                in_rule = in_range && ((std::get<2>(rule) == "*") || std::get<2>(rule) == scripts[j]);
+                if (in_rule) {
+                    // earlier rule has higher priority
+                    bias = std::max(bias, std::get<3>(rule));
+                    break;
+                }
+            }
+            if (!in_rule) {
+                if ((scripts[j] == "common") || (scripts[j] == "inherited")) {
+                    // for common or inherited codepoints (e.g. whitespace), defer to other codepoints in the token
+                    continue;
+                }
+
+                // to shadow realm
+                bias = -INFINITY;
+                break;
+            }
+        }
+        biases[id] = bias;
+    }
+    return biases;
+}
+
+std::vector<int32_t> common_allowlist_union_ids(
+        const struct llama_model * model,
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> & rules,
+        const std::vector<std::string> & allow_pieces) {
+    const int32_t n_vocab = (int32_t) vocab_pieces.size();
+    std::vector<bool> allowed(n_vocab, false);
+
+    for (const auto & piece: allow_pieces) {
+        for (const auto token: common_tokenize(model, piece, false, true)) {
+            if (token >= 0 && token < n_vocab) {
+                allowed[token] = true;
+            }
+        }
+    }
+    for (const auto & set: rules) {
+        const auto biases = common_allowlist_set_bias(vocab_pieces, set);
+        for (int32_t id = 0; id < n_vocab; ++id) {
+            if (biases[id] != -INFINITY) {
+                allowed[id] = true;
+            }
+        }
+    }
+
+    std::vector<int32_t> ids;
+    ids.reserve(n_vocab);
+    for (int32_t id = 0; id < n_vocab; ++id) {
+        if (allowed[id]) {
+            ids.push_back(id);
+        }
+    }
+    return ids;
 }
 
 std::string common_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
@@ -5754,6 +5863,8 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "split_mode_tensor_parallel_scheduling: %s # default: false\n", params.split_mode_tensor_parallel_scheduling ? "true" : "false");
     fprintf(stream, "split_output_tensor: %d # default: 0 (0=off, 1=all GPUs, N>1=top N GPUs)\n", params.split_output_tensor);
     fprintf(stream, "split_output_tensor: %s # default: false\n", params.split_output_tensor ? "true" : "false");
+    fprintf(stream, "split_output_tensor_subset: %d # default: 0 (0=off, 1=all output GPUs, N>1=top N output GPUs)\n", params.split_output_tensor_subset);
+    fprintf(stream, "output_subset_host: %d # default: 0 (keep the full output tensor in host memory once the output logits subset is set)\n", params.output_subset_host);
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");

@@ -432,7 +432,9 @@ extern "C" {
         bool merge_up_gate_exps;  // if true, merge ffn_up_exps and ffn_gate_exps tensors into a single, contiguous tensor
         bool mtp;           // if true, load MTP layers if present
         bool dry_run;       // skip loading tensors
+        bool output_subset_host; // if true and the output logits subset is set, keep the full output tensor in host memory (CUDA_Host with CUDA, CPU otherwise) and free its GPU buffer
         int split_output_tensor;  // 0=off, 1=split on all GPUs, N>1=split on top N GPUs by VRAM
+        int split_output_tensor_subset; // 0=off, 1=split the allowlist output logits subset on all output GPUs, N>1=top N output GPUs (requires split_output_tensor)
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
         bool defer_ple;        // keep the per-layer token embedding on the file instead of resident in memory (Linux only)
@@ -655,6 +657,13 @@ extern "C" {
     LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_inp(const struct llama_model* model);
+
+    // Restrict the output logits computation to a subset of vocab rows (allowlist optimization).
+    // ids must be sorted ascending and in [0, llama_n_vocab(model)). The logits of all other rows
+    // are set to -inf in the graph, so they can never be sampled. ids == NULL or n_ids <= 0
+    // disables the subset. When split_output_tensor_subset is set the subset weight is distributed
+    // across the same GPUs as a split output tensor (-sot). Returns 0 on success, -1 on invalid ids.
+    LLAMA_API int32_t llama_model_set_output_subset(struct llama_model * model, const int32_t * ids, int32_t n_ids);
 
     LLAMA_API int32_t llama_n_layer    (const struct llama_model * model);
 

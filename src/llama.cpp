@@ -434,6 +434,26 @@ llama_model::~llama_model() {
     while (!lora_adapters.empty()) {
         llama_lora_adapter_free(*lora_adapters.begin());
     }
+    if (buf_output_subset != nullptr) {
+        ggml_backend_buffer_free(buf_output_subset);
+        buf_output_subset = nullptr;
+    }
+    if (ctx_output_subset != nullptr) {
+        ggml_free(ctx_output_subset);
+        ctx_output_subset = nullptr;
+    }
+    if (buf_output_subset_ids != nullptr) {
+        ggml_backend_buffer_free(buf_output_subset_ids);
+        buf_output_subset_ids = nullptr;
+    }
+    if (ctx_output_subset_ids != nullptr) {
+        ggml_free(ctx_output_subset_ids);
+        ctx_output_subset_ids = nullptr;
+    }
+    if (ctx_output_subset_splits != nullptr) {
+        ggml_free(ctx_output_subset_splits);
+        ctx_output_subset_splits = nullptr;
+    }
 }
 
 static size_t llama_get_device_count(const llama_model & model, int initial_count = 1) {
@@ -5230,6 +5250,12 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         model.hparams.vocab_only = params.vocab_only;
         model.split_output_tensor = params.split_output_tensor;
+        model.split_output_tensor_subset = params.split_output_tensor_subset;
+        if (model.split_output_tensor_subset > 0 && model.split_output_tensor == 0) {
+            LLAMA_LOG_WARN("%s: -sot-s requires -sot, disabling the output logits subset split\n", __func__);
+            model.split_output_tensor_subset = 0;
+        }
+        model.output_subset_host = params.output_subset_host;
 
         model.mtp = params.mtp;
 
@@ -8353,7 +8379,9 @@ struct llama_model_params llama_model_default_params() {
         /*.merge_up_gate_exps          =*/ false,
         /*.mtp                         =*/ false,
         /*.dry_run                     =*/ false,
+        /*.output_subset_host          =*/ false,
         /*.split_output_tensor         =*/ 0,
+        /*.split_output_tensor_subset  =*/ 0,
         /*.flash_attn                  =*/ true,
         /*.defer_experts               =*/ false,
         /*.defer_ple                   =*/ false,
@@ -9800,6 +9828,376 @@ bool llama_supports_ctx_shift(const struct llama_context * ctx) {
 
 const struct llama_vocab* llama_model_get_vocab(const struct llama_model* model) {
     return &model->vocab;
+}
+
+static bool llama_model_output_to_host(llama_model & model) {
+    auto output = model.output;
+    if (output == nullptr || model.output_full_host) {
+        return true;
+    }
+
+    // the host copy keeps the full rows (CUDA_Host when the build uses CUDA and pinmem is enabled,
+    // plain CPU otherwise) so the allowlist subset can be re-extracted later on allowlist changes
+    const size_t row_bytes = ggml_row_size(output->type, output->ne[0]);
+    const size_t total = (size_t) output->ne[1] * row_bytes;
+    ggml_backend_buffer_type_t buft = llama_default_buffer_type_cpu(true);
+    ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(buft, total);
+    if (buf == nullptr) {
+        LLAMA_LOG_ERROR("%s: failed to allocate a host buffer of %.2f MiB for the output tensor\n", __func__, total / (1024.0 * 1024.0));
+        return false;
+    }
+    uint8_t * data = (uint8_t *) ggml_backend_buffer_get_base(buf);
+
+    // a real split output has per-device chunk tensors carrying data; a single-device -sot keeps
+    // the splits with no data and the rows in the output tensor itself
+    bool real_split = false;
+    if (output->extra != nullptr) {
+        auto split_output = (ggml_split_tensor_t *) output->extra;
+        for (int id = 0; id < split_output->n_device; ++id) {
+            if (split_output->splits[id] != nullptr && split_output->splits[id]->data != nullptr) {
+                real_split = true;
+                break;
+            }
+        }
+    }
+
+    if (real_split) {
+        // copy the per-device row chunks back into one contiguous host copy, in device order
+        auto split_output = (ggml_split_tensor_t *) output->extra;
+        int64_t row_start = 0;
+        for (int id = 0; id < split_output->n_device; ++id) {
+            auto split = split_output->splits[id];
+            if (split == nullptr) {
+                continue;
+            }
+            ggml_backend_tensor_get(split, data + row_start * row_bytes, 0, ggml_nbytes(split));
+            row_start += split->ne[1];
+        }
+    } else {
+        ggml_backend_tensor_get(output, data, 0, total);
+    }
+
+    // free the GPU memory the full output occupied
+    if (real_split) {
+        auto split_output = (ggml_split_tensor_t *) output->extra;
+        for (int id = 0; id < split_output->n_device; ++id) {
+            auto split = split_output->splits[id];
+            if (split != nullptr && split->buffer != nullptr) {
+                ggml_backend_buffer_free(split->buffer);
+                split->buffer = nullptr;
+                split->data   = nullptr;
+            }
+        }
+    } else {
+        auto old_buf = output->buffer;
+        auto it = std::find(model.bufs.begin(), model.bufs.end(), old_buf);
+        if (it != model.bufs.end()) {
+            model.bufs.erase(it);
+        }
+        ggml_backend_buffer_free(old_buf);
+    }
+
+    // the model now owns the host copy; it is released with the rest of the model buffers
+    output->buffer = buf;
+    output->data   = data;
+    model.bufs.push_back(buf);
+    model.output_full_host = true;
+
+    LLAMA_LOG_INFO("%s: moved the full output tensor to host memory (%.2f MiB), freed the GPU buffer\n", __func__, total / (1024.0 * 1024.0));
+    return true;
+}
+
+int32_t llama_model_set_output_subset(struct llama_model * model, const int32_t * ids, int32_t n_ids) {
+    if (model == nullptr || model->output == nullptr) {
+        return -1;
+    }
+    const int32_t n_vocab = (int32_t) model->hparams.n_vocab;
+    if (ids == nullptr || n_ids <= 0 || n_ids > n_vocab) {
+        return -1;
+    }
+    for (int32_t i = 0; i < n_ids; ++i) {
+        if (ids[i] < 0 || ids[i] >= n_vocab || (i > 0 && ids[i] <= ids[i - 1])) {
+            return -1;
+        }
+    }
+
+    // free any previous subset
+    if (model->buf_output_subset != nullptr) {
+        ggml_backend_buffer_free(model->buf_output_subset);
+        model->buf_output_subset = nullptr;
+    }
+    if (model->ctx_output_subset != nullptr) {
+        ggml_free(model->ctx_output_subset);
+        model->ctx_output_subset = nullptr;
+    }
+    if (model->buf_output_subset_ids != nullptr) {
+        ggml_backend_buffer_free(model->buf_output_subset_ids);
+        model->buf_output_subset_ids = nullptr;
+    }
+    if (model->ctx_output_subset_ids != nullptr) {
+        ggml_free(model->ctx_output_subset_ids);
+        model->ctx_output_subset_ids = nullptr;
+    }
+    if (model->ctx_output_subset_splits != nullptr) {
+        ggml_free(model->ctx_output_subset_splits);
+        model->ctx_output_subset_splits = nullptr;
+    }
+    model->output_subset     = nullptr;
+    model->output_subset_ids = nullptr;
+    model->split_output_subset.tensor_splits.clear();
+    model->split_output_subset.ggml = {};
+
+    // gather the allowlisted rows into a host buffer, in the order of `ids`. with a split output
+    // tensor (-sot) the rows live in the per-device split tensors (contiguous ranges in device order)
+    const size_t row_bytes = ggml_row_size(model->output->type, model->output->ne[0]);
+    std::vector<uint8_t> data((size_t) n_ids * row_bytes);
+    if (model->output_full_host) {
+        // the full output lives in host memory (its GPU buffer was freed): read the allowlisted rows
+        // directly from the host copy so the subset can be re-extracted on allowlist changes
+        const uint8_t * src = (const uint8_t *) model->output->data;
+        for (int32_t i = 0; i < n_ids; ++i) {
+            memcpy(data.data() + (size_t) i * row_bytes, src + (size_t) ids[i] * row_bytes, row_bytes);
+        }
+    } else if (model->output->extra != nullptr) {
+        auto split_output = (ggml_split_tensor_t *) model->output->extra;
+        int64_t row_start = 0;
+        int32_t i = 0;
+        for (int id = 0; id < split_output->n_device && i < n_ids; ++id) {
+            auto split = split_output->splits[id];
+            const int64_t row_end = row_start + (split ? split->ne[1] : 0);
+            while (i < n_ids && ids[i] < row_end) {
+                if (ids[i] < row_start) {
+                    return -1;
+                }
+                ggml_backend_tensor_get(split, data.data() + (size_t) i * row_bytes, (size_t) (ids[i] - row_start) * row_bytes, row_bytes);
+                ++i;
+            }
+            row_start = row_end;
+        }
+        if (i != n_ids) {
+            return -1;
+        }
+    } else {
+        for (int32_t i = 0; i < n_ids; ++i) {
+            ggml_backend_tensor_get(model->output, data.data() + (size_t) i * row_bytes, (size_t) ids[i] * row_bytes, row_bytes);
+        }
+    }
+
+    // the subset weight lives in the split buffer as well when commanded via -sot-s: it follows the
+    // output tensor's split (same GPUs, same distribution). detect a real split buffer: the per-device
+    // split tensors must carry data (a single-device -sot allocates the splits in one normal buffer,
+    // leaving their data unset)
+    bool use_split = false;
+    if (model->split_output_tensor_subset > 0 && model->output->extra != nullptr) {
+        if (model->output_full_host) {
+            // the per-device chunk buffers were freed when the full output moved to host; reuse the
+            // split decision from the extraction that performed the migration
+            use_split = model->output_subset_split;
+        } else {
+            auto split_output = (ggml_split_tensor_t *) model->output->extra;
+            for (int id = 0; id < split_output->n_device; ++id) {
+                if (split_output->splits[id] != nullptr) {
+                    use_split = split_output->splits[id]->data != nullptr;
+                    break;
+                }
+            }
+            if (!use_split) {
+                LLAMA_LOG_WARN("%s: -sot-s requested but the output tensor is not split, keeping the output logits subset on a single GPU\n", __func__);
+            }
+        }
+    }
+    // remember the real-split decision (before the granularity fallback) so a later extraction that
+    // finds the full output already in host memory can reuse it
+    model->output_subset_split = use_split;
+    const int n_device = use_split ? ((ggml_split_tensor_t *) model->output->extra)->n_device : 0;
+
+    // the split buffer's set_tensor requires each device chunk to hold a multiple of the type's
+    // repack interleave (4/8/16 rows for interleaved quants, 1 for F16/BF16/plain types). chunk the
+    // subset accordingly; fall back to a single-GPU subset when the subset size is not a multiple
+    // of the interleave
+    const int64_t granularity = interleaved_properties(model->output->type).second;
+    if (use_split && n_ids % granularity != 0) {
+        LLAMA_LOG_WARN("%s: subset size %d is not a multiple of the %lld-row interleave, keeping the output logits subset on a single GPU\n", __func__, n_ids, (long long) granularity);
+        use_split = false;
+    }
+
+    // ids live in their own context, so the subset weight context can be allocated in the split buffer
+    ggml_context * ctx_ids = nullptr;
+    ggml_backend_buffer_t buf_ids = nullptr;
+    ggml_tensor * subset_ids = nullptr;
+    {
+        ggml_init_params params = {
+            /*.mem_size   =*/ ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ctx_ids = ggml_init(params);
+        if (ctx_ids == nullptr) {
+            return -1;
+        }
+        subset_ids = ggml_new_tensor_1d(ctx_ids, GGML_TYPE_I32, n_ids);
+        ggml_set_name(subset_ids, "output_subset.ids");
+        // the subset ids live in a regular (non-split) buffer: buft_matrix is the split buffer type
+        // under -sm tenpar/attn, which would leave a tensor without `extra` pointing at its dummy base
+        ggml_backend_buffer_type_t ids_buft = model->buft_output.buft != nullptr ?
+            model->buft_output.buft : ggml_backend_cpu_buffer_type();
+        buf_ids = ggml_backend_alloc_ctx_tensors_from_buft(ctx_ids, ids_buft);
+        if (buf_ids == nullptr) {
+            ggml_free(ctx_ids);
+            return -1;
+        }
+        ggml_backend_tensor_set(subset_ids, ids, 0, (size_t) n_ids * sizeof(int32_t));
+    }
+
+    ggml_context * ctx_sub = nullptr;
+    ggml_backend_buffer_t buf_sub = nullptr;
+    ggml_tensor * subset = nullptr;
+    ggml_context * ctx_splits = nullptr;
+    {
+        ggml_init_params params = {
+            /*.mem_size   =*/ ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ctx_sub = ggml_init(params);
+        if (ctx_sub == nullptr) {
+            ggml_backend_buffer_free(buf_ids);
+            ggml_free(ctx_ids);
+            return -1;
+        }
+        subset = ggml_new_tensor_2d(ctx_sub, model->output->type, model->output->ne[0], n_ids);
+        ggml_set_name(subset, "output_subset.weight");
+
+        if (use_split) {
+            auto split_output = (ggml_split_tensor_t *) model->output->extra;
+            auto & sp = model->split_output_subset;
+            // the split tensors live in their own context (never allocated); the split buffer's
+            // init_tensor assigns each one its per-device chunk buffer/pointer when the subset is
+            // allocated below
+            ggml_init_params sp_params = {
+                /*.mem_size   =*/ (size_t) ggml_tensor_overhead() * n_device,
+                /*.mem_buffer =*/ nullptr,
+                /*.no_alloc   =*/ true,
+            };
+            ctx_splits = ggml_init(sp_params);
+            if (ctx_splits == nullptr) {
+                ggml_backend_buffer_free(buf_ids);
+                ggml_free(ctx_ids);
+                ggml_free(ctx_sub);
+                return -1;
+            }
+            sp.tensor_splits.resize(n_device);
+            // split the subset rows across the output tensor's devices, proportional to the output
+            // split sizes (in 16-row chunks) so the additional tensor is balanced; -sot-s N limits
+            // the subset to the first N of the output's split GPUs
+            const int max_devices = model->split_output_tensor_subset; // 1 = all output GPUs
+            int64_t total_rows = 0;
+            {
+                int used = 0;
+                for (int id = 0; id < n_device; ++id) {
+                    auto osplit = split_output->splits[id];
+                    if (!osplit) {
+                        continue;
+                    }
+                    if (max_devices > 1 && used >= max_devices) {
+                        break;
+                    }
+                    ++used;
+                    total_rows += osplit->ne[1];
+                }
+            }
+            GGML_ASSERT(total_rows > 0);
+            int64_t nchunk = n_ids / granularity;
+            int64_t chunks_left = nchunk;
+            int last_active = -1;
+            std::vector<int64_t> rows(n_device, 0);
+            {
+                int used = 0;
+                for (int id = 0; id < n_device; ++id) {
+                    auto osplit = split_output->splits[id];
+                    if (!osplit) {
+                        continue;
+                    }
+                    if (max_devices > 1 && used >= max_devices) {
+                        break;
+                    }
+                    ++used;
+                    int64_t c = (int64_t) ((double) osplit->ne[1] * nchunk / (double) total_rows);
+                    if (c > chunks_left) {
+                        c = chunks_left;
+                    }
+                    rows[id] = c * granularity;
+                    chunks_left -= c;
+                    if (c > 0) {
+                        last_active = id;
+                    }
+                }
+            }
+            if (chunks_left > 0) {
+                GGML_ASSERT(last_active >= 0);
+                rows[last_active] += chunks_left * granularity;
+            }
+            int n_active = 0;
+            for (int id = 0; id < n_device; ++id) {
+                if (rows[id] > 0) {
+                    ++n_active;
+                }
+            }
+            LLAMA_LOG_INFO("%s: splitting the output logits subset (%d rows) across %d output GPU%s\n", __func__, n_ids, n_active, n_active == 1 ? "" : "s");
+            for (int id = 0; id < n_device; ++id) {
+                if (rows[id] > 0) {
+                    sp.tensor_splits[id] = ggml_new_tensor_2d(ctx_splits, subset->type, subset->ne[0], rows[id]);
+                    ggml_set_name(sp.tensor_splits[id], (std::string("output_subset.weight.") + std::to_string(id)).c_str());
+                } else {
+                    sp.tensor_splits[id] = nullptr;
+                }
+            }
+            sp.ggml.n_device  = n_device;
+            sp.ggml.split_dim = 1;
+            sp.ggml.tensor    = subset;
+            sp.ggml.splits    = sp.tensor_splits.data();
+            subset->extra = (void *) &sp.ggml;
+        }
+
+        // the subset weight is allocated in the split buffer (buft_matrix under -sm tenpar/attn) so the
+        // per-device chunk tensors get their buffers, or in a regular buffer when not split
+        ggml_backend_buffer_type_t buft;
+        if (use_split) {
+            buft = model->buft_output.buft_matrix != nullptr ?
+                model->buft_output.buft_matrix : ggml_backend_cpu_buffer_type();
+        } else {
+            buft = model->buft_output.buft != nullptr ?
+                model->buft_output.buft : ggml_backend_cpu_buffer_type();
+        }
+        buf_sub = ggml_backend_alloc_ctx_tensors_from_buft(ctx_sub, buft);
+        if (buf_sub == nullptr) {
+            ggml_backend_buffer_free(buf_ids);
+            ggml_free(ctx_ids);
+            ggml_free(ctx_sub);
+            if (ctx_splits != nullptr) {
+                ggml_free(ctx_splits);
+            }
+            return -1;
+        }
+        ggml_backend_tensor_set(subset, data.data(), 0, data.size());
+    }
+
+    model->ctx_output_subset     = ctx_sub;
+    model->buf_output_subset     = buf_sub;
+    model->ctx_output_subset_ids = ctx_ids;
+    model->buf_output_subset_ids = buf_ids;
+    model->ctx_output_subset_splits = ctx_splits;
+    model->output_subset         = subset;
+    model->output_subset_ids     = subset_ids;
+
+    // if requested, move the full output tensor to host memory (CUDA_Host with CUDA, CPU otherwise)
+    // so the GPU buffer it occupied can be released while the subset handles the lm_head; the host
+    // copy keeps the full rows available for re-extracting the subset on later allowlist changes
+    if (model->output_subset_host && !model->output_full_host) {
+        llama_model_output_to_host(*model);
+    }
+
+    return 0;
 }
 
 const struct llama_model * llama_get_model(const struct llama_context * ctx) {

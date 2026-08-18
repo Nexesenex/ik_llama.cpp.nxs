@@ -409,6 +409,7 @@ struct gpt_params {
     std::vector<std::string> allow_pieces;  // each token to allowlist
     std::vector<std::string> allow_kws;     // keywords
     size_t allow_kw_delay;  // minimum n_decoded before first keyword is active
+    bool   allow_subset    = false;  // restrict output logits computation to the allowlisted subset (Option A)
 
     std::vector<std::tuple<
         uint32_t        // lower codepoint
@@ -515,6 +516,8 @@ struct gpt_params {
     bool split_mode_tensor_parallel_scheduling = false; // if true, force split mode tensor parallel (graph) scheduling
     //bool split_mode_f16    = true;  // if true, intermediate results will be cast to f16 before copying to other GPUs to perform reduce ops
     int  split_output_tensor = 0; // 0=off, 1=split on all GPUs, N>1=split on top N GPUs by VRAM
+    int  split_output_tensor_subset = 0; // 0=off, -1=follow -sot, 1=all output GPUs, N>1=top N output GPUs
+    bool output_subset_host   = false; // if true and the output logits subset is set, keep the full output tensor in host memory (CUDA_Host with CUDA, CPU otherwise) and free its GPU buffer
     bool scheduler_async   = false; // if true, in split mode graph the scheduler will use multiple threads to evaluate the graph
     int  fused_delta_net   = 0;     // use fused delta-net if number of tokens in the batch is less than this value
     bool has_mtp           = false; // enable MTP if supported by the model
@@ -844,6 +847,20 @@ std::vector<llama_token> common_tokenize(
     const std::string& text,
     bool   add_special,
     bool   parse_special = false);
+
+// allowlist helpers (see llama_model_set_output_subset): compute the per-rule-set bias vector
+// (rule bias for an allowed token, -INFINITY for a banned one) and the union of vocab ids that are
+// allowed by at least one rule set or by the allowlist pieces. the union is the safe superset used
+// to restrict the output logits computation (Option A).
+std::vector<float> common_allowlist_set_bias(
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & rules);
+
+std::vector<int32_t> common_allowlist_union_ids(
+        const struct llama_model * model,
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> & rules,
+        const std::vector<std::string> & allow_pieces);
 
 std::vector<llama_token> llama_tokenize(
     const struct llama_vocab * vocab,
