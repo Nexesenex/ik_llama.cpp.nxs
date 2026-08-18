@@ -4663,18 +4663,22 @@ void server_context::release_slot_after_final_response(server_slot & slot) {
     // log the reason generation ended
     if (slot.ctx_sampling != nullptr && slot.ctx_sampling->special_eosg_hit) {
         LOG_INFO("TG_STOP", {
-            {"id_slot",      slot.id},
-            {"id_task",      slot.id_task},
-            {"n_decoded",    slot.n_decoded},
-            {"stop_reason",  "special_eog"},
-            {"stop_string",  slot.ctx_sampling->special_eosg_matched},
+            {"id_slot",         slot.id},
+            {"id_task",         slot.id_task},
+            {"n_decoded",       slot.n_decoded},
+            {"stop_reason",     "special_eog"},
+            {"stop_string",     slot.ctx_sampling->special_eosg_matched},
+            {"eog_token",       slot.sampled},
+            {"eog_token_text",  common_token_to_piece(ctx, slot.sampled)},
         });
     } else if (slot.stopped_eos) {
         LOG_INFO("TG_STOP", {
-            {"id_slot",      slot.id},
-            {"id_task",      slot.id_task},
-            {"n_decoded",    slot.n_decoded},
-            {"stop_reason",  "eos"},
+            {"id_slot",         slot.id},
+            {"id_task",         slot.id_task},
+            {"n_decoded",       slot.n_decoded},
+            {"stop_reason",     "eos"},
+            {"eog_token",       slot.sampled},
+            {"eog_token_text",  common_token_to_piece(ctx, slot.sampled)},
         });
     } else if (slot.stopped_word) {
         LOG_INFO("TG_STOP", {
