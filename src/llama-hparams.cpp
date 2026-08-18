@@ -819,6 +819,9 @@ void llm_load_hparams(
                     case 64: // without MTP layer
                     case 65: // with MTP layer (64 main + 1 MTP)
                         model.type = e_model::MODEL_27B; break;
+                    case 96: // without MTP layer
+                    case 97: // with MTP layer (96 main + 1 MTP)
+                        model.type = e_model::MODEL_40B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
