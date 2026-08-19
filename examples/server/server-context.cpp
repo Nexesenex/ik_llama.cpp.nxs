@@ -390,13 +390,25 @@ void server_context::init() {
         } else {
             const int32_t n_vocab = populate_vocab_pieces();
             const auto ids = common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, params_base.disallow_rules);
+            const int32_t n_remaining = (int32_t) ids.size();
+            // rows preserved by the allowlist stage (union of the allow rules + pieces; full vocab when no allow rules)
+            const int32_t n_preserved = (int32_t) common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, {}).size();
+            const int32_t n_ditched = n_preserved - n_remaining;
             if (!ids.empty() && llama_model_set_output_subset(model, ids.data(), (int32_t) ids.size()) == 0) {
-                LLAMA_LOG_INFO("%s: output logits restricted to %d/%d vocab rows by the allowlist/disallowlist\n",
-                        __func__, (int32_t) ids.size(), n_vocab);
+                LLAMA_LOG_INFO("%s: output logits restricted to %d/%d vocab rows by the allowlist/disallowlist (%d preserved by allowlist, %d ditched by disallowlist)\n",
+                        __func__, n_remaining, n_vocab, n_preserved, n_ditched);
             } else {
                 LLAMA_LOG_WARN("%s: output logits subset not enabled (allowlist/disallowlist active, subset unsupported)\n", __func__);
             }
         }
+    } else if (!params_base.allow_rules.empty() || !params_base.disallow_rules.empty()) {
+        // traditional allowlist/disallowlist without the output subset: still report the logit accounting
+        const int32_t n_vocab = populate_vocab_pieces();
+        const int32_t n_preserved = (int32_t) common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, {}).size();
+        const int32_t n_remaining = (int32_t) common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, params_base.disallow_rules).size();
+        const int32_t n_ditched = n_preserved - n_remaining;
+        LLAMA_LOG_INFO("%s: allowlist preserves %d/%d logits, disallowlist ditches %d, %d/%d logits remain\n",
+                __func__, n_preserved, n_vocab, n_ditched, n_remaining, n_vocab);
     }
 
     default_generation_settings_for_props = get_formatted_generation(slots.front());
