@@ -2519,6 +2519,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.penalize_nl = true;
         return true;
     }
+    if (arg == "-nsaq" || arg == "--no-space-after-quote") {
+        sparams.no_space_after_quote = true;
+        return true;
+    }
     if (arg == "-l" || arg == "--logit-bias") {
         CHECK_ARG
         std::stringstream ss(argv[i]);
@@ -3239,6 +3243,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --eos-token-probability N", "scales the probability of the EOS/EOG tokens (default: %.1f, 1.0 = no change, 0.0 = EOG tokens effectively disabled)", (double)sparams.eos_token_probability });
     options.push_back({ "*",           "       --special-eosg-token STR",  "stop generation when STR is found in the generated text (acts like an EOG/EOS token; comma-separated list, e.g. -seosgt '<,[,('; can be repeated)" });
     options.push_back({ "*",           "       --penalize-nl",          "penalize newline tokens (default: %s)", sparams.penalize_nl ? "true" : "false" });
+    options.push_back({ "*",           "-nsaq, --no-space-after-quote", "contextual rule: while inside an open \" quote, disallow tokens that begin with a space (e.g. \" You -> \"You)" });
     options.push_back({ "*",           "       --temp N",               "temperature (default: %.1f)", (double)sparams.temp });
     options.push_back({ "*",           "       --top-k N",              "top-k sampling (default: %d, 0 = disabled)", sparams.top_k });
     options.push_back({ "*",           "       --max-candidates N",     "max candidates to keep as prefilter (default: %d, 0 = disabled)", sparams.max_candidates });
@@ -5547,6 +5552,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "prefetch_experts_threads: %d # default: 0 (auto)\n", params.prefetch_experts_threads);
     fprintf(stream, "max_extra_alloc: %d # default: 256\n", params.max_extra_alloc_MiB);
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
+    fprintf(stream, "no_space_after_quote: %s # default: false\n", sparams.no_space_after_quote ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
     fprintf(stream, "ppl_stride: %d # default: 0\n", params.ppl_stride);
     fprintf(stream, "presence_penalty: %f # default: 0.0\n", sparams.penalty_present);

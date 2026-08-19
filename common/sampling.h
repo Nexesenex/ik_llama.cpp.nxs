@@ -129,6 +129,7 @@ typedef struct common_params_sampling {
     int32_t     n_probs               = 0;                  // if greater than 0, output the probabilities of top n_probs tokens.
     int32_t     total_context_size    = 16840;
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
+    bool        no_space_after_quote  = false;              // contextual rule: while inside an open " quote, disallow tokens that begin with a space (e.g. " You -> "You)
     float       eos_token_probability = 1.0f;               // scale factor for the probability of the EOS/EOG tokens (1.0 = no change, 0.0 = EOG tokens effectively disabled)
     std::vector<std::string> special_eosg_tokens;          // if non-empty, the first occurrence of any of these strings in the generated text stops generation like an EOG/EOS token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
@@ -231,6 +232,9 @@ struct common_sampler {
     std::vector<llama_token>      prev;
     std::vector<llama_token_data> cur;
     llama_sampler_dry* smpl;
+
+    bool              quote_open = false;              // true when the accepted text is inside an open " quote (contextual no_space_after_quote rule)
+    std::vector<bool> starts_with_space;               // vocab rows whose piece begins with a space (only built when no_space_after_quote is set)
 
     llama_sampler_adaptive_p * adapt_p_ctx;    // adaptive p sampler
 

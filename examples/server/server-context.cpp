@@ -1188,6 +1188,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     slot.sparams.adaptive_decay = json_value(data, "adaptive_decay", default_sparams.adaptive_decay);
     slot.sparams.adaptive_updt_w_cur = json_value(data, "adaptive_updt_w_cur", default_sparams.adaptive_updt_w_cur);
     slot.sparams.penalize_nl = json_value(data, "penalize_nl", default_sparams.penalize_nl);
+    slot.sparams.no_space_after_quote = json_value(data, "no_space_after_quote", default_sparams.no_space_after_quote);
     slot.params.n_keep = json_value(data, "n_keep", slot.params.n_keep);
     slot.params.n_discard = json_value(data, "n_discard", defaults.n_discard);
     slot.sparams.seed = json_value(data, "seed", default_sparams.seed);
@@ -2453,6 +2454,7 @@ json server_context::get_formatted_generation(const server_slot& slot) const {
         {"adaptive_decay",            slot.sparams.adaptive_decay},
         {"adaptive_updt_w_cur",       slot.sparams.adaptive_updt_w_cur},
         {"penalize_nl",               slot.sparams.penalize_nl},
+        {"no_space_after_quote",      slot.sparams.no_space_after_quote},
         {"stop",                      slot.params.antiprompt},
         {"max_tokens",                slot.params.n_predict}, // User configured n_predict
         {"n_keep",                    slot.params.n_keep},
