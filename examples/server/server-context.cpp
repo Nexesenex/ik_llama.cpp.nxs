@@ -382,18 +382,20 @@ void server_context::init() {
     // restrict the output logits computation to the union of the allowlist-allowed tokens
     // (Option A). opt-in via --allowlist-subset. the subset is computed from the CLI-level allowlist
     // rules/pieces; per-request allowlist_piece_array overrides that fall outside of this union are a
-    // known limitation.
-    if (params_base.allow_subset && params_base.allow_rules.empty()) {
-        LLAMA_LOG_WARN("%s: --allowlist-subset given without --allowlist-unicode-rule, ignoring\n", __func__);
-    }
-    if (!params_base.allow_rules.empty() && params_base.allow_subset) {
-        const int32_t n_vocab = populate_vocab_pieces();
-        const auto ids = common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces);
-        if (!ids.empty() && llama_model_set_output_subset(model, ids.data(), (int32_t) ids.size()) == 0) {
-            LLAMA_LOG_INFO("%s: output logits restricted to %d/%d vocab rows by the allowlist\n",
-                    __func__, (int32_t) ids.size(), n_vocab);
+    // known limitation. disallow rules subtract their banned rows from the union (with no allow rules
+    // the union starts from the full vocabulary), so --allowlist-subset also works disallow-only.
+    if (params_base.allow_subset) {
+        if (params_base.allow_rules.empty() && params_base.disallow_rules.empty()) {
+            LLAMA_LOG_WARN("%s: --allowlist-subset given without --allowlist-unicode-rule or --disallowlist-unicode-rule, ignoring\n", __func__);
         } else {
-            LLAMA_LOG_WARN("%s: output logits subset not enabled (allowlist active, subset unsupported)\n", __func__);
+            const int32_t n_vocab = populate_vocab_pieces();
+            const auto ids = common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, params_base.disallow_rules);
+            if (!ids.empty() && llama_model_set_output_subset(model, ids.data(), (int32_t) ids.size()) == 0) {
+                LLAMA_LOG_INFO("%s: output logits restricted to %d/%d vocab rows by the allowlist/disallowlist\n",
+                        __func__, (int32_t) ids.size(), n_vocab);
+            } else {
+                LLAMA_LOG_WARN("%s: output logits subset not enabled (allowlist/disallowlist active, subset unsupported)\n", __func__);
+            }
         }
     }
 
@@ -1829,30 +1831,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         if (!slot.disallow_rules.empty()) {
             // recompute the per-token disallow decision only when the rules changed
             if (slot.disallow_rules != slot.disallow_rules_prev) {
-                slot.disallow_banned.assign(n_vocab, false);
-                std::vector<uint32_t> cpts;
-                std::vector<std::string> scripts;
-                for (size_t id = 0; id < (size_t) n_vocab; ++id) {
-                    const size_t n_cpt = llama_fill_from_utf8(&vocab_pieces[id], &cpts, &scripts);
-                    bool banned = false;
-                    for (size_t j = 0; j < n_cpt; ++j) {
-                        // common/inherited codepoints (e.g. whitespace) never trigger a ban on their own
-                        if ((scripts[j] == "common") || (scripts[j] == "inherited")) {
-                            continue;
-                        }
-                        for (const auto& rule: slot.disallow_rules) {
-                            const bool in_range = (std::get<0>(rule) <= cpts[j]) && (cpts[j] <= std::get<1>(rule));
-                            if (in_range && ((std::get<2>(rule) == "*") || std::get<2>(rule) == scripts[j])) {
-                                banned = true;
-                                break;
-                            }
-                        }
-                        if (banned) {
-                            break;
-                        }
-                    }
-                    slot.disallow_banned[id] = banned;
-                }
+                slot.disallow_banned = common_disallowlist_banned_ids(vocab_pieces, slot.disallow_rules);
                 slot.disallow_rules_prev = slot.disallow_rules;
             }
 

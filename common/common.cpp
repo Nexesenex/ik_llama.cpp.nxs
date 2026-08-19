@@ -3417,7 +3417,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
     options.push_back({ "*",           "       --allowlist-keyword-delay",
                                                                         "# tokens to delay matching for the first keyword (default: %zu)", params.allow_kw_delay });
-    options.push_back({ "*",           "       --allowlist-subset",     "restrict the output logits computation to the allowlisted vocab rows (Option A). requires at least one --allowlist-unicode-rule" });
+    options.push_back({ "*",           "       --allowlist-subset",     "restrict the output logits computation to the allowed vocab rows (Option A). requires at least one --allowlist-unicode-rule or --disallowlist-unicode-rule" });
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
@@ -5248,13 +5248,45 @@ std::vector<float> common_allowlist_set_bias(
     return biases;
 }
 
+std::vector<bool> common_disallowlist_banned_ids(
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & rules) {
+    const int32_t n_vocab = (int32_t) vocab_pieces.size();
+    std::vector<bool> banned(n_vocab, false);
+
+    std::vector<uint32_t> cpts;
+    std::vector<std::string> scripts;
+    for (int32_t id = 0; id < n_vocab; ++id) {
+        const size_t n_cpt = llama_fill_from_utf8((void *) &vocab_pieces[id], &cpts, &scripts);
+        for (size_t j = 0; j < n_cpt; ++j) {
+            // common/inherited codepoints (e.g. whitespace) never trigger a ban on their own
+            if ((scripts[j] == "common") || (scripts[j] == "inherited")) {
+                continue;
+            }
+            for (const auto & rule: rules) {
+                const bool in_range = (std::get<0>(rule) <= cpts[j]) && (cpts[j] <= std::get<1>(rule));
+                if (in_range && ((std::get<2>(rule) == "*") || std::get<2>(rule) == scripts[j])) {
+                    banned[id] = true;
+                    break;
+                }
+            }
+            if (banned[id]) {
+                break;
+            }
+        }
+    }
+    return banned;
+}
+
 std::vector<int32_t> common_allowlist_union_ids(
         const struct llama_model * model,
         const std::vector<std::string> & vocab_pieces,
         const std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> & rules,
-        const std::vector<std::string> & allow_pieces) {
+        const std::vector<std::string> & allow_pieces,
+        const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & disallow_rules) {
     const int32_t n_vocab = (int32_t) vocab_pieces.size();
-    std::vector<bool> allowed(n_vocab, false);
+    // without allow rules everything starts allowed; with allow rules only the union is allowed
+    std::vector<bool> allowed(n_vocab, rules.empty());
 
     for (const auto & piece: allow_pieces) {
         for (const auto token: common_tokenize(model, piece, false, true)) {
@@ -5268,6 +5300,16 @@ std::vector<int32_t> common_allowlist_union_ids(
         for (int32_t id = 0; id < n_vocab; ++id) {
             if (biases[id] != -INFINITY) {
                 allowed[id] = true;
+            }
+        }
+    }
+
+    // disallow wins: subtract every disallowed row from the union
+    if (!disallow_rules.empty()) {
+        const auto banned = common_disallowlist_banned_ids(vocab_pieces, disallow_rules);
+        for (int32_t id = 0; id < n_vocab; ++id) {
+            if (banned[id]) {
+                allowed[id] = false;
             }
         }
     }
