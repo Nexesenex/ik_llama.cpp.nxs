@@ -508,6 +508,8 @@ node index.js
 
     `penalize_nl`: Penalize newline tokens when applying the repeat penalty. Default: `true`
 
+    `no_space_after_quote`: Contextual sampler rule. While inside an open `"` quote, disallow tokens that begin with a space (e.g. `" You` becomes `"You`, and a spaced closing quote `today. "` becomes `today."`). Default: `false`
+
     `presence_penalty`: Repeat alpha presence penalty. Default: `0.0`, which is disabled.
 
     `frequency_penalty`: Repeat alpha frequency penalty. Default: `0.0`, which is disabled.
