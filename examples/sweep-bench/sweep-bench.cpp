@@ -163,22 +163,23 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // allowlist (Option A): restrict the output logits computation to the allowlisted subset of vocab rows
-    if (params.allow_subset && params.allow_rules.empty()) {
-        LOG_TEE("%s: warning: --allowlist-subset given without --allowlist-unicode-rule, ignoring\n", __func__);
-    }
-    if (!params.allow_rules.empty() && params.allow_subset) {
-        const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-        std::vector<std::string> vocab_pieces;
-        vocab_pieces.reserve(n_vocab);
-        for (int32_t id = 0; id < n_vocab; ++id) {
-            vocab_pieces.push_back(common_token_to_piece(ctx, id, true));
-        }
-        const auto ids = common_allowlist_union_ids(model, vocab_pieces, params.allow_rules, params.allow_pieces);
-        if (!ids.empty() && llama_model_set_output_subset(model, ids.data(), (int32_t) ids.size()) == 0) {
-            LOG_TEE("%s: output logits restricted to %d/%d vocab rows by the allowlist\n", __func__, (int32_t) ids.size(), n_vocab);
+    // allowlist/disallowlist (Option A): restrict the output logits computation to the allowed subset of vocab rows
+    if (params.allow_subset) {
+        if (params.allow_rules.empty() && params.disallow_rules.empty()) {
+            LOG_TEE("%s: warning: --allowlist-subset given without --allowlist-unicode-rule or --disallowlist-unicode-rule, ignoring\n", __func__);
         } else {
-            LOG_TEE("%s: warning: output logits subset not enabled (allowlist active, subset unsupported)\n", __func__);
+            const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+            std::vector<std::string> vocab_pieces;
+            vocab_pieces.reserve(n_vocab);
+            for (int32_t id = 0; id < n_vocab; ++id) {
+                vocab_pieces.push_back(common_token_to_piece(ctx, id, true));
+            }
+            const auto ids = common_allowlist_union_ids(model, vocab_pieces, params.allow_rules, params.allow_pieces, params.disallow_rules);
+            if (!ids.empty() && llama_model_set_output_subset(model, ids.data(), (int32_t) ids.size()) == 0) {
+                LOG_TEE("%s: output logits restricted to %d/%d vocab rows by the allowlist/disallowlist\n", __func__, (int32_t) ids.size(), n_vocab);
+            } else {
+                LOG_TEE("%s: warning: output logits subset not enabled (allowlist/disallowlist active, subset unsupported)\n", __func__);
+            }
         }
     }
 
