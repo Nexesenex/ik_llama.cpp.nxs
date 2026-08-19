@@ -2480,7 +2480,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         if (params.allow_rules.size() == 0) {
             params.allow_rules.push_back({});
         }
-        params.allow_rules.back().push_back(argparse_allowlist_unicode_rule(argv[i]));
+        // multiple rules can be given in a single argument, separated by ';'
+        for (const auto& subarg : string_split(std::string(argv[i]), ';')) {
+            if (!subarg.empty()) {
+                params.allow_rules.back().push_back(argparse_allowlist_unicode_rule(subarg));
+            }
+        }
         return true;
     }
     if (arg == "--allowlist-pieces") {
@@ -3361,7 +3366,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --banned-n",             "number of tokens banned in the phrase during rewind. -1 means all tokens: (default: %d)",params.banned_n });
     options.push_back({ "*",           "       --allowlist-unicode-rule",
                                                                         "rule for allowlisting unicode script and/or codepoints. disabled without any rule. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
-                                                                        "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n" });
+                                                                        "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n"
+                                                                        "multiple rules can be specified in one argument, separated by `;`\n" });
     options.push_back({ "*",           "       --allowlist-pieces",     "allowlist each token in argument. inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule" });
     options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
     options.push_back({ "*",           "       --allowlist-keyword-delay",
