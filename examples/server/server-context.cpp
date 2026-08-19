@@ -538,6 +538,7 @@ void server_slot::reset() {
     allow_kws.clear();
     allow_kw_delay = 0;
     allow_idx = 0;
+    disallow_rules.clear();
 
     // Reset speculative decoding stats
     n_draft_total = 0;
@@ -1738,11 +1739,17 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     {
         // TODO: JSON parsing for rules and keywords
         slot.allow_rules = params_base.allow_rules;
-        if (slot.allow_rules.size() == 0) {
+        slot.disallow_rules = params_base.disallow_rules;
+        if (slot.allow_rules.size() == 0 && slot.disallow_rules.size() == 0) {
             slot.allow_biasess.clear();
             break;
         }
         slot.allow_kws = params_base.allow_kws;
+
+        if (slot.allow_rules.size() == 0) {
+            // no allow rules: allow everything by default, the disallowlist decides
+            slot.allow_rules.push_back({ { 0, (uint32_t) -1, "*", 0.0f } });
+        }
 
         slot.allow_pieces = params_base.allow_pieces;
         const auto& allowlist_piece_array = data.find("allowlist_piece_array");
@@ -1828,6 +1835,49 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             }
             for (const auto token: allow_settoken) {
                 biases[token] = max_bias;
+            }
+        }
+
+        if (!slot.disallow_rules.empty()) {
+            // recompute the per-token disallow decision only when the rules changed
+            if (slot.disallow_rules != slot.disallow_rules_prev) {
+                slot.disallow_banned.assign(n_vocab, false);
+                std::vector<uint32_t> cpts;
+                std::vector<std::string> scripts;
+                for (size_t id = 0; id < (size_t) n_vocab; ++id) {
+                    const size_t n_cpt = llama_fill_from_utf8(&vocab_pieces[id], &cpts, &scripts);
+                    bool banned = false;
+                    for (size_t j = 0; j < n_cpt; ++j) {
+                        // common/inherited codepoints (e.g. whitespace) never trigger a ban on their own
+                        if ((scripts[j] == "common") || (scripts[j] == "inherited")) {
+                            continue;
+                        }
+                        for (const auto& rule: slot.disallow_rules) {
+                            const bool in_range = (std::get<0>(rule) <= cpts[j]) && (cpts[j] <= std::get<1>(rule));
+                            if (in_range && ((std::get<2>(rule) == "*") || std::get<2>(rule) == scripts[j])) {
+                                banned = true;
+                                break;
+                            }
+                        }
+                        if (banned) {
+                            break;
+                        }
+                    }
+                    slot.disallow_banned[id] = banned;
+                }
+                slot.disallow_rules_prev = slot.disallow_rules;
+            }
+
+            // disallow wins over allow rules and allow pieces
+            for (auto& biases: slot.allow_biasess) {
+                if (biases.size() != (size_t) n_vocab) {
+                    continue;
+                }
+                for (size_t id = 0; id < (size_t) n_vocab; ++id) {
+                    if (slot.disallow_banned[id]) {
+                        biases[id] = -INFINITY;
+                    }
+                }
             }
         }
     } while (false);
