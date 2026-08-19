@@ -831,8 +831,14 @@ std::vector<llama_token> common_tokenize(
 // allowlist helpers (see llama_model_set_output_subset): compute the per-rule-set bias vector
 // (rule bias for an allowed token, -INFINITY for a banned one) and the union of vocab ids that are
 // allowed by at least one rule set or by the allowlist pieces. the union is the safe superset used
-// to restrict the output logits computation (Option A).
+// to restrict the output logits computation (Option A). disallow rules (if any) subtract their
+// banned ids from that union, so disallow wins; with no allow rules the union starts from the full
+// vocabulary, making the subset the complement of the disallowed rows.
 std::vector<float> common_allowlist_set_bias(
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & rules);
+
+std::vector<bool> common_disallowlist_banned_ids(
         const std::vector<std::string> & vocab_pieces,
         const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & rules);
 
@@ -840,7 +846,8 @@ std::vector<int32_t> common_allowlist_union_ids(
         const struct llama_model * model,
         const std::vector<std::string> & vocab_pieces,
         const std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> & rules,
-        const std::vector<std::string> & allow_pieces);
+        const std::vector<std::string> & allow_pieces,
+        const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & disallow_rules);
 
 std::vector<llama_token> llama_tokenize(
     const struct llama_vocab * vocab,
