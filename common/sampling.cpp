@@ -29,6 +29,16 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     result->grammar = nullptr;
     result->rbudget = nullptr;
 
+    // precompute which vocab rows begin with a space for the contextual no_space_after_quote rule
+    if (result->params.no_space_after_quote && vocab != nullptr) {
+        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+        result->starts_with_space.resize(n_vocab);
+        for (llama_token id = 0; id < n_vocab; ++id) {
+            const auto piece = common_token_to_piece(vocab, id, false);
+            result->starts_with_space[id] = !piece.empty() && piece[0] == ' ';
+        }
+    }
+
     struct llama_grammar* grmr = nullptr;
     const std::string & grammar_str = common_grammar_value(params.grammar);
     if (grammar_str.compare(0, 11, "%llguidance") == 0) {
@@ -238,6 +248,7 @@ static void llama_grammar_reset(common_sampler * ctx) {
 void common_sampler_reset(common_sampler * ctx) {
     // llama_grammar_reset(ctx);
     ctx->prev.clear();
+    ctx->quote_open = false;
     llama_sampler_dry_reset(ctx->smpl);
 
     llama_free_adaptive_p(ctx->adapt_p_ctx);
@@ -757,6 +768,16 @@ static llama_token_data_array llama_sampling_prepare_impl(
         }
     }
 
+    // contextual quote rule: while inside an open " quote, disallow tokens that begin with a space
+    // (e.g. " You -> "You, and a spaced closing quote today. " -> today.")
+    if (params.no_space_after_quote && ctx_sampling->quote_open && !ctx_sampling->starts_with_space.empty()) {
+        for (size_t idx = 0; idx < cur_p.size; ++idx) {
+            if (ctx_sampling->starts_with_space[cur_p.data[idx].id]) {
+                cur_p.data[idx].logit = -INFINITY;
+            }
+        }
+    }
+
     // apply grammar checks before sampling logic
     if (grammar_first && ctx_sampling->grammar != NULL) {
         llama_grammar_apply(ctx_sampling->grammar, ctx_main, &cur_p);
@@ -802,6 +823,14 @@ void common_sampler_accept(
         ctx_sampling->prev.erase(ctx_sampling->prev.begin());
     }
     ctx_sampling->prev.push_back(token);
+
+    // contextual quote rule: toggle the open-quote state when the accepted piece contains a quote mark
+    if (ctx_sampling->params.no_space_after_quote) {
+        const auto piece = common_token_to_piece(ctx_main, token, false);
+        if (std::count(piece.begin(), piece.end(), '"') & 1) {
+            ctx_sampling->quote_open = !ctx_sampling->quote_open;
+        }
+    }
 
     // grammar_should_apply() checks the reasoning budget state, so calculate this before we accept
     const auto accept_grammar = is_generated && grammar_should_apply(ctx_sampling);
