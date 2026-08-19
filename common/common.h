@@ -410,6 +410,13 @@ struct gpt_params {
     std::vector<std::string> allow_kws;     // keywords
     size_t allow_kw_delay;  // minimum n_decoded before first keyword is active
 
+    std::vector<std::tuple<
+        uint32_t        // lower codepoint
+        ,uint32_t       // upper codepoint
+        ,std::string    // unicode script name
+        ,float          // bias
+    >> disallow_rules;  // always-active disallowlist; disallow wins over allow
+
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     std::vector<std::pair<int,int>> offload_policy;

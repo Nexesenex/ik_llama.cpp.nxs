@@ -118,6 +118,11 @@ struct server_slot {
     std::vector<std::vector<float>> allow_biasess;
     size_t allow_idx = 0;
 
+    // disallowlist (always active, wins over allowlist)
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> disallow_rules;
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> disallow_rules_prev;
+    std::vector<bool> disallow_banned;
+
     server_prompt server_cached_prompt;
 
     void prompt_save(server_prompt_cache& prompt_cache) const;
