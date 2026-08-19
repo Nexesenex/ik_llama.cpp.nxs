@@ -2468,7 +2468,9 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         // multiple rules can be given in a single argument, separated by ';'
         for (const auto& subarg : string_split(std::string(argv[i]), ';')) {
             if (!subarg.empty()) {
-                params.allow_rules.back().push_back(argparse_allowlist_unicode_rule(subarg));
+                for (auto& rule : argparse_allowlist_unicode_rules(subarg)) {
+                    params.allow_rules.back().push_back(rule);
+                }
             }
         }
         return true;
@@ -2478,7 +2480,9 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         // multiple rules can be given in a single argument, separated by ';'
         for (const auto& subarg : string_split(std::string(argv[i]), ';')) {
             if (!subarg.empty()) {
-                params.disallow_rules.push_back(argparse_allowlist_unicode_rule(subarg));
+                for (auto& rule : argparse_allowlist_unicode_rules(subarg)) {
+                    params.disallow_rules.push_back(rule);
+                }
             }
         }
         return true;
@@ -3355,12 +3359,14 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --allowlist-unicode-rule",
                                                                         "rule for allowlisting unicode script and/or codepoints. disabled without any rule. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
                                                                         "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n"
-                                                                        "multiple rules can be specified in one argument, separated by `;`\n" });
+                                                                        "multiple rules can be specified in one argument, separated by `;`\n"
+                                                                        "named subsets: `ideographic` (han, hiragana, katakana, hangul, bopomofo, yi, tangut, nushu), `indic` (devanagari, bengali, gujarati, gurmukhi, kannada, malayalam, oriya, tamil, telugu, sinhala), `persic` (arabic, old_persian, avestan, inscriptional_pahlavi, psalter_pahlavi, manichaean, sogdian, old_sogdian, chorasmian), `mesopotamic` (cuneiform, old_persian, ugaritic, hatran, imperial_aramaic)\n" });
     options.push_back({ "*",           "       --disallowlist-unicode-rule",
                                                                         "rule for disallowing unicode script and/or codepoints. tokens whose non-common codepoints match a rule are banned.\n"
                                                                         "takes precedence over --allowlist-unicode-rule and --allowlist-pieces. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
                                                                         "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n"
-                                                                        "multiple rules can be specified in one argument, separated by `;`\n" });
+                                                                        "multiple rules can be specified in one argument, separated by `;`\n"
+                                                                        "named subsets: `ideographic` (han, hiragana, katakana, hangul, bopomofo, yi, tangut, nushu), `indic` (devanagari, bengali, gujarati, gurmukhi, kannada, malayalam, oriya, tamil, telugu, sinhala), `persic` (arabic, old_persian, avestan, inscriptional_pahlavi, psalter_pahlavi, manichaean, sogdian, old_sogdian, chorasmian), `mesopotamic` (cuneiform, old_persian, ugaritic, hatran, imperial_aramaic)\n" });
     options.push_back({ "*",           "       --allowlist-pieces",     "allowlist each token in argument. inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule" });
     options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
     options.push_back({ "*",           "       --allowlist-keyword-delay",
@@ -5748,6 +5754,35 @@ std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_ru
     }
 
     return { std::min(first, last), std::max(first, last), script, bias };
+}
+
+// named script subsets, expandable in allowlist/disallowlist rules
+static const std::map<std::string, std::vector<std::string>> unicode_script_subsets = {
+    // languages written with ideograms/logographs (CJK and related)
+    { "ideographic", { "han", "hiragana", "katakana", "hangul", "bopomofo", "yi", "tangut", "nushu" } },
+    // modern Indic (South Asian, Brahmic-derived) scripts
+    { "indic", { "devanagari", "bengali", "gujarati", "gurmukhi", "kannada", "malayalam", "oriya", "tamil", "telugu", "sinhala" } },
+    // Persian/Iranian scripts (incl. Arabic script, used for modern Farsi/Dari/Urdu)
+    { "persic", { "arabic", "old_persian", "avestan", "inscriptional_pahlavi", "psalter_pahlavi", "manichaean", "sogdian", "old_sogdian", "chorasmian" } },
+    // cuneiform and other scripts of ancient Mesopotamia
+    { "mesopotamic", { "cuneiform", "old_persian", "ugaritic", "hatran", "imperial_aramaic" } },
+};
+
+std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> argparse_allowlist_unicode_rules(std::string argstr) {
+    // parse a single rule, expanding a named script subset into one rule per component script
+    auto rule = argparse_allowlist_unicode_rule(argstr);
+
+    const auto subset = unicode_script_subsets.find(std::get<2>(rule));
+    if (subset == unicode_script_subsets.end()) {
+        return { std::move(rule) };
+    }
+
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> rules;
+    rules.reserve(subset->second.size());
+    for (const auto& s : subset->second) {
+        rules.emplace_back(std::get<0>(rule), std::get<1>(rule), s, std::get<3>(rule));
+    }
+    return rules;
 }
 
 void argparse_expiring_logit_bias(const std::string& content, common_params_sampling& sparams) {
