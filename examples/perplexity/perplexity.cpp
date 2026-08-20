@@ -2206,8 +2206,8 @@ struct ppl_run_spec {
     float ser_thresh_experts_tiers[GGML_MAX_SER_TIERS] = { 0.0f };
 };
 
-// Parses a ser= override value: "off" (or "0") disables SER, "c,t" is the legacy
-// single pair, "c:t,c:t,..." is the cascade (>= 2 tiers). Fills the run spec.
+// Parses a ser= override value: "off" (or "0") disables SER, "c,t" is the
+// single pair, "c,t;c,t;..." is the cascade (>= 2 tiers). Fills the run spec.
 static bool parse_ser_override(const std::string & value, ppl_run_spec & run) {
     if (value == "off" || value == "none" || value == "0") {
         run.ser_set = true;
@@ -2216,8 +2216,8 @@ static bool parse_ser_override(const std::string & value, ppl_run_spec & run) {
         run.ser_n_tiers = 0;
         return true;
     }
-    if (value.find(':') != std::string::npos) {
-        const auto parts = string_split<std::string>(value, ',');
+    if (value.find(';') != std::string::npos) {
+        const auto parts = string_split<std::string>(value, ';');
         if (parts.size() < 2 || parts.size() > GGML_MAX_SER_TIERS) {
             fprintf(stderr, "%s: --ppl-run-params ser: cascade needs 2..%d tiers, got '%s'\n", __func__, GGML_MAX_SER_TIERS, value.c_str());
             return false;
@@ -2227,16 +2227,16 @@ static bool parse_ser_override(const std::string & value, ppl_run_spec & run) {
         run.ser_min_experts   = -1;
         run.ser_thresh_experts = 0;
         for (size_t k = 0; k < parts.size(); ++k) {
-            const auto tier = string_split<std::string>(parts[k], ':');
+            const auto tier = string_split<std::string>(parts[k], ',');
             if (tier.size() != 2) {
-                fprintf(stderr, "%s: --ppl-run-params ser: invalid tier '%s' (expected c:t)\n", __func__, parts[k].c_str());
+                fprintf(stderr, "%s: --ppl-run-params ser: invalid tier '%s' (expected c,t)\n", __func__, parts[k].c_str());
                 return false;
             }
             try {
                 run.ser_min_experts_tiers[k]   = std::stoi(tier[0]);
                 run.ser_thresh_experts_tiers[k] = std::stof(tier[1]);
             } catch (...) {
-                fprintf(stderr, "%s: --ppl-run-params ser: invalid tier '%s' (expected c:t)\n", __func__, parts[k].c_str());
+                fprintf(stderr, "%s: --ppl-run-params ser: invalid tier '%s' (expected c,t)\n", __func__, parts[k].c_str());
                 return false;
             }
             if (run.ser_min_experts_tiers[k] <= 0 || run.ser_thresh_experts_tiers[k] <= 0) {
@@ -2248,7 +2248,7 @@ static bool parse_ser_override(const std::string & value, ppl_run_spec & run) {
     }
     const auto values = string_split<std::string>(value, ',');
     if (values.size() != 2) {
-        fprintf(stderr, "%s: --ppl-run-params ser: expected 'c,t' or 'c:t,c:t,...' or 'off', got '%s'\n", __func__, value.c_str());
+        fprintf(stderr, "%s: --ppl-run-params ser: expected 'c,t' or 'c,t;c,t;...' or 'off', got '%s'\n", __func__, value.c_str());
         return false;
     }
     try {
@@ -2268,7 +2268,7 @@ static bool parse_ser_override(const std::string & value, ppl_run_spec & run) {
 }
 
 // Parses a --ppl-run-params value given as a copy-paste of the actual llama.cpp
-// CLI flags, e.g. "-ser 7:0.03,6:0.06,5:0.1" or "-c 4096 -ctk q8_0 -khad" or
+// CLI flags, e.g. "-ser 7,0.03;6,0.06;5,0.1" or "-c 4096 -ctk q8_0 -khad" or
 // "-bf arc.bin". Flags that take a value consume the next whitespace-separated
 // token; the boolean flags (-khad, -vhad, --hellaswag, ...) take none. Supports
 // the same overrides as the legacy "key=value" list: ctx, experts (via -okv
@@ -2433,7 +2433,7 @@ static bool parse_ppl_run_spec_cli(const std::string & spec, ppl_run_spec & run)
 // k_cache, v_cache, k_hadamard, v_hadamard, ctk_first, ctk_last, ctv_first, ctv_last, ser.
 static bool parse_ppl_run_spec(const std::string & spec, ppl_run_spec & run) {
     // a spec that starts with a dash is a copy-paste of the actual llama.cpp CLI
-    // flags (e.g. "-ser 7:0.03,6:0.06,5:0.1"); otherwise it's the legacy
+    // flags (e.g. "-ser 7,0.03;6,0.06;5,0.1"); otherwise it's the legacy
     // "key=value,key=value" list
     {
         const size_t first = spec.find_first_not_of(" \t");
@@ -2930,9 +2930,12 @@ int main(int argc, char ** argv) {
                 params.ser_thresh_experts[i] = cur_ser_thresh_experts_tiers[i];
             }
             if (run.ser_n_tiers >= 2) {
-                std::string ser = "cascade:";
+                std::string ser;
                 for (int i = 0; i < run.ser_n_tiers; ++i) {
-                    ser += " " + std::to_string(run.ser_min_experts_tiers[i]) + ":" + std::to_string(run.ser_thresh_experts_tiers[i]);
+                    if (i > 0) {
+                        ser += ";";
+                    }
+                    ser += std::to_string(run.ser_min_experts_tiers[i]) + "," + std::to_string(run.ser_thresh_experts_tiers[i]);
                 }
                 fprintf(stderr, "%s: run %zu/%zu: ser set to %s\n", __func__, irun + 1, n_runs, ser.c_str());
             } else if (run.ser_min_experts > 0) {
