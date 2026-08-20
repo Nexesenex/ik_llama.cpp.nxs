@@ -3406,13 +3406,13 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "rule for allowlisting unicode script and/or codepoints. disabled without any rule. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
                                                                         "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n"
                                                                         "multiple rules can be specified in one argument, separated by `;`\n"
-                                                                        "named subsets: `ideographic` (han, hiragana, katakana, hangul, bopomofo, yi, tangut, nushu), `indic` (devanagari, bengali, gujarati, gurmukhi, kannada, malayalam, oriya, tamil, telugu, sinhala), `persic` (arabic, old_persian, avestan, inscriptional_pahlavi, psalter_pahlavi, manichaean, sogdian, old_sogdian, chorasmian), `mesopotamic` (cuneiform, old_persian, ugaritic, hatran, imperial_aramaic)\n" });
+                                                                        "named subsets: `ideographic` (han, hiragana, katakana, hangul, bopomofo, yi, tangut, nushu), `indic` (devanagari, bengali, gujarati, gurmukhi, kannada, malayalam, oriya, tamil, telugu, sinhala), `persic` (arabic, old_persian, avestan, inscriptional_pahlavi, psalter_pahlavi, manichaean, sogdian, old_sogdian, chorasmian), `semitic` (hebrew, arabic, syriac, samaritan, mandaic, ethiopic, phoenician, imperial_aramaic, old_south_arabian, old_north_arabian, ugaritic, hatran, palmyrene, nabataean, elymaic), `caucasian` (armenian, georgian, caucasian_albanian), `african` (adlam, bamum, bassa_vah, coptic, egyptian_hieroglyphs, ethiopic, garay, medefaidrin, mende_kikakui, meroitic_cursive, meroitic_hieroglyphs, nko, tifinagh, vai), `amerindian` (canadian_aboriginal, cherokee, osage), `austronesian` (balinese, batak, buginese, buhid, cham, hanunoo, javanese, kawi, makasar, rejang, sundanese, tagalog, tagbanwa), `mesopotamic` (cuneiform, old_persian, ugaritic, hatran, imperial_aramaic), `turko_mongol` (old_turkic, mongolian, soyombo, phags_pa), `finno_ugric_uralic` (old_hungarian), `ancient_european` (linear_a, linear_b, cypro_minoan, cypriot, anatolian_hieroglyphs, carian, lycian, lydian, old_italic, runic, ogham, glagolitic, old_hungarian, gothic), `southeast_asian` (thai, lao, khmer, myanmar, tibetan, tai_le, tai_tham, tai_viet, new_tai_lue), `latin_diacritics_viet` (Vietnamese accented latin), `latin_diacritics_western` (Western European accented latin), `latin_diacritics` (union of both), `exotic` (union of all named subsets: every indigenous writing system outside the latin/greek/cyrillic world)\n" });
     options.push_back({ "*",           "       --disallowlist-unicode-rule",
                                                                         "rule for disallowing unicode script and/or codepoints. tokens whose non-common codepoints match a rule are banned.\n"
                                                                         "takes precedence over --allowlist-unicode-rule and --allowlist-pieces. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
                                                                         "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n"
                                                                         "multiple rules can be specified in one argument, separated by `;`\n"
-                                                                        "named subsets: `ideographic` (han, hiragana, katakana, hangul, bopomofo, yi, tangut, nushu), `indic` (devanagari, bengali, gujarati, gurmukhi, kannada, malayalam, oriya, tamil, telugu, sinhala), `persic` (arabic, old_persian, avestan, inscriptional_pahlavi, psalter_pahlavi, manichaean, sogdian, old_sogdian, chorasmian), `mesopotamic` (cuneiform, old_persian, ugaritic, hatran, imperial_aramaic)\n" });
+                                                                        "named subsets: `ideographic` (han, hiragana, katakana, hangul, bopomofo, yi, tangut, nushu), `indic` (devanagari, bengali, gujarati, gurmukhi, kannada, malayalam, oriya, tamil, telugu, sinhala), `persic` (arabic, old_persian, avestan, inscriptional_pahlavi, psalter_pahlavi, manichaean, sogdian, old_sogdian, chorasmian), `semitic` (hebrew, arabic, syriac, samaritan, mandaic, ethiopic, phoenician, imperial_aramaic, old_south_arabian, old_north_arabian, ugaritic, hatran, palmyrene, nabataean, elymaic), `caucasian` (armenian, georgian, caucasian_albanian), `african` (adlam, bamum, bassa_vah, coptic, egyptian_hieroglyphs, ethiopic, garay, medefaidrin, mende_kikakui, meroitic_cursive, meroitic_hieroglyphs, nko, tifinagh, vai), `amerindian` (canadian_aboriginal, cherokee, osage), `austronesian` (balinese, batak, buginese, buhid, cham, hanunoo, javanese, kawi, makasar, rejang, sundanese, tagalog, tagbanwa), `mesopotamic` (cuneiform, old_persian, ugaritic, hatran, imperial_aramaic), `turko_mongol` (old_turkic, mongolian, soyombo, phags_pa), `finno_ugric_uralic` (old_hungarian), `ancient_european` (linear_a, linear_b, cypro_minoan, cypriot, anatolian_hieroglyphs, carian, lycian, lydian, old_italic, runic, ogham, glagolitic, old_hungarian, gothic), `southeast_asian` (thai, lao, khmer, myanmar, tibetan, tai_le, tai_tham, tai_viet, new_tai_lue), `latin_diacritics_viet` (Vietnamese accented latin), `latin_diacritics_western` (Western European accented latin), `latin_diacritics` (union of both), `exotic` (union of all named subsets: every indigenous writing system outside the latin/greek/cyrillic world)\n" });
     options.push_back({ "*",           "       --allowlist-pieces",     "allowlist each token in argument. inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule" });
     options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
     options.push_back({ "*",           "       --allowlist-keyword-delay",
@@ -5941,9 +5941,15 @@ std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_ru
     float bias = subs.size() == 1 ? 0 : std::stof(subs[1]);
 
     subs = string_split(subs[0], ",");
-    std::string script = std::all_of(subs.back().begin(), subs.back().end(), [](char c) {
-        return std::isalpha(c);
-    }) ? string_lower(subs.back()) : "*";
+    // a script or subset name is a field of letters/digits/underscores that contains at least one
+    // letter (e.g. 'latin_diacritics_viet', 'old_south_arabian'); a pure codepoint range such as
+    // '192..591' or '0..127' stays numeric and gets script "*"
+    std::string script = "*";
+    const auto & name = subs.back();
+    if (std::any_of(name.begin(), name.end(), [](char c) { return std::isalpha(c); }) &&
+        std::all_of(name.begin(), name.end(), [](char c) { return std::isalnum(c) || c == '_'; })) {
+        script = string_lower(name);
+    }
     if (script == "ascii") {
         return { 0x000000, 0x00007F, "*", bias };
     }
@@ -5971,8 +5977,75 @@ static const std::map<std::string, std::vector<std::string>> unicode_script_subs
     { "indic", { "devanagari", "bengali", "gujarati", "gurmukhi", "kannada", "malayalam", "oriya", "tamil", "telugu", "sinhala" } },
     // Persian/Iranian scripts (incl. Arabic script, used for modern Farsi/Dari/Urdu)
     { "persic", { "arabic", "old_persian", "avestan", "inscriptional_pahlavi", "psalter_pahlavi", "manichaean", "sogdian", "old_sogdian", "chorasmian" } },
+    // Semitic language scripts: Hebrew, Arabic, the Aramaic/Syriac family, Ethiopic (Ge'ez/Amharic/
+    // Tigrinya), and the ancient Semitic scripts. note: `arabic` overlaps with `persic`.
+    { "semitic", { "hebrew", "arabic", "syriac", "samaritan", "mandaic", "ethiopic", "phoenician", "imperial_aramaic", "old_south_arabian", "old_north_arabian", "ugaritic", "hatran", "palmyrene", "nabataean", "elymaic" } },
+    // Caucasian scripts with indigenous writing systems (not transliterated into latin/cyrillic/greek:
+    // Abkhaz, Chechen, Ossetian, etc. use cyrillic and are excluded)
+    { "caucasian", { "armenian", "georgian", "caucasian_albanian" } },
+    // African scripts with indigenous writing systems (the numerous African languages written with
+    // latin/arabic/cyrillic are excluded). `ethiopic` overlaps with `semitic`.
+    { "african", { "adlam", "bamum", "bassa_vah", "coptic", "egyptian_hieroglyphs", "ethiopic", "garay", "medefaidrin", "mende_kikakui", "meroitic_cursive", "meroitic_hieroglyphs", "nko", "tifinagh", "vai" } },
+    // Indigenous scripts of the Americas (most native American languages use latin and are excluded;
+    // Mayan hieroglyphs are not encoded in Unicode)
+    { "amerindian", { "canadian_aboriginal", "cherokee", "osage" } },
+    // Austronesian scripts of insular Southeast Asia and the Pacific (Oceania): the many Austronesian
+    // languages written with latin (Malay, Tagalog, Hawaiian, Maori, etc.) are excluded
+    { "austronesian", { "balinese", "batak", "buginese", "buhid", "cham", "hanunoo", "javanese", "kawi", "makasar", "rejang", "sundanese", "tagalog", "tagbanwa" } },
+    // scripts of mainland Southeast Asia and the Himalayas: the Tai-Kadai scripts (thai, lao,
+    // tai_le, tai_tham, tai_viet, new_tai_lue), Khmer, Burmese (myanmar) and Tibetan
+    { "southeast_asian", { "thai", "lao", "khmer", "myanmar", "tibetan",
+                           "tai_le", "tai_tham", "tai_viet", "new_tai_lue" } },
     // cuneiform and other scripts of ancient Mesopotamia
     { "mesopotamic", { "cuneiform", "old_persian", "ugaritic", "hatran", "imperial_aramaic" } },
+    // indigenous scripts of the Turkic and Mongolic peoples, predating their latinisation/cyrillisation:
+    // the Orkhon runes of the Gokturks and the classical Mongolian script (plus Soyombo and Phags-pa,
+    // invented for the Mongol empire). modern Turkic languages (Turkish, Uyghur, Kazakh, etc.) write
+    // in latin/cyrillic/arabic scripts and are covered elsewhere.
+    { "turko_mongol", { "old_turkic", "mongolian", "soyombo", "phags_pa" } },
+    // indigenous scripts of the Finno-Ugric/Uralic peoples, predating their latinisation/cyrillisation:
+    // the Hungarian runes are the only one (Finnish, Estonian, Sami and the Russian Uralic languages
+    // — Mordvin, Mari, Udmurt, Komi, Khanty, Mansi, Nenets — write in latin/cyrillic).
+    { "finno_ugric_uralic", { "old_hungarian" } },
+    // ancient European scripts predating the adoption of greek/latin/cyrillic: the Aegean scripts
+    // (Linear A/B, Cypriot syllabary), the Anatolian scripts (Carian, Lycian, Lydian, Luwian
+    // hieroglyphs), Old Italic (Etruscan/Oscan/Umbrian), Germanic runes, Irish Ogham, Old Church
+    // Slavonic Glagolitic, Hungarian runes (overlaps finno_ugric_uralic) and the Gothic alphabet.
+    { "ancient_european", { "linear_a", "linear_b", "cypro_minoan", "cypriot", "anatolian_hieroglyphs",
+                            "carian", "lycian", "lydian", "old_italic", "runic", "ogham",
+                            "glagolitic", "old_hungarian", "gothic" } },
+    // every script covered by the other named subsets: the union of ideographic, indic, persic,
+    // semitic, caucasian, african, amerindian, austronesian, southeast_asian, mesopotamic,
+    // turko_mongol, finno_ugric_uralic and ancient_european (deduplicated).
+    // effectively "all indigenous writing systems outside the latin/greek/cyrillic world".
+    { "exotic", { "han", "hiragana", "katakana", "hangul", "bopomofo", "yi", "tangut", "nushu",
+                  "devanagari", "bengali", "gujarati", "gurmukhi", "kannada", "malayalam", "oriya", "tamil", "telugu", "sinhala",
+                  "arabic", "old_persian", "avestan", "inscriptional_pahlavi", "psalter_pahlavi", "manichaean", "sogdian", "old_sogdian", "chorasmian",
+                  "hebrew", "syriac", "samaritan", "mandaic", "ethiopic", "phoenician", "imperial_aramaic", "old_south_arabian", "old_north_arabian", "ugaritic", "hatran", "palmyrene", "nabataean", "elymaic",
+                  "armenian", "georgian", "caucasian_albanian",
+                  "adlam", "bamum", "bassa_vah", "coptic", "egyptian_hieroglyphs", "garay", "medefaidrin", "mende_kikakui", "meroitic_cursive", "meroitic_hieroglyphs", "nko", "tifinagh", "vai",
+                  "canadian_aboriginal", "cherokee", "osage",
+                  "balinese", "batak", "buginese", "buhid", "cham", "hanunoo", "javanese", "kawi", "makasar", "rejang", "sundanese", "tagalog", "tagbanwa",
+                  "thai", "lao", "khmer", "myanmar", "tibetan", "tai_le", "tai_tham", "tai_viet", "new_tai_lue",
+                  "cuneiform",
+                  "old_turkic", "mongolian", "soyombo", "phags_pa",
+                  "old_hungarian",
+                  "linear_a", "linear_b", "cypro_minoan", "cypriot", "anatolian_hieroglyphs", "carian", "lycian", "lydian", "old_italic", "runic", "ogham", "glagolitic", "gothic" } },
+};
+
+// named codepoint-range subsets: like unicode_script_subsets, but for ranges of codepoints
+// within a single script (e.g. the accented letters of `latin`), which script names cannot
+// express. each entry is (first, last, script): a codepoint matches if it falls in the range
+// and belongs to the script (or any script, if the script is "*").
+static const std::map<std::string, std::vector<std::tuple<uint32_t, uint32_t, std::string>>> unicode_range_subsets = {
+    // precomposed Vietnamese letters: the entire Latin Extended Additional block is a contiguous
+    // range of accented latin codepoints (a, a-macron-breve-tone, o-u circumflex/tone, etc.)
+    { "latin_diacritics_viet", { { 0x1E00, 0x1EFF, "latin" } } },
+    // precomposed Western European letters: the accented half of Latin-1 Supplement (U+00C0-U+00FF),
+    // excluding the two math symbols U+00D7 (multiplication) and U+00F7 (division)
+    { "latin_diacritics_western", { { 0x00C0, 0x00D6, "latin" }, { 0x00D8, 0x00FF, "latin" } } },
+    // all accented latin letters: the union of latin_diacritics_viet and latin_diacritics_western
+    { "latin_diacritics", { { 0x00C0, 0x00D6, "latin" }, { 0x00D8, 0x00FF, "latin" }, { 0x1E00, 0x1EFF, "latin" } } },
 };
 
 std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> argparse_allowlist_unicode_rules(std::string argstr) {
@@ -5981,7 +6054,17 @@ std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> argparse_allowli
 
     const auto subset = unicode_script_subsets.find(std::get<2>(rule));
     if (subset == unicode_script_subsets.end()) {
-        return { std::move(rule) };
+        const auto rsubset = unicode_range_subsets.find(std::get<2>(rule));
+        if (rsubset == unicode_range_subsets.end()) {
+            return { std::move(rule) };
+        }
+
+        std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> rules;
+        rules.reserve(rsubset->second.size());
+        for (const auto & [first, last, script] : rsubset->second) {
+            rules.emplace_back(first, last, script, std::get<3>(rule));
+        }
+        return rules;
     }
 
     std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> rules;
