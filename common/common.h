@@ -454,7 +454,7 @@ struct gpt_params {
 
     // Additional perplexity runs executed on the same loaded model after the main one.
     // Each entry is either a copy-paste of the actual llama.cpp CLI flags, e.g.
-    // "-ser 7:0.03,6:0.06,5:0.1", or a comma-separated "key=value" list overriding a
+    // "-ser 7,0.03;6,0.06;5,0.1", or a comma-separated "key=value" list overriding a
     // parameter for one extra run, e.g. "ctx=4096,experts=8". Supported keys:
     // ctx (context size), experts (expert_used_count), file (data file, text unless
     // mode=mc), mode (test type: ppl, hellaswag, winogrande, mc, kl),

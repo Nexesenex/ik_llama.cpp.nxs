@@ -2091,18 +2091,18 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-ser" || arg == "--smart-expert-reduction") {
         CHECK_ARG
-        // cascade syntax: "c:t,c:t,..." (>=2 tiers) - colon between count and
-        // threshold, comma between tiers. Legacy single-pair syntax: "c,t".
+        // cascade syntax: "c,t;c,t;..." (>=2 tiers) - comma between count and
+        // threshold, semicolon between tiers. Single-pair syntax: "c,t".
         const std::string val = argv[i];
-        if (val.find(':') != std::string::npos) {
-            auto parts = string_split(val, ',');
+        if (val.find(';') != std::string::npos) {
+            auto parts = string_split(val, ';');
             if (parts.size() < 2 || parts.size() > GGML_MAX_SER_TIERS) {
                 invalid_param = true;
                 return true;
             }
             params.ser_n_tiers = (int) parts.size();
             for (size_t k = 0; k < parts.size(); ++k) {
-                auto tier = string_split(parts[k], ':');
+                auto tier = string_split(parts[k], ',');
                 if (tier.size() != 2) {
                     invalid_param = true;
                     return true;
@@ -3368,7 +3368,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
     options.push_back({ "*",           "-gr, --graph-reuse",            "enable graph reuse (default: %s)", params.graph_reuse ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-gr, --no-graph-reuse",      "disable graph reuse (default: %s)", !params.graph_reuse ? "enabled" : "disabled" });
-    options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction, single pair c,t or cascade c:t,c:t,... (default: %d,%g)", params.min_experts, params.thresh_experts});
+    options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction, single pair c,t or cascade c,t;c,t;... (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",         "-muge,  --merge-up-gate-experts","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
@@ -3571,7 +3571,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "perplexity",  "       --ppl-stride N",         "stride for perplexity calculation (default: %d)", params.ppl_stride });
     options.push_back({ "perplexity",  "       --ppl-output-type {0,1}",
                                                                         "output type for perplexity calculation (default: %d)", params.ppl_output_type });
-    options.push_back({ "perplexity",  "   -ppl-run, --ppl-run-params S", "additional test run on the same loaded model (repeatable); S is either a copy-paste of the actual llama.cpp CLI flags, e.g. \"-ser 7:0.03,6:0.06,5:0.1\" or \"-c 4096 -ctk q8_0 -khad\" or \"-bf arc.bin\" (supported flags: -c/--ctx-size, -f/--file, -bf/--binary-file, -ctk/--cache-type-k, -ctv/--cache-type-v, -khad/--k-cache-hadamard, -vhad/--v-cache-hadamard, -ctk-first, -ctk-last, -ctv-first, -ctv-last, -ser/--smart-expert-reduction, --hellaswag, --winogrande, --multiple-choice, --kl-divergence, -okv <arch>.expert_used_count=int:N), or a comma-separated \"key=value\" list, e.g. \"ctx=4096,experts=8\" or \"file=french.txt\" or \"file=arc.bin,mode=mc\" or \"ctk=q8_0,ctv=q8_0,khad=1,vhad=1\" or \"ser=8:0.25,7:0.2,6:0.15\" (keys: ctx, experts, file, mode, k_cache/ctk, v_cache/ctv, k_hadamard/khad, v_hadamard/vhad, ctk_first, ctk_last, ctv_first, ctv_last, ser; the first/last keys take TYPE,N layer ranges; ser takes the -ser syntax or \"off\")" });
+    options.push_back({ "perplexity",  "   -ppl-run, --ppl-run-params S", "additional test run on the same loaded model (repeatable); S is either a copy-paste of the actual llama.cpp CLI flags, e.g. \"-ser 7,0.03;6,0.06;5,0.1\" or \"-c 4096 -ctk q8_0 -khad\" or \"-bf arc.bin\" (supported flags: -c/--ctx-size, -f/--file, -bf/--binary-file, -ctk/--cache-type-k, -ctv/--cache-type-v, -khad/--k-cache-hadamard, -vhad/--v-cache-hadamard, -ctk-first, -ctk-last, -ctv-first, -ctv-last, -ser/--smart-expert-reduction, --hellaswag, --winogrande, --multiple-choice, --kl-divergence, -okv <arch>.expert_used_count=int:N), or a comma-separated \"key=value\" list, e.g. \"ctx=4096,experts=8\" or \"file=french.txt\" or \"file=arc.bin,mode=mc\" or \"ctk=q8_0,ctv=q8_0,khad=1,vhad=1\" or \"ser=8,0.25;7,0.2;6,0.15\" (keys: ctx, experts, file, mode, k_cache/ctk, v_cache/ctv, k_hadamard/khad, v_hadamard/vhad, ctk_first, ctk_last, ctv_first, ctv_last, ser; the first/last keys take TYPE,N layer ranges; ser takes the -ser syntax or \"off\")" });
 
     options.push_back({ "parallel" });
     options.push_back({ "*",           "-dt,   --defrag-thold N",       "KV cache defragmentation threshold (default: %.1f, < 0 - disabled)", (double)params.defrag_thold });
@@ -6031,9 +6031,9 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");
     if (params.ser_n_tiers >= 2) {
-        fprintf(stream, "ser: cascade");
+        fprintf(stream, "ser:");
         for (int i = 0; i < params.ser_n_tiers; ++i) {
-            fprintf(stream, " %d:%g", params.ser_min_experts[i], (double) params.ser_thresh_experts[i]);
+            fprintf(stream, "%s%d,%g", i > 0 ? ";" : " ", params.ser_min_experts[i], (double) params.ser_thresh_experts[i]);
         }
         fprintf(stream, " # default: -1,0\n");
     } else {
