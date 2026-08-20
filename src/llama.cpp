@@ -9307,9 +9307,12 @@ struct llama_context * llama_init_from_model(
     LLAMA_LOG_INFO("%s: reduce_type   = %s\n",     __func__, ggml_type_name(cparams.reduce_type));
     LLAMA_LOG_INFO("%s: sched_async   = %d\n",     __func__, cparams.scheduler_async);
     if (cparams.ser_n_tiers >= 2) {
-        std::string ser = "cascade:";
+        std::string ser;
         for (int i = 0; i < cparams.ser_n_tiers; ++i) {
-            ser += " " + std::to_string(cparams.ser_min_experts[i]) + ":" + std::to_string(cparams.ser_thresh_experts[i]);
+            if (i > 0) {
+                ser += ";";
+            }
+            ser += std::to_string(cparams.ser_min_experts[i]) + "," + std::to_string(cparams.ser_thresh_experts[i]);
         }
         LLAMA_LOG_INFO("%s: ser           = %s\n", __func__, ser.c_str());
     } else {
