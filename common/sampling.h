@@ -130,6 +130,7 @@ typedef struct common_params_sampling {
     int32_t     total_context_size    = 16840;
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
     bool        no_space_after_quote  = false;              // contextual rule: while inside an open " quote, disallow tokens that begin with a space (e.g. " You -> "You)
+    float       boost_space_after_quote = 0.0f;             // contextual rule: while inside an open " quote, boost logits of tokens that begin with a space (e.g. "You -> " You)
     float       eos_token_probability = 1.0f;               // scale factor for the probability of the EOS/EOG tokens (1.0 = no change, 0.0 = EOG tokens effectively disabled)
     std::vector<std::string> special_eosg_tokens;          // if non-empty, the first occurrence of any of these strings in the generated text stops generation like an EOG/EOS token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context

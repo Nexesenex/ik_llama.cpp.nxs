@@ -773,6 +773,16 @@ static llama_token_data_array llama_sampling_prepare_impl(
         }
     }
 
+    // contextual quote rule: while inside an open " quote, boost logits of tokens that begin with a space
+    // (e.g. "You -> " You)
+    if (params.boost_space_after_quote > 0.0f && ctx_sampling->quote_open && !ctx_sampling->starts_with_space.empty()) {
+        for (size_t idx = 0; idx < cur_p.size; ++idx) {
+            if (ctx_sampling->starts_with_space[cur_p.data[idx].id]) {
+                cur_p.data[idx].logit += params.boost_space_after_quote;
+            }
+        }
+    }
+
     // apply grammar checks before sampling logic
     if (grammar_first && ctx_sampling->grammar != NULL) {
         llama_grammar_apply(ctx_sampling->grammar, ctx_main, &cur_p);
