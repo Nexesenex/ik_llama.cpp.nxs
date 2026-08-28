@@ -5871,6 +5871,9 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 // Only dim==0 is chunked; dim==1/2 would launch illegal grid and fault with
                 // "illegal memory access" at ggml_cuda_compute_forward:5008. Force CPU fallback.
                 if (op->ne[1] >= 65536 || op->ne[2] >= 65536) return false;
+                // Small dim0 concat 9+1->10 (ple_conv_state, ne1=10240) faults with both kernel and D2D
+                // on 3090 enable-p2p=0, even though same device. Force CPU fallback for tiny ne0<64 dim0.
+                if (((const int32_t *)op->op_params)[0] == 0 && op->ne[0] < 64) return false;
                 return true;
             } break;
         case GGML_OP_CONV_TRANSPOSE_1D:
