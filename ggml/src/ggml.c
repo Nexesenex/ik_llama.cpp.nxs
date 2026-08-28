@@ -2023,6 +2023,7 @@ static float fudge_factors[GGML_TYPE_COUNT] = {
     [GGML_TYPE_Q5_0]       = 1.0f,
     [GGML_TYPE_Q5_1]       = 1.0f,
     [GGML_TYPE_Q6_0]       = 1.0f,
+    [GGML_TYPE_Q6_1]       = 1.0f,
     [GGML_TYPE_Q8_0]       = 1.0f,
     [GGML_TYPE_Q8_1]       = 1.0f,
     [GGML_TYPE_Q8_0_X4]    = 1.0f,
