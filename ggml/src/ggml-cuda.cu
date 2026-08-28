@@ -5914,6 +5914,14 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_MUL:
         case GGML_OP_DIV:
         case GGML_OP_SUB:
+            {
+                // binbcast fallback uses uint32_t fastdiv for ne0*ne1*ne2 and ne0*ne1 (see binbcast.cu:276)
+                // Overflow -> illegal memory access at ggml_cuda_compute_forward:5008 for large n_ctx=65536.
+                int64_t ne = (int64_t)op->ne[0]*op->ne[1]*op->ne[2]*op->ne[3];
+                if (ne > (int64_t)UINT32_MAX) return false;
+                if (op->ne[1] >= 65536 || op->ne[2] >= 65536) return false;
+                return true;
+            }
         case GGML_OP_FUSED_RMS_NORM:
         case GGML_OP_FUSED_RMS_RMS_ADD:
         case GGML_OP_SCALE:
