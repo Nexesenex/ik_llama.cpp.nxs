@@ -136,6 +136,46 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
     dst_row[i0] = (dst_t) bin_op(result, (float) src1_row[i10]);
 }
 
+template<float (*bin_op)(const float, const float),
+          typename src0_t,
+          typename src1_t,
+          typename dst_t>
+static __global__ void k_bin_bcast_unravel64(const src0_t * src0,
+                                           const src1_t * src1,
+                                           dst_t * dst,
+                                           const int64_t ne0,
+                                           const int64_t ne1,
+                                           const int64_t ne2,
+                                           const int64_t ne3,
+                                           const int64_t prod_012,
+                                           const int64_t prod_01,
+                                           const int64_t ne10,
+                                           const int64_t ne11,
+                                           const int64_t ne12,
+                                           const int64_t ne13,
+                                           const int s1, const int s2, const int s3,
+                                           const int s01, const int s02, const int s03,
+                                           const int s11, const int s12, const int s13) {
+    const int64_t i = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= ne0*ne1*ne2*ne3) return;
+    const int64_t i3 = i / prod_012;
+    const int64_t i2 = (i - i3 * prod_012) / prod_01;
+    const int64_t i1 = (i - i3 * prod_012 - i2 * prod_01) / ne0;
+    const int64_t i0 = i - i3 * prod_012 - i2 * prod_01 - i1 * ne0;
+    const int64_t i11 = i1 % ne11;
+    const int64_t i12 = i2 % ne12;
+    const int64_t i13 = i3 % ne13;
+    const size_t i_src0 = i3*s03 + i2*s02 + i1*s01;
+    const size_t i_src1 = i13*s13 + i12*s12 + i11*s11;
+    const size_t i_dst  = i3*s3  + i2*s2  + i1*s1;
+    const src0_t * src0_row = src0 ? (src0 + i_src0) : nullptr;
+    const src1_t * src1_row = src1 + i_src1;
+    dst_t * dst_row = dst + i_dst;
+    const int64_t i10 = i0 % ne10;
+    float result = src0_row ? (float) src0_row[i0] : 0.0f;
+    dst_row[i0] = (dst_t) bin_op(result, (float) src1_row[i10]);
+}
+
 template<float (*bin_op)(const float, const float)>
 struct bin_bcast_cuda {
     template<typename src0_t, typename src1_t, typename dst_t>
@@ -270,22 +310,36 @@ struct bin_bcast_cuda {
                 (ne2*ne3 + block_dims.z - 1) / block_dims.z
             );
 
-            if (block_nums.z > 65535) {
+            bool overflow = (ne0 > 0 && ne1 > 0 && ne2 > 0 && ne3 > 0) &&
+                            ((int64_t)ne0*ne1*ne2 > (int64_t)UINT32_MAX || (int64_t)ne0*ne1*ne2*ne3 > (int64_t)UINT32_MAX ||
+                             ne0 > (int64_t)UINT32_MAX || ne1 > (int64_t)UINT32_MAX || ne2 > (int64_t)UINT32_MAX);
+            if (block_nums.z > 65535 || overflow) {
                 // this is the maximum number of blocks in z dimension, fallback to 1D grid kernel
-                int         block_num  = (ne0 * ne1 * ne2 * ne3 + block_size - 1) / block_size;
-                const uint3 prod_012    = init_fastdiv_values((uint32_t) (ne0 * ne1 * ne2));
-                const uint3 prod_01     = init_fastdiv_values((uint32_t) (ne0 * ne1));
-                const uint3 ne0_fastdiv = init_fastdiv_values((uint32_t) ne0);
-                const uint3 ne1_fastdiv = init_fastdiv_values((uint32_t) ne1);
-                const uint3 ne2_fastdiv = init_fastdiv_values((uint32_t) ne2);
+                // Use 64-bit unravel when product overflows uint32_t (n_ctx=65536 -> 167M) to avoid fastdiv wrap.
+                if (overflow) {
+                    int64_t block_num = (ne0 * ne1 * ne2 * ne3 + block_size - 1) / block_size;
+                    k_bin_bcast_unravel64<bin_op><<<block_num, block_size, 0, stream>>>(
+                        src0_dd, src1_dd, dst_dd, ne0, ne1, ne2, ne3, ne0*ne1*ne2, ne0*ne1,
+                        ne10, ne11, ne12, ne13,
+                        /* s0, */ s1, s2, s3,
+                        /* s00,*/ s01, s02, s03,
+                        /* s10,*/ s11, s12, s13);
+                } else {
+                    int         block_num  = (ne0 * ne1 * ne2 * ne3 + block_size - 1) / block_size;
+                    const uint3 prod_012    = init_fastdiv_values((uint32_t) (ne0 * ne1 * ne2));
+                    const uint3 prod_01     = init_fastdiv_values((uint32_t) (ne0 * ne1));
+                    const uint3 ne0_fastdiv = init_fastdiv_values((uint32_t) ne0);
+                    const uint3 ne1_fastdiv = init_fastdiv_values((uint32_t) ne1);
+                    const uint3 ne2_fastdiv = init_fastdiv_values((uint32_t) ne2);
 
-                k_bin_bcast_unravel<bin_op><<<block_num, block_size, 0, stream>>>(
-                    src0_dd, src1_dd, dst_dd, ne0_fastdiv, ne1_fastdiv, ne2_fastdiv, ne3, prod_012, prod_01,
-                    init_fastdiv_values((uint32_t) ne10), init_fastdiv_values((uint32_t) ne11),
-                    init_fastdiv_values((uint32_t) ne12), init_fastdiv_values((uint32_t) ne13),
-                    /* s0, */ s1, s2, s3,
-                    /* s00,*/ s01, s02, s03,
-                    /* s10,*/ s11, s12, s13);
+                    k_bin_bcast_unravel<bin_op><<<block_num, block_size, 0, stream>>>(
+                        src0_dd, src1_dd, dst_dd, ne0_fastdiv, ne1_fastdiv, ne2_fastdiv, ne3, prod_012, prod_01,
+                        init_fastdiv_values((uint32_t) ne10), init_fastdiv_values((uint32_t) ne11),
+                        init_fastdiv_values((uint32_t) ne12), init_fastdiv_values((uint32_t) ne13),
+                        /* s0, */ s1, s2, s3,
+                        /* s00,*/ s01, s02, s03,
+                        /* s10,*/ s11, s12, s13);
+                }
             } else {
                 const uint3 ne3_fastdiv = init_fastdiv_values((uint32_t) ne3);
                 k_bin_bcast<bin_op><<<block_nums, block_dims, 0, stream>>>(
