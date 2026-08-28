@@ -190,6 +190,8 @@ static void ggml_cuda_log_oom_details(int raw_id, int logical_id, size_t request
         }
     }
 
+    // Clear any prior CUDA error before querying memory
+    (void) cudaGetLastError();
     size_t free_mem = 0, total_mem = 0;
     cudaError_t mi_err = cudaMemGetInfo(&free_mem, &total_mem);
     if (mi_err != cudaSuccess) {
@@ -328,6 +330,8 @@ void ggml_cuda_set_device(int device) {
                 target_logical, cuda_device, current_device, __func__, __FILE__, __LINE__);
             GGML_CUDA_LOG_ERROR("  cudaSetDevice(%d) [raw ordinal %d]\n", cuda_device, cuda_device);
             ggml_cuda_log_oom_details(cuda_device, target_logical, 0);
+            GGML_CUDA_LOG_ERROR("  cudaSetDevice(cuda_device)\n");
+            GGML_ABORT("CUDA error");
         }
         ggml_cuda_error("cudaSetDevice(cuda_device)", __func__, __FILE__, __LINE__, msg);
     }
@@ -1959,9 +1963,36 @@ static void * ggml_cuda_host_malloc(size_t size) {
             GGML_CUDA_LOG_INFO("%s: pinamount=%.2f GiB cap applied (requested %.2f GiB)\n", __func__, ggml_cuda_pinamount_gb, size_GiB);
         }
     }
+    // Safety cap: avoid exhausting host RAM which makes subsequent cudaSetDevice/cudaMalloc fail with host OOM.
+    // Seen with 82 GiB pinned on 191 GiB RAM with 84 GiB free -> leaves ~2 GiB free and next CUDA call OOMs (Device 1).
+    {
+        MEMORYSTATUSEX ms2 = { sizeof(MEMORYSTATUSEX) };
+        if (GlobalMemoryStatusEx(&ms2)) {
+            const size_t reserve  = 8ULL * 1024 * 1024 * 1024; // keep 8 GiB free for OS/CUDA
+            size_t max_pin = 0;
+            if (ms2.ullAvailPhys > reserve) {
+                max_pin = (size_t)(ms2.ullAvailPhys - reserve);
+                // Also don't pin more than 75% of total RAM in one go
+                size_t cap_total = (size_t)(ms2.ullTotalPhys * 0.75);
+                if (max_pin > cap_total) max_pin = cap_total;
+            } else {
+                max_pin = (size_t)(ms2.ullAvailPhys * 0.5);
+            }
+            if (pin_amount > max_pin && max_pin >= (1ULL<<30)) {
+                GGML_CUDA_LOG_WARN("%s: host RAM safety cap: pin_amount %.2f GiB > avail %.2f GiB, capping to %.2f GiB (reserve 8 GiB)\n",
+                    __func__, pin_amount/1024.0/1024.0/1024.0, ms2.ullAvailPhys/1024.0/1024.0/1024.0, max_pin/1024.0/1024.0/1024.0);
+                pin_amount = max_pin;
+            } else if (pin_amount > max_pin) {
+                GGML_CUDA_LOG_WARN("%s: host RAM critically low (avail %.2f GiB), pin_amount %.2f GiB capped to %.2f GiB\n",
+                    __func__, ms2.ullAvailPhys/1024.0/1024.0/1024.0, pin_amount/1024.0/1024.0/1024.0, max_pin/1024.0/1024.0/1024.0);
+                pin_amount = max_pin;
+            }
+        }
+    }
 
     // Diagnostic: check system/CUDA memory state
     {
+        (void) cudaGetLastError(); // clear stale OOM before diagnostic queries
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, cur_dev);
         int log_id = -1;
