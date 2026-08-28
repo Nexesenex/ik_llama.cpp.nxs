@@ -2107,11 +2107,11 @@ static float fudge_factors[GGML_TYPE_COUNT] = {
     [GGML_TYPE_I2_S]       = 1.0f,
 };
 
-void ggml_set_quantize_fudge_factor(enum ggml_type type, float fudge) {
+GGML_API void ggml_set_quantize_fudge_factor(enum ggml_type type, float fudge) {
     fudge_factors[type] = fudge;
 }
 
-float ggml_get_quantize_fudge_factor(enum ggml_type type) {
+GGML_API float ggml_get_quantize_fudge_factor(enum ggml_type type) {
     return fudge_factors[type];
 }
 
