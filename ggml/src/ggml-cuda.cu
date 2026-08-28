@@ -82,6 +82,7 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <float.h>
 #include <functional>
 #include <limits>
@@ -143,23 +144,151 @@ void ggml_cuda_log(enum ggml_log_level level, const char * format, ...) {
     }
 }
 
+static void ggml_cuda_log_oom_details(int raw_id, int logical_id, size_t requested_bytes) {
+    const auto & info = ggml_cuda_info();
+    char pci_bus_id[32] = "unknown";
+    char dev_name[256] = "unknown";
+    size_t total_vram = 0;
+    int ordinal = raw_id;
+    int logical = logical_id;
+
+    // Resolve missing mapping
+    if (ordinal >= 0 && ordinal < GGML_CUDA_MAX_DEVICES && info.device_id[ordinal] >= 0) {
+        logical = info.device_id[ordinal];
+    } else if (logical >= 0 && logical < info.device_count) {
+        ordinal = info.cuda_device_id[logical];
+    }
+
+    if (ordinal >= 0) {
+        cudaDeviceProp prop;
+        if (cudaGetDeviceProperties(&prop, ordinal) == cudaSuccess) {
+            snprintf(dev_name, sizeof(dev_name), "%s", prop.name);
+            total_vram = prop.totalGlobalMem;
+        } else {
+            cudaGetLastError();
+            if (logical >= 0 && logical < info.device_count) {
+                total_vram = info.devices[logical].total_vram;
+            }
+        }
+        if (cudaDeviceGetPCIBusId(pci_bus_id, (int) sizeof(pci_bus_id), ordinal) != cudaSuccess) {
+            snprintf(pci_bus_id, sizeof(pci_bus_id), "unknown");
+            cudaGetLastError();
+        }
+    } else if (logical >= 0 && logical < info.device_count) {
+        total_vram = info.devices[logical].total_vram;
+        ordinal = info.cuda_device_id[logical];
+        cudaDeviceProp prop;
+        if (ordinal >= 0 && cudaGetDeviceProperties(&prop, ordinal) == cudaSuccess) {
+            snprintf(dev_name, sizeof(dev_name), "%s", prop.name);
+            total_vram = prop.totalGlobalMem;
+        } else {
+            cudaGetLastError();
+        }
+        if (ordinal >= 0 && cudaDeviceGetPCIBusId(pci_bus_id, (int) sizeof(pci_bus_id), ordinal) != cudaSuccess) {
+            snprintf(pci_bus_id, sizeof(pci_bus_id), "unknown");
+            cudaGetLastError();
+        }
+    }
+
+    size_t free_mem = 0, total_mem = 0;
+    cudaError_t mi_err = cudaMemGetInfo(&free_mem, &total_mem);
+    if (mi_err != cudaSuccess) {
+        free_mem = 0;
+        total_mem = 0;
+        cudaGetLastError();
+        if (total_mem == 0) {
+            total_mem = total_vram;
+        }
+    }
+    if (total_vram != 0 && total_mem == 0) {
+        total_mem = total_vram;
+    }
+    if (total_vram == 0) {
+        total_vram = total_mem;
+    }
+
+    if (requested_bytes > 0) {
+        size_t deficit = requested_bytes > free_mem ? requested_bytes - free_mem : 0;
+        GGML_CUDA_LOG_ERROR("  OOM details: requested %.2f MiB (%" PRIu64 " bytes, %.2f GiB)\n", requested_bytes / 1024.0 / 1024.0, (uint64_t) requested_bytes, requested_bytes / 1024.0 / 1024.0 / 1024.0);
+        GGML_CUDA_LOG_ERROR("               free     %.2f MiB (%" PRIu64 " bytes, %.2f GiB)\n", free_mem / 1024.0 / 1024.0, (uint64_t) free_mem, free_mem / 1024.0 / 1024.0 / 1024.0);
+        GGML_CUDA_LOG_ERROR("               total    %.2f MiB (%" PRIu64 " bytes, %.2f GiB) [cudaMemGetInfo]\n", total_mem / 1024.0 / 1024.0, (uint64_t) total_mem, total_mem / 1024.0 / 1024.0 / 1024.0);
+        if (total_vram != 0 && total_vram != total_mem) {
+            GGML_CUDA_LOG_ERROR("               VRAM     %.2f MiB (%" PRIu64 " bytes, %.2f GiB) [device prop]\n", total_vram / 1024.0 / 1024.0, (uint64_t) total_vram, total_vram / 1024.0 / 1024.0 / 1024.0);
+        }
+        GGML_CUDA_LOG_ERROR("               deficit  %.2f MiB (%" PRIu64 " bytes, %.2f GiB) (requested - free)\n", deficit / 1024.0 / 1024.0, (uint64_t) deficit, deficit / 1024.0 / 1024.0 / 1024.0);
+    } else {
+        GGML_CUDA_LOG_ERROR("  device memory: free %.2f MiB (%.2f GiB), total %.2f MiB (%.2f GiB) [cudaMemGetInfo]\n", free_mem / 1024.0 / 1024.0, free_mem / 1024.0 / 1024.0 / 1024.0, total_mem / 1024.0 / 1024.0, total_mem / 1024.0 / 1024.0 / 1024.0);
+        if (total_vram != 0 && total_vram != total_mem) {
+            GGML_CUDA_LOG_ERROR("               VRAM total %.2f MiB (%.2f GiB) [device prop]\n", total_vram / 1024.0 / 1024.0, total_vram / 1024.0 / 1024.0 / 1024.0);
+        }
+    }
+
+    if (ordinal >= 0 && logical >= 0) {
+        GGML_CUDA_LOG_ERROR("  device mapping: logical CUDA%d <-> ordinal Device %d (PCI %s, %s)\n", logical, ordinal, pci_bus_id, dev_name);
+        GGML_CUDA_LOG_ERROR("  (NOTE: CUDA n is logical PCIE order, Device n is ordinal TCC-first/WDDM order)\n");
+    } else if (ordinal >= 0) {
+        GGML_CUDA_LOG_ERROR("  device: ordinal Device %d (PCI %s, %s)\n", ordinal, pci_bus_id, dev_name);
+    } else if (logical >= 0) {
+        GGML_CUDA_LOG_ERROR("  device: logical CUDA%d (ordinal Device %d, PCI %s, %s)\n", logical, ordinal, pci_bus_id, dev_name);
+    }
+
+#ifdef _WIN32
+    MEMORYSTATUSEX ms = { sizeof(MEMORYSTATUSEX) };
+    if (GlobalMemoryStatusEx(&ms)) {
+        GGML_CUDA_LOG_ERROR("  system RAM: free %.2f GiB / total %.2f GiB\n", ms.ullAvailPhys / (1024.0 * 1024.0 * 1024.0), ms.ullTotalPhys / (1024.0 * 1024.0 * 1024.0));
+    }
+#endif
+    GGML_CUDA_LOG_ERROR("  hint: try reducing -ts / -ngl / -b / -c, adjusting -ot / --device / --tensor-split, or use GGML_CUDA_NO_PINNED=1\n");
+}
+
 [[noreturn]]
 void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, const char * msg) {
     int id = -1; // in case cudaGetDevice fails
     cudaGetDevice(&id);
 
     int log_id = -1;
-    if (id >= 0 && id < ggml_cuda_info().device_count) {
-        log_id = ggml_cuda_info().device_id[id];
+    if (id >= 0 && id < GGML_CUDA_MAX_DEVICES) {
+        const auto & info = ggml_cuda_info();
+        if (id < info.device_count || info.device_id[id] >= 0) {
+            log_id = info.device_id[id];
+        }
+        // Also handle case where id is ordinal but device_count check above failed due to TCC ordering
+        if (log_id < 0 && id < GGML_CUDA_MAX_DEVICES) {
+            log_id = info.device_id[id];
+        }
     }
 
     GGML_CUDA_LOG_ERROR("CUDA error: %s\n", msg);
     if (log_id >= 0) {
-        GGML_CUDA_LOG_ERROR("  current device: Device %d (CUDA%d), in function %s at %s:%d\n", id, log_id, func, file, line);
+        GGML_CUDA_LOG_ERROR("  current device: logical CUDA%d (ordinal Device %d), in function %s at %s:%d\n", log_id, id, func, file, line);
     } else {
-        GGML_CUDA_LOG_ERROR("  current device: %d, in function %s at %s:%d\n", id, func, file, line);
+        GGML_CUDA_LOG_ERROR("  current device: ordinal Device %d (no logical mapping), in function %s at %s:%d\n", id, func, file, line);
     }
     GGML_CUDA_LOG_ERROR("  %s\n", stmt);
+
+    // Extra diagnostics for OOM
+    if (strstr(msg, "out of memory") != nullptr || strstr(msg, "Out of memory") != nullptr ||
+        strstr(msg, "memory allocation") != nullptr) {
+        ggml_cuda_log_oom_details(id, log_id, 0);
+    } else {
+        // Still log device mapping for non-OOM to clarify ordinal vs logical
+        char pci_bus_id[32] = "unknown";
+        char dev_name[256] = "unknown";
+        if (id >= 0) {
+            cudaDeviceProp prop;
+            if (cudaGetDeviceProperties(&prop, id) == cudaSuccess) {
+                snprintf(dev_name, sizeof(dev_name), "%s", prop.name);
+            } else {
+                cudaGetLastError();
+            }
+            if (cudaDeviceGetPCIBusId(pci_bus_id, (int) sizeof(pci_bus_id), id) != cudaSuccess) {
+                snprintf(pci_bus_id, sizeof(pci_bus_id), "unknown");
+                cudaGetLastError();
+            }
+            GGML_CUDA_LOG_ERROR("  device: %s (PCI %s)\n", dev_name, pci_bus_id);
+            GGML_CUDA_LOG_ERROR("  (NOTE: CUDA n is logical PCIE order, Device n is ordinal TCC-first/WDDM order)\n");
+        }
+    }
     // abort with GGML_ASSERT to get a stack trace
     GGML_ABORT("CUDA error");
 }
@@ -171,13 +300,37 @@ void ggml_cuda_set_device(int device) {
     int cuda_device = (device >= 0 && device < info.device_count) ? info.cuda_device_id[device] : device;
 
     int current_device;
-    CUDA_CHECK(cudaGetDevice(&current_device));
+    cudaError_t err0 = cudaGetDevice(&current_device);
+    if (err0 != cudaSuccess) {
+        ggml_cuda_error("cudaGetDevice(&current_device)", __func__, __FILE__, __LINE__, cudaGetErrorString(err0));
+    }
 
     if (cuda_device == current_device) {
         return;
     }
 
-    CUDA_CHECK(cudaSetDevice(cuda_device));
+    cudaError_t err = cudaSetDevice(cuda_device);
+    if (err != cudaSuccess) {
+        const char * msg = cudaGetErrorString(err);
+        // Enrich OOM with target device mapping and memory stats before aborting
+        if (strstr(msg, "out of memory") != nullptr || strstr(msg, "Out of memory") != nullptr) {
+            int target_logical = device;
+            if (device < 0 || device >= info.device_count) {
+                // device may already be raw ordinal; try reverse lookup
+                if (cuda_device >= 0 && cuda_device < GGML_CUDA_MAX_DEVICES && info.device_id[cuda_device] >= 0) {
+                    target_logical = info.device_id[cuda_device];
+                } else {
+                    target_logical = -1;
+                }
+            }
+            GGML_CUDA_LOG_ERROR("CUDA error: %s\n", msg);
+            GGML_CUDA_LOG_ERROR("  cudaSetDevice failed: target logical CUDA%d -> ordinal Device %d, current ordinal Device %d, in function %s at %s:%d\n",
+                target_logical, cuda_device, current_device, __func__, __FILE__, __LINE__);
+            GGML_CUDA_LOG_ERROR("  cudaSetDevice(%d) [raw ordinal %d]\n", cuda_device, cuda_device);
+            ggml_cuda_log_oom_details(cuda_device, target_logical, 0);
+        }
+        ggml_cuda_error("cudaSetDevice(cuda_device)", __func__, __FILE__, __LINE__, msg);
+    }
 }
 
 int ggml_cuda_get_device() {
@@ -198,6 +351,13 @@ cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
         // if error we "need" to know why...
         CUDA_CHECK(hipMemAdvise(*ptr, size, hipMemAdviseSetCoarseGrain, device));
     }
+    if (res == hipErrorOutOfMemory || res == hipErrorMemoryAllocation) {
+        const auto & info = ggml_cuda_info();
+        int ordinal = (device >= 0 && device < info.device_count) ? info.cuda_device_id[device] : device;
+        GGML_CUDA_LOG_ERROR("%s: hipMallocManaged of %.2f MiB (%" PRIu64 " bytes) on logical CUDA%d (ordinal Device %d) failed: %s\n",
+            __func__, size / 1024.0 / 1024.0, (uint64_t) size, device, ordinal, cudaGetErrorString((cudaError_t)res));
+        ggml_cuda_log_oom_details(ordinal, device, size);
+    }
     return res;
 #else
 
@@ -211,9 +371,24 @@ cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
     {
         err = cudaMalloc(ptr, size);
     }
+    if (err == cudaErrorMemoryAllocation) {
+        const auto & info = ggml_cuda_info();
+        int ordinal = (device >= 0 && device < info.device_count) ? info.cuda_device_id[device] : device;
+        GGML_CUDA_LOG_ERROR("%s: cudaMalloc of %.2f MiB (%" PRIu64 " bytes, %.2f GiB) on logical CUDA%d (ordinal Device %d) failed: %s\n",
+            __func__, size / 1024.0 / 1024.0, (uint64_t) size, size / 1024.0 / 1024.0 / 1024.0, device, ordinal, cudaGetErrorString(err));
+        ggml_cuda_log_oom_details(ordinal, device, size);
+    }
     return err;
 #else
-    return cudaMalloc(ptr, size);
+    cudaError_t err = cudaMalloc(ptr, size);
+    if (err == cudaErrorMemoryAllocation) {
+        const auto & info = ggml_cuda_info();
+        int ordinal = (device >= 0 && device < info.device_count) ? info.cuda_device_id[device] : device;
+        GGML_CUDA_LOG_ERROR("%s: cudaMalloc of %.2f MiB (%" PRIu64 " bytes) on logical CUDA%d (ordinal Device %d) failed: %s\n",
+            __func__, size / 1024.0 / 1024.0, (uint64_t) size, device, ordinal, cudaGetErrorString(err));
+        ggml_cuda_log_oom_details(ordinal, device, size);
+    }
+    return err;
 #endif // !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA)
 
 #endif
@@ -838,7 +1013,17 @@ GGML_CALL static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffe
     if (err != cudaSuccess) {
         // clear the error
         cudaGetLastError();
-        GGML_CUDA_LOG_ERROR("%s: allocating %.2f MiB on CUDA%d (Device %d): cudaMalloc failed: %s\n", __func__, size / 1024.0 / 1024.0, buft_ctx->device, ggml_backend_cuda_get_device_ordinal(buft_ctx->device), cudaGetErrorString(err));
+        if (err == cudaErrorMemoryAllocation) {
+            // Detailed OOM already logged in ggml_cuda_device_malloc; add concise context
+            GGML_CUDA_LOG_ERROR("%s: allocating %.2f MiB (%" PRIu64 " bytes, %.2f GiB) on logical CUDA%d (ordinal Device %d) failed - see OOM details above: %s\n",
+                __func__, size / 1024.0 / 1024.0, (uint64_t) size, size / 1024.0 / 1024.0 / 1024.0,
+                buft_ctx->device, ggml_backend_cuda_get_device_ordinal(buft_ctx->device), cudaGetErrorString(err));
+        } else {
+            GGML_CUDA_LOG_ERROR("%s: allocating %.2f MiB on CUDA%d (Device %d): cudaMalloc failed: %s\n", __func__, size / 1024.0 / 1024.0, buft_ctx->device, ggml_backend_cuda_get_device_ordinal(buft_ctx->device), cudaGetErrorString(err));
+            // For non-OOM, still log device mapping
+            int ordinal = ggml_backend_cuda_get_device_ordinal(buft_ctx->device);
+            ggml_cuda_log_oom_details(ordinal, buft_ctx->device, size);
+        }
         return nullptr;
     }
 
@@ -1630,8 +1815,17 @@ static void * ggml_cuda_host_malloc(size_t size) {
     cudaError_t err = cudaHostRegister(ptr, pin_amount, reg_flags);
     if (err != cudaSuccess) {
         cudaGetLastError(); // clear the error
-        GGML_CUDA_LOG_WARN("%s: cudaHostRegister (%.2f MiB, %s) failed: %s\n", __func__,
-                           size/1024.0/1024.0, flag_tag, cudaGetErrorString(err));
+        GGML_CUDA_LOG_WARN("%s: cudaHostRegister (%.2f MiB / %.2f GiB, %s, pin_amount=%.2f GiB) failed: %s\n", __func__,
+                           size/1024.0/1024.0, size/1024.0/1024.0/1024.0, flag_tag, pin_amount/1024.0/1024.0/1024.0, cudaGetErrorString(err));
+        {
+            int raw = -1; cudaGetDevice(&raw); cudaGetLastError();
+            int logical = -1;
+            const auto & info = ggml_cuda_info();
+            if (raw >= 0 && raw < GGML_CUDA_MAX_DEVICES) logical = info.device_id[raw];
+            GGML_CUDA_LOG_WARN("%s: pinned host OOM (size=%.2f GiB, pin_amount=%.2f GiB)\n", __func__, size/1024.0/1024.0/1024.0, pin_amount/1024.0/1024.0/1024.0);
+            ggml_cuda_log_oom_details(raw, logical, pin_amount);
+            GGML_CUDA_LOG_WARN("%s: WDDM per-process pinned quota is ~32-48 GiB; TCC bypasses it (pinmem=5/6 or pindev=TCC ordinal)\n", __func__);
+        }
         munmap(ptr, size);
         if (ggml_cuda_pinmem == 2) {
             GGML_CUDA_LOG_WARN("%s: pinmem=2 mode - stopping further pinning attempts\n", __func__);
@@ -1807,7 +2001,15 @@ static void * ggml_cuda_host_malloc(size_t size) {
         } while (try_size >= min_chunk);
 
         if (err != cudaSuccess) {
-            GGML_CUDA_LOG_WARN("%s: pinmem=2 could not pin any of %.2f GiB\n", __func__, size_GiB);
+            GGML_CUDA_LOG_WARN("%s: pinmem=2 could not pin any of %.2f GiB (requested %.2f GiB, pin_amount %.2f GiB)\n", __func__, size_GiB, size_GiB, pin_amount/1024.0/1024.0/1024.0);
+            {
+                int raw = choose_dev >= 0 ? choose_dev : cur_dev;
+                int logical = -1;
+                const auto & info2 = ggml_cuda_info();
+                if (raw >= 0 && raw < GGML_CUDA_MAX_DEVICES) logical = info2.device_id[raw];
+                ggml_cuda_log_oom_details(raw, logical, pin_amount);
+                GGML_CUDA_LOG_WARN("%s: WDDM pinned quota exhausted; try pinmem=5/6, pinamount, or GGML_CUDA_NO_PINNED=1\n", __func__);
+            }
             free(ptr);
             ggml_cuda_pinmem2_stopped = true;
             return nullptr;
@@ -1847,8 +2049,15 @@ static void * ggml_cuda_host_malloc(size_t size) {
         err = cudaHostRegister(ptr, amount, cudaHostRegisterPortable);
         if (err != cudaSuccess) {
             cudaGetLastError();
-            GGML_CUDA_LOG_WARN("%s: pinmem=4 cudaHostRegister of %.2f GiB failed: %s\n", __func__,
-                               amount / (1024.0 * 1024.0 * 1024.0), cudaGetErrorString(err));
+            GGML_CUDA_LOG_WARN("%s: pinmem=4 cudaHostRegister of %.2f GiB (amount %.2f GiB, requested %.2f GiB) failed: %s\n", __func__,
+                               amount / (1024.0 * 1024.0 * 1024.0), amount/1024.0/1024.0/1024.0, size_GiB, cudaGetErrorString(err));
+            {
+                int raw = choose_dev >= 0 ? choose_dev : cur_dev;
+                int logical = -1;
+                const auto & info2 = ggml_cuda_info();
+                if (raw >= 0 && raw < GGML_CUDA_MAX_DEVICES) logical = info2.device_id[raw];
+                ggml_cuda_log_oom_details(raw, logical, amount);
+            }
             free(ptr);
             GGML_CUDA_LOG_WARN("%s: pinmem=4 falling back to pinmem=1 (token_embd only)\n", __func__);
             ggml_backend_cuda_set_pinmem(1);
@@ -1875,8 +2084,15 @@ static void * ggml_cuda_host_malloc(size_t size) {
         err = cudaHostRegister(ptr, pin_amount, cudaHostRegisterPortable);
         if (err != cudaSuccess) {
             cudaGetLastError();
-            GGML_CUDA_LOG_WARN("%s: pinmem=5 full-size cudaHostRegister of %.2f GiB failed: %s\n", __func__,
-                               size_GiB, cudaGetErrorString(err));
+            GGML_CUDA_LOG_WARN("%s: pinmem=5 full-size cudaHostRegister of %.2f GiB (pin_amount %.2f GiB) failed: %s\n", __func__,
+                               size_GiB, pin_amount/1024.0/1024.0/1024.0, cudaGetErrorString(err));
+            {
+                int raw = choose_dev >= 0 ? choose_dev : cur_dev;
+                int logical = -1;
+                const auto & info2 = ggml_cuda_info();
+                if (raw >= 0 && raw < GGML_CUDA_MAX_DEVICES) logical = info2.device_id[raw];
+                ggml_cuda_log_oom_details(raw, logical, pin_amount);
+            }
             _aligned_free(ptr);
             GGML_CUDA_LOG_WARN("%s: pinmem=5 falling back to pinmem=3 (standard full pin)\n", __func__);
             ggml_backend_cuda_set_pinmem(3);
@@ -1898,8 +2114,15 @@ static void * ggml_cuda_host_malloc(size_t size) {
         err = cudaHostRegister(ptr, pin_amount, 0); // non-portable
         if (err != cudaSuccess) {
             cudaGetLastError();
-            GGML_CUDA_LOG_WARN("%s: pinmem=6 full-size cudaHostRegister of %.2f GiB failed: %s\n", __func__,
-                               size_GiB, cudaGetErrorString(err));
+            GGML_CUDA_LOG_WARN("%s: pinmem=6 full-size cudaHostRegister of %.2f GiB (pin_amount %.2f GiB) failed: %s\n", __func__,
+                               size_GiB, pin_amount/1024.0/1024.0/1024.0, cudaGetErrorString(err));
+            {
+                int raw = choose_dev >= 0 ? choose_dev : cur_dev;
+                int logical = -1;
+                const auto & info2 = ggml_cuda_info();
+                if (raw >= 0 && raw < GGML_CUDA_MAX_DEVICES) logical = info2.device_id[raw];
+                ggml_cuda_log_oom_details(raw, logical, pin_amount);
+            }
             _aligned_free(ptr);
             GGML_CUDA_LOG_WARN("%s: pinmem=6 falling back to pinmem=3 (portable full pin)\n", __func__);
             ggml_backend_cuda_set_pinmem(3);
@@ -1915,8 +2138,16 @@ static void * ggml_cuda_host_malloc(size_t size) {
         err = cudaHostRegister(ptr, pin_amount, cudaHostRegisterPortable);
         if (err != cudaSuccess) {
             cudaGetLastError();
-            GGML_CUDA_LOG_WARN("%s: cudaHostRegister of %.2f MiB failed: %s\n", __func__,
-                               size / 1024.0 / 1024.0, cudaGetErrorString(err));
+            GGML_CUDA_LOG_WARN("%s: cudaHostRegister of %.2f MiB (%.2f GiB, pin_amount %.2f GiB) failed: %s\n", __func__,
+                               size / 1024.0 / 1024.0, size/1024.0/1024.0/1024.0, pin_amount/1024.0/1024.0/1024.0, cudaGetErrorString(err));
+            {
+                int raw = choose_dev >= 0 ? choose_dev : cur_dev;
+                int logical = -1;
+                const auto & info2 = ggml_cuda_info();
+                if (raw >= 0 && raw < GGML_CUDA_MAX_DEVICES) logical = info2.device_id[raw];
+                ggml_cuda_log_oom_details(raw, logical, pin_amount);
+                GGML_CUDA_LOG_WARN("%s: pinned host OOM; WDDM quota ~32-48 GiB, TCC bypasses it (try pinmem=5/6 or pindev)\n", __func__);
+            }
             free(ptr);
             if (ggml_cuda_pinmem == 3) {
                 GGML_CUDA_LOG_WARN("%s: falling back to pinmem=1 (token_embd only)\n", __func__);
