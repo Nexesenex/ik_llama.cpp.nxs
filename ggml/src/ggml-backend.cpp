@@ -1415,6 +1415,25 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
 
     if (tensor->buffer || (tensor->view_src && tensor->view_src->buffer)) {
         // since the tensor is pre-allocated, it cannot be moved to another backend
+        ggml_backend_buffer_t buf = tensor->buffer ? tensor->buffer : tensor->view_src->buffer;
+        fprintf(stderr, "pre-allocated tensor '%s' op %s (%d) ne [%lld,%lld,%lld,%lld] buffer %s (%s, usage %d) in backend that cannot run op\n",
+            tensor->name, ggml_op_name(tensor->op), tensor->op,
+            (long long)tensor->ne[0], (long long)tensor->ne[1], (long long)tensor->ne[2], (long long)tensor->ne[3],
+            buf ? ggml_backend_buffer_name(buf) : "NULL",
+            buf && buf->buft ? ggml_backend_buft_name(buf->buft) : "NULL",
+            buf ? (int)buf->usage : -1);
+        if (tensor->view_src) {
+            fprintf(stderr, "  view_src '%s' buffer %s (%s)\n",
+                tensor->view_src->name,
+                tensor->view_src->buffer ? ggml_backend_buffer_name(tensor->view_src->buffer) : "NULL",
+                tensor->view_src->buffer && tensor->view_src->buffer->buft ? ggml_backend_buft_name(tensor->view_src->buffer->buft) : "NULL");
+        }
+        for (int b = 0; b < sched->n_backends; b++) {
+            fprintf(stderr, "  backend %d (%s) supports_op=%d supports_buft=%d\n",
+                b, ggml_backend_name(sched->backends[b]),
+                ggml_backend_supports_op(sched->backends[b], tensor),
+                buf ? ggml_backend_supports_buft(sched->backends[b], buf->buft) : -1);
+        }
         GGML_ABORT("pre-allocated tensor in a backend that cannot run the operation");
     }
 
