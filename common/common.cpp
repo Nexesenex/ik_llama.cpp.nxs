@@ -3239,6 +3239,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.warmup = false;
         return true;
     }
+    if (arg == "-tp" || arg == "--threadpool") {
+        params.threadpool = true;
+        return true;
+    }
     if (arg == "-wb" || arg == "--warmup-batch") {
         params.batch_warmup = true;
         return true;
@@ -3750,6 +3754,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "bench",   "        --sweep-memory",         "report RSS high-water and sampled VRAM delta" });
     }
     options.push_back({ "bench",       "-wb,    --warmup-batch",         "run a warmup batch before measurement" });
+    options.push_back({ "*",          "--threadpool",              "use a persistent threadpool for CPU graph compute instead of OpenMP fork-join" });
     options.push_back({ "bench",       "       --output-format FORMAT",  "output format: table, jsonl, or csv (default: table)" });
 
     options.push_back({ "server" });
@@ -4826,6 +4831,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     //cparams.split_mode_f16    = params.split_mode_f16;
     cparams.scheduler_async   = params.scheduler_async;
     cparams.sched_max_copies  = params.sched_max_copies;
+    cparams.threadpool        = params.threadpool;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
     cparams.ser_n_tiers       = params.ser_n_tiers;

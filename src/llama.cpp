@@ -933,13 +933,11 @@ llama_context::~llama_context() {
     free_dsv4_cache_tensors();
     ggml_backend_sched_free(sched);
 
-#ifdef GGML_USE_THREADPOOL
     if (threadpool_owned) {
         ggml_threadpool_free(threadpool);
         threadpool       = nullptr;
         threadpool_batch = nullptr;
     }
-#endif
 
     for (ggml_backend_t backend : backends) {
         ggml_backend_free(backend);
@@ -6787,9 +6785,7 @@ static void llama_graph_compute(
         llama_context & lctx,
           ggml_cgraph * gf,
                   int   n_threads
-#ifdef GGML_USE_THREADPOOL
         , ggml_threadpool_t threadpool
-#endif
         ) {
 #ifdef GGML_USE_METAL
     if (ggml_backend_is_metal(lctx.backend_metal)) {
@@ -6799,9 +6795,7 @@ static void llama_graph_compute(
 
     if (lctx.backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
-#ifdef GGML_USE_THREADPOOL
         ggml_backend_cpu_set_threadpool(lctx.backend_cpu, threadpool);
-#endif
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
     }
@@ -6816,9 +6810,7 @@ static void llama_graph_compute_sched(
         ggml_backend_sched_t sched,
           ggml_cgraph * gf,
                   int   n_threads
-#ifdef GGML_USE_THREADPOOL
         , ggml_threadpool_t threadpool
-#endif
         ) {
 #ifdef GGML_USE_METAL
     if (ggml_backend_is_metal(lctx.backend_metal)) {
@@ -6828,9 +6820,7 @@ static void llama_graph_compute_sched(
 
     if (lctx.backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
-#ifdef GGML_USE_THREADPOOL
         ggml_backend_cpu_set_threadpool(lctx.backend_cpu, threadpool);
-#endif
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
     }
@@ -7312,9 +7302,7 @@ static int llama_decode_internal(
 #endif
         //fprintf(stderr, "%s: invoking llama_graph_compute\n", __func__);
         llama_graph_compute(lctx, gf, n_threads
-#ifdef GGML_USE_THREADPOOL
             , n_tokens == 1 ? lctx.threadpool : lctx.threadpool_batch
-#endif
             );
 
         if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 &&
@@ -7710,9 +7698,7 @@ static int llama_encode_internal(
     llama_set_inputs(lctx, batch);
 
     llama_graph_compute(lctx, gf, n_threads
-#ifdef GGML_USE_THREADPOOL
         , lctx.threadpool
-#endif
         );
 
     // extract embeddings
@@ -8005,9 +7991,7 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
     ggml_cgraph * gf = llm_build_context::llama_build_graph_defrag(lctx, ids);
 
     llama_graph_compute(lctx, gf, lctx.cparams.n_threads
-#ifdef GGML_USE_THREADPOOL
         , lctx.threadpool
-#endif
         );
 #endif
 
@@ -8052,9 +8036,7 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
             llama_set_k_shift(lctx);
 
             llama_graph_compute(lctx, gf, lctx.cparams.n_threads
-#ifdef GGML_USE_THREADPOOL
                 , lctx.threadpool
-#endif
                 );
 
             need_reserve = true;
@@ -8082,9 +8064,7 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
             llama_set_s_copy(lctx);
 
             llama_graph_compute(lctx, gf, lctx.cparams.n_threads
-#ifdef GGML_USE_THREADPOOL
                 , lctx.threadpool
-#endif
                 );
 
             need_reserve = true;
@@ -8497,6 +8477,7 @@ struct llama_context_params llama_context_default_params() {
         // /*.split_mode_f16           =*/ true,
         /*.scheduler_async             =*/ false,
         /*.sched_max_copies            =*/ -1,
+        /*.threadpool                 =*/ false,
         /*.mtp                         =*/ false,
         /*.mtp_op_type                 =*/ MTP_OP_NONE,
         /*.abort_callback              =*/ nullptr,
@@ -9122,8 +9103,7 @@ struct llama_context * llama_init_from_model(
     cparams.n_seq_max        = std::max(1u, params.n_seq_max);
     cparams.n_threads        = params.n_threads;
     cparams.n_threads_batch  = params.n_threads_batch;
-#ifdef GGML_USE_THREADPOOL
-    {
+    if (params.threadpool) {
         uint32_t n_tp = std::max(params.n_threads, params.n_threads_batch);
         if (n_tp > 0) {
             struct ggml_threadpool_params tpp = ggml_threadpool_params_default((int)n_tp);
@@ -9137,7 +9117,6 @@ struct llama_context * llama_init_from_model(
             }
         }
     }
-#endif
     cparams.yarn_ext_factor  = params.yarn_ext_factor >= 0.0f ? params.yarn_ext_factor : hparams.yarn_ext_factor;
     cparams.yarn_attn_factor = params.yarn_attn_factor >= 0.0f ? params.yarn_attn_factor : hparams.yarn_attn_factor;
     cparams.yarn_beta_fast   = params.yarn_beta_fast >= 0.0f ? params.yarn_beta_fast : hparams.yarn_beta_fast;
@@ -13516,7 +13495,6 @@ uint32_t llama_n_threads_batch(struct llama_context * ctx) {
     return ctx->cparams.n_threads_batch;
 }
 
-#ifdef GGML_USE_THREADPOOL
 void llama_attach_threadpool(struct llama_context * ctx, ggml_threadpool_t threadpool, ggml_threadpool_t threadpool_batch) {
     if (ctx->threadpool_owned) {
         ggml_threadpool_free(ctx->threadpool);
@@ -13534,7 +13512,6 @@ void llama_detach_threadpool(struct llama_context * ctx) {
     ctx->threadpool_batch = nullptr;
     ctx->threadpool_owned = false;
 }
-#endif
 
 void llama_set_abort_callback(struct llama_context * ctx, bool (*abort_callback)(void * data), void * abort_callback_data) {
     ctx->abort_callback      = abort_callback;

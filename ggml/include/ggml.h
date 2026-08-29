@@ -869,9 +869,7 @@ extern "C" {
         // read-ahead selected MoE expert weights in the CPU matmul-id kernels
         bool moe_expert_prefetch;
 
-#ifdef GGML_USE_THREADPOOL
         struct ggml_threadpool * threadpool;
-#endif
     };
 
     enum ggml_cgraph_eval_order {
@@ -2958,8 +2956,7 @@ extern "C" {
     // note: the drawback of this API is that you must have ensured that the context has enough memory for the work data
     GGML_API enum ggml_status  ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads);
 
-#ifdef GGML_USE_THREADPOOL
-    // threadpool API
+// threadpool API
     GGML_API struct ggml_threadpool_params ggml_threadpool_params_default      (int n_threads);
     GGML_API void                           ggml_threadpool_params_init         (struct ggml_threadpool_params * p, int n_threads);
     GGML_API bool                           ggml_threadpool_params_match        (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
@@ -2968,7 +2965,6 @@ extern "C" {
     GGML_API int                            ggml_threadpool_get_n_threads      (struct ggml_threadpool * threadpool);
     GGML_API void                           ggml_threadpool_pause              (struct ggml_threadpool * threadpool);
     GGML_API void                           ggml_threadpool_resume             (struct ggml_threadpool * threadpool);
-#endif
 
     GGML_API struct ggml_tensor * ggml_graph_get_tensor(struct ggml_cgraph * cgraph, const char * name);
 

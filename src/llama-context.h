@@ -393,11 +393,9 @@ struct llama_context {
 #endif
     ggml_backend_t backend_cpu = nullptr;
 
-#ifdef GGML_USE_THREADPOOL
     ggml_threadpool_t threadpool       = nullptr;
     ggml_threadpool_t threadpool_batch = nullptr;
     bool              threadpool_owned = false;
-#endif
 
     bool has_evaluated_once = false;
 

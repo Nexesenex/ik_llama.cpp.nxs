@@ -2981,9 +2981,7 @@ struct ggml_compute_state_shared {
 
     enum ggml_status ec;
 
-#ifdef GGML_USE_THREADPOOL
     bool use_threadpool; // when true, always use spin barrier (not OpenMP barrier)
-#endif
 };
 
 struct ggml_compute_state {
@@ -4962,12 +4960,10 @@ static void ggml_barrier(struct ggml_compute_state_shared * shared) {
     if (shared->n_threads == 1) {
         return;
     }
-#ifdef GGML_USE_THREADPOOL
     if (shared->use_threadpool) {
         ggml_barrier_impl(shared);
         return;
     }
-#endif
     // if (shared && shared->n_batch > 32) { // Ikawrakow's default switch.
     if (shared && ggml_batch_threshold_check(shared->n_batch)) {
         ggml_barrier_impl(shared);
@@ -4983,8 +4979,6 @@ void ggml_set_batch_thread_threshold(const char * expr) { (void)expr; }
 void ggml_set_pp_batch_size(int batch_size) { (void)batch_size; }
 const char * ggml_get_batch_thread_threshold(void) { return ">32"; }
 #endif
-
-#ifdef GGML_USE_THREADPOOL
 
 // Forward declaration of the worker thread entry point
 // (defined after ggml_graph_plan() which is later in this file)
@@ -5220,7 +5214,6 @@ void ggml_threadpool_resume(struct ggml_threadpool * tp) {
     mtx_unlock(&tp->mutex);
 }
 
-#endif // GGML_USE_THREADPOOL
 
 // TODO: make this somehow automatically executed
 //       some sort of "sentry" mechanism
@@ -31852,11 +31845,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
     cplan.n_threads = MIN(max_tasks, n_threads);
     cplan.work_size = work_size;
     cplan.work_data = NULL;
-#ifdef GGML_USE_THREADPOOL
     cplan.threadpool = threadpool;
-#else
-    GGML_UNUSED(threadpool);
-#endif
 
     return cplan;
 }
@@ -31933,8 +31922,6 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         /*.current_chunk           =*/ 0,
         /*.ec                      =*/ GGML_STATUS_SUCCESS,
     };
-
-#ifdef GGML_USE_THREADPOOL
     if (cplan->threadpool && !atomic_load(&cplan->threadpool->pause_flag)) {
         struct ggml_threadpool * tp = cplan->threadpool;
 
@@ -31973,7 +31960,6 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         tp->shared = NULL;
         return state_shared.ec;
     }
-#endif
 
 #ifdef GGML_USE_OPENMP
     if (n_threads > 1) {
