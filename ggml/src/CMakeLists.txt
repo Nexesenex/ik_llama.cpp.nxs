@@ -156,12 +156,6 @@ if (GGML_MUSA)
     list(APPEND GGML_CDEF_PUBLIC GGML_USE_MUSA)
 endif()
 
-option(GGML_THREADPOOL "ggml: use persistent threadpool" OFF)
-if (GGML_THREADPOOL)
-    message(STATUS "Using persistent threadpool")
-    add_compile_definitions(GGML_USE_THREADPOOL)
-endif()
-
 if (GGML_OPENMP)
     find_package(OpenMP)
     if (OpenMP_FOUND)

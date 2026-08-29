@@ -807,9 +807,8 @@ struct ggml_backend_cpu_context {
 
     bool moe_expert_prefetch;
 
-#ifdef GGML_USE_THREADPOOL
+
     struct ggml_threadpool * threadpool;
-#endif
 };
 
 GGML_CALL static const char * ggml_backend_cpu_name(ggml_backend_t backend) {
@@ -842,11 +841,7 @@ GGML_CALL static ggml_backend_graph_plan_t ggml_backend_cpu_graph_plan_create(gg
     struct ggml_backend_plan_cpu * cpu_plan = (ggml_backend_plan_cpu *)malloc(sizeof(struct ggml_backend_plan_cpu));
 
     cpu_plan->cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads,
-#ifdef GGML_USE_THREADPOOL
         cpu_ctx->threadpool
-#else
-        NULL
-#endif
     );
     cpu_plan->cgraph = *cgraph; // FIXME: deep copy
 
@@ -886,11 +881,7 @@ GGML_CALL static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t 
     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
 
     struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads,
-#ifdef GGML_USE_THREADPOOL
         cpu_ctx->threadpool
-#else
-        NULL
-#endif
     );
 
     if (cpu_ctx->work_size < cplan.work_size) {
@@ -986,9 +977,8 @@ ggml_backend_t ggml_backend_cpu_init(void) {
     ctx->abort_callback      = NULL;
     ctx->abort_callback_data = NULL;
     ctx->moe_expert_prefetch = false;
-#ifdef GGML_USE_THREADPOOL
+
     ctx->threadpool          = NULL;
-#endif
 
     ggml_backend_t cpu_backend = (ggml_backend_t)malloc(sizeof(struct ggml_backend));
     if (cpu_backend == NULL) {
@@ -1030,14 +1020,12 @@ void ggml_backend_cpu_set_abort_callback(ggml_backend_t backend_cpu, ggml_abort_
     ctx->abort_callback_data = abort_callback_data;
 }
 
-#ifdef GGML_USE_THREADPOOL
 void ggml_backend_cpu_set_threadpool(ggml_backend_t backend_cpu, struct ggml_threadpool * threadpool) {
     GGML_ASSERT(ggml_backend_is_cpu(backend_cpu));
 
     struct ggml_backend_cpu_context * ctx = (struct ggml_backend_cpu_context *)backend_cpu->context;
     ctx->threadpool = threadpool;
 }
-#endif
 
 GGML_CALL ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) {
     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
