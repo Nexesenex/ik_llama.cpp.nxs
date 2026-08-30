@@ -1,6 +1,7 @@
 #include "server-task.h"
 #include "server-queue.h"
 #include "speculative.h"
+#include "common.h"
 #include "json-schema-to-grammar.h"
 #include <nlohmann/json_fwd.hpp>
 
@@ -187,6 +188,8 @@ struct server_slot {
 
     double t_prompt_processing; // ms
     double t_token_generation; // ms
+
+    common_token_rate_limiter tgsl;
 
     void reset();
 
