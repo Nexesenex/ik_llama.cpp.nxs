@@ -200,6 +200,9 @@ int main(int argc, char ** argv) {
 
     LOG("%s: llama backend init\n", __func__);
     common_params_minilog(params);
+    if (params.token_generation_speed_limit > 0) {
+        LOG_TEE("%s: token generation speed limit: %.2f tokens/s (approx, 0.25s quantum)\n", __func__, params.token_generation_speed_limit);
+    }
     llama_backend_init();
     llama_numa_init(params.numa);
 
@@ -647,6 +650,9 @@ int main(int argc, char ** argv) {
     double t_token_generation_ms = 0.0;
     int n_prompt_tokens_processed = 0;
     int n_decoded = 0;
+
+    common_token_rate_limiter tgsl;
+    tgsl.init(params.token_generation_speed_limit);
 
     // the first thing we will do is to output the prompt, so set color accordingly
     console::set_display(console::prompt);
@@ -1235,7 +1241,16 @@ int main(int argc, char ** argv) {
                 }
 
                 fflush(stdout);
+
+                // token generation speed limiter: fluid pacing, updated every 0.25s
+                if (emitted_generated) {
+                    tgsl.consume(1);
+                }
             }
+        }
+        // when display is disabled, still throttle generation (non-fluid batch path)
+        if (emitted_generated && !(input_echo && display)) {
+            tgsl.consume((int) emitted.size());
         }
 
         // reset color to default if there is no pending user input
