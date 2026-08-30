@@ -374,6 +374,7 @@ void server_context::init() {
         }
 
         slot.reset();
+        slot.tgsl.init(params_base.token_generation_speed_limit);
 
         slots.push_back(std::move(slot));
     }
@@ -566,6 +567,8 @@ void server_slot::reset() {
     n_decoded_at_batch_100 = 0;
     n_prompt_tokens_processed_log = 0;
     t_last_pp_log = 0;
+
+    tgsl.reset();
 
     task.reset();
 }
@@ -2083,6 +2086,10 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
     slot.command = SLOT_COMMAND_LOAD_PROMPT;
     // slot.prompt_tokens.clear();
+
+    // init token generation speed limiter from global params
+    slot.tgsl.init(params_base.token_generation_speed_limit);
+    slot.tgsl.reset();
 
     LOG_INFO("slot is processing task", {
         {"id_slot", slot.id},
@@ -4654,6 +4661,7 @@ void server_context::speculative_decoding_accept() {
             completion_token_output result;
 
             slot.n_decoded += 1;
+            slot.tgsl.consume(1);
 
             result.tok = ids[i];
             result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
@@ -5163,6 +5171,9 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             slot.n_decoded += 1;
             const int64_t t_current = ggml_time_us();
+
+            // token generation speed limiter: throttle if ahead of target rate
+            slot.tgsl.consume(1);
 
             if (slot.n_decoded == 1) {
                 slot.t_start_generation = ggml_time_us();

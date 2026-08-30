@@ -12,6 +12,7 @@
 #include "common.h"
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
+#include "ggml.h"
 #include "llama-vocab.h"
 #include "llama.h"
 #include "chat.h"
@@ -834,6 +835,7 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
     get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
     get_env("LLAMA_ARG_V_CACHE_HADAMARD", params.v_cache_hadamard);
+    get_env("LLAMA_ARG_TOKEN_GENERATION_SPEED_LIMIT", params.token_generation_speed_limit);
 
 }
 
@@ -1261,6 +1263,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "-n" || arg == "--predict" || arg == "--n-predict") {
         CHECK_ARG
         params.n_predict = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "-tgsl" || arg == "--token-generation-speed-limit") {
+        CHECK_ARG
+        params.token_generation_speed_limit = std::stof(argv[i]);
+        if (params.token_generation_speed_limit < 0) {
+            invalid_param = true;
+            return true;
+        }
         return true;
     }
     if (arg == "--top-k") {
@@ -3174,6 +3185,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-crs,  --cache-ram-similarity N",           "minimum fraction of a cached entry that must match the new prompt for that entry to be reusable (default: %.2f).",params.cache_ram_similarity });
     options.push_back({ "*",           "-cram-n-min N, --cache-ram-n-min N",           "minimum number of the cached tokens that triggers prompt cache (default: %d).", params.cache_ram_n_min });
     options.push_back({ "*",           "-n,    --predict N",            "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)", params.n_predict });
+    options.push_back({ "*",           "-tgsl, --token-generation-speed-limit N", "limit token generation speed to N tokens per second (approx, 0.25s quantum, 0 = disabled, default: %.1f)", (double)params.token_generation_speed_limit });
     options.push_back({ "*",           "-b,    --batch-size N",         "logical maximum batch size (default: %d)", params.n_batch });
     options.push_back({ "*",           "-ub,   --ubatch-size N",        "physical maximum batch size (default: %d)", params.n_ubatch });
     options.push_back({ "*",           "       --keep N",               "number of tokens to keep from the initial prompt (default: %d, -1 = all)", params.n_keep });
@@ -3689,6 +3701,34 @@ static void common_minilog_callback(ggml_log_level level, const char * text, voi
 void common_params_minilog(const gpt_params & params) {
     if (params.minilog) {
         llama_log_set(common_minilog_callback, nullptr);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// token generation speed limiter (approximate, 0.25s quantum for fluid streaming)
+// ----------------------------------------------------------------------------
+void common_token_rate_limiter::consume(int n) {
+    if (tps <= 0.0 || n <= 0) {
+        return;
+    }
+    if (t_start_us == 0) {
+        t_start_us = ggml_time_us();
+        n_tokens = 0;
+    }
+    for (int k = 0; k < n; ++k) {
+        ++n_tokens;
+        const double expected_us = n_tokens * 1e6 / tps;
+        const int64_t now = ggml_time_us();
+        const int64_t elapsed = now - t_start_us;
+        int64_t need = (int64_t) expected_us - elapsed;
+        if (need > 0) {
+            // sleep in up to 250 ms chunks so the limiter is updated every 0.25s
+            while (need > 0) {
+                const int64_t chunk = std::min<int64_t>(need, 250'000);
+                std::this_thread::sleep_for(std::chrono::microseconds(chunk));
+                need -= chunk;
+            }
+        }
     }
 }
 

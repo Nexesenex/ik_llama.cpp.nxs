@@ -321,6 +321,7 @@ struct gpt_params {
 #else
     std::string ggml_batch_thread_thresh = ">32";  // IK's switch: use OpenMP barrier for TG, custom barrier for PP
 #endif
+    float   token_generation_speed_limit = 0.0f; // tokens per second, 0 = disabled (approx, updated every 0.25s)
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
@@ -647,6 +648,24 @@ struct gpt_params {
     std::string error_message;
 };
 
+// token generation speed limiter - approximate, fluid streaming via 0.25s quantum
+struct common_token_rate_limiter {
+    double  tps        = 0.0; // tokens per second, 0 = disabled
+    int64_t t_start_us = 0;
+    int64_t n_tokens   = 0;
+
+    void init(double tps_) {
+        tps = tps_;
+        t_start_us = 0;
+        n_tokens = 0;
+    }
+    void reset() {
+        t_start_us = 0;
+        n_tokens = 0;
+    }
+    // sleep if generation is ahead of the target rate; splits sleeps into 250ms chunks for fluid streaming
+    void consume(int n);
+};
 
 std::pair<int, char**> parse_command_line(const std::string& commandLine);
 void free_command_line(int argc, char** argv);
