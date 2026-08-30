@@ -590,6 +590,9 @@ struct gpt_params {
     int  prefetch_experts_threads = 0; // number of expert prefetch workers (<=0 = auto)
     bool k_cache_hadamard  = false; // if true, use Hadamard transform for the K-cache (only makes sense with quantized cache)
     bool v_cache_hadamard  = false; // if true, use Hadamard transform for the V-cache (only makes sense with quantized cache, which requires FA)
+
+    float   token_generation_speed_limit = 0.0f; // tokens per second, 0 = disabled (approx, updated every 0.25s)
+
     bool dsv4_cache_cpu    = false; // if true, keep DeepSeek-V4 compressed-attention K caches (CSA/HCA) in host memory
     bool dsv4_lid_cache_cpu= false; // if true, also keep the DeepSeek-V4 indexer (LID) K cache in host memory
     bool split_mode_tensor_parallel_scheduling = false; // if true, force split mode tensor parallel (graph) scheduling
@@ -752,6 +755,24 @@ struct gpt_params {
     std::string error_message;
 };
 
+// token generation speed limiter - approximate, fluid streaming via 0.25s quantum
+struct common_token_rate_limiter {
+    double  tps        = 0.0; // tokens per second, 0 = disabled
+    int64_t t_start_us = 0;
+    int64_t n_tokens   = 0;
+
+    void init(double tps_) {
+        tps = tps_;
+        t_start_us = 0;
+        n_tokens = 0;
+    }
+    void reset() {
+        t_start_us = 0;
+        n_tokens = 0;
+    }
+    // sleep if generation is ahead of the target rate; splits sleeps into 250ms chunks for fluid streaming
+    void consume(int n);
+};
 
 std::pair<int, char**> parse_command_line(const std::string& commandLine);
 void free_command_line(int argc, char** argv);
