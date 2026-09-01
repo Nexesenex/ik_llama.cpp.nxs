@@ -226,12 +226,6 @@ static void ggml_cuda_log_oom_details(int raw_id, int logical_id, size_t request
         GGML_CUDA_LOG_ERROR("  device: logical CUDA%d (ordinal Device %d, PCI %s, %s)\n", logical, ordinal, pci_bus_id, dev_name);
     }
 
-#ifdef _WIN32
-    MEMORYSTATUSEX ms = { sizeof(MEMORYSTATUSEX) };
-    if (GlobalMemoryStatusEx(&ms)) {
-        GGML_CUDA_LOG_ERROR("  system RAM: free %.2f GiB / total %.2f GiB\n", ms.ullAvailPhys / (1024.0 * 1024.0 * 1024.0), ms.ullTotalPhys / (1024.0 * 1024.0 * 1024.0));
-    }
-#endif
     GGML_CUDA_LOG_ERROR("  hint: try reducing -ts / -ngl / -b / -c, adjusting -ot / --device / --tensor-split, or use GGML_CUDA_NO_PINNED=1\n");
 }
 
