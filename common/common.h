@@ -417,7 +417,7 @@ struct gpt_params {
         ,float          // bias
     >> disallow_rules;  // always-active disallowlist; disallow wins over allow
     std::vector<std::string> disallow_pieces;  // each token in the tokenized piece (or the token id, if integer) is disallowed
-    bool   disallow_emdash   = false;  // automatically disallow every token containing U+2014/U+2013 or the space+hyphen sequence
+    bool   disallow_emdash   = false;  // automatically disallow every token containing U+2014/U+2013, the space+hyphen sequence or a 2+ hyphen run
 
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
@@ -865,9 +865,10 @@ std::vector<bool> common_disallowlist_banned_ids(
         const std::vector<std::string> & vocab_pieces,
         const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & rules);
 
-// ban every token containing U+2014 (em-dash) or U+2013 (en-dash), or the space+hyphen
-// sequence U+0020 U+002D. unlike unicode rules, this reaches dash tokens: U+2014/U+2013
-// are 'common' script and common codepoints never trigger rule bans
+// ban every token containing U+2014 (em-dash) or U+2013 (en-dash), the space+hyphen
+// sequence U+0020 U+002D, or a run of 2+ hyphens. unlike unicode rules, this reaches
+// dash tokens: U+2014/U+2013 are 'common' script and common codepoints never trigger
+// rule bans
 std::vector<bool> common_disallow_emdash_banned_ids(
         const std::vector<std::string> & vocab_pieces);
 
