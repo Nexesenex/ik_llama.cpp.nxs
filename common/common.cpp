@@ -3423,7 +3423,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "named subsets: `ideographic` (han, hiragana, katakana, hangul, bopomofo, yi, tangut, nushu), `indic` (devanagari, bengali, gujarati, gurmukhi, kannada, malayalam, oriya, tamil, telugu, sinhala), `persic` (arabic, old_persian, avestan, inscriptional_pahlavi, psalter_pahlavi, manichaean, sogdian, old_sogdian, chorasmian), `semitic` (hebrew, arabic, syriac, samaritan, mandaic, ethiopic, phoenician, imperial_aramaic, old_south_arabian, old_north_arabian, ugaritic, hatran, palmyrene, nabataean, elymaic), `caucasian` (armenian, georgian, caucasian_albanian), `african` (adlam, bamum, bassa_vah, coptic, egyptian_hieroglyphs, ethiopic, garay, medefaidrin, mende_kikakui, meroitic_cursive, meroitic_hieroglyphs, nko, tifinagh, vai), `amerindian` (canadian_aboriginal, cherokee, osage), `austronesian` (balinese, batak, buginese, buhid, cham, hanunoo, javanese, kawi, makasar, rejang, sundanese, tagalog, tagbanwa), `mesopotamic` (cuneiform, old_persian, ugaritic, hatran, imperial_aramaic), `turko_mongol` (old_turkic, mongolian, soyombo, phags_pa), `finno_ugric_uralic` (old_hungarian), `ancient_european` (linear_a, linear_b, cypro_minoan, cypriot, anatolian_hieroglyphs, carian, lycian, lydian, old_italic, runic, ogham, glagolitic, old_hungarian, gothic), `southeast_asian` (thai, lao, khmer, myanmar, tibetan, tai_le, tai_tham, tai_viet, new_tai_lue), `latin_diacritics_viet` (Vietnamese accented latin), `latin_diacritics_western` (Western European accented latin), `latin_diacritics` (union of both), `exotic` (union of all named subsets: every indigenous writing system outside the latin/greek/cyrillic world)\n" });
     options.push_back({ "*",           "       --allowlist-pieces",     "allowlist each token in argument. inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule" });
     options.push_back({ "*",           "       --disallowlist-pieces",    "disallow each token in argument. takes precedence over the allowlist. ';' separates entries; each entry is a comma-separated token-id list or a text piece, tokenized like --allowlist-pieces" });
-    options.push_back({ "*",           "       --disallowlist-em-dash",   "automatically disallow every token containing U+2014 (em-dash) in this model's tokenizer. model-agnostic, no id list needed" });
+    options.push_back({ "*",           "       --disallowlist-em-dash",   "automatically disallow every token containing U+2014 (em-dash), U+2013 (en-dash) or the space+hyphen sequence. model-agnostic, no id list needed" });
     options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
     options.push_back({ "*",           "       --allowlist-keyword-delay",
                                                                         "# tokens to delay matching for the first keyword (default: %zu)", params.allow_kw_delay });
@@ -5304,12 +5304,15 @@ std::vector<bool> common_disallow_emdash_banned_ids(
     std::vector<uint32_t> cpts;
     std::vector<std::string> scripts;  // unused, required by the fill call
     for (int32_t id = 0; id < n_vocab; ++id) {
-        // raw codepoint scan, script-blind on purpose: U+2014 is 'common' script and common
-        // codepoints never trigger rule bans, so no unicode rule can reach these tokens.
-        // lone bytes decode to U+FFFD and never match, so byte-fallback tokens are untouched
+        // raw codepoint scan, script-blind on purpose: U+2014/U+2013 are 'common' script and
+        // common codepoints never trigger rule bans, so no unicode rule can reach these tokens.
+        // lone bytes decode to U+FFFD and never match, so byte-fallback tokens are untouched.
+        // the space+hyphen pair looks at the previous codepoint, which also spares the lone
+        // '-' token and mid-word hyphens (only space-led hyphen phrases are banned)
         llama_fill_from_utf8((void *) &vocab_pieces[id], &cpts, &scripts);
-        for (const auto cpt : cpts) {
-            if (cpt == 0x2014) {
+        for (size_t k = 0; k < cpts.size(); ++k) {
+            if (cpts[k] == 0x2014 || cpts[k] == 0x2013 ||
+                (cpts[k] == 0x002D && k > 0 && cpts[k - 1] == 0x0020)) {
                 banned[id] = true;
                 break;
             }
