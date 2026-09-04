@@ -4522,7 +4522,7 @@ bool create_tensors_helper::create_glm5next_tensors(const LLM_TN & tn) {
         auto & layer = model.layers[il];
         ggml_context * ctx_layer = ctx_for_layer(il);
         ggml_context * ctx_split = ctx_for_layer_split(il);
-        const bool graph_or_attn = model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
+        const bool graph_or_attn = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
         ggml_context * norm_ctx = graph_or_attn ? ctx_split : ctx_layer;
         ggml_context * moe_ctx  = graph_or_attn ? ctx_split : ctx_layer;
 
