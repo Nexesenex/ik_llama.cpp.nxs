@@ -2506,6 +2506,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.allow_pieces.push_back(argv[i]);
         return true;
     }
+    if (arg == "--disallowlist-pieces") {
+        CHECK_ARG
+        params.disallow_pieces.push_back(argv[i]);
+        return true;
+    }
     if (arg == "--allowlist-subset") {
         params.allow_subset = true;
         return true;
@@ -3413,10 +3418,11 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "multiple rules can be specified in one argument, separated by `;`\n"
                                                                         "named subsets: `ideographic` (han, hiragana, katakana, hangul, bopomofo, yi, tangut, nushu), `indic` (devanagari, bengali, gujarati, gurmukhi, kannada, malayalam, oriya, tamil, telugu, sinhala), `persic` (arabic, old_persian, avestan, inscriptional_pahlavi, psalter_pahlavi, manichaean, sogdian, old_sogdian, chorasmian), `semitic` (hebrew, arabic, syriac, samaritan, mandaic, ethiopic, phoenician, imperial_aramaic, old_south_arabian, old_north_arabian, ugaritic, hatran, palmyrene, nabataean, elymaic), `caucasian` (armenian, georgian, caucasian_albanian), `african` (adlam, bamum, bassa_vah, coptic, egyptian_hieroglyphs, ethiopic, garay, medefaidrin, mende_kikakui, meroitic_cursive, meroitic_hieroglyphs, nko, tifinagh, vai), `amerindian` (canadian_aboriginal, cherokee, osage), `austronesian` (balinese, batak, buginese, buhid, cham, hanunoo, javanese, kawi, makasar, rejang, sundanese, tagalog, tagbanwa), `mesopotamic` (cuneiform, old_persian, ugaritic, hatran, imperial_aramaic), `turko_mongol` (old_turkic, mongolian, soyombo, phags_pa), `finno_ugric_uralic` (old_hungarian), `ancient_european` (linear_a, linear_b, cypro_minoan, cypriot, anatolian_hieroglyphs, carian, lycian, lydian, old_italic, runic, ogham, glagolitic, old_hungarian, gothic), `southeast_asian` (thai, lao, khmer, myanmar, tibetan, tai_le, tai_tham, tai_viet, new_tai_lue), `latin_diacritics_viet` (Vietnamese accented latin), `latin_diacritics_western` (Western European accented latin), `latin_diacritics` (union of both), `exotic` (union of all named subsets: every indigenous writing system outside the latin/greek/cyrillic world)\n" });
     options.push_back({ "*",           "       --allowlist-pieces",     "allowlist each token in argument. inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule" });
+    options.push_back({ "*",           "       --disallowlist-pieces",    "disallow each token in argument. takes precedence over the allowlist. ';' separates entries; each entry is a comma-separated token-id list or a text piece, tokenized like --allowlist-pieces" });
     options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
     options.push_back({ "*",           "       --allowlist-keyword-delay",
                                                                         "# tokens to delay matching for the first keyword (default: %zu)", params.allow_kw_delay });
-    options.push_back({ "*",           "       --allowlist-subset",     "restrict the output logits computation to the allowed vocab rows (Option A). requires at least one --allowlist-unicode-rule or --disallowlist-unicode-rule" });
+    options.push_back({ "*",           "       --allowlist-subset",     "restrict the output logits computation to the allowed vocab rows (Option A). requires at least one --allowlist-unicode-rule, --disallowlist-unicode-rule or --disallowlist-pieces" });
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
@@ -5285,12 +5291,56 @@ std::vector<bool> common_disallowlist_banned_ids(
     return banned;
 }
 
+std::vector<llama_token> common_disallow_piece_ids(
+        const struct llama_model * model,
+        const std::string & piece) {
+    std::vector<llama_token> ids;
+    const int32_t n_vocab = llama_n_vocab(model);
+    // ';' separates independent entries (copy-pasted tokens); each entry is either a
+    // comma-separated token-id list (plain integers in vocabulary range, whitespace ignored)
+    // or a single text piece, tokenized like --allowlist-pieces (';' segments are used verbatim,
+    // so leading/trailing spaces stay significant)
+    for (const auto & seg : string_split(piece, ';')) {
+        if (seg.empty()) {
+            continue;
+        }
+        std::vector<llama_token> seg_ids;
+        bool all_ids = true;
+        for (const auto & part : string_split(seg, ',')) {
+            const auto num = string_strip(part);
+            if (num.empty() || !std::all_of(num.begin(), num.end(), [](char c) { return std::isdigit((unsigned char) c); })) {
+                all_ids = false;
+                break;
+            }
+            try {
+                const unsigned long id = std::stoul(num);
+                if (id >= (unsigned long) n_vocab) {
+                    all_ids = false;
+                    break;
+                }
+                seg_ids.push_back((llama_token) id);
+            } catch (const std::exception &) {
+                all_ids = false;
+                break;
+            }
+        }
+        if (all_ids && !seg_ids.empty()) {
+            ids.insert(ids.end(), seg_ids.begin(), seg_ids.end());
+        } else {
+            const auto tokens = common_tokenize(model, seg, false, true);
+            ids.insert(ids.end(), tokens.begin(), tokens.end());
+        }
+    }
+    return ids;
+}
+
 std::vector<int32_t> common_allowlist_union_ids(
         const struct llama_model * model,
         const std::vector<std::string> & vocab_pieces,
         const std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> & rules,
         const std::vector<std::string> & allow_pieces,
-        const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & disallow_rules) {
+        const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & disallow_rules,
+        const std::vector<std::string> & disallow_pieces) {
     const int32_t n_vocab = (int32_t) vocab_pieces.size();
     // without allow rules everything starts allowed; with allow rules only the union is allowed
     std::vector<bool> allowed(n_vocab, rules.empty());
@@ -5317,6 +5367,13 @@ std::vector<int32_t> common_allowlist_union_ids(
         for (int32_t id = 0; id < n_vocab; ++id) {
             if (banned[id]) {
                 allowed[id] = false;
+            }
+        }
+    }
+    for (const auto & piece: disallow_pieces) {
+        for (const auto token: common_disallow_piece_ids(model, piece)) {
+            if (token >= 0 && token < n_vocab) {
+                allowed[token] = false;
             }
         }
     }
