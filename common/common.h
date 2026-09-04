@@ -417,6 +417,7 @@ struct gpt_params {
         ,float          // bias
     >> disallow_rules;  // always-active disallowlist; disallow wins over allow
     std::vector<std::string> disallow_pieces;  // each token in the tokenized piece (or the token id, if integer) is disallowed
+    bool   disallow_emdash   = false;  // automatically disallow every token containing U+2014 (em-dash)
 
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
@@ -862,6 +863,11 @@ std::vector<bool> common_disallowlist_banned_ids(
         const std::vector<std::string> & vocab_pieces,
         const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & rules);
 
+// ban every token whose raw piece contains U+2014 (em-dash). unlike unicode rules, this reaches
+// em-dash tokens: U+2014 is 'common' script and common codepoints never trigger rule bans
+std::vector<bool> common_disallow_emdash_banned_ids(
+        const std::vector<std::string> & vocab_pieces);
+
 // resolve a --disallowlist-pieces argument to token ids. ';' separates independent entries;
 // each entry is either a comma-separated token-id list (plain integers in vocabulary range)
 // or a single text piece, tokenized like --allowlist-pieces
@@ -875,7 +881,8 @@ std::vector<int32_t> common_allowlist_union_ids(
         const std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> & rules,
         const std::vector<std::string> & allow_pieces,
         const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & disallow_rules,
-        const std::vector<std::string> & disallow_pieces);
+        const std::vector<std::string> & disallow_pieces,
+        bool disallow_emdash = false);
 
 std::vector<llama_token> llama_tokenize(
     const struct llama_vocab * vocab,
