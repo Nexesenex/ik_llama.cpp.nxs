@@ -425,17 +425,17 @@ void server_context::init() {
     // restrict the output logits computation to the union of the allowlist-allowed tokens
     // (Option A). opt-in via --allowlist-subset. the subset is computed from the CLI-level allowlist
     // rules/pieces; per-request allowlist_piece_array overrides that fall outside of this union are a
-    // known limitation. disallow rules subtract their banned rows from the union (with no allow rules
-    // the union starts from the full vocabulary), so --allowlist-subset also works disallow-only.
+    // known limitation. disallow rules and pieces subtract their banned rows from the union (with no
+    // allow rules the union starts from the full vocabulary), so --allowlist-subset also works disallow-only.
     if (params_base.allow_subset) {
-        if (params_base.allow_rules.empty() && params_base.disallow_rules.empty()) {
-            LLAMA_LOG_WARN("%s: --allowlist-subset given without --allowlist-unicode-rule or --disallowlist-unicode-rule, ignoring\n", __func__);
+        if (params_base.allow_rules.empty() && params_base.disallow_rules.empty() && params_base.disallow_pieces.empty()) {
+            LLAMA_LOG_WARN("%s: --allowlist-subset given without --allowlist-unicode-rule, --disallowlist-unicode-rule or --disallowlist-pieces, ignoring\n", __func__);
         } else {
             const int32_t n_vocab = populate_vocab_pieces();
-            const auto ids = common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, params_base.disallow_rules);
+            const auto ids = common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, params_base.disallow_rules, params_base.disallow_pieces);
             const int32_t n_remaining = (int32_t) ids.size();
             // rows preserved by the allowlist stage (union of the allow rules + pieces; full vocab when no allow rules)
-            const int32_t n_preserved = (int32_t) common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, {}).size();
+            const int32_t n_preserved = (int32_t) common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, {}, {}).size();
             const int32_t n_ditched = n_preserved - n_remaining;
             if (!ids.empty() && llama_model_set_output_subset(model, ids.data(), (int32_t) ids.size()) == 0) {
                 LLAMA_LOG_INFO("%s: output logits restricted to %d/%d vocab rows by the allowlist/disallowlist (%d preserved by allowlist, %d ditched by disallowlist)\n",
@@ -444,11 +444,11 @@ void server_context::init() {
                 LLAMA_LOG_WARN("%s: output logits subset not enabled (allowlist/disallowlist active, subset unsupported)\n", __func__);
             }
         }
-    } else if (!params_base.allow_rules.empty() || !params_base.disallow_rules.empty()) {
+    } else if (!params_base.allow_rules.empty() || !params_base.disallow_rules.empty() || !params_base.disallow_pieces.empty()) {
         // traditional allowlist/disallowlist without the output subset: still report the logit accounting
         const int32_t n_vocab = populate_vocab_pieces();
-        const int32_t n_preserved = (int32_t) common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, {}).size();
-        const int32_t n_remaining = (int32_t) common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, params_base.disallow_rules).size();
+        const int32_t n_preserved = (int32_t) common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, {}, {}).size();
+        const int32_t n_remaining = (int32_t) common_allowlist_union_ids(model, vocab_pieces, params_base.allow_rules, params_base.allow_pieces, params_base.disallow_rules, params_base.disallow_pieces).size();
         const int32_t n_ditched = n_preserved - n_remaining;
         LLAMA_LOG_INFO("%s: allowlist preserves %d/%d logits, disallowlist ditches %d, %d/%d logits remain\n",
                 __func__, n_preserved, n_vocab, n_ditched, n_remaining, n_vocab);
@@ -1849,10 +1849,19 @@ bool server_context::l_s_w_t(server_slot& slot, server_task& task) {
             }
         }
 
-        if (!slot.disallow_rules.empty()) {
-            // recompute the per-token disallow decision only when the rules changed
-            if (slot.disallow_rules != slot.disallow_rules_prev) {
+        if (!slot.disallow_rules.empty() || !params_base.disallow_pieces.empty()) {
+            // recompute the per-token disallow decision only when the rules changed; disallow pieces
+            // are static, so they ride along on that recompute (the empty-vector check forces the first
+            // computation when only pieces are given)
+            if (slot.disallow_rules != slot.disallow_rules_prev || slot.disallow_banned.empty()) {
                 slot.disallow_banned = common_disallowlist_banned_ids(vocab_pieces, slot.disallow_rules);
+                for (const auto & piece : params_base.disallow_pieces) {
+                    for (const auto token : common_disallow_piece_ids(model, piece)) {
+                        if (token >= 0 && token < n_vocab) {
+                            slot.disallow_banned[(size_t) token] = true;
+                        }
+                    }
+                }
                 slot.disallow_rules_prev = slot.disallow_rules;
             }
 
