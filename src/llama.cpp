@@ -10083,6 +10083,21 @@ void llama_kv_cache_seq_div(struct llama_context * ctx, llama_seq_id seq_id, lla
     llama_kv_cache_seq_div(ctx->kv_self, seq_id, p0, p1, d);
 }
 
+bool llama_kv_cache_is_compacted(const struct llama_context * ctx) {
+    return ctx && ctx->kv_self.any_compacted();
+}
+
+// Lowest position a compacted (--swa-compress) cache can still be rewound to. Mirrors the
+// allow-condition in llama_kv_cache_seq_rm(): a rewind to p0 survives iff p0 == 0, the window
+// has never slid (pos_base_swa == 0), or p0 >= pos_base_swa + window_swa. Returns 0 when the
+// cache is not compacted or has not slid, i.e. when every rewind is still possible.
+llama_pos llama_kv_cache_swa_rewind_floor(const struct llama_context * ctx) {
+    if (!ctx || !ctx->kv_self.any_compacted() || ctx->kv_self.pos_base_swa == 0) {
+        return 0;
+    }
+    return ctx->kv_self.pos_base_swa + (llama_pos) ctx->kv_self.window_swa;
+}
+
 llama_pos llama_kv_cache_seq_pos_min(struct llama_context * ctx, llama_seq_id seq_id) {
     if (ctx->kv_self.hybrid || ctx->kv_self.recurrent) {
         return llama_kv_cache_seq_pos_max(ctx->kv_self, seq_id);

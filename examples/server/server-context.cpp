@@ -1800,19 +1800,30 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     } while (false);
     slot.allow_rules_prev = slot.allow_rules;
 
+    // make a checkpoint of the parts of the memory that cannot be rolled back.
+    // checkpoints are created only if:
+    // - the model architecture is marked as recurrent or hybrid, or has private per-position state (DSV4), or
+    // - the KV cache is compacted (--swa-compress): the sliding-window layers keep only the live
+    //   window, so llama_kv_cache_seq_rm() refuses any rewind below it and the prompt cache would
+    //   otherwise re-process the whole conversation on every turn.
+    //
+    // the compacted case is the one this condition was always meant to cover - it is a property of
+    // the memory module, not of the architecture, which is why it is tested on the context.
+    const bool memory_no_rollback =
+        llama_model_has_recurrent(llama_get_model(slot.ctx)) ||
+        llama_model_is_openpangu(llama_get_model(slot.ctx))  ||
+        llama_model_is_deepseek4(llama_get_model(slot.ctx))  ||
+        llama_kv_cache_is_compacted(slot.ctx);
+
+    params_base.do_checkpoint = params_base.ctx_checkpoints_n > 0
+        // make checkpoints only for completion tasks
+        && task.type == SERVER_TASK_TYPE_COMPLETION
+        && memory_no_rollback;
+
     if (llama_model_has_recurrent(llama_get_model(slot.ctx)) ||
         llama_model_is_openpangu(llama_get_model(slot.ctx)) ||
         llama_model_is_deepseek4(llama_get_model(slot.ctx))) {
         params_base.can_ban_phrases = false;
-        bool do_checkpoint = params_base.ctx_checkpoints_n > 0;
-        // make checkpoints only for completion tasks
-        do_checkpoint = do_checkpoint && task.type == SERVER_TASK_TYPE_COMPLETION;
-        // make a checkpoint of the parts of the memory that cannot be rolled back.
-        // checkpoints are created only if:
-        // - the model architecture is marked as recurrent or hybrid, or has private per-position state (DSV4)
-        //
-        // TODO: try to make this conditional on the context or the memory module, instead of the model type
-        params_base.do_checkpoint = do_checkpoint;
         if (slot.n_buffer != 0) {
             LLAMA_LOG_WARN("banned strings is not supported by recurrent model, it will be disabled.\n");
         }
@@ -3655,8 +3666,21 @@ void server_context::apply_checkpoint(server_slot & slot) {
     const auto pos_min_thold = std::max(0, pos_next - 1);
     const bool is_dsv4 = llama_model_is_deepseek4(model);
     const bool is_openpangu = llama_model_is_openpangu(model);
+    const bool is_compacted = llama_kv_cache_is_compacted(slot.ctx);
     if (slot.n_past > 0 && slot.n_past < slot.cache_tokens.n_tokens()) {
         int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
+
+        // A compacted cache (--swa-compress) reports pos_min from cells[], which the FULL-ATTENTION
+        // layers own, so it says 0 while the sliding-window layers have long since dropped
+        // everything below their window. Raise it to the window's real rewind floor.
+        //
+        // This must be the floor and not simply "true whenever compacted": inside the window an
+        // ordinary rewind still succeeds and is cheaper than restoring a checkpoint, and forcing
+        // the checkpoint path there costs a FULL reprocess whenever no checkpoint happens to
+        // exist -- measured worse than doing nothing at all (36,012 vs 28,632 prefill tokens).
+        if (is_compacted) {
+            pos_min = std::max(pos_min, (int32_t) llama_kv_cache_swa_rewind_floor(slot.ctx));
+        }
 
         // DSV4 and openPangu have pos_min=0 (no eviction) so the guard always blocks them
         if (pos_min >= pos_min_thold || is_dsv4 || is_openpangu) {
@@ -3667,7 +3691,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 slot.server_cached_prompt.checkpoints.rbegin(),
                 slot.server_cached_prompt.checkpoints.rend(),
                 [&](const auto & cur) {
-                    return cur.pos_max < (is_dsv4 || is_openpangu ? pos_next : pos_min_thold);
+                    return cur.pos_max < (is_dsv4 || is_openpangu || is_compacted ? pos_next : pos_min_thold);
                 }
             );
 
@@ -3695,7 +3719,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 }
 
                 if (!do_reset) {
-                    if (is_dsv4 || is_openpangu) {
+                    if (is_dsv4 || is_openpangu || is_compacted) {
                         pos_next = std::min(pos_next, it->pos_max + 1);
                     } else {
                         pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));

@@ -710,6 +710,14 @@ extern "C" {
     // Returns true if the model is openPangu (conv-only recurrent state that rides the spec-rollback checkpoint)
     LLAMA_API bool llama_model_is_openpangu(const struct llama_model * model);
 
+    // Returns true if any KV layer is compacted (--swa-compress). Such a cache holds only the
+    // live sliding window, so it cannot be rewound below that window and callers that would
+    // trim it must restore a context checkpoint instead.
+    LLAMA_API bool llama_kv_cache_is_compacted(const struct llama_context * ctx);
+
+    // Lowest position a compacted cache can still be rewound to; 0 when every rewind is possible.
+    LLAMA_API llama_pos llama_kv_cache_swa_rewind_floor(const struct llama_context * ctx);
+
     // Returns true if the model is a Gemma 4 MTP assistant (external frozen-KV speculative drafter)
     LLAMA_API bool llama_model_is_gemma4_mtp_assistant(const struct llama_model * model);
 
