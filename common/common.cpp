@@ -2515,6 +2515,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.disallow_pieces.push_back(argv[i]);
         return true;
     }
+    if (arg == "--disallowlist-em-dash") {
+        params.disallow_emdash = true;
+        return true;
+    }
     if (arg == "--allowlist-subset") {
         params.allow_subset = true;
         return true;
@@ -3424,10 +3428,11 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "named subsets: `ideographic` (han, hiragana, katakana, hangul, bopomofo, yi, tangut, nushu), `indic` (devanagari, bengali, gujarati, gurmukhi, kannada, malayalam, oriya, tamil, telugu, sinhala), `persic` (arabic, old_persian, avestan, inscriptional_pahlavi, psalter_pahlavi, manichaean, sogdian, old_sogdian, chorasmian), `semitic` (hebrew, arabic, syriac, samaritan, mandaic, ethiopic, phoenician, imperial_aramaic, old_south_arabian, old_north_arabian, ugaritic, hatran, palmyrene, nabataean, elymaic), `caucasian` (armenian, georgian, caucasian_albanian), `african` (adlam, bamum, bassa_vah, coptic, egyptian_hieroglyphs, ethiopic, garay, medefaidrin, mende_kikakui, meroitic_cursive, meroitic_hieroglyphs, nko, tifinagh, vai), `amerindian` (canadian_aboriginal, cherokee, osage), `austronesian` (balinese, batak, buginese, buhid, cham, hanunoo, javanese, kawi, makasar, rejang, sundanese, tagalog, tagbanwa), `mesopotamic` (cuneiform, old_persian, ugaritic, hatran, imperial_aramaic), `turko_mongol` (old_turkic, mongolian, soyombo, phags_pa), `finno_ugric_uralic` (old_hungarian), `ancient_european` (linear_a, linear_b, cypro_minoan, cypriot, anatolian_hieroglyphs, carian, lycian, lydian, old_italic, runic, ogham, glagolitic, old_hungarian, gothic), `southeast_asian` (thai, lao, khmer, myanmar, tibetan, tai_le, tai_tham, tai_viet, new_tai_lue), `latin_diacritics_viet` (Vietnamese accented latin), `latin_diacritics_western` (Western European accented latin), `latin_diacritics` (union of both), `exotic` (union of all named subsets: every indigenous writing system outside the latin/greek/cyrillic world)\n" });
     options.push_back({ "*",           "       --allowlist-pieces",     "allowlist each token in argument. inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule" });
     options.push_back({ "*",           "       --disallowlist-pieces",    "disallow each token in argument. takes precedence over the allowlist. ';' separates entries; each entry is a comma-separated token-id list or a text piece, tokenized like --allowlist-pieces" });
+    options.push_back({ "*",           "       --disallowlist-em-dash",   "automatically disallow every token containing U+2014 (em-dash) in this model's tokenizer. model-agnostic, no id list needed" });
     options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
     options.push_back({ "*",           "       --allowlist-keyword-delay",
                                                                         "# tokens to delay matching for the first keyword (default: %zu)", params.allow_kw_delay });
-    options.push_back({ "*",           "       --allowlist-subset",     "restrict the output logits computation to the allowed vocab rows (Option A). requires at least one --allowlist-unicode-rule, --disallowlist-unicode-rule or --disallowlist-pieces" });
+    options.push_back({ "*",           "       --allowlist-subset",     "restrict the output logits computation to the allowed vocab rows (Option A). requires at least one --allowlist-unicode-rule, --disallowlist-unicode-rule, --disallowlist-pieces or --disallowlist-em-dash" });
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
@@ -5296,6 +5301,28 @@ std::vector<bool> common_disallowlist_banned_ids(
     return banned;
 }
 
+std::vector<bool> common_disallow_emdash_banned_ids(
+        const std::vector<std::string> & vocab_pieces) {
+    const int32_t n_vocab = (int32_t) vocab_pieces.size();
+    std::vector<bool> banned(n_vocab, false);
+
+    std::vector<uint32_t> cpts;
+    std::vector<std::string> scripts;  // unused, required by the fill call
+    for (int32_t id = 0; id < n_vocab; ++id) {
+        // raw codepoint scan, script-blind on purpose: U+2014 is 'common' script and common
+        // codepoints never trigger rule bans, so no unicode rule can reach these tokens.
+        // lone bytes decode to U+FFFD and never match, so byte-fallback tokens are untouched
+        llama_fill_from_utf8((void *) &vocab_pieces[id], &cpts, &scripts);
+        for (const auto cpt : cpts) {
+            if (cpt == 0x2014) {
+                banned[id] = true;
+                break;
+            }
+        }
+    }
+    return banned;
+}
+
 std::vector<llama_token> common_disallow_piece_ids(
         const struct llama_model * model,
         const std::string & piece) {
@@ -5345,7 +5372,8 @@ std::vector<int32_t> common_allowlist_union_ids(
         const std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> & rules,
         const std::vector<std::string> & allow_pieces,
         const std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> & disallow_rules,
-        const std::vector<std::string> & disallow_pieces) {
+        const std::vector<std::string> & disallow_pieces,
+        bool disallow_emdash) {
     const int32_t n_vocab = (int32_t) vocab_pieces.size();
     // without allow rules everything starts allowed; with allow rules only the union is allowed
     std::vector<bool> allowed(n_vocab, rules.empty());
@@ -5379,6 +5407,14 @@ std::vector<int32_t> common_allowlist_union_ids(
         for (const auto token: common_disallow_piece_ids(model, piece)) {
             if (token >= 0 && token < n_vocab) {
                 allowed[token] = false;
+            }
+        }
+    }
+    if (disallow_emdash) {
+        const auto emdash_banned = common_disallow_emdash_banned_ids(vocab_pieces);
+        for (int32_t id = 0; id < n_vocab; ++id) {
+            if (emdash_banned[id]) {
+                allowed[id] = false;
             }
         }
     }
