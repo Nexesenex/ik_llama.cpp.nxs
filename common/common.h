@@ -879,6 +879,13 @@ std::vector<llama_token> common_disallow_piece_ids(
         const struct llama_model * model,
         const std::string & piece);
 
+// log every token banned by --disallowlist-pieces (argument, id and piece text), so the
+// command line can be checked and corrected at model load
+void common_log_disallow_pieces(
+        const struct llama_model * model,
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::string> & disallow_pieces);
+
 std::vector<int32_t> common_allowlist_union_ids(
         const struct llama_model * model,
         const std::vector<std::string> & vocab_pieces,
