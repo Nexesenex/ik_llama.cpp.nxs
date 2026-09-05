@@ -454,6 +454,12 @@ void server_context::init() {
                 __func__, n_preserved, n_vocab, n_ditched, n_remaining, n_vocab);
     }
 
+    // log every token banned by --disallowlist-pieces (vocab_pieces is populated above
+    // in exactly the cases where pieces are given)
+    if (!params_base.disallow_pieces.empty()) {
+        common_log_disallow_pieces(model, vocab_pieces, params_base.disallow_pieces);
+    }
+
     default_generation_settings_for_props = get_formatted_generation(slots.front());
     default_generation_settings_for_props["seed"] = -1;
 

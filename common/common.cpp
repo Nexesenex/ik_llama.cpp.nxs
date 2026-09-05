@@ -5376,6 +5376,41 @@ std::vector<llama_token> common_disallow_piece_ids(
     return ids;
 }
 
+void common_log_disallow_pieces(
+        const struct llama_model * model,
+        const std::vector<std::string> & vocab_pieces,
+        const std::vector<std::string> & disallow_pieces) {
+    // escape non-ASCII bytes: raw UTF-8 pieces render as mojibake on non-UTF-8 log sinks
+    const auto escape = [](const std::string & piece) {
+        std::string out;
+        for (const unsigned char c : piece) {
+            if (c >= 0x20 && c < 0x7F && c != '\'' && c != '\\') {
+                out += (char) c;
+            } else {
+                char buf[5];
+                snprintf(buf, sizeof(buf), "\\x%02X", c);
+                out += buf;
+            }
+        }
+        return out;
+    };
+    const int32_t n_vocab = (int32_t) vocab_pieces.size();
+    for (const auto & piece : disallow_pieces) {
+        std::string detail;
+        for (const auto token : common_disallow_piece_ids(model, piece)) {
+            if (token < 0 || token >= n_vocab) {
+                continue;
+            }
+            if (!detail.empty()) {
+                detail += ", ";
+            }
+            detail += std::to_string(token) + " '" + escape(vocab_pieces[(size_t) token]) + "'";
+        }
+        LLAMA_LOG_INFO("%s: --disallowlist-pieces '%s' bans %s\n",
+                __func__, escape(piece).c_str(), detail.empty() ? "(nothing)" : detail.c_str());
+    }
+}
+
 std::vector<int32_t> common_allowlist_union_ids(
         const struct llama_model * model,
         const std::vector<std::string> & vocab_pieces,
