@@ -659,10 +659,10 @@ static inline float convert_to_q8_k_r8(int k, float d0, const __m256i * qx, cons
             auto i1 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(qs[2*ib32+0], 1));
             auto i2 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(qs[2*ib32+1]));
             auto i3 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(qs[2*ib32+1], 1));
-            i0 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i0)), _MM_ROUND_NEAREST));
-            i1 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i1)), _MM_ROUND_NEAREST));
-            i2 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i2)), _MM_ROUND_NEAREST));
-            i3 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i3)), _MM_ROUND_NEAREST));
+            i0 = _mm256_cvtps_epi32(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i0)));
+            i1 = _mm256_cvtps_epi32(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i1)));
+            i2 = _mm256_cvtps_epi32(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i2)));
+            i3 = _mm256_cvtps_epi32(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i3)));
 #endif
             i0 = _mm256_packs_epi32(i0, i1);
             i2 = _mm256_packs_epi32(i2, i3);
