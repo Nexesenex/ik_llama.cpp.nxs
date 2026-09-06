@@ -1103,6 +1103,11 @@ static void mul_mat_iq4_xs_r8_q8_k_avx2(int n, const void * vx, size_t bx, const
     for (int ix = 0; ix < nrc_x; ix += 8) {
         const block_iq4_xs_r8 * iq4 = (const block_iq4_xs_r8 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
+            // Stream-bound over iq4 + q8: prefetch next block (hint-only, never faults).
+            if (ibl + 1 < nbl) {
+                _mm_prefetch((const char *)&iq4[ibl+1], _MM_HINT_T0);
+                _mm_prefetch((const char *)q8.y[0][ibl+1].qs, _MM_HINT_T0);
+            }
             auto d4 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[ibl].d));
             auto slbits = _mm256_loadu_si256((const __m256i *)iq4[ibl].scales_l);
             auto sl1 = _mm256_and_si256(slbits, m4);
