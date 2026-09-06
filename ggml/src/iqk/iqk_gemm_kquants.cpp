@@ -3142,7 +3142,7 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                         xv[ib32] = _mm256_and_si256(MM256_SRLI128_M128I(bits, 4), _mm256_set1_epi8(0xf));
                         xv[ib32] = _mm256_shuffle_epi8(values, xv[ib32]);
                     }
-                    dnew[k] = d * convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
+                    dnew[k] = d * convert_to_q8_k_r8<k_nr, true>(k, 1.f/127, xv, ls, block, y[i].qs);
                 }
 #if defined(HAVE_FANCY_SIMD)
                 _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(_mm512_loadu_ps(dnew), _MM_ROUND_NEAREST));
@@ -3155,17 +3155,8 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                 __m128i hi = _mm_unpacklo_epi64(d2, d3);
                 _mm256_storeu_si256((__m256i *)y[i].d, _mm256_set_m128i(hi, lo));
 #endif
-                for (int l = 0; l < 64; ++l) {
-#if defined(HAVE_FANCY_SIMD)
-                    auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
-                    _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
-#else
-                    for (int ll = 0; ll < 2; ++ll) {
-                        auto v = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[i].qs + 2*l + ll), _mm256_set1_epi8(-128));
-                        _mm256_storeu_si256((__m256i *)y[i].qs + 2*l + ll, v);
-                    }
-#endif
-                }
+                // Note: the R16 -128 xor is now folded into convert_to_q8_k_r8<k_nr, true>
+                // (if constexpr nr == 16), so no second pass over y[i].qs here.
             }
             y += nb;
         }

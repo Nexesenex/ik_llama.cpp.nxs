@@ -621,7 +621,7 @@ inline void iqk_transpose_8x8(__m256 * m) {
     }
 }
 
-template <int nr = 8>
+template <int nr = 8, bool xor_sign = false>
 static inline float convert_to_q8_k_r8(int k, float d0, const __m256i * qx, const int16_t * scales, uint32_t * block, int8_t * q8_k) {
     auto max_i16 = _mm256_setzero_si256();
     __m256i qs[16];
@@ -672,10 +672,14 @@ static inline float convert_to_q8_k_r8(int k, float d0, const __m256i * qx, cons
             i2 = _mm256_packs_epi32(i2, i3);
             i0 = _mm256_packs_epi16(i0, i2);
             i0 = _mm256_permutevar8x32_epi32(i0, _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7));
+            // R16 (xor_sign) uses the unsigned-dot sign trick: fold the -128 xor here
+            // so the caller no longer needs a second full pass over q8_k.
+            if constexpr (xor_sign) i0 = _mm256_xor_si256(i0, _mm256_set1_epi8(-128));
             _mm256_storeu_si256((__m256i *)block, i0);
         } else {
             // 0, 1, 2, 3, 4, 5, 6, 7, 8, 16, 17, 18, 19, 20, 21, 22, 23, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31
             auto i0 = _mm256_packs_epi16(qs[2*ib32+0], qs[2*ib32+1]);
+            if constexpr (xor_sign) i0 = _mm256_xor_si256(i0, _mm256_set1_epi8(-128));
             auto i0_l = _mm256_castsi256_si128(i0);
             auto i0_h = _mm256_extracti128_si256(i0, 1);
             _mm_storeu_si128((__m128i *)block+0, _mm_unpacklo_epi64(i0_l, i0_h));
