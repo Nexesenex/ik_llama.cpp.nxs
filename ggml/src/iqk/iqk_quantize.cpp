@@ -5825,8 +5825,20 @@ static void repack_iq4_xs(int nrows, int n_per_row, const block_iq4_xs * x, bloc
     for (int row = 0; row < nrows; row += 8) {
         for (int k = 0; k < 8; ++k) x8[k] = x + nblock*k;
         for (int ibl = 0; ibl < nblock; ++ibl) {
+            // Offline repack is stream-bound: prefetch the next source blocks while shuffling the current one.
+#if defined(__x86_64__) || defined(_M_X64)
+            if (ibl + 1 < nblock) {
+                for (int k = 0; k < 8; ++k) _mm_prefetch((const char *)&x8[k][ibl+1], _MM_HINT_T0);
+            }
+#endif
+#ifdef __AVX2__
+            // Same as the memsets (32B + 16B zeroes) but without a libc call per block.
+            _mm256_storeu_si256((__m256i *)y[ibl].scales_l, _mm256_setzero_si256());
+            _mm_storeu_si128((__m128i *)y[ibl].scales_h, _mm_setzero_si128());
+#else
             std::memset(y[ibl].scales_l, 0, QK_K/8);
             std::memset(y[ibl].scales_h, 0, QK_K/16);
+#endif
             for (int k = 0; k < 8; ++k) {
                 y[ibl].d[k] = x8[k][ibl].d;
                 for (int ib = 0; ib < QK_K/32; ++ib) {
