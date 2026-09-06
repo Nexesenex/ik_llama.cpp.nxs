@@ -3125,6 +3125,8 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
 
         auto values128 = _mm_loadu_si128((const __m128i *)iq4k_values);
         auto values = MM256_SET1_M128I(values128);
+        // Hoisted: was rebuilt per ib32/k/nb iteration below.
+        const auto mf_xs = _mm256_set1_epi8(0xf);
 
         int16_t  ls[16];
         float    dnew[k_nr];
@@ -3134,12 +3136,15 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
         for (int ix = 0; ix < nrc_x; ix += k_nr) {
             for (int k = 0; k < k_nr; ++k) x8[k] = (const block_iq4_xs *)((const char *)vx + (ix + k)*bx);
             for (int i = 0; i < nb; ++i) {
+                if (i + 1 < nb) {
+                    for (int k = 0; k < k_nr; ++k) _mm_prefetch((const char *)&x8[k][i+1], _MM_HINT_T0);
+                }
                 for (int k = 0; k < k_nr; ++k) {
                     float d = GGML_FP16_TO_FP32(x8[k][i].d);
                     for (int ib32 = 0; ib32 < 8; ++ib32) {
                         ls[2*ib32+0] = ls[2*ib32+1] = (((x8[k][i].scales_l[ib32/2] >> 4*(ib32%2)) & 0xf) | (((x8[k][i].scales_h >> 2*ib32) & 3) << 4)) - 32;
                         auto bits = _mm_loadu_si128((const __m128i *)x8[k][i].qs + ib32);
-                        xv[ib32] = _mm256_and_si256(MM256_SRLI128_M128I(bits, 4), _mm256_set1_epi8(0xf));
+                        xv[ib32] = _mm256_and_si256(MM256_SRLI128_M128I(bits, 4), mf_xs);
                         xv[ib32] = _mm256_shuffle_epi8(values, xv[ib32]);
                     }
                     dnew[k] = d * convert_to_q8_k_r8<k_nr, true>(k, 1.f/127, xv, ls, block, y[i].qs);
@@ -3156,7 +3161,7 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                 _mm256_storeu_si256((__m256i *)y[i].d, _mm256_set_m128i(hi, lo));
 #endif
                 // Note: the R16 -128 xor is now folded into convert_to_q8_k_r8<k_nr, true>
-                // (if constexpr nr == 16), so no second pass over y[i].qs here.
+                // (opt-in xor_sign), so no second pass over y[i].qs here.
             }
             y += nb;
         }
@@ -3176,6 +3181,8 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
 
     auto values128 = _mm_loadu_si128((const __m128i *)iq4k_values);
     auto values = MM256_SET1_M128I(values128);
+    // Hoisted: was rebuilt per ib32/k/nb iteration below.
+    const auto mf_xs = _mm256_set1_epi8(0xf);
 
     int16_t  ls[16];
     float    dnew[k_nr];
@@ -3185,12 +3192,15 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
     for (int ix = 0; ix < nrc_x; ix += k_nr) {
         for (int k = 0; k < k_nr; ++k) x8[k] = (const block_iq4_xs *)((const char *)vx + (ix + k)*bx);
         for (int i = 0; i < nb; ++i) {
+            if (i + 1 < nb) {
+                for (int k = 0; k < k_nr; ++k) _mm_prefetch((const char *)&x8[k][i+1], _MM_HINT_T0);
+            }
             for (int k = 0; k < k_nr; ++k) {
                 float d = GGML_FP16_TO_FP32(x8[k][i].d);
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
                     ls[2*ib32+0] = ls[2*ib32+1] = (((x8[k][i].scales_l[ib32/2] >> 4*(ib32%2)) & 0xf) | (((x8[k][i].scales_h >> 2*ib32) & 3) << 4)) - 32;
                     auto bits = _mm_loadu_si128((const __m128i *)x8[k][i].qs + ib32);
-                    xv[ib32] = _mm256_and_si256(MM256_SRLI128_M128I(bits, 4), _mm256_set1_epi8(0xf));
+                    xv[ib32] = _mm256_and_si256(MM256_SRLI128_M128I(bits, 4), mf_xs);
                     xv[ib32] = _mm256_shuffle_epi8(values, xv[ib32]);
                 }
                 dnew[k] = d * convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
