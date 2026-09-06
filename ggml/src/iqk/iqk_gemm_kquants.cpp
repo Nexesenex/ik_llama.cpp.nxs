@@ -293,6 +293,10 @@ struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
     DequantizerIQ4XS(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_iq4nl_values_512()) {}
     template <typename Q8>
     inline void new_block(int i, const Q8& q8, __m256 * accd, __m512i * scales) {
+#if defined(__x86_64__) || defined(_M_X64)
+        // Small-Ny (Ny < 32) plain-XS path is latency-bound: prefetch next block (never faults).
+        _mm_prefetch((const char *)&x[i+1], _MM_HINT_T0);
+#endif
         d = GGML_FP16_TO_FP32(x[i].d);
         prepare(x[i].qs);
         auto scales128 = siq4.make_scales(*(const uint32_t *)x[i].scales_l, x[i].scales_h);
@@ -607,6 +611,10 @@ struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
     DequantizerIQ4XS(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_iq4nl_values_256()) {}
     template <typename Q8>
     inline __m256i new_block(int i, const Q8& q8, __m256 * accd) {
+#if defined(__x86_64__) || defined(_M_X64)
+        // Small-Ny (Ny < 32) plain-XS path is latency-bound: prefetch next block (never faults).
+        _mm_prefetch((const char *)&x[i+1], _MM_HINT_T0);
+#endif
         d = GGML_FP16_TO_FP32(x[i].d);
         auto scales128 = siq4.make_scales(*(const uint32_t *)x[i].scales_l, x[i].scales_h);
         s8k.accum_mins(scales128, q8, i, -128.f*d, accd);
