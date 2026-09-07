@@ -6674,40 +6674,25 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             return batch.token ? batch.token[k] : img_tok;
         };
 
-        // snapshot before any update: one pass would let a token read an earlier token of this
-        // same ubatch as prior context
-        std::map<llama_seq_id, std::vector<llama_token>> snap;
-        for (int32_t i = 0; i < n_tokens; ++i) {
-            const llama_seq_id seq = batch.seq_id[i][0];
-            if (snap.count(seq)) {
-                continue;
-            }
-            auto & h = lctx.ple_hist[seq];
-            if (h.next_pos != batch.pos[i]) {
-                h.toks.assign(n_gram - 1, eos);
-            }
-            h.toks.resize(n_gram - 1, eos);
-            snap[seq] = h.toks;
-        }
-
+        // History is indexed by absolute position, so a speculative rollback needs no explicit
+        // rewind: the next ubatch overwrites the rejected positions and predecessors always read
+        // back at their true positions instead of falling back to EOS.
         for (int32_t i = 0; i < n_tokens; ++i) {
             const llama_pos    pos = batch.pos[i];
             const llama_seq_id seq = batch.seq_id[i][0];
 
-            const auto & hist = snap[seq];
+            auto & h = lctx.ple_hist[seq];
 
             // predecessor s (1-based) of this token: from the ubatch when it is there, from the
-            // sequence's own history when it is not, EOS past a segment boundary
+            // sequence's position-indexed history when it is not, EOS past a segment boundary
             auto prev = [&](int32_t s) -> llama_token {
                 const int32_t j = i - s;
                 if (j >= 0 && batch.seq_id[j][0] == seq && batch.pos[j] == pos - s) {
                     return tok_of(j);
                 }
-                // s - i positions before this ubatch started, most recent last
-                const int32_t back = s - i;
-                const int32_t k    = (int32_t) hist.size() - back;
-                if (back > 0 && k >= 0 && pos - s >= 0) {
-                    return hist[k];
+                const llama_pos p = pos - s;
+                if (p >= 0 && p < (llama_pos) h.toks.size()) {
+                    return h.toks[(size_t) p];
                 }
                 return eos;
             };
@@ -6735,12 +6720,14 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
-            auto & h = lctx.ple_hist[seq];
-            h.toks.push_back(tok_of(i));
-            if ((int32_t) h.toks.size() > n_gram - 1) {
-                h.toks.erase(h.toks.begin(), h.toks.end() - (n_gram - 1));
+            // record this token at its position for future ubatches; a later rollback
+            // overwrites the same slot with the accepted token
+            if (pos >= 0) {
+                if (pos >= (llama_pos) h.toks.size()) {
+                    h.toks.resize((size_t) pos + 1, eos);
+                }
+                h.toks[(size_t) pos] = tok_of(i);
             }
-            h.next_pos = pos + 1;
         }
     }
 

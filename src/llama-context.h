@@ -708,10 +708,11 @@ struct llama_context {
     // pool every block; set on state restore and defrag, cleared by that graph's host fill
     bool qsa_pooled_stale = false;
 
-    // each sequence's recent tokens, read by the n-gram hash when a ubatch does not carry its
-    // first tokens' predecessors; trusted only while contiguous with the incoming position
+    // each sequence's tokens indexed by position, read by the n-gram hash when a ubatch does not
+    // carry its first tokens' predecessors. toks[p] is the token at position p (EOS for unwritten
+    // holes). Indexing by position keeps the hash exact across a speculative rollback: rejected
+    // drafts are simply overwritten at their positions instead of poisoning a sliding window.
     struct ple_history {
-        llama_pos next_pos = -1;
         std::vector<llama_token> toks;
     };
     std::map<llama_seq_id, ple_history> ple_hist;
