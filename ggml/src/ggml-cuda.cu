@@ -5867,10 +5867,21 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         }
         case GGML_OP_DUP:
         case GGML_OP_REPEAT:
-        case GGML_OP_CONCAT:
             {
                 ggml_type src0_type = op->src[0]->type;
                 return src0_type != GGML_TYPE_I32 && src0_type != GGML_TYPE_I16;
+            } break;
+        case GGML_OP_CONCAT:
+            {
+                ggml_type src0_type = op->src[0]->type;
+                if (src0_type == GGML_TYPE_I32 || src0_type == GGML_TYPE_I16) return false;
+                // CUDA concat kernels use gridDim.y = ne1, gridDim.z = ne2 (limit 65535).
+                // Only dim==0 is chunked; dim==1/2 would launch illegal grid and fault with
+                // "illegal memory access" at ggml_cuda_compute_forward for large n_ctx (e.g. 262144).
+                // Force CPU fallback for intermediates. Do NOT extend this guard to NONE/MUL/DIV/SUB:
+                // pre-allocated tensors (e.g. cache_k_l*.0) cannot fallback and would abort in scheduler.
+                if (op->ne[1] >= 65536 || op->ne[2] >= 65536) return false;
+                return true;
             } break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             {
