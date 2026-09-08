@@ -29,8 +29,9 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     result->grammar = nullptr;
     result->rbudget = nullptr;
 
-    // precompute which vocab rows begin with a space for the contextual no_space_after_quote rule
-    if (result->params.no_space_after_quote && vocab != nullptr) {
+    // precompute which vocab rows begin with a space for the contextual quote rules
+    // (no_space_after_quote and boost_space_after_quote)
+    if ((result->params.no_space_after_quote || result->params.boost_space_after_quote > 0.0f) && vocab != nullptr) {
         const int32_t n_vocab = llama_vocab_n_tokens(vocab);
         result->starts_with_space.resize(n_vocab);
         for (llama_token id = 0; id < n_vocab; ++id) {
@@ -834,7 +835,7 @@ void common_sampler_accept(
     }
 
     // contextual quote rule: toggle the open-quote state when the accepted piece contains a quote mark
-    if (ctx_sampling->params.no_space_after_quote) {
+    if (ctx_sampling->params.no_space_after_quote || ctx_sampling->params.boost_space_after_quote > 0.0f) {
         const auto piece = common_token_to_piece(ctx_main, token, false);
         if (std::count(piece.begin(), piece.end(), '"') & 1) {
             ctx_sampling->quote_open = !ctx_sampling->quote_open;
