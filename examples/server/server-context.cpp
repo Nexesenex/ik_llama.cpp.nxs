@@ -888,14 +888,14 @@ void server_slot::print_timings() const {
     double n_prompt_second = 0.0;
     if (n_prompt_tokens_processed > 0) {
         t_prompt = t_prompt_processing / n_prompt_tokens_processed;
-        n_prompt_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+        n_prompt_second = t_prompt_processing > 0.0 ? 1e3 / t_prompt_processing * n_prompt_tokens_processed : 0.0;
     }
 
     double t_gen = 0.0;
     double n_gen_second = 0.0;
     if (n_decoded > 0) {
         t_gen = t_token_generation / n_decoded;
-        n_gen_second = 1e3 / t_token_generation * n_decoded;
+        n_gen_second = t_token_generation > 0.0 ? 1e3 / t_token_generation * n_decoded : 0.0;
     }
 
     SLT_INF(*this,
