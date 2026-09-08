@@ -527,11 +527,6 @@ static llama_token llama_sampling_sample_impl(
     llama_sampling_prepare(ctx_sampling, ctx_main, ctx_cfg, idx, /* grammar_first= */ grammar_first, &original_logits);
     llama_token_data_array & cur_p = ctx_sampling->cur_p;
 
-    const int32_t max_candidates = params.max_candidates;
-    if (max_candidates > 0) {
-        llama_sample_top_k(ctx_main, &cur_p, max_candidates, 1);
-    }
-
     if (ctx_sampling->grammar != NULL && !grammar_first) {
         GGML_ASSERT(!original_logits.empty());
     }
@@ -545,6 +540,13 @@ static llama_token llama_sampling_sample_impl(
     if (ctx_sampling->grammar != NULL && grammar_first && grammar_should_apply(ctx_sampling)) {
         // Apply grammar constraints to all candidates
         llama_grammar_apply(ctx_sampling->grammar, ctx_main, &cur_p);
+    }
+
+    // prefilter AFTER grammar: trimming before constraints apply can drop
+    // grammar-legal tokens (leaving zero legal candidates on resample)
+    const int32_t max_candidates = params.max_candidates;
+    if (max_candidates > 0) {
+        llama_sample_top_k(ctx_main, &cur_p, max_candidates, 1);
     }
 
     // llama_sampler_apply
