@@ -284,6 +284,8 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
     dst->special_eosg_text = src->special_eosg_text;
     dst->special_eosg_hit = src->special_eosg_hit;
     dst->eosg_token = src->eosg_token;
+    dst->quote_open = src->quote_open;
+    dst->starts_with_space = src->starts_with_space;
 
     if (dst->grammar) {
         llama_grammar_free(dst->grammar);
