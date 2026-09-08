@@ -1297,12 +1297,21 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
                                   static_cast<uint32_t>(i) >= hparams.n_layer - hparams.nextn_predict_layers;
         const std::string mtp_probe_name = tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i);
         const bool mtp_layer_present = !is_mtp_layer || ml.get_tensor_meta(mtp_probe_name.c_str()) != nullptr;
-        const int layer_flags = mtp_only && !is_mtp_layer
+        int layer_flags = mtp_only && !is_mtp_layer
             ? trunk_flags
             : (is_mtp_layer && !mtp_layer_present
                 ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0);
+        if (!model.mtp && is_mtp_layer) {
+            // without MTP at runtime the tail trunk is never computed either
+            layer_flags |= llama_model_loader::TENSOR_SKIP;
+        }
         const int optional_layer_flags = layer_flags | llama_model_loader::TENSOR_NOT_REQUIRED;
-        const int nextn_required_flags = mtp_layer_present ? 0 : llama_model_loader::TENSOR_NOT_REQUIRED;
+        int nextn_required_flags = mtp_layer_present ? 0 : llama_model_loader::TENSOR_NOT_REQUIRED;
+        if (!model.mtp && is_mtp_layer) {
+            // without MTP at runtime the tail is never computed (trunk graph stops
+            // at n_layer_base): skip it instead of loading dead weights
+            nextn_required_flags |= llama_model_loader::TENSOR_SKIP;
+        }
         const uint32_t n_head_l      = hparams.n_head(i);
         layer.attn_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, layer_flags);
         layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, optional_layer_flags);
