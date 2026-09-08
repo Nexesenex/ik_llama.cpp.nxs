@@ -3549,8 +3549,13 @@ std::string gpt_params_get_system_info(const gpt_params & params) {
 }
 
 static void common_minilog_callback(ggml_log_level level, const char * text, void * user_data) {
-    (void) level;
     (void) user_data;
+    // never suppress warnings or errors (CONT carries no level: still filter it, error
+    // continuations rarely match the load-table patterns below)
+    if (level >= GGML_LOG_LEVEL_WARN && level != GGML_LOG_LEVEL_CONT) {
+        LOG_TEE("%s", text);
+        return;
+    }
     const char * skip_patterns[] = {
         "Setting default device in layer",
         "llama_model_loader: Dumping metadata",
@@ -3565,15 +3570,12 @@ static void common_minilog_callback(ggml_log_level level, const char * text, voi
         "print_info:",
         "------------------- Layer sizes",
         "-------------------------------",
-        "Layer ",
         // "llm_load_tensors:",
         "==========================",
         "merging up/gate in layer",
         "repacking up/gate experts weight in layer",
-        "Tensor ",
         "model has unused ",
         "Setting default ",
-        "GPU ",
         "buffer type overriden to CPU",
     };
     for (const char * pat : skip_patterns) {
@@ -3584,6 +3586,18 @@ static void common_minilog_callback(ggml_log_level level, const char * text, voi
     int i = 0;
     while (text[i] == ' ' || text[i] == '\t') {
         i++;
+    }
+    // anchored at line start: only the load-table lines begin with these words,
+    // error text merely mentioning them elsewhere still shows
+    const char * skip_prefixes[] = {
+        "Layer ",
+        "Tensor ",
+        "GPU ",
+    };
+    for (const char * pat : skip_prefixes) {
+        if (strncmp(text + i, pat, strlen(pat)) == 0) {
+            return;
+        }
     }
     if (text[i] == ',' || text[i] == '(' || text[i] == ')'|| (text[i] >= '0' && text[i] <= '9')) {
         return;
