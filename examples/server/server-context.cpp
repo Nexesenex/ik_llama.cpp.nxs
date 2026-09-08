@@ -4653,19 +4653,20 @@ void server_context::speculative_decoding_accept() {
             }
         }
 
-        if (slot.n_decoded > 1) {
+        if (n_decoded_prev + (int32_t) ids.size() > 1) {
             create_checkpoint_at_interval(slot);
         }
 
-        if (n_decoded_prev / 100 != slot.n_decoded / 100) {
-            const int32_t last_n_tokens = slot.n_decoded - slot.n_decoded_at_batch_100;
+        if (n_decoded_prev / 100 != (n_decoded_prev + (int32_t) ids.size()) / 100) {
+            const int32_t n_decoded_new = n_decoded_prev + (int32_t) ids.size();
+            const int32_t last_n_tokens = n_decoded_new - slot.n_decoded_at_batch_100;
             const double tok_per_sec = last_n_tokens * 1e6 / (t_current - slot.t_start_batch_100);
             slot.t_start_batch_100 = t_current;
-            slot.n_decoded_at_batch_100 = slot.n_decoded;
-            const double cur_tg_tok_per_sec = slot.n_decoded * 1e6 / (t_current - slot.t_start_generation);
+            slot.n_decoded_at_batch_100 = n_decoded_new;
+            const double cur_tg_tok_per_sec = n_decoded_new * 1e6 / (t_current - slot.t_start_generation);
             LOG_INFO("TG", {
                 {"n_p",   slot.n_past},
-                {"Dec",    slot.n_decoded},
+                {"Dec",    n_decoded_new},
                 {"L" + std::to_string(last_n_tokens) + " t/s",    std::round(tok_per_sec * 100) / 100},
                 {"CurTG t/s",    std::round(cur_tg_tok_per_sec * 100) / 100},
             });
