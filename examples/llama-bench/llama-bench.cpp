@@ -282,6 +282,7 @@ struct cmd_params {
 #else
     std::string ggml_batch_thread_thresh = ">32";
 #endif
+    int split_output_tensor = 0;
     bool print_overrides = false;
     bool fit = false;
     int  fit_margin = 0;
@@ -341,6 +342,7 @@ static const cmd_params cmd_params_defaults = {
 #else
     /* ggml_batch_thread_thresh */ ">32",
 #endif
+    /* split_output_tensor    */ 0,
     /* print_overrides      */ false,
     /* fit                  */ false,
     /* fit_margin           */ 0,
@@ -405,6 +407,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -mgps, --max-gpu, --max-gpu-per-split <N> (default: %d)\n", cmd_params_defaults.max_gpu_per_split);
     printf("  -sasf, --split-adjust-step-frequency <F> (default: %.1f, <1: legacy formula, >=1: direct)\n", cmd_params_defaults.split_adjust_step_frequency);
     printf("  -gbtt, --ggml-batch-thread-threshold EXPR (default: %s)\n", cmd_params_defaults.ggml_batch_thread_thresh.c_str());
+    printf("  -sot, --split-output-tensor [N]   (default: %d, 0=off, 1=all GPUs, N>1=top N GPUs by VRAM)\n", cmd_params_defaults.split_output_tensor);
     printf("  --print-overrides <0|1>             (default: %s)\n", cmd_params_defaults.print_overrides ? "1" : "0");
     printf("\n");
     printf("Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.\n");
@@ -891,6 +894,18 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.ggml_batch_thread_thresh = argv[i];
+        } else if (arg == "-sot" || arg == "--split-output-tensor") {
+            // optional N: bare flag splits on all GPUs, N>1 splits on top N GPUs by VRAM
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                try {
+                    params.split_output_tensor = std::max(1, std::stoi(argv[++i]));
+                } catch (...) {
+                    invalid_param = true;
+                    break;
+                }
+            } else {
+                params.split_output_tensor = 1;
+            }
         } else if (arg == "-rcache" || arg == "--rope-cache") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -1043,6 +1058,7 @@ struct cmd_params_instance {
     bool fit = false;
     int  fit_margin = 0;
     float split_adjust_step_frequency = 0.5f;
+    int split_output_tensor = 0;
     const llama_model_tensor_buft_override* buft_overrides;
     int32_t n_parallel = 1;
 
@@ -1070,6 +1086,7 @@ struct cmd_params_instance {
         mparams.type_k = type_k;
         mparams.type_v = type_v;
         mparams.split_adjust_step_frequency = split_adjust_step_frequency;
+        mparams.split_output_tensor = split_output_tensor;
 
         return mparams;
     }
@@ -1091,6 +1108,7 @@ struct cmd_params_instance {
                fit_margin == other.fit_margin &&
                max_gpu_per_split == other.max_gpu_per_split &&
                split_adjust_step_frequency == other.split_adjust_step_frequency &&
+               split_output_tensor == other.split_output_tensor &&
                tensor_split == other.tensor_split;
     }
 
@@ -1192,6 +1210,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
+                /* .split_output_tensor = */ params.split_output_tensor,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
                 /* .n_parallel   = */ params.n_parallel,
             };
@@ -1242,6 +1261,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
+                /* .split_output_tensor = */ params.split_output_tensor,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
                 /* .n_parallel   = */ params.n_parallel,
             };
@@ -1292,6 +1312,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
+                /* .split_output_tensor = */ params.split_output_tensor,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
                 /* .n_parallel   = */ params.n_parallel,
             };
@@ -1342,6 +1363,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit          = */ params.fit,
                 /* .git_margin   = */ params.fit_margin,
                 /* .split_adjust_step_frequency = */ params.split_adjust_step_frequency,
+                /* .split_output_tensor = */ params.split_output_tensor,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
                 /* .n_parallel   = */ params.n_parallel,
             };
@@ -1401,6 +1423,7 @@ struct test {
     bool fit = false;
     int  fit_margin = 0;
     float split_adjust_step_frequency = 0.5f;
+    int split_output_tensor = 0;
     std::string override_tensor;
     int n_prompt;
     int n_gen;
@@ -1447,6 +1470,7 @@ struct test {
         fit = inst.fit;
         fit_margin = inst.fit_margin;
         split_adjust_step_frequency = inst.split_adjust_step_frequency;
+        split_output_tensor = inst.split_output_tensor;
         no_fug = inst.no_fug;
         use_thp = inst.use_thp;
         no_ooae = inst.no_ooae;
@@ -1548,7 +1572,7 @@ struct test {
             field == "model_size" || field == "model_n_params" ||
             field == "n_gpu_layers" || field == "main_gpu" ||
             field == "n_prompt" || field == "n_gen" || field == "mla_attn" || field == "attn_max_batch" ||
-            field == "avg_ns" || field == "stddev_ns" || field == "max_gpu_per_split") {
+            field == "avg_ns" || field == "stddev_ns" || field == "max_gpu_per_split" || field == "split_output_tensor") {
             return INT;
         }
         if (field == "cuda" || field == "vulkan" || field == "metal" ||
@@ -1602,6 +1626,7 @@ struct test {
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
             std::to_string(max_gpu_per_split),
             std::to_string(split_adjust_step_frequency),
+            std::to_string(split_output_tensor),
             cuda_params, override_tensor,
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
@@ -1622,7 +1647,7 @@ struct test {
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
             "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "defer_experts", "fused_moe", "grouped_er",
-            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu_per_split", "split_adjust_step_frequency", "cuda_params", "override_tensor",
+            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu_per_split", "split_adjust_step_frequency", "split_output_tensor", "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1820,6 +1845,9 @@ struct markdown_printer : public printer {
         if (field == "split_adjust_step_frequency") {
             return 7;
         }
+        if (field == "split_output_tensor") {
+            return 7;
+        }
         if (field == "use_thp") {
             return 3;
         }
@@ -1901,6 +1929,9 @@ struct markdown_printer : public printer {
         }
         if (field == "split_adjust_step_frequency") {
             return "split_adjust_step_frequency";
+        }
+        if (field == "split_output_tensor") {
+            return "sot";
         }
         if (field == "use_thp") {
             return "thp";
@@ -2017,6 +2048,9 @@ struct markdown_printer : public printer {
         }
         if (params.split_adjust_step_frequency != cmd_params_defaults.split_adjust_step_frequency) {
             fields.emplace_back("split_adjust_step_frequency");
+        }
+        if (params.split_output_tensor != cmd_params_defaults.split_output_tensor) {
+            fields.emplace_back("split_output_tensor");
         }
         if (params.muge != cmd_params_defaults.muge) {
             fields.emplace_back("muge");
