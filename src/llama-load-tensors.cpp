@@ -2757,7 +2757,11 @@ bool create_tensors_helper::create_gemma4_mtp_tensors(const LLM_TN & tn) {
 
     model.tok_embd    = create_tensor(ctx_input,  tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-    model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+    // prefer output_extra when present; SKIP output.weight then so a file carrying
+    // both does not keep an orphaned vocab matrix resident
+    const bool has_output_extra = ml.get_tensor_meta("output_extra.weight") != nullptr;
+    model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab},
+            llama_model_loader::TENSOR_NOT_REQUIRED | (has_output_extra ? llama_model_loader::TENSOR_SKIP : 0));
     auto output_extra = create_tensor(ctx_output, "output_extra.weight", {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
     if (output_extra) {
         model.output = output_extra;
@@ -2819,7 +2823,11 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
 
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-    model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+    // prefer output_extra when present; SKIP output.weight then so a file carrying
+    // both does not keep an orphaned vocab matrix resident
+    const bool has_output_extra = ml.get_tensor_meta("output_extra.weight") != nullptr;
+    model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab},
+            llama_model_loader::TENSOR_NOT_REQUIRED | (has_output_extra ? llama_model_loader::TENSOR_SKIP : 0));
     auto output_extra = create_tensor(ctx_output, "output_extra.weight", {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
     if (output_extra != nullptr) {
         model.output = output_extra;
