@@ -718,6 +718,40 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
     const std::string arg_prefix = "--";
     common_params_sampling & sparams = params.sparams;
 
+    // expand --key=value into --key value so value-taking handlers (CHECK_ARG) just work
+    std::vector<std::string> args_store;
+    std::vector<char *> args_ptrs;
+    args_store.reserve(argc + 4);
+    args_ptrs.reserve(argc + 4);
+    args_store.emplace_back(argv[0]);
+    for (int k = 1; k < argc; k++) {
+        std::string a = argv[k];
+        if (a.compare(0, arg_prefix.size(), arg_prefix) == 0) {
+            const size_t eq = a.find('=');
+            if (eq != std::string::npos) {
+                args_store.push_back(a.substr(0, eq));
+                args_store.push_back(a.substr(eq + 1));
+                continue;
+            }
+        }
+        args_store.push_back(a);
+    }
+    for (auto & s : args_store) {
+        args_ptrs.push_back(s.data());
+    }
+    argc = (int) args_ptrs.size();
+    argv = args_ptrs.data();
+
+    // honor -iu/--ignore-unknown regardless of position: an unknown flag must
+    // not throw just because -iu comes after it on the command line
+    for (int k = 1; k < argc; k++) {
+        const std::string a = argv[k];
+        if (a == "-iu" || a == "--ignore-unknown" || a == "--ignore_unknown") {
+            params.ignore_unknown = true;
+            break;
+        }
+    }
+
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
         if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
@@ -725,18 +759,9 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
         }
         if (!gpt_params_find_arg(argc, argv, arg, params, i, invalid_param)) {
             if (params.ignore_unknown) {
-                fprintf(stderr, "warning: ignoring unknown argument: %s", argv[i]);
-                std::string raw = argv[i];
-                if (raw.find('=') == std::string::npos && !raw.empty() && raw[0] == '-') {
-                    if (i + 1 < argc) {
-                        std::string next = argv[i + 1];
-                        if (!next.empty() && next[0] != '-') {
-                            i++;
-                            fprintf(stderr, " %s", next.c_str());
-                        }
-                    }
-                }
-                fprintf(stderr, "\n");
+                // never consume the following token: it may be a positional or
+                // another flag, not this flag's value
+                fprintf(stderr, "warning: ignoring unknown argument: %s\n", argv[i]);
                 continue;
             }
             throw std::invalid_argument("error: unknown argument: " + arg);
