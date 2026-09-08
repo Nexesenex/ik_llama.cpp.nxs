@@ -4581,7 +4581,11 @@ bool create_tensors_helper::create_glm5next_tensors(const LLM_TN & tn) {
         if (is_mtp_layer && !model.mtp) {
             flags |= llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED;
         }
-        const int hc_flags = is_mtp_layer ? llama_model_loader::TENSOR_NOT_REQUIRED : 0;
+        // hyper-connections wrap the trunk blocks only: the MTP tail has no mHC,
+        // so never load tail hc_* (the MTP graph does not read them)
+        const int hc_flags = is_mtp_layer
+            ? llama_model_loader::TENSOR_NOT_REQUIRED | llama_model_loader::TENSOR_SKIP
+            : 0;
 
         layer.attn_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_ATTN_NORM, "weight", il), {n_embd}, flags);
 
