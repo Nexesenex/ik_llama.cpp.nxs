@@ -6053,14 +6053,21 @@ bool create_tensors_helper::create_tensors() {
                 model.splits.size(), mgpu_vram_total/1024./1024., mgpu_vram_free/1024./1024.);
         const auto & hparams = model.hparams;
         auto cur_splits = model.splits;
+        // sasf must be a positive finite number: 0 -> 1/0=inf -> (int)inf is UB,
+        // negative/NaN silently degrades to adjust-every-layer
+        float sasf = model.split_adjust_step_frequency;
+        if (!(sasf > 0) || !std::isfinite(sasf)) {
+            LLAMA_LOG_WARN("%s: invalid split_adjust_step_frequency %f, falling back to 0.5\n", __func__, (double) sasf);
+            sasf = 0.5f;
+        }
         int effective_sasf;
-        if (model.split_adjust_step_frequency < 1) {
-            effective_sasf = int(std::round(1.0f / model.split_adjust_step_frequency));
+        if (sasf < 1) {
+            effective_sasf = int(std::round(1.0f / sasf));
         } else {
-            effective_sasf = int(std::round(model.split_adjust_step_frequency));
+            effective_sasf = int(std::round(sasf));
         }
         int adjust_step;
-        if (model.split_adjust_step_frequency < 1) {
+        if (sasf < 1) {
             adjust_step = std::max(1, int(n_layer / (effective_sasf * model.splits.size())));
         } else {
             adjust_step = std::max(1, effective_sasf);
