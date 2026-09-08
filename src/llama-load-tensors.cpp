@@ -6297,7 +6297,14 @@ bool create_tensors_helper::create_tensors() {
                     prepare_split_tensors(1, ctx_split, model.output, model.split_output, split, mem_used);
                     if (auto it = split_tensors.find(model.output_norm); it != split_tensors.end() && !ggml_backend_buft_is_host(model.buft_output.buft_matrix)) {
                         auto ctx_split = ctx_map[model.buft_output.buft_matrix];
-                        prepare_split_tensors(-1, ctx_split, model.output_norm, model.split_output_norm, split, mem_used);
+                        // output_norm is a 1D vector: mirror it instead of sharding. Derive a
+                        // binary mask from the output split so top-N -sot stays consistent
+                        // (norm present exactly on GPUs holding an output shard).
+                        std::vector<int> split_norm(split.size());
+                        for (size_t i = 0; i < split.size(); ++i) {
+                            split_norm[i] = split[i] > 0 ? 1 : 0;
+                        }
+                        prepare_split_tensors(-1, ctx_split, model.output_norm, model.split_output_norm, split_norm, mem_used);
                     }
                     if (model.output_mtp && model.output_mtp != model.output) {
                         if (auto it = split_tensors.find(model.output_mtp); it != split_tensors.end() && !ggml_backend_buft_is_host(model.buft_output.buft_matrix)) {
