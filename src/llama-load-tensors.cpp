@@ -2942,8 +2942,8 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
             }
         }
 
-        // --- NextN / MTP tensors on the MTP layer ---
-        if (is_mtp_layer) {
+        // --- NextN / MTP tensors on the MTP layer (graphs read only the final layer) ---
+        if (is_mtp_layer && i == n_layer - 1) {
             create_nextn_tensors(tn, n_embd, i, ctx_for_layer(i), flags);
         }
     }
@@ -4846,7 +4846,7 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
             layer.ffn_up   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, flags);
         }
         // NextN/MTP tensors
-        if (is_mtp_layer) {
+        if (is_mtp_layer && i == n_layer - 1) {
             const int final_layer = n_layer - 1;
             auto nextn_ctx      = ctx_for_layer(final_layer);
             auto nextn_host_ctx = ctx_input;
