@@ -423,6 +423,12 @@ static float get_ceiling_factor(int i, int min_vram_gpu_index, const std::vector
     return (i == min_vram_gpu_index) ? (7.0f / 8.0f) : (15.0f / 16.0f);
 }
 
+// saturating remaining VRAM: mem_used can exceed the total/cap when oversubscribed;
+// a plain size_t subtraction would wrap to ~2^64 and rank the fullest GPU as "most free"
+static size_t vram_remaining(size_t total, size_t used) {
+    return total > used ? total - used : 0;
+}
+
 static std::vector<int> create_split(int nr, int granularity, const std::vector<float> & splits, const std::vector<size_t> & mem_used,
         const std::vector<size_t> & vram_free, const std::vector<size_t> & vram_total, size_t tensor_nbytes, const std::vector<float> & split_vram_reserve_factor, float split_tensor_split_factor, float split_vram_free_factor, float split_usage_penalty_factor, bool verbose = false) {
     // VRAM allocation tracking:
@@ -465,7 +471,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
         float p0 = p;
         p += (p - 1.f*mem_used[i]/tot_memory_used);
         if (split_tensor_split_factor != 1.0f || split_vram_free_factor != 0.0f || split_usage_penalty_factor != 0.0f) {
-            float remaining_ratio = (vram_total[i] - mem_used[i]) / float(tot_vram_total);
+            float remaining_ratio = vram_remaining(vram_total[i], mem_used[i]) / float(tot_vram_total);
             float usage_penalty = 1.f * mem_used[i] / tot_memory_used;
             p = p * split_tensor_split_factor + remaining_ratio * split_vram_free_factor - usage_penalty * split_usage_penalty_factor;
         }
@@ -477,7 +483,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
             size_t chunk_size = tensor_nbytes > 0 ? tensor_nbytes / nchunk : tot_memory_used / nchunk;
             if (chunk_size == 0) chunk_size = 1;
             if (mem_used[i] + (size_t)result[i] * chunk_size > ceiling) {
-                result[i] = std::max(0, int((ceiling - mem_used[i]) / chunk_size));
+                result[i] = std::max(0, int(vram_remaining(ceiling, mem_used[i]) / chunk_size));
             }
         }
         if (verbose) LLAMA_LOG_INFO("i = %d, p0 = %g, p = %g, result = %d\n", i, p0, p, result[i]);
@@ -499,7 +505,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
                 float p = splits[i] - last_split;
                 p += (p - 1.f*mem_used[i]/tot_memory_used);
                 if (split_tensor_split_factor != 1.0f || split_vram_free_factor != 0.0f || split_usage_penalty_factor != 0.0f) {
-                    float remaining_ratio = (vram_total[i] - mem_used[i]) / float(tot_vram_total);
+                    float remaining_ratio = vram_remaining(vram_total[i], mem_used[i]) / float(tot_vram_total);
                     float usage_penalty = 1.f * mem_used[i] / tot_memory_used;
                     p = p * split_tensor_split_factor + remaining_ratio * split_vram_free_factor - usage_penalty * split_usage_penalty_factor;
                 }
@@ -529,7 +535,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
             float p = splits[i] - last_split;
             p += (p - 1.f*mem_used[i]/tot_memory_used);
             if (split_tensor_split_factor != 1.0f || split_vram_free_factor != 0.0f || split_usage_penalty_factor != 0.0f) {
-                float remaining_ratio = (vram_total[i] - mem_used[i]) / float(tot_vram_total);
+                float remaining_ratio = vram_remaining(vram_total[i], mem_used[i]) / float(tot_vram_total);
                 float usage_penalty = 1.f * mem_used[i] / tot_memory_used;
                 p = p * split_tensor_split_factor + remaining_ratio * split_vram_free_factor - usage_penalty * split_usage_penalty_factor;
             }
@@ -5616,7 +5622,7 @@ static void adjust_split(std::vector<float> & split, const std::vector<size_t> &
         if (use_vram_aware) {
             float cf = get_ceiling_factor(i, min_vram_gpu_index, split_vram_reserve_factor);
             size_t effective_cap = (size_t)(vram_total[i] * cf);
-            float remaining_ratio = (effective_cap - mem_used[i]) / float(tot_vram_total);
+            float remaining_ratio = vram_remaining(effective_cap, mem_used[i]) / float(tot_vram_total);
             sorted[i] = {remaining_ratio, i};
         } else {
             sorted[i] = {err, i};
@@ -6688,7 +6694,7 @@ bool create_tensors_helper::create_tensors() {
                         int n_devices = (int)mem_used.size();
                         std::vector<std::pair<size_t, int>> remaining;
                         for (int i = 0; i < n_devices; ++i) {
-                            remaining.push_back({vram_total[i] - mem_used[i], i});
+                            remaining.push_back({vram_remaining(vram_total[i], mem_used[i]), i});
                         }
                         int n_gpus = std::min(model.split_output_tensor, n_devices);
                         std::partial_sort(remaining.begin(), remaining.begin() + n_gpus, remaining.end(),
