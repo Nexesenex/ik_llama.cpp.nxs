@@ -577,6 +577,11 @@ void server_slot::reset() {
     generated_token_probs.clear();
     if (!ctx_checkpoints_interval_gating) {
         checkpoint_pos = -1;
+    } else {
+        // gating persists the position across tasks: re-anchor it to the
+        // checkpoints that survived (if any), otherwise the interval check
+        // can never pass again (short prompts) or spaces wrongly (long ones)
+        checkpoint_pos = server_cached_prompt.checkpoints.empty() ? -1 : server_cached_prompt.checkpoints.back().pos_max;
     }
     image_just_processed = false;
     do_checkpoint = false;
