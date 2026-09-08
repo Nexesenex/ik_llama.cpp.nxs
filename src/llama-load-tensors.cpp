@@ -189,6 +189,9 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     ggml_context * get_context_for_tensor(ggml_context * ctx, const std::string & name);
 
+    // Tied output head: tie to tok_embd, duplicating into the split context only when sharded
+    ggml_tensor * create_tied_output(const LLM_TN & tn, int64_t n_embd, int64_t n_vocab);
+
     void create_default_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool norm_bias);
     void create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm = true);
 
@@ -549,6 +552,17 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
         bool use_mmap_buffer = true;
 
 
+ggml_tensor * create_tensors_helper::create_tied_output(const LLM_TN & tn, int64_t n_embd, int64_t n_vocab) {
+    // A sharded head needs its own tensor in the split context for the tail
+    // prepare_split_tensors(); otherwise tie to tok_embd with no duplicate load.
+    // (No embeddings to tie to happens only for MTP-only packs: legacy duplicate path, throws if missing.)
+    if ((model.split_output_tensor && model.split_buft) || model.tok_embd == NULL) {
+        return create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab},
+                llama_model_loader::TENSOR_DUPLICATED);
+    }
+    return model.tok_embd;
+}
+
 void create_tensors_helper::create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm) {
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
@@ -559,7 +573,7 @@ void create_tensors_helper::create_embd_output(const LLM_TN & tn, int n_embd, in
 
     // if output is NULL, init from the input tok embed
     if (model.output == NULL) {
-        model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tied_output(tn, n_embd, n_vocab);
     }
 }
 
@@ -986,7 +1000,7 @@ bool create_tensors_helper::create_falcon_tensors(const LLM_TN & tn) {
 
         model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         if (!model.output) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED); // needs to be on GPU
+            model.output = create_tied_output(tn, n_embd, n_vocab); // needs to be on GPU
         }
     }
 
@@ -1023,7 +1037,7 @@ bool create_tensors_helper::create_starcoder_tensors(const LLM_TN & tn) {
         model.output        = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         if (!model.output) {
             // needs to be on GPU
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
 
     }
@@ -1210,7 +1224,7 @@ bool create_tensors_helper::create_mpt_tensors(const LLM_TN & tn) {
 
         model.output        = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         if (!model.output) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED); // needs to be on GPU
+            model.output = create_tied_output(tn, n_embd, n_vocab); // needs to be on GPU
         }
     }
 
@@ -1301,7 +1315,7 @@ bool create_tensors_helper::create_seedoss_tensors(const LLM_TN & tn) {
         model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
     }
 
@@ -1479,7 +1493,7 @@ bool create_tensors_helper::create_qwen2_tensors(const LLM_TN & tn) {
 
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
     }
 
@@ -1565,7 +1579,7 @@ bool create_tensors_helper::create_qwen3_tensors(const LLM_TN & tn) {
         model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
     }
 
@@ -1599,7 +1613,7 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
         model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
     }
 
@@ -1733,7 +1747,7 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
         model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
     }
 
@@ -1850,7 +1864,7 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
     model.hc_head_up   = create_tensor(ctx_output, tn(LLM_TENSOR_HC_HEAD_UP,   "weight"), {hc_rank, hc_dim}, out_mixer_flags);
     model.output       = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,       "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
     if (model.output == NULL && model.tok_embd != nullptr) {
-        model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tied_output(tn, n_embd, n_vocab);
     }
 
     bool ple_table_needed = hparams.ple_n_heads > 0;
@@ -2085,7 +2099,7 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
         model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
         int flags = llama_model_loader::TENSOR_NOT_REQUIRED;
         if (!model.mtp) flags |= llama_model_loader::TENSOR_SKIP;
@@ -2201,8 +2215,7 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
         model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab},
                 llama_model_loader::TENSOR_NOT_REQUIRED);
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab},
-                    llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
         int flags = llama_model_loader::TENSOR_NOT_REQUIRED;
         if (!model.mtp) flags |= llama_model_loader::TENSOR_SKIP;
@@ -2626,8 +2639,7 @@ bool create_tensors_helper::create_gemma_tensors(const LLM_TN & tn, int version)
     model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab},
             llama_model_loader::TENSOR_NOT_REQUIRED);
     if (!model.output) {
-        model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab},
-                llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tied_output(tn, n_embd, n_vocab);
     }
 
     for (int i = 0; i < n_layer; ++i) {
@@ -2675,7 +2687,7 @@ bool create_tensors_helper::create_gemma4_tensors(const LLM_TN & tn) {
     model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
     // if output is NULL, init from the input tok embed
     if (!model.output) {
-        model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tied_output(tn, n_embd, n_vocab);
     }
 
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -2779,7 +2791,7 @@ bool create_tensors_helper::create_gemma4_mtp_tensors(const LLM_TN & tn) {
         model.output = output_extra;
     }
     if (model.output == NULL) {
-        model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tied_output(tn, n_embd, n_vocab);
     }
     if (model.arch == LLM_ARCH_GEMMA4_MTP) {
         model.mtp_pre_proj  = create_tensor(ctx_output, tn(LLM_TENSOR_MTP_PRE_PROJ,  "weight"), {2*n_backbone, n_embd}, 0);
@@ -2841,7 +2853,7 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
         model.output = output_extra;
     }
     if (model.output == nullptr && model.tok_embd != nullptr) {
-        model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tied_output(tn, n_embd, n_vocab);
     }
     model.output_mtp = model.output;
     model.dflash_fc = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_FC, "weight"), {(int64_t) hparams.dflash_n_target_features, n_embd}, 0);
@@ -3084,7 +3096,7 @@ bool create_tensors_helper::create_starcoder2_tensors(const LLM_TN & tn) {
         model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
 
     }
@@ -3142,7 +3154,7 @@ bool create_tensors_helper::create_mamba_tensors(const LLM_TN & tn) {
         model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed, duplicated to allow offloading
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
     }
 
@@ -3208,7 +3220,7 @@ bool create_tensors_helper::create_command_r_tensors(const LLM_TN & tn) {
     {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
         // init output from the input tok embed
-        model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tied_output(tn, n_embd, n_vocab);
     }
 
     for (int i = 0; i < n_layer; ++i) {
@@ -3258,7 +3270,7 @@ bool create_tensors_helper::create_openelm_tensors(const LLM_TN & tn) {
     {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
         // init output from the input tok embed
-        model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tied_output(tn, n_embd, n_vocab);
     }
 
     for (int i = 0; i < n_layer; ++i) {
@@ -4074,7 +4086,7 @@ bool create_tensors_helper::create_bitnet_tensors(const LLM_TN & tn) {
     // output
     {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-        model.output      = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED); // same as tok_embd, duplicated to allow offloading
+        model.output      = create_tied_output(tn, n_embd, n_vocab); // same as tok_embd, duplicated to allow offloading
     }
 
     for (int i = 0; i < n_layer; ++i) {
@@ -4119,7 +4131,7 @@ bool create_tensors_helper::create_bitnet2_tensors(const LLM_TN & tn) {
 
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
     }
 
@@ -4208,7 +4220,7 @@ bool create_tensors_helper::create_t5_tensors(const LLM_TN & tn) {
         model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
     }
 
@@ -4268,7 +4280,7 @@ bool create_tensors_helper::create_tsencoder_tensors(const LLM_TN & tn) {
         model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tied_output(tn, n_embd, n_vocab);
         }
     }
 
@@ -4391,7 +4403,7 @@ bool create_tensors_helper::create_cohere2_moe_tensors(const LLM_TN & tn) {
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
     if (model.output == nullptr) {
-        model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tied_output(tn, n_embd, n_vocab);
     }
 
     for (int i = 0; i < n_layer; ++i) {
@@ -4429,7 +4441,7 @@ bool create_tensors_helper::create_glm4_tensors(const LLM_TN & tn) {
     model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
     // if output is NULL, init from the input tok embed
     if (model.output == NULL) {
-        model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tied_output(tn, n_embd, n_vocab);
     }
 
     for (int i = 0; i < n_layer; ++i) {
@@ -4709,8 +4721,7 @@ bool create_tensors_helper::create_glm5next_tensors(const LLM_TN & tn) {
     model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab},
             llama_model_loader::TENSOR_NOT_REQUIRED);
     if (!model.output) {
-        model.output = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab},
-                llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tied_output(tn, n_embd, n_vocab);
     }
 
     for (uint32_t il = 0; il < hparams.n_layer; ++il) {
