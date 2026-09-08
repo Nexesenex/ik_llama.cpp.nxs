@@ -217,7 +217,7 @@ static const char * split_mode_str(llama_split_mode mode) {
     switch (mode) {
         case LLAMA_SPLIT_MODE_NONE:  return "none";
         case LLAMA_SPLIT_MODE_LAYER: return "layer";
-        case LLAMA_SPLIT_MODE_TENSOR_PARALLEL: return "tenpar";
+        case LLAMA_SPLIT_MODE_TENSOR_PARALLEL: return "graph";
         default: GGML_ABORT("invalid split mode");
     }
 }
@@ -275,6 +275,13 @@ struct cmd_params {
     bool sas = false;
     int  max_gpu_per_split = 0;
     float split_adjust_step_frequency = 0.5f;
+#if defined(__clang__)
+    std::string ggml_batch_thread_thresh = ">32";
+#elif defined(_MSC_VER)
+    std::string ggml_batch_thread_thresh = "<1";
+#else
+    std::string ggml_batch_thread_thresh = ">32";
+#endif
     bool print_overrides = false;
     bool fit = false;
     int  fit_margin = 0;
@@ -327,6 +334,13 @@ static const cmd_params cmd_params_defaults = {
     /* sas                  */ false,
     /* max_gpu_per_split    */ 0,
     /* split_adjust_step_frequency */ 0.5f,
+#if defined(__clang__)
+    /* ggml_batch_thread_thresh */ ">32",
+#elif defined(_MSC_VER)
+    /* ggml_batch_thread_thresh */ "<1",
+#else
+    /* ggml_batch_thread_thresh */ ">32",
+#endif
     /* print_overrides      */ false,
     /* fit                  */ false,
     /* fit_margin           */ 0,
@@ -356,7 +370,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  --n-cpu-moe <n>                     (default: none)\n");
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
-    printf("  -sm, --split-mode <none|layer|graph>(default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
+    printf("  -sm, --split-mode <none|layer|tenpar|graph>(default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>        (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1>             (default: %s)\n", join(cmd_params_defaults.flash_attn, ",").c_str());
@@ -388,8 +402,9 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -sas, --scheduler-async <0|1>       (default: %s)\n", cmd_params_defaults.sas ? "1" : "0");
     printf("  --fit <0|1>                         (default: %s)\n", cmd_params_defaults.fit ? "1" : "0");
     printf("  --fit-margin N                      (default: %d)\n", cmd_params_defaults.fit_margin);
-    printf("  --max-gpu-per-split <N>             (default: %d)\n", cmd_params_defaults.max_gpu_per_split);
+    printf("  -mgps, --max-gpu, --max-gpu-per-split <N> (default: %d)\n", cmd_params_defaults.max_gpu_per_split);
     printf("  -sasf, --split-adjust-step-frequency <F> (default: %.1f, <1: legacy formula, >=1: direct)\n", cmd_params_defaults.split_adjust_step_frequency);
+    printf("  -gbtt, --ggml-batch-thread-threshold EXPR (default: %s)\n", cmd_params_defaults.ggml_batch_thread_thresh.c_str());
     printf("  --print-overrides <0|1>             (default: %s)\n", cmd_params_defaults.print_overrides ? "1" : "0");
     printf("\n");
     printf("Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.\n");
@@ -684,7 +699,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     mode = LLAMA_SPLIT_MODE_NONE;
                 } else if (m == "layer") {
                     mode = LLAMA_SPLIT_MODE_LAYER;
-                } else if (m == "tenpar") {
+                } else if (m == "tenpar" || m == "graph") {
                     mode = LLAMA_SPLIT_MODE_TENSOR_PARALLEL;
                 } else {
                     invalid_param = true;
@@ -858,18 +873,24 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.fit_margin = std::stoi(argv[i]);
-        } else if (arg == "--max-gpu-per-split") {
+        } else if (arg == "--max-gpu-per-split" || arg == "--max-gpu" || arg == "-mgps") {
             if (++i >= argc) {
                 invalid_param = true;
                 break;
             }
             params.max_gpu_per_split = std::stoi(argv[i]);
-        } else if (arg == "--split-adjust-step-frequency") {
+        } else if (arg == "--split-adjust-step-frequency" || arg == "-sasf") {
             if (++i >= argc) {
                 invalid_param = true;
                 break;
             }
             params.split_adjust_step_frequency = std::stof(argv[i]);
+        } else if (arg == "-gbtt" || arg == "--ggml-batch-thread-threshold") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.ggml_batch_thread_thresh = argv[i];
         } else if (arg == "-rcache" || arg == "--rope-cache") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -1527,7 +1548,7 @@ struct test {
             field == "model_size" || field == "model_n_params" ||
             field == "n_gpu_layers" || field == "main_gpu" ||
             field == "n_prompt" || field == "n_gen" || field == "mla_attn" || field == "attn_max_batch" ||
-            field == "avg_ns" || field == "stddev_ns" || field == "max_gpu_per_split" || field == "split_adjust_step_frequency") {
+            field == "avg_ns" || field == "stddev_ns" || field == "max_gpu_per_split") {
             return INT;
         }
         if (field == "cuda" || field == "vulkan" || field == "metal" ||
@@ -1537,7 +1558,7 @@ struct test {
             field == "rcache" || field == "reuse" || field == "muge" || field == "defer_experts" || field == "sas") {
             return BOOL;
         }
-        if (field == "avg_ts" || field == "stddev_ts") {
+        if (field == "avg_ts" || field == "stddev_ts" || field == "split_adjust_step_frequency") {
             return FLOAT;
         }
         return STRING;
@@ -2237,6 +2258,7 @@ int main(int argc, char ** argv) {
     }
     llama_backend_init();
     llama_numa_init(params.numa);
+    ggml_set_batch_thread_threshold(params.ggml_batch_thread_thresh.c_str());
 
     // initialize printer
     std::unique_ptr<printer> p = create_printer(params.output_format);
