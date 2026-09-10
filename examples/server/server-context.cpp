@@ -3494,7 +3494,38 @@ void server_context::discard_n_kv_and_cache_tokens(llama_context* ctx, server_sl
     auto kv_past = slot.cache_tokens.pos_next(slot.n_past);
     int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
     const auto pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
-    llama_kv_cache_seq_rm(ctx, slot.id, slot.cache_tokens.pos_next(kv_keep), slot.cache_tokens.pos_next(kv_keep + kv_discard));
+    // For compacted or position-strict caches (SWA-compress, openPangu, etc.) interior
+    // removal and the subsequent seq_add shift are unsupported and would GGML_ASSERT.
+    // Fail gracefully: clear the sequence instead of aborting (silent exit).
+    const bool can_rm = llama_kv_cache_seq_rm(ctx, slot.id, slot.cache_tokens.pos_next(kv_keep), slot.cache_tokens.pos_next(kv_keep + kv_discard));
+    if (!can_rm) {
+        LLAMA_LOG_WARN("discard_n_kv_and_cache_tokens: seq_rm [%d,%d) refused (compacted/position-strict or SWA ring) - clearing sequence %d\n",
+            (int) slot.cache_tokens.pos_next(kv_keep), (int) slot.cache_tokens.pos_next(kv_keep + kv_discard), slot.id);
+        llama_kv_cache_seq_rm(ctx, slot.id, -1, -1);
+        if (slot.spec) {
+            common_speculative_clear_sequence_kv(slot.spec, ctx, slot.id);
+        }
+        slot.cache_tokens.keep_first(0);
+        slot.n_past = 0;
+        slot.n_past_prompt = 0;
+        slot.n_past_offset = 0;
+        slot.truncated = true;
+        return;
+    }
+    // seq_add asserts for compacted/position-strict; guard likewise
+    if (llama_kv_cache_is_compacted(ctx) || !llama_supports_ctx_shift(ctx)) {
+        LLAMA_LOG_WARN("discard_n_kv_and_cache_tokens: seq_add shift not supported for this cache - clearing sequence %d\n", slot.id);
+        llama_kv_cache_seq_rm(ctx, slot.id, -1, -1);
+        if (slot.spec) {
+            common_speculative_clear_sequence_kv(slot.spec, ctx, slot.id);
+        }
+        slot.cache_tokens.keep_first(0);
+        slot.n_past = 0;
+        slot.n_past_prompt = 0;
+        slot.n_past_offset = 0;
+        slot.truncated = true;
+        return;
+    }
     llama_kv_cache_seq_add(ctx, slot.id, kv_keep + kv_discard, kv_past, -kv_discard);
     if (slot.spec) {
         common_speculative_context_shift(slot.spec, slot.id, kv_keep, kv_discard, kv_past);
