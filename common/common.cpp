@@ -2579,6 +2579,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.boost_space_after_quote = std::stof(argv[i]);
         return true;
     }
+    if (arg == "-bes" || arg == "--break-endless-sentences") {
+        CHECK_ARG
+        sparams.break_endless_sentences = std::stof(argv[i]);
+        return true;
+    }
     if (arg == "-l" || arg == "--logit-bias") {
         CHECK_ARG
         std::stringstream ss(argv[i]);
@@ -3314,6 +3319,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --penalize-nl",          "penalize newline tokens (default: %s)", sparams.penalize_nl ? "true" : "false" });
     options.push_back({ "*",           "-nsaq, --no-space-after-quote", "contextual rule: while inside an open \" quote, disallow tokens that begin with a space (e.g. \" You -> \"You)" });
     options.push_back({ "*",         "-bsaq N, --boost-space-after-quote N", "contextual rule: while inside an open \" quote, boost logits of tokens that begin with a space (e.g. \"You -> \" You) (default: %.1f)", (double)sparams.boost_space_after_quote });
+    options.push_back({ "*",         "-bes N, --break-endless-sentences N", "boost \".\" logits by N percent per generated token since the previous \".\" to break endless sentences (default: %.1f, 0.0 = disabled)", (double)sparams.break_endless_sentences });
     options.push_back({ "*",           "       --temp N",               "temperature (default: %.1f)", (double)sparams.temp });
     options.push_back({ "*",           "       --top-k N",              "top-k sampling (default: %d, 0 = disabled)", sparams.top_k });
     options.push_back({ "*",           "       --max-candidates N",     "max candidates to keep as prefilter (default: %d, 0 = disabled)", sparams.max_candidates });
@@ -5650,6 +5656,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "no_space_after_quote: %s # default: false\n", sparams.no_space_after_quote ? "true" : "false");
     fprintf(stream, "boost_space_after_quote: %f # default: 0.0\n", sparams.boost_space_after_quote);
+    fprintf(stream, "break_endless_sentences: %f # default: 0.0\n", sparams.break_endless_sentences);
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
     fprintf(stream, "ppl_stride: %d # default: 0\n", params.ppl_stride);
     for (const auto & spec : params.ppl_run_params) {
