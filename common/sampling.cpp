@@ -20,8 +20,8 @@ using json = nlohmann::ordered_json;
 struct llama_sampler_adaptive_p * llama_clone_adaptive_p(const struct llama_sampler_adaptive_p * adapt_p_ctx);
 void llama_free_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx);
 
-// Strip leading space markers (ASCII space, SentencePiece U+2581, BPE U+0120) so "." is found
-// across tokenizers whether the piece is ".", " .", "▁." or "Ġ.".
+// Strip leading space markers (ASCII space, SentencePiece U+2581, BPE U+0120) so sentence-end
+// and continuation marks are found across tokenizers whether the piece is ".", " .", "▁." or "Ġ.".
 static std::string strip_leading_space_markers(const std::string & piece) {
     size_t pos = 0;
     while (pos < piece.size()) {
@@ -38,12 +38,14 @@ static std::string strip_leading_space_markers(const std::string & piece) {
     return piece.substr(pos);
 }
 
-static bool is_period_piece(const std::string & piece) {
-    return strip_leading_space_markers(piece) == ".";
+static bool is_sentence_end_piece(const std::string & piece) {
+    const auto stripped = strip_leading_space_markers(piece);
+    return stripped == "." || stripped == "?" || stripped == "!";
 }
 
-static bool is_comma_piece(const std::string & piece) {
-    return strip_leading_space_markers(piece) == ",";
+static bool is_continuation_piece(const std::string & piece) {
+    const auto stripped = strip_leading_space_markers(piece);
+    return stripped == "," || stripped == ";" || stripped == "-";
 }
 
 struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params) {
@@ -66,20 +68,20 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         }
     }
 
-    // precompute which vocab rows are "." and "," (after stripping leading space markers) for
-    // break_endless_sentences; the bias is applied in llama_sampling_prepare_impl and the
-    // counter is updated in common_sampler_accept
+    // precompute which vocab rows are sentence ends (".", "?", "!") and continuations (",", ";", "-")
+    // (after stripping leading space markers) for break_endless_sentences; the bias is applied in
+    // llama_sampling_prepare_impl and the counter is updated in common_sampler_accept
     if (result->params.break_endless_sentences > 0.0f && vocab != nullptr) {
         const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-        result->is_period_token.resize(n_vocab);
-        result->is_comma_token.resize(n_vocab);
+        result->is_sentence_end_token.resize(n_vocab);
+        result->is_continuation_token.resize(n_vocab);
         for (llama_token id = 0; id < n_vocab; ++id) {
             const auto piece = common_token_to_piece(vocab, id, false);
-            result->is_period_token[id] = is_period_piece(piece);
-            result->is_comma_token[id]  = is_comma_piece(piece);
+            result->is_sentence_end_token[id] = is_sentence_end_piece(piece);
+            result->is_continuation_token[id]  = is_continuation_piece(piece);
         }
     }
-    result->tokens_since_period = 0;
+    result->tokens_since_sentence_end = 0;
 
     struct llama_grammar* grmr = nullptr;
     const std::string & grammar_str = common_grammar_value(params.grammar);
@@ -289,7 +291,7 @@ void common_sampler_reset(common_sampler * ctx) {
     // llama_grammar_reset(ctx);
     ctx->prev.clear();
     ctx->quote_open = false;
-    ctx->tokens_since_period = 0;
+    ctx->tokens_since_sentence_end = 0;
     llama_sampler_dry_reset(ctx->smpl);
 
     llama_free_adaptive_p(ctx->adapt_p_ctx);
@@ -328,9 +330,9 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
     dst->eosg_token = src->eosg_token;
     dst->quote_open = src->quote_open;
     dst->starts_with_space = src->starts_with_space;
-    dst->tokens_since_period = src->tokens_since_period;
-    dst->is_period_token = src->is_period_token;
-    dst->is_comma_token = src->is_comma_token;
+    dst->tokens_since_sentence_end = src->tokens_since_sentence_end;
+    dst->is_sentence_end_token = src->is_sentence_end_token;
+    dst->is_continuation_token = src->is_continuation_token;
 
     if (dst->grammar) {
         llama_grammar_free(dst->grammar);
@@ -833,34 +835,35 @@ static llama_token_data_array llama_sampling_prepare_impl(
         }
     }
 
-    // break endless sentences: boost "." logits and reduce "," logits by N percent per generated
-    // token since the previous "." (e.g. -bes 5 adds +0.05 per token, so +1.0 after 20 words without a period).
-    // 3-token grace delay: no bias for the first 3 tokens after a period.
-    if (params.break_endless_sentences > 0.0f && ctx_sampling->tokens_since_period > 3) {
-        if (ctx_sampling->is_period_token.size() != (size_t) n_vocab) {
+    // break endless sentences: boost sentence-end logits (".", "?", "!") and reduce continuation
+    // logits (",", ";", "-") by N percent per generated token since the previous sentence end
+    // (e.g. -bes 5 adds +0.05 per token, so +1.0 after 20 words without a sentence end).
+    // 3-token grace delay: no bias for the first 3 tokens after a sentence end.
+    if (params.break_endless_sentences > 0.0f && ctx_sampling->tokens_since_sentence_end > 3) {
+        if (ctx_sampling->is_sentence_end_token.size() != (size_t) n_vocab) {
             // lazy (re)build: sampler was created before the flag was set (e.g. server per-request
             // params) or for a different vocab size
             const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx_main));
             if (vocab != nullptr) {
-                ctx_sampling->is_period_token.assign(n_vocab, false);
-                ctx_sampling->is_comma_token.assign(n_vocab, false);
+                ctx_sampling->is_sentence_end_token.assign(n_vocab, false);
+                ctx_sampling->is_continuation_token.assign(n_vocab, false);
                 for (llama_token id = 0; id < n_vocab; ++id) {
                     const auto piece = common_token_to_piece(vocab, id, false);
-                    ctx_sampling->is_period_token[id] = is_period_piece(piece);
-                    ctx_sampling->is_comma_token[id]  = is_comma_piece(piece);
+                    ctx_sampling->is_sentence_end_token[id] = is_sentence_end_piece(piece);
+                    ctx_sampling->is_continuation_token[id]  = is_continuation_piece(piece);
                 }
             }
         }
-        if (!ctx_sampling->is_period_token.empty()) {
-            const float bias = (ctx_sampling->tokens_since_period - 3) * params.break_endless_sentences / 100.0f;
+        if (!ctx_sampling->is_sentence_end_token.empty()) {
+            const float bias = (ctx_sampling->tokens_since_sentence_end - 3) * params.break_endless_sentences / 100.0f;
             for (size_t idx = 0; idx < cur_p.size; ++idx) {
                 const llama_token id = cur_p.data[idx].id;
-                if (id < 0 || (size_t) id >= ctx_sampling->is_period_token.size()) {
+                if (id < 0 || (size_t) id >= ctx_sampling->is_sentence_end_token.size()) {
                     continue;
                 }
-                if (ctx_sampling->is_period_token[id]) {
+                if (ctx_sampling->is_sentence_end_token[id]) {
                     cur_p.data[idx].logit += bias;
-                } else if ((size_t) id < ctx_sampling->is_comma_token.size() && ctx_sampling->is_comma_token[id]) {
+                } else if ((size_t) id < ctx_sampling->is_continuation_token.size() && ctx_sampling->is_continuation_token[id]) {
                     cur_p.data[idx].logit -= bias;
                 }
             }
@@ -923,19 +926,20 @@ void common_sampler_accept(
         }
     }
 
-    // break endless sentences: count generated tokens since the previous "."; reset on "."
-    // (also resets on tokens ending with "." such as "word." so already-terminated sentences restart the count)
+    // break endless sentences: count generated tokens since the previous sentence end (".", "?", "!");
+    // reset on sentence ends (also resets on tokens ending with ".", "?" or "!" such as "word?" so
+    // already-terminated sentences restart the count)
     if (ctx_sampling->params.break_endless_sentences > 0.0f && is_generated) {
-        bool is_period = false;
-        if (token >= 0 && (size_t) token < ctx_sampling->is_period_token.size()) {
-            is_period = ctx_sampling->is_period_token[token];
+        bool is_sentence_end = false;
+        if (token >= 0 && (size_t) token < ctx_sampling->is_sentence_end_token.size()) {
+            is_sentence_end = ctx_sampling->is_sentence_end_token[token];
         }
-        if (!is_period) {
+        if (!is_sentence_end) {
             const auto piece = common_token_to_piece(ctx_main, token, false);
             const auto stripped = strip_leading_space_markers(piece);
-            is_period = !stripped.empty() && stripped.back() == '.';
+            is_sentence_end = !stripped.empty() && (stripped.back() == '.' || stripped.back() == '?' || stripped.back() == '!');
         }
-        ctx_sampling->tokens_since_period = is_period ? 0 : ctx_sampling->tokens_since_period + 1;
+        ctx_sampling->tokens_since_sentence_end = is_sentence_end ? 0 : ctx_sampling->tokens_since_sentence_end + 1;
     }
 
     // grammar_should_apply() checks the reasoning budget state, so calculate this before we accept
