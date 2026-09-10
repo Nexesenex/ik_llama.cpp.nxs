@@ -1393,10 +1393,46 @@ void server_tokens::keep_first(size_t n) {
         if (n == tokens.size()) {
             return; // nothing to do
         }
-        // It is an internal error if the longest common prefix ends in the middle of an image
-        llama_token first_removed_token = tokens[n];
-        if (first_removed_token == LLAMA_TOKEN_NULL) {
-            find_chunk(n); // will throw an error if the token is not begin-of-chunk
+        // It is an internal error if the longest common prefix ends in the middle of an image.
+        // Be robust: if n lands inside a media chunk, round down to the chunk start to keep
+        // the KV image expansion (pos_next) consistent and avoid a throw that would terminate
+        // the server thread (silent exit on Windows). This can happen when fuzzy prefix
+        // matching or an edit truncates inside an image's placeholder run.
+        if (n < tokens.size() && tokens[n] == LLAMA_TOKEN_NULL) {
+            // find_chunk(n) requires n to be the start of a chunk; if it is interior, adjust
+            auto it = map_idx_to_media.find(n);
+            if (it == map_idx_to_media.end()) {
+                // n is inside a chunk - search backwards for the containing chunk start
+                size_t chunk_start = n;
+                while (chunk_start > 0) {
+                    --chunk_start;
+                    auto it2 = map_idx_to_media.find(chunk_start);
+                    if (it2 != map_idx_to_media.end()) {
+                        const size_t chunk_n = mtmd_input_chunk_get_n_tokens(it2->second.get());
+                        if (chunk_start + chunk_n > n) {
+                            // n is strictly inside this chunk
+                            LLAMA_LOG_WARN("keep_first: n=%zu is inside media chunk [%zu, %zu) - rounding down to %zu\n",
+                                n, chunk_start, chunk_start + chunk_n, chunk_start);
+                            n = chunk_start;
+                        }
+                        break;
+                    }
+                    // also stop if we hit a non-placeholder - then n is not inside a chunk
+                    if (tokens[chunk_start] != LLAMA_TOKEN_NULL) {
+                        break;
+                    }
+                }
+                // re-validate after adjustment
+                if (n < tokens.size() && tokens[n] == LLAMA_TOKEN_NULL) {
+                    find_chunk(n); // will throw if still not a chunk start - indicates corrupt state
+                }
+            } else {
+                find_chunk(n); // validate start
+            }
+        } else if (n > 0 && n < tokens.size()) {
+            // also handle case where n is interior but tokens[n] is NULL due to consecutive chunks?
+            // The above already handles tokens[n]==NULL interior. For n pointing just after a chunk,
+            // tokens[n-1]==NULL but tokens[n]!=NULL is fine (chunk boundary). No adjustment needed.
         }
         // remove all image chunks that are not used anymore
         for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ) {
