@@ -70,6 +70,30 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         dst = &local_dst;
     }
 
+    // Per-head (per-GQA-group) mask plane: only the tile-f16/f32, vec-f16/f32 and wmma kernels
+    // index the mask head plane (head % ne[2]); the mma / new-mma kernels assume a single 2D mask
+    // and would mis-index a per-head mask. Route a per-head mask (MiniMax-M3 MSA) to a wired kernel:
+    // bs1/decode -> vec, prefill -> tile-f16 (or tile-f32 when fp16 is slow / f32 precision asked).
+    // A 2D mask (ne[2]==1) is unaffected.
+    const bool per_head_mask = mask && mask->ne[2] > 1;
+    if (per_head_mask) {
+        const bool prefer_f32 = !fast_fp16_available(cc) || precision != GGML_PREC_DEFAULT;
+        // vec kernels need symmetric K/V head dims and a head dim divisible by 2*WARP_SIZE.
+        const bool can_use_vec = K->ne[0] == V->ne[0] && Q->ne[0] % (2*WARP_SIZE) == 0 &&
+                                 !ggml_is_quantized(K->type) && !ggml_is_quantized(V->type);
+        if (Q->ne[1] == 1 && can_use_vec) {
+            // #2144: on P100 (sm_60) the fp16 vec DECODE kernel accumulates the online-softmax in fp16 and
+            // flips ~3-4% of top-1 tokens vs f32 (llama.cpp#25593); route P100 decode to f32 here too, so a
+            // per-head (MSA) mask does not bypass that fix. Decode is bandwidth-bound on P100 so f32 is free.
+            if (prefer_f32 || cc == CC_PASCAL) ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
+            else                               ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
+        } else {
+            if (prefer_f32) ggml_cuda_flash_attn_ext_tile_f32(ctx, dst);
+            else            ggml_cuda_flash_attn_ext_tile_f16(ctx, dst);
+        }
+        return;
+    }
+
     // On AMD the tile kernels perform poorly, use the vec kernel instead:
     if (cc >= CC_OFFSET_AMD) {
         if (precision == GGML_PREC_DEFAULT && fast_fp16_available(cc)) {
@@ -184,6 +208,22 @@ bool ggml_cuda_fattn_is_supported(ggml_backend_cuda_context & ctx, const ggml_te
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const int32_t precision = KQV->op_params[3];
     const int32_t n_swa = KQV->op_params[4];
+
+    // Per-head mask is only honoured by the tile/vec/wmma kernels (see ggml_cuda_flash_attn_ext).
+    const bool per_head_mask = mask && mask->ne[2] > 1;
+    if (per_head_mask) {
+        const bool prefer_f32 = !fast_fp16_available(cc) || precision != GGML_PREC_DEFAULT;
+        const bool can_use_vec = K->ne[0] == V->ne[0] && Q->ne[0] % (2*WARP_SIZE) == 0 &&
+                                 !ggml_is_quantized(K->type) && !ggml_is_quantized(V->type);
+        if (Q->ne[1] == 1 && can_use_vec) {
+            // match the dispatch: P100 (sm_60) decode uses vec_f32 (#2144), so check its support.
+            return (prefer_f32 || cc == CC_PASCAL) ? ggml_cuda_fattn_vec_f32_is_supported(ctx, dst)
+                                                   : ggml_cuda_fattn_vec_f16_is_supported(ctx, dst);
+        }
+        return prefer_f32 ? ggml_cuda_fattn_tile_f32_is_supported(ctx, dst)
+                          : ggml_cuda_fattn_tile_f16_is_supported(ctx, dst);
+    }
+
     if (cc >= CC_OFFSET_AMD) {
         return precision == GGML_PREC_DEFAULT ? ggml_cuda_fattn_vec_f16_is_supported(ctx, dst)
                                               : ggml_cuda_fattn_vec_f32_is_supported(ctx, dst);

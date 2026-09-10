@@ -39,6 +39,8 @@ static __global__ void flash_attn_tile_ext_f16(
         const int ne13,
         const int ne31,
         const int nb31,
+        const int ne32,
+        const int nb32,
         const int nb01,
         const int nb02,
         const int nb03,
@@ -72,7 +74,7 @@ static __global__ void flash_attn_tile_ext_f16(
     // fattn.cu n_swa windowing re-points K/V/mask to the last nton tokens (ne11 = nton) while the mask keeps
     // its original row stride, so indexing the mask by ne11 reads garbage and yields NaN on the tile kernels.
     const int    stride_mask = nb31 / sizeof(half);
-    const half   * maskh  = (const half   *)  mask + stride_mask*ic0;
+    const half   * maskh  = (const half   *)  mask + stride_mask*ic0 + (size_t)(nb32/sizeof(half))*(blockIdx.y % ne32);
     const float  * sinksf = (const float  *)  sinks;
 
     const int stride_KV2 = nb11 / sizeof(half2);

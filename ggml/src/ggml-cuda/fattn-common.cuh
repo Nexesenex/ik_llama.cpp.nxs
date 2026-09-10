@@ -43,6 +43,8 @@ typedef void (* fattn_kernel_t)(
         const int ne13,
         const int ne31,
         const int nb31,
+        const int ne32,   // mask head count (per-head mask: ne32==n_head; 2D mask: ne32==1)
+        const int nb32,   // mask head byte-stride (0 / unused when ne32==1)
         const int nb01,
         const int nb02,
         const int nb03,
@@ -921,6 +923,7 @@ void launch_fattn(
         Q->ne[0], Q->ne[1], Q->ne[2], Q->ne[3],
         K->ne[0], K->ne[1], K->ne[2], K->ne[3],
         mask ? mask->ne[1] : 0, mask ?  mask->nb[1] : 0,
+        mask ? (int) mask->ne[2] : 1, mask ? (int) mask->nb[2] : 0,
         Q->nb[1], Q->nb[2], Q->nb[3],
         nb11, nb12, nb13,
         nb21, nb22, nb23,

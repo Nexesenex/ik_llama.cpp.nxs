@@ -161,6 +161,11 @@ struct llama_layer {
     struct ggml_tensor * attn_q_norm_b = nullptr;
     struct ggml_tensor * attn_k_norm = nullptr;
     struct ggml_tensor * attn_k_norm_b = nullptr;
+    // MiniMax-M3 MSA (sparse attention) indexer projections / norms
+    struct ggml_tensor * index_q = nullptr;
+    struct ggml_tensor * index_q_norm = nullptr;
+    struct ggml_tensor * index_k = nullptr;
+    struct ggml_tensor * index_k_norm = nullptr;
     struct ggml_tensor * attn_out_norm = nullptr;
     struct ggml_tensor * attn_out_norm_b = nullptr;
     struct ggml_tensor * attn_q_a_norm = nullptr;

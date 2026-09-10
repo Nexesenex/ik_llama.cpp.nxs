@@ -1774,6 +1774,30 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
 
+                // MiniMax-M3 MSA (sparse attention) — optional; absent => dense fallback.
+                // Mainline llama.cpp writes these five under attention.indexer.*; our converter
+                // wrote attention.sparse_*. Read mainline's spelling first so a GGUF converted by
+                // any mainline-based tool runs MSA here, and keep ours as the fallback so files we
+                // already converted keep working.
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,    hparams.minimax_sparse_index_dim,   false);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,    hparams.minimax_sparse_index_heads, false);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,         hparams.minimax_sparse_topk_blocks, false);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,    hparams.minimax_sparse_block_size,  false);
+                if (hparams.minimax_sparse_index_dim   == 0) ml.get_key(LLM_KV_MINIMAX_SPARSE_INDEX_DIM,        hparams.minimax_sparse_index_dim,   false);
+                if (hparams.minimax_sparse_index_heads == 0) ml.get_key(LLM_KV_MINIMAX_SPARSE_INDEX_HEAD_COUNT, hparams.minimax_sparse_index_heads, false);
+                if (hparams.minimax_sparse_topk_blocks == 0) ml.get_key(LLM_KV_MINIMAX_SPARSE_TOPK_BLOCKS,      hparams.minimax_sparse_topk_blocks, false);
+                if (hparams.minimax_sparse_block_size  == 0) ml.get_key(LLM_KV_MINIMAX_SPARSE_BLOCK_SIZE,       hparams.minimax_sparse_block_size,  false);
+                // We always force exactly the one containing block. Mainline carries a count, so a
+                // model asking for anything else would select a different set -- say so rather than
+                // silently attending the wrong cells.
+                uint32_t indexer_local_blocks = 1;
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS, indexer_local_blocks, false);
+                if (indexer_local_blocks != 1) {
+                    LLAMA_LOG_WARN("%s: GGUF requests indexer.local_blocks = %u; this implementation "
+                                   "forces exactly 1 local block, so selection will differ\n",
+                                   __func__, indexer_local_blocks);
+                }
+
                 model.type = e_model::MODEL_UNKNOWN;
             } break;
         case LLM_ARCH_SMOLLM3:

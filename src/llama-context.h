@@ -152,10 +152,10 @@ struct llama_kv_cache {
     std::vector<struct ggml_tensor *> v_l;
     std::vector<struct ggml_tensor *> s_l; // per layer recurrent state storage (Qwen3Next)
 
-    // Persistent DSA indexer-key cache. One per indexer layer, MQA single head:
-    // [indexer_head_size, kv_size]. Stores architecture-specific indexer keys in their
-    // scoring representation so a decoded token scores against all past indexer keys.
-    // Empty unless the model has the DSA indexer.
+    // Persistent indexer-key cache, one per indexer layer, MQA single head:
+    // [indexer_head_size, kv_size]. Stores the architecture-specific indexer keys in their
+    // scoring representation so a decoded token scores against all past indexer keys. Shared
+    // by GLM-DSA and MiniMax-M3 MSA. Empty unless the model has the DSA/MSA indexer.
     std::vector<struct ggml_tensor *> kr_l;
 
     // Pooled block keys for Qwen sparse attention: [indexer_head_size, kv_size/compress_ratio],
@@ -816,6 +816,23 @@ struct llama_context {
     std::vector<CacheCopy> dsa_cache_copies;
     std::vector<CacheCopy> openpangu_cache_copies;
     std::vector<CacheCopy> openpangu_cache_copies_mtp;
+    // MiniMax-M3 MSA: the indexer-key cache (kr_l) write is a separate ggml_cpy that the
+    // K/V cache_copies fixup does NOT cover. Under graph reuse (FA pad-256 keeps n_kv
+    // constant across consecutive ubatches, so the graph IS reused) its view_offs would
+    // stay baked at the first ubatch's kv_head, scattering recent indexer keys to stale
+    // slots (recent cells read 0 -> wrong top-k -> PPL inflation). Register the kr_l cpy
+    // per layer here and patch its offset in update_cache_copies(), exactly like K/V.
+    std::vector<CacheCopy> msa_cache_copies;
+
+    // MiniMax-M3 MSA: the local-block force-include builds its block id from
+    // ggml_arange(kv_head, kv_head + n_tokens, 1), which BAKES kv_head into op_params at graph
+    // build time. can_reuse_graph() keys on kv_self.n, not on kv_head, and with FA the cache pads
+    // to 256, so one graph serves up to 256 decode steps while kv_head advances. B_k is 128, so
+    // the true local block moves twice inside a window while the baked one never does, and the
+    // reference's force-include of the query's own block silently targets the wrong block for
+    // about half of all decoded tokens. Register the arange here and re-point it in
+    // update_cache_copies(), exactly like the kr_l copy above. Null when MSA is off.
+    ggml_tensor * msa_local_arange = nullptr;
 
     bool update_cache_copies();
 

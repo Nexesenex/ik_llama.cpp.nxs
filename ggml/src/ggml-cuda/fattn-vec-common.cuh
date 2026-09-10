@@ -1047,7 +1047,11 @@ void launch_fattn(
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at least one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths.
-    if (mask && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || (n_swa > 0 && K->ne[1] >= FATTN_KQ_STRIDE + n_swa))) {
+    // The KV_min_max scan assumes a single causal-style mask plane with a contiguous keep range
+    // (it reads only head 0 via s31/s33). A per-head sparse mask (ne[2] > 1, MiniMax-M3 MSA) keeps
+    // scattered blocks per head, so this skip-optimization would drop kept keys -> disable it then.
+    const bool per_head_mask = mask && mask->ne[2] > 1;
+    if (mask && !per_head_mask && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || (n_swa > 0 && K->ne[1] >= FATTN_KQ_STRIDE + n_swa))) {
         const int s31 = mask->nb[1] / sizeof(half2);
         const int s33 = mask->nb[3] / sizeof(half2);
 
@@ -1147,7 +1151,7 @@ void launch_fattn(
         Q->ne[0], Q->ne[1], Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
         K->ne[0], K->ne[1], K->ne[2], K->ne[3], nb11, nb12, nb13,
         nb21, nb22, nb23,
-        mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
+        mask ? mask->ne[1] : 0, mask ? (int) mask->ne[2] : 1, mask ? mask->ne[3] : 1,
         mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
     );
     CUDA_CHECK(cudaGetLastError());

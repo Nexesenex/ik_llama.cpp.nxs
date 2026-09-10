@@ -65,7 +65,9 @@ static __global__ void flash_attn_vec_ext_f16(
     K += nb13*sequence + nb12*(head / gqa_ratio);
     V += nb23*sequence + nb22*(head / gqa_ratio);
 
-    const half  * maskh  = (const half  *) (mask + nb33*(sequence % ne33) + nb31*ic0);
+    // Per-head (per-GQA-group) mask plane: head h reads mask plane (h % ne32). nb32==0 / ne32==1
+    // (dense 2D mask) leaves this byte-identical to the previous head-broadcast behaviour.
+    const half  * maskh  = (const half  *) (mask + nb33*(sequence % ne33) + (int64_t)nb32*(head % ne32) + nb31*ic0);
     const float * sinksf = (const float *) (sinks);
 
     const float slopef = get_alibi_slope(max_bias, head, n_head_log2, m0, m1);

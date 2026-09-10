@@ -328,6 +328,80 @@ ggml_cgraph * llm_build_context::build_k_shift() {
         }
     }
 
+    // MiniMax-M3 MSA: the persistent indexer-key cache kv_self.kr_l[il] is RoPE-position-encoded
+    // at write time (build_minimaxm3_msa_mask rotates the first n_rot dims of each d_idx-wide index key
+    // with the cell's absolute pos, NEOX, NO Hadamard). A context-shift that re-RoPEs the main K cache
+    // MUST apply the identical per-cell delta-rotation to the indexer keys, or the indexer query/key
+    // rotations desync and the top-k block selection silently degrades.
+    //
+    // UNLIKE GLM-DSA (which is an MLA model -> get_can_shift() returns FALSE -> k-shift never runs, so
+    // its kr_l shift block is dormant), MiniMax-M3 is NOT an MLA model (is_mla_model() excludes it), so
+    // get_can_shift() returns TRUE and this block IS LIVE on the serving path whenever the context is
+    // shifted. It must be correct, not dormant.
+    //
+    // Simpler than GLM-DSA: the MSA index key has no Hadamard rotation, it is just concat(RoPE(ik[:n_rot]),
+    // ik[n_rot:]). So we view the pe sub-block, RoPE it by the per-cell delta (inp_K_shift), and write back.
+    // Exactness: identical to the main K-shift above -- a delta-rotation composes with the write-time
+    // rotation exactly when NEOX RoPE is pure (ext_factor==0); under YaRN it is the same approximation the
+    // main K-shift already makes, so the indexer stays consistent WITH the main K it scores alongside.
+    // Params mirror the indexer forward RoPE exactly: NEOX, n_rot, freq_base/freq_scale (the indexer uses
+    // cparams.rope_freq_base == this freq_base), ext_factor/attn_factor, rope_factors==nullptr.
+    // MSA is the first live user of the indexer-key-cache K-shift (GLM-DSA is MLA, so it never shifts).
+    // Re-RoPE the kr_l indexer keys by the same per-cell delta as the main K cache so a shifted context
+    // keeps the indexer consistent with the K it scores alongside.
+    if (model.arch == LLM_ARCH_MINIMAX_M3 && !kv_self.kr_l.empty()) {
+        for (int il = 0; il < n_layer; ++il) {
+            if ((size_t) il >= kv_self.kr_l.size() || kv_self.kr_l[il] == nullptr) {
+                continue;
+            }
+            ggml_tensor * kr = kv_self.kr_l[il];          // {d_idx, kv_size} F16
+            const int64_t d_idx   = kr->ne[0];
+            const int64_t n_pass  = d_idx - n_rot;        // [n_rot, d_idx) passes through unrotated
+            if (n_rot <= 0 || n_rot > d_idx) {
+                continue;                                  // defensive: no/invalid partial rotation
+            }
+
+            // work in F32 for the rotation, write back to the F16 cache. Reshape to a 3D index-head
+            // view {d_idx, 1, kv_size} so ggml_rope_ext sees a per-head row layout (single shared head).
+            ggml_tensor * kr_f32 = ggml_cast(ctx0, kr, GGML_TYPE_F32);
+            for (auto * backend : lctx.backends) {
+                if (ggml_backend_supports_buft(backend, lctx.model.buft_layer[il].buft)) {
+                    ggml_backend_sched_set_tensor_backend(lctx.sched, kr_f32, backend);
+                    break;
+                }
+            }
+            cb(kr_f32, "kr_f32", il);
+
+            // pe sub-block {n_rot, 1, kv_size}; pass sub-block {n_pass, 1, kv_size}.
+            ggml_tensor * kr_pe = ggml_view_3d(ctx0, kr_f32, n_rot, 1, n_ctx,
+                    ggml_row_size(kr_f32->type, d_idx),
+                    ggml_row_size(kr_f32->type, d_idx), 0);
+            // RoPE the pe block by the per-cell delta (inp_K_shift) into a NEW tensor (non-in-place;
+            // ggml_cont copies the view first to avoid aliasing). NEOX, indexer forward params.
+            ggml_tensor * kr_pe_rot = ggml_rope_ext(ctx0, ggml_cont(ctx0, kr_pe),
+                    lctx.inp_K_shift, nullptr, n_rot, LLAMA_ROPE_TYPE_NEOX, n_ctx_orig,
+                    freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+            cb(kr_pe_rot, "kr_pe_shifted", il);
+
+            ggml_tensor * kr_new;
+            if (n_pass > 0) {
+                ggml_tensor * kr_pass = ggml_view_3d(ctx0, kr_f32, n_pass, 1, n_ctx,
+                        ggml_row_size(kr_f32->type, d_idx),
+                        ggml_row_size(kr_f32->type, d_idx),
+                        ggml_row_size(kr_f32->type, n_rot));
+                ggml_tensor * kr_cat = ggml_concat(ctx0, kr_pe_rot, ggml_cont(ctx0, kr_pass), 0);
+                kr_new = ggml_reshape_2d(ctx0, kr_cat, d_idx, n_ctx);
+            } else {
+                kr_new = ggml_reshape_2d(ctx0, kr_pe_rot, d_idx, n_ctx);
+            }
+            cb(kr_new, "kr_cat_shifted", il);
+
+            ggml_tensor * kr_back = ggml_cpy(ctx0, kr_new, kr);   // write back into F16 cache
+            cb(kr_back, "kr_shifted", il);
+            ggml_build_forward_expand(gf, kr_back);
+        }
+    }
+
     return gf;
 }
 
@@ -437,21 +511,24 @@ ggml_cgraph * llm_build_context::build_defrag(const std::vector<uint32_t> & ids)
                 ggml_build_forward_expand(gf, ggml_cpy(ctx0, view_v_src, view_v_dst));
             }
 
-            // DSA lightning-indexer key cache: move the indexer keys alongside k_l. Each cell's
-            // indexer key (kr_l row, one per cache cell) must follow its cell, or after defrag the
-            // kr_l rows no longer match the cells the indexer scores by cell index. The indexer key
-            // is RoPE-encoded at its (unchanged) absolute pos, and defrag does NOT change pos, so a
-            // plain row move is correct (no re-RoPE needed; only seq_add/K-shift change pos).
+            // Indexer-key cache (kr_l) defrag row-move, shared by GLM-DSA and MiniMax-M3 MSA: each
+            // cell's indexer key (kr_l row, one per cache cell) must follow its cell, or after defrag
+            // the kr_l rows no longer match the cells the indexer scores by cell index -> the indexer
+            // scores against mismatched keys. The indexer key is RoPE-encoded at its (unchanged)
+            // absolute pos and defrag does NOT change pos, so this is a pure row-move (no re-RoPE),
+            // mirroring the k_l/v_l move above. Only sparse layers carry kr_l (others are nullptr ->
+            // skipped). Row width is kv_self.kr_l[il]->ne[0] (== indexer_head_size for GLM-DSA, == d_idx
+            // for MSA). Only sparse layers carry kr_l; other layers are nullptr and are skipped.
             if ((size_t) il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr) {
-                const int64_t head_size = hparams.indexer_head_size;
+                const int64_t d_idx = kv_self.kr_l[il]->ne[0];
                 ggml_tensor * view_kr_src = ggml_view_2d(ctx0, kv_self.kr_l[il],
-                        head_size, nm,
-                        ggml_row_size(kv_self.kr_l[il]->type, head_size),
-                        ggml_row_size(kv_self.kr_l[il]->type, head_size*i));
+                        d_idx, nm,
+                        ggml_row_size(kv_self.kr_l[il]->type, d_idx),
+                        ggml_row_size(kv_self.kr_l[il]->type, d_idx*i));
                 ggml_tensor * view_kr_dst = ggml_view_2d(ctx0, kv_self.kr_l[il],
-                        head_size, nm,
-                        ggml_row_size(kv_self.kr_l[il]->type, head_size),
-                        ggml_row_size(kv_self.kr_l[il]->type, head_size*id));
+                        d_idx, nm,
+                        ggml_row_size(kv_self.kr_l[il]->type, d_idx),
+                        ggml_row_size(kv_self.kr_l[il]->type, d_idx*id));
                 ggml_build_forward_expand(gf, ggml_cpy(ctx0, view_kr_src, view_kr_dst));
             }
         }
@@ -2118,7 +2195,7 @@ static ggml_tensor * llm_build_kqv(
                     int       il,
                 ggml_tensor * sinks = nullptr, int n_swa = 0, int kv_il = -1,
                 ggml_tensor ** k_cache_view = nullptr, ggml_tensor ** v_cache_view = nullptr,
-                    int32_t kv_view_offset = 0) {
+                    int32_t kv_view_offset = 0, const msa_attn_split * msa = nullptr) {
     const llama_model   & model   = lctx.model;
     const llama_hparams & hparams = lctx.model.hparams;
     const llama_cparams & cparams = lctx.cparams;
@@ -2203,21 +2280,62 @@ static ggml_tensor * llm_build_kqv(
             cb(v, "v", il);
         }
 
-        cur = ggml_flash_attn_ext(ctx, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
-                hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
-        cb(cur, "fa", il);
-        ggml_flash_attn_ext_add_sinks(cur, sinks);
-        if (n_swa > 0 && can_use_kv_swa_reduction(cparams, kv) && !kv.cells_disordered) {
-            ((int32_t *)cur->op_params)[4] = n_swa;
-        }
+        if (msa && msa->n_groups > 0) {
+            // MiniMax-M3 MSA: one flash-attention call per GQA group. Each call sees a single mask
+            // plane, so the mask stays at n_groups planes instead of n_head and no kernel has to
+            // resolve a per-head plane. k/v come from the gathered selection when it is present,
+            // else from the group's slice of the full-cache view.
+            const int64_t n_groups = msa->n_groups;
+            const int64_t group_sz = n_head / n_groups;
+            GGML_ASSERT(n_head % n_groups == 0 && n_head_kv == n_groups);
+            // ne[2] == 1 is index-list mode: one shared causal mask, selection carried on src[5].
+            GGML_ASSERT(kq_mask && (kq_mask->ne[2] == n_groups || kq_mask->ne[2] == 1));
+            const bool shared_mask = kq_mask->ne[2] == 1;
+            GGML_ASSERT(!shared_mask || (int) msa->idx.size() == n_groups);
+            GGML_ASSERT(!sinks && n_swa == 0 && hparams.f_max_alibi_bias == 0.0f);
+            for (int64_t g = 0; g < n_groups; ++g) {
+                ggml_tensor * q_g = ggml_view_3d(ctx, q, q->ne[0], q->ne[1], group_sz,
+                        q->nb[1], q->nb[2], g*group_sz*q->nb[2]);
+                ggml_tensor * k_g = ggml_view_3d(ctx, k, k->ne[0], k->ne[1], 1, k->nb[1], k->nb[2], g*k->nb[2]);
+                ggml_tensor * v_g = ggml_view_3d(ctx, v, v->ne[0], v->ne[1], 1, v->nb[1], v->nb[2], g*v->nb[2]);
+                ggml_tensor * m_g = ggml_view_3d(ctx, kq_mask, kq_mask->ne[0], kq_mask->ne[1], 1,
+                        kq_mask->nb[1], kq_mask->nb[2], shared_mask ? 0 : g*kq_mask->nb[2]);
+                ggml_tensor * fa_g = ggml_flash_attn_ext(ctx, q_g, k_g, v_g, m_g, kq_scale,
+                        hparams.f_max_alibi_bias,
+                        hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+                if (!msa->idx.empty()) {
+                    fa_g->src[5] = msa->idx[g];
+                } else if (msa->n_gather > 0 && msa->n_gather < k_g->ne[1]) {
+                    // One index row per query token, listing the cells this token actually attends.
+                    // The kernel reads it at src[5] and gathers K/V/mask per row, so this covers
+                    // prefill as well as decode. -1 padding is handled there (it writes -inf).
+                    ggml_tensor * idx = ggml_mask_to_index(ctx, m_g, msa->n_gather);
+                    ggml_build_forward_expand(graph, idx);
+                    fa_g->src[5] = idx;
+                }
+                if (should_use_f32_precision) {
+                    ggml_flash_attn_ext_set_prec(fa_g, GGML_PREC_F32);
+                }
+                cur = g == 0 ? fa_g : ggml_concat(ctx, cur, fa_g, 1);
+            }
+            cb(cur, "fa", il);
+        } else {
+            cur = ggml_flash_attn_ext(ctx, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+                    hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+            cb(cur, "fa", il);
+            ggml_flash_attn_ext_add_sinks(cur, sinks);
+            if (n_swa > 0 && can_use_kv_swa_reduction(cparams, kv) && !kv.cells_disordered) {
+                ((int32_t *)cur->op_params)[4] = n_swa;
+            }
 
-        // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
-        // For DeepSeek-2, it is perfectly fine with fp16 for PP, but I get gibberish when uding fp16 for TG.
-        // Not sure if it is really a matter of insufficient precision, or I have made a mistake in the fattn-vec-f16 kernel.
-        if (should_use_f32_precision) {
-            ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
+            // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
+            // For DeepSeek-2, it is perfectly fine with fp16 for PP, but I get gibberish when uding fp16 for TG.
+            // Not sure if it is really a matter of insufficient precision, or I have made a mistake in the fattn-vec-f16 kernel.
+            if (should_use_f32_precision) {
+                ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
+            }
+            //ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
         }
-        //ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
 
         if (cparams.v_cache_hadamard) {
             if (int block_size = lctx.model.hadamard_size_v(il); block_size > 0) {
@@ -2386,7 +2504,7 @@ ggml_tensor * llm_build_context::llm_build_kv(
                     float     kq_scale,
          const llm_build_cb & cb, int il, ggml_tensor * sinks, int n_swa, int kv_il,
          ggml_tensor ** k_cache_view, ggml_tensor ** v_cache_view,
-                    int32_t   swa_head) {
+                    int32_t   swa_head, const msa_attn_split * msa) {
     const llama_hparams & hparams = lctx.model.hparams;
     const llama_cparams & cparams = lctx.cparams;
 
@@ -2427,7 +2545,7 @@ ggml_tensor * llm_build_context::llm_build_kv(
     }
 
     auto cur = llm_build_kqv(ctx, lctx, kv, graph, wo, wo_b, q_cur, kq_mask, n_tokens, n_kv_view, kq_scale, cb, il, sinks, n_swa, kv_il,
-            k_cache_view, v_cache_view, kv_view_offset);
+            k_cache_view, v_cache_view, kv_view_offset, msa);
     cb(cur, "kqv_out", il);
 
     return cur;
@@ -3304,7 +3422,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale,
         int n_swa, int il, bool do_rope, bool add_graph_split, bool add_input, bool is_norm, bool is_multi,
         ggml_tensor * post_norm, int kv_il, float post_norm_eps, post_norm_data * pnd,
-        ggml_tensor ** k_view, ggml_tensor ** v_view) {
+        ggml_tensor ** k_view, ggml_tensor ** v_view,
+        const msa_attn_split * msa, ggml_tensor * pre_normed) {
 
     float freq_base_l  = n_swa > 0 ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
     float freq_scale_l = n_swa > 0 ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
@@ -3549,6 +3668,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                              vnb1, v_row_size, kv_off_eff*vnb1);
                 cb(v, "v", il_cb);
 
+                // q here is this device's slice, so q->ne[2] is the per-device head count, not the
+                // model's. A per-head mask is indexed by the device-local head index, so it would
+                // read planes 0..q->ne[2] on every device. Single-plane is the only correct case.
+                GGML_ASSERT(!KQ_mask || KQ_mask->ne[2] == 1);
                 cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask, KQ_scale, hparams.f_max_alibi_bias,
                         hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
                 cb(cur, "flash_attn", il_cb);
@@ -3669,7 +3792,14 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     }
 
     auto cur = input;
-    if (the_attn_norm) {
+    if (pre_normed) {
+        // The caller already computed RMSNorm(input, the_attn_norm) -- MiniMax-M3's indexer does,
+        // for every sparse layer -- so reuse it instead of building an identical second node.
+        // `input` deliberately stays as it was: it is the add_input residual at the end of this
+        // function, and feeding the normed tensor in as `input` would make that residual
+        // attn_out + RMSNorm(x) instead of attn_out + x.
+        cur = pre_normed;
+    } else if (the_attn_norm) {
         cur = llm_build_norm(ctx0, cur, hparams, the_attn_norm, NULL, is_norm ? LLM_NORM : LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
     }
@@ -3727,7 +3857,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                 nullptr, nullptr,
                 Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il,
-                k_view, v_view, swa_head);
+                k_view, v_view, swa_head, msa);
         cb(cur, "wqkv", il);
         auto gate = llm_build_lora_mm(lctx, ctx0, wqkv_gate, input_normed);
         if (model.arch == LLM_ARCH_LAGUNA) {
@@ -3769,7 +3899,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         if (gate) {
             cur = llm_build_kv(ctx0, lctx, kv_self, gf, nullptr, nullptr,
                     Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il,
-                    k_view, v_view, swa_head);
+                    k_view, v_view, swa_head, msa);
             if (false && cur->ne[1] == 1) { // we need to add GGML_UNARY_OP_SIGMOID to the ops supported by ggml_fused_mul_unary
                 cur = ggml_fused_mul_unary(ctx0, cur, gate, GGML_UNARY_OP_SIGMOID);
             } else {
@@ -3787,7 +3917,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                     model.layers[il].wo, model.layers[il].bo,
                     Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il,
-                    k_view, v_view, swa_head);
+                    k_view, v_view, swa_head, msa);
         }
     }
 

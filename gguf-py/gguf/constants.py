@@ -133,6 +133,14 @@ class Keys:
         VALUE_SCALE                  = "{arch}.attention.value_scale"
         OUTPUT_SCALE                 = "{arch}.attention.output_scale"
         TEMPERATURE_LENGTH           = "{arch}.attention.temperature_length"
+        # MiniMax-M3 MSA (block-sparse attention) indexer hparams
+        SPARSE_INDEX_DIM             = "{arch}.attention.sparse_index_dim"
+        SPARSE_INDEX_HEAD_COUNT      = "{arch}.attention.sparse_index_head_count"
+        SPARSE_TOPK_BLOCKS           = "{arch}.attention.sparse_topk_blocks"
+        SPARSE_BLOCK_SIZE            = "{arch}.attention.sparse_block_size"
+        # Mainline llama.cpp's spelling for the same MSA indexer config (conversion/minimax.py).
+        INDEXER_BLOCK_SIZE           = "{arch}.attention.indexer.block_size"
+        INDEXER_LOCAL_BLOCKS         = "{arch}.attention.indexer.local_blocks"
 
     class Rope:
         DIMENSION_COUNT          = "{arch}.rope.dimension_count"
@@ -288,6 +296,7 @@ class MODEL_ARCH(IntEnum):
     ERNIE4_5_MOE = auto()
     BAILINGMOE2  = auto()
     MINIMAXM2    = auto()
+    MINIMAXM3    = auto()
     SMOLLM3      = auto()
     SEED_OSS     = auto()
     LAGUNA       = auto()
@@ -342,6 +351,10 @@ class MODEL_TENSOR(IntEnum):
     ATTN_Q_NORM          = auto()
     ATTN_K_NORM          = auto()
     ATTN_SINKS           = auto()
+    INDEX_Q              = auto()
+    INDEX_Q_NORM         = auto()
+    INDEX_K              = auto()
+    INDEX_K_NORM         = auto()
     LAYER_OUT_NORM       = auto()
     LAYER_OUT_SCALE      = auto()
     PER_LAYER_TOKEN_EMBD = auto()
@@ -523,6 +536,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ERNIE4_5_MOE:   "ernie4_5-moe",
     MODEL_ARCH.BAILINGMOE2:    "bailingmoe2",
     MODEL_ARCH.MINIMAXM2:      "minimax-m2",
+    MODEL_ARCH.MINIMAXM3:      "minimax-m3",
     MODEL_ARCH.SMOLLM3:        "smollm3",
     MODEL_ARCH.SEED_OSS:       "seed_oss",
     MODEL_ARCH.LAGUNA:         "laguna",
@@ -553,6 +567,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_Q_NORM:          "blk.{bid}.attn_q_norm",
     MODEL_TENSOR.ATTN_K_NORM:          "blk.{bid}.attn_k_norm",
     MODEL_TENSOR.ATTN_SINKS:           "blk.{bid}.attn_sinks",
+    MODEL_TENSOR.INDEX_Q:              "blk.{bid}.indexer.q_proj",
+    MODEL_TENSOR.INDEX_Q_NORM:         "blk.{bid}.indexer.q_norm",
+    MODEL_TENSOR.INDEX_K:              "blk.{bid}.indexer.k_proj",
+    MODEL_TENSOR.INDEX_K_NORM:         "blk.{bid}.indexer.k_norm",
     MODEL_TENSOR.ATTN_OUT_NORM:        "blk.{bid}.attn_output_norm",
     MODEL_TENSOR.ATTN_POST_NORM:       "blk.{bid}.post_attention_norm",
     MODEL_TENSOR.ATTN_GATE:            "blk.{bid}.attn_gate",
@@ -1851,6 +1869,35 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
+    ],
+    MODEL_ARCH.MINIMAXM3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        # MSA sparse-attention indexer (kept for the MSA-capable loader; optional)
+        MODEL_TENSOR.INDEX_Q,
+        MODEL_TENSOR.INDEX_Q_NORM,
+        MODEL_TENSOR.INDEX_K,
+        MODEL_TENSOR.INDEX_K_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
     ],
     MODEL_ARCH.SMOLLM3: [
         MODEL_TENSOR.TOKEN_EMBD,

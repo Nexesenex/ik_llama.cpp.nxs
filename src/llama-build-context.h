@@ -44,6 +44,31 @@ struct post_norm_data {
 };
 
 bool can_use_kv_swa_reduction(const llama_cparams & cparams, const llama_kv_cache & kv);
+// MiniMax-M3 MSA per-GQA-group attention. The sparse selection is per idx head (== per KV head),
+// so the mask only carries n_groups planes; running one flash-attention call per group gives every
+// call a single-plane (ne[2]==1) mask, which is the dense case both backends already handle, and
+// avoids materializing the mask at n_head planes.
+struct msa_attn_split {
+    int n_groups = 0;
+    // Cell index list per group. When non-empty this IS the selection: each entry goes straight
+    // onto src[5] of that group's flash-attention call and the kernel gathers K, V and the mask
+    // from it. This is the --msa-gather path and it takes precedence over n_gather below.
+    std::vector<ggml_tensor *> idx;
+    // Fallback used only when `idx` is EMPTY: the builder produced an n_kv-wide mask instead of a
+    // list, and the consumer derives the index list from that mask with ggml_mask_to_index,
+    // keeping n_gather cells. Same mechanism DSA uses (build_deepseek2.cpp). Left at 0 by the
+    // index-list path on purpose -- see llama-build-context.cpp, which tests `idx` first.
+    int n_gather = 0;
+};
+
+// Subgraphs the MSA mask builder needs that do NOT depend on the layer index. n_kv, n_tokens,
+// kv_head and B_k are graph-level constants, so every sparse layer was building byte-identical
+// copies of these. Built on the first sparse layer and reused by the rest.
+struct msa_shared {
+    ggml_tensor * cell_table = nullptr;   // {n_kv,1} I32, the list 0..n_kv-1
+    ggml_tensor * floor3     = nullptr;   // {n_kv,1,n_tokens} F32, the causal floor
+    ggml_tensor * bump       = nullptr;   // {n_blocks,1,n_tokens} F32, local-block force-include
+};
 
 struct llm_build_context {
     const llama_model    & model;
@@ -440,6 +465,20 @@ struct llm_build_context {
 
     ggml_cgraph * build_minimaxm2();
     ggml_cgraph * build_minimaxm3();
+    // MiniMax-M3 MSA: build the block-sparse additive attention mask for sparse layer `il`.
+    // Returns nullptr to signal "fall back to the dense KQ_mask" (disabled / non-sparse /
+    // indexer tensors absent / cache missing). `cur` is the layer input (pre attn_norm).
+    // `shared` caches the layer-independent subgraphs across the layer loop; pass the address of a
+    // default-constructed msa_shared and they are built once per graph, not once per sparse layer.
+    // out_normed, when non-null, receives the RMSNorm(cur, attn_norm) this function computes for
+    // the indexer, so the caller can hand it to build_std_attention instead of recomputing it.
+    ggml_tensor * build_minimaxm3_msa_mask(ggml_cgraph * gf, ggml_tensor * cur,
+            ggml_tensor * inp_pos, ggml_tensor * KQ_mask, int il, msa_attn_split * msa,
+            msa_shared * shared = nullptr, ggml_tensor ** out_normed = nullptr);
+    // MiniMax-M3 MSA: partial NEOX RoPE on the indexer q/k ({d_idx, n_idx_heads, n_tokens}).
+    ggml_tensor * build_minimaxm3_index_rope(ggml_tensor * v, ggml_tensor * inp_pos,
+            int64_t n_rot_idx, int64_t d_idx, int64_t n_idx_heads, float idx_freq_base,
+            float idx_freq_scale, int il);
 
     ggml_cgraph * build_smollm3();
 
@@ -511,7 +550,7 @@ struct llm_build_context {
                     float     kq_scale,
          const llm_build_cb & cb, int il, ggml_tensor * sinks = nullptr, int n_swa = 0, int kv_il = -1,
          ggml_tensor ** k_cache_view = nullptr, ggml_tensor ** v_cache_view = nullptr,
-                    int32_t   swa_head = -1);
+                    int32_t   swa_head = -1, const msa_attn_split * msa = nullptr);
 
     static ggml_tensor * llm_build_ffn(ggml_context * ctx, llama_context & lctx, ggml_tensor * ffn_norm,
          ggml_tensor * cur,
@@ -622,7 +661,13 @@ llm_expert_gating_func_type   gating_op,
             ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale,
             int n_swa, int il, bool do_rope = true, bool add_graph_split = false, bool add_input = false, bool is_norm = false,
             bool is_multi = false, ggml_tensor * post_norm = nullptr, int kv_il = -1, float post_norm_eps = 0.0f,
-            post_norm_data * pnd = nullptr, ggml_tensor ** k_view = nullptr, ggml_tensor ** v_view = nullptr);
+            post_norm_data * pnd = nullptr, ggml_tensor ** k_view = nullptr, ggml_tensor ** v_view = nullptr,
+            const msa_attn_split * msa = nullptr,
+            // Already-normed `cur`. When non-null the internal attn_norm is SKIPPED and this is
+            // used in its place. `cur` itself is still what the add_input residual adds, so the
+            // two must be passed separately -- feeding the normed tensor in as `cur` would make
+            // the residual attn_out + RMSNorm(x) instead of attn_out + x.
+            ggml_tensor * pre_normed = nullptr);
 
     static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur, ggml_tensor * output, const llm_build_cb & cb);
 

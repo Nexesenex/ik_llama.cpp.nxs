@@ -986,6 +986,38 @@ bool llama_context::update_cache_copies() {
             }
         }
     }
+    // MiniMax-M3 MSA: patch the indexer-key (kr_l) cache write offset for the reused graph.
+    // Each registered cpy writes this ubatch's index keys into kr_l at the kv_head slot; like
+    // the K/V copies above, its baked view_offs must be re-pointed to the CURRENT kv_head, else
+    // a reused graph (FA pad-256, constant n_kv) keeps writing to the first ubatch's slot and the
+    // recent indexer-key cells read 0.0 (scattered selection -> PPL inflation). step = kr_l->nb[1]
+    // (one index-key row = d_idx * F16). No-op when MSA is off (vector entries stay null).
+    for (size_t il = 0; il < msa_cache_copies.size(); ++il) {
+        auto & c = msa_cache_copies[il];
+        if (!c.cpy) continue;
+        // Sanity guard: the registered cpy must still be a CPY whose destination view is
+        // rooted at this layer's kr_l cache (mirrors the K/V guard above, which checks
+        // c.cpy->view_src). If the graph was rebuilt with a different shape these no longer match,
+        // so refuse reuse and force a rebuild rather than patch a stale/mismatched view.
+        if (c.cpy->op != GGML_OP_CPY ||
+            il >= kv_self.kr_l.size() || kv_self.kr_l[il] == nullptr ||
+            c.cpy->view_src != kv_self.kr_l[il]) {
+            return false;
+        }
+        c.cpy->view_offs    = kv_self.head * c.step;
+        c.cpy->src[1]->data = (char *) kv_self.kr_l[il]->data + c.cpy->view_offs;
+        c.cpy->data         = c.cpy->src[1]->data;
+    }
+    // MiniMax-M3 MSA: re-point the local-block arange at the CURRENT kv_head. Without this the
+    // force-include targets the block that was current when the graph was built, which inside one
+    // FA pad-256 reuse window is wrong for every step past the next B_k boundary.
+    if (msa_local_arange) {
+        if (msa_local_arange->op != GGML_OP_ARANGE) return false;
+        // op_params[0..2] are start/stop/step as floats (see ggml_arange); the ggml helper that
+        // writes them lives in ggml-impl.h and is not visible here, so write them the same way.
+        ((float *) msa_local_arange->op_params)[0] = (float) kv_self.head;
+        ((float *) msa_local_arange->op_params)[1] = (float) (kv_self.head + msa_local_arange->ne[0]);
+    }
     return patch_dsa_cache_copies();
 }
 
@@ -1008,6 +1040,8 @@ llama_context::llama_context(const llama_model & model)
     dsa_cache_copies.resize(hparams.n_layer);
     openpangu_cache_copies.resize(hparams.n_layer);
     openpangu_cache_copies_mtp.resize(hparams.n_layer);
+    // MiniMax-M3 MSA: one indexer-key (kr_l) cache copy per layer (sparse layers only use it).
+    msa_cache_copies.resize(hparams.n_layer);
     llama_all_contexts().push_back(this);
 }
 
@@ -1545,6 +1579,13 @@ static bool llama_kv_cache_init(
     }
     if (needs_v_cache && !is_dsv4_k_only) cache.v_l.reserve(n_layer);
     cache.s_l.resize(n_layer, nullptr);
+    // MiniMax-M3 MSA indexer-key cache. Allocated per sparse layer below; nullptr elsewhere.
+    // Gated on cparams.msa (--msa, off by default): when MSA is disabled the kr_l cache is never
+    // allocated, so the K-shift / defrag / cache-copy machinery (all guarded by !kr_l.empty())
+    // no-ops and the minimax-m3 model runs the dense MLA path byte-identical to a build without MSA.
+    const bool has_minimax_msa = cparams.msa && model.arch == LLM_ARCH_MINIMAX_M3 &&
+                                 hparams.minimax_sparse_index_dim > 0;
+    if (has_minimax_msa) cache.kr_l.resize(n_layer, nullptr);
 
     // DSA indexer-key cache: one [indexer_head_size, kv_size] tensor per indexer layer.
     // Allocated below only when the model carries persistent DSA indexer tensors.
@@ -1832,6 +1873,16 @@ static bool llama_kv_cache_init(
             cache.k_l.push_back(k);
             if (!is_dsv4_k_only && model.arch != LLM_ARCH_OPENPANGU) {
                 cache.v_l.push_back(v);
+            }
+
+            // MiniMax-M3 MSA: allocate the single-head indexer-key cache for sparse layers
+            // that actually carry the indexer tensors. F16, d_idx x kv_size (one shared head).
+            if (has_minimax_msa && i >= (int) hparams.n_layer_dense_lead && model.layers[i].index_k) {
+                ggml_tensor * kr = ggml_new_tensor_2d(ctx, GGML_TYPE_F16,
+                        hparams.minimax_sparse_index_dim, kv_size);
+                auto kr_name = std::string{"cache_kr_l"} + std::to_string(i);
+                ggml_set_name(kr, kr_name.c_str());
+                cache.kr_l[i] = kr;
             }
         }
     }
@@ -8885,6 +8936,11 @@ struct llama_context_params llama_context_default_params() {
         /*.offload_kqv                 =*/ true,
         /*.flash_attn                  =*/ true,
         /*.mla_attn                    =*/ 3,
+        /*.msa                         =*/ false,
+        /*.msa_top_k                   =*/ -1,
+        /*.msa_gather                  =*/ false,
+        /*.msa_split_gqa               =*/ true,
+        /*.msa_min_kv                  =*/ 0,
         /*.attn_max_batch              =*/ 256,
         /*.fused_moe_up_gate           =*/ true,
         /*.grouped_expert_routing      =*/ false,
@@ -9571,6 +9627,13 @@ struct llama_context * llama_init_from_model(
     cparams.offload_kqv      = params.offload_kqv;
     cparams.flash_attn       = params.flash_attn;
     cparams.mla_attn         = params.mla_attn;
+    cparams.msa              = params.msa;
+    cparams.msa_top_k        = params.msa_top_k;
+    cparams.msa_split_gqa    = params.msa_split_gqa;
+    cparams.msa_gather       = params.msa_gather;
+    // The CLI clamps this, but the C API does not go through it: a negative value would make
+    // topk_blk >= frac*n_blocks always true and silently disable MSA with no warning.
+    cparams.msa_min_kv       = std::max(0, params.msa_min_kv);
     cparams.attn_max_batch   = params.attn_max_batch;
     cparams.fused_moe_up_gate= params.fused_moe_up_gate;
     cparams.grouped_expert_routing = params.grouped_expert_routing;
@@ -9777,6 +9840,19 @@ struct llama_context * llama_init_from_model(
         LLAMA_LOG_INFO("%s: dsa_idx_topk  = %d\n",     __func__, cparams.fused_idx_topk);
         if (cparams.dsa_top_k > 0) {
             LLAMA_LOG_INFO("%s: dsa_top_k     = %d\n",     __func__, cparams.dsa_top_k);
+        }
+    }
+    if (model->arch == LLM_ARCH_MINIMAX_M3) {
+        LLAMA_LOG_INFO("%s: msa           = %d\n",     __func__, cparams.msa);
+        if (cparams.msa) {
+            LLAMA_LOG_INFO("%s: msa_split_gqa = %d\n", __func__, cparams.msa_split_gqa);
+            LLAMA_LOG_INFO("%s: msa_gather    = %d\n", __func__, cparams.msa_gather);
+            if (cparams.msa_top_k >= 0) {
+                LLAMA_LOG_INFO("%s: msa_top_k     = %d\n", __func__, cparams.msa_top_k);
+            }
+            if (cparams.msa_min_kv > 0) {
+                LLAMA_LOG_INFO("%s: msa_min_kv    = %d\n", __func__, cparams.msa_min_kv);
+            }
         }
     }
     if (model->arch == LLM_ARCH_OPENPANGU) {

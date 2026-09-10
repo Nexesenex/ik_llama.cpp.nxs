@@ -347,6 +347,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.moe.linear_v",  # Grok (merged)
             "transformer.blocks.{bid}.ffn.experts.mlp.v1",   # dbrx
             "model.layers.{bid}.mlp.experts.up_proj",        # qwen2moe (merged)
+            "model.layers.{bid}.block_sparse_moe.experts.w3", # minimax-m2/m3 (merged)
         ),
 
         MODEL_TENSOR.FFN_GATE_UP_EXP: (
@@ -357,6 +358,7 @@ class TensorNameMap:
         MODEL_TENSOR.FFN_UP_SHEXP: (
             "model.layers.{bid}.mlp.shared_expert.up_proj",  # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.up_proj", # deepseek2
+            "model.layers.{bid}.block_sparse_moe.shared_experts.up_proj", # minimax-m3
         ),
 
         # AWQ-activation gate
@@ -383,11 +385,13 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.moe.linear",   # Grok (merged)
             "transformer.blocks.{bid}.ffn.experts.mlp.w1",  # dbrx
             "model.layers.{bid}.mlp.experts.gate_proj",     # qwen2moe (merged)
+            "model.layers.{bid}.block_sparse_moe.experts.w1", # minimax-m2/m3 (merged)
         ),
 
         MODEL_TENSOR.FFN_GATE_SHEXP: (
             "model.layers.{bid}.mlp.shared_expert.gate_proj",  # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.gate_proj", # deepseek2
+            "model.layers.{bid}.block_sparse_moe.shared_experts.gate_proj", # minimax-m3
         ),
 
         # Feed-forward down
@@ -422,11 +426,13 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.moe.linear_1",  # Grok (merged)
             "transformer.blocks.{bid}.ffn.experts.mlp.w2",   # dbrx
             "model.layers.{bid}.mlp.experts.down_proj",      # qwen2moe (merged)
+            "model.layers.{bid}.block_sparse_moe.experts.w2", # minimax-m2/m3 (merged)
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
             "model.layers.{bid}.mlp.shared_expert.down_proj",  # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.down_proj", # deepseek2
+            "model.layers.{bid}.block_sparse_moe.shared_experts.down_proj", # minimax-m3
         ),
 
         MODEL_TENSOR.ATTN_Q_NORM: (
@@ -466,6 +472,21 @@ class TensorNameMap:
         ),
         MODEL_TENSOR.DFLASH_FFN_CONV_PROJ: (
             "model.layers.{bid}.mlp_conv.kernel_projection",
+        ),
+
+        # MiniMax-M3 MSA (block-sparse attention) indexer tensors.
+        # The converter strips the "language_model." VL prefix before lookup.
+        MODEL_TENSOR.INDEX_Q: (
+            "model.layers.{bid}.self_attn.index_q_proj",                      # minimax-m3
+        ),
+        MODEL_TENSOR.INDEX_Q_NORM: (
+            "model.layers.{bid}.self_attn.index_q_norm",                      # minimax-m3
+        ),
+        MODEL_TENSOR.INDEX_K: (
+            "model.layers.{bid}.self_attn.index_k_proj",                      # minimax-m3
+        ),
+        MODEL_TENSOR.INDEX_K_NORM: (
+            "model.layers.{bid}.self_attn.index_k_norm",                      # minimax-m3
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (

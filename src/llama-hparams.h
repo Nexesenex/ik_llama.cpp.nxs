@@ -48,6 +48,12 @@ struct llama_hparams {
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 
     uint32_t n_layer_dense_lead = 0;
+    // MiniMax-M3 MSA (sparse attention) parameters (0 => MSA disabled / not present)
+    uint32_t minimax_sparse_index_dim   = 0;   // d_idx           (config: sparse_index_dim)
+    uint32_t minimax_sparse_index_heads = 0;   // idx q-heads     (config: sparse_num_index_heads, == n_head_kv)
+    uint32_t minimax_sparse_topk_blocks = 0;   // k               (config: sparse_topk_blocks)
+    uint32_t minimax_sparse_block_size  = 0;   // B_k             (config: sparse_block_size)
+    bool     minimax_sparse_local_block = true; // always select the local block
     uint32_t n_lora_q           = 0;
     uint32_t n_lora_kv          = 0;
     uint32_t n_ff_exp           = 0;
@@ -302,6 +308,13 @@ struct llama_hparams {
         }
         printf("%s: Oops, il = %d\n", __func__, il);
         GGML_ABORT("fatal error");
+    }
+
+    // MiniMax-M3: is layer `il` a sparse (MSA) attention layer?
+    // Layers [0, n_layer_dense_lead) are dense full attention; the rest are sparse,
+    // matching config sparse_attention_freq (which coincides with the dense lead in M3).
+    bool minimax_sparse_layer(int il) const {
+        return minimax_sparse_index_dim > 0 && (uint32_t) il >= n_layer_dense_lead;
     }
 
     uint32_t n_head_kv(uint32_t il = 0) const {

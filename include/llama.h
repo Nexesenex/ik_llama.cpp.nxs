@@ -500,6 +500,11 @@ extern "C" {
         bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
         bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
         int  mla_attn;    // whether to use MLA attention [EXPERIMENTAL]
+        bool msa;               // enable MiniMax-M3 sparse attention (off by default) [EXPERIMENTAL]
+        int  msa_top_k;         // MSA top-k blocks override (<0 => model's configured topk_blocks) [EXPERIMENTAL]
+        bool msa_gather;        // MSA: FA-kernel gather of the selected cells [EXPERIMENTAL]
+        bool msa_split_gqa;     // MSA: one attention call per GQA group (on by default) [EXPERIMENTAL]
+        int  msa_min_kv;        // MSA: run dense below this n_kv, sparse at or above it; 0 = off [EXPERIMENTAL]
         int  attn_max_batch;    // maximum batch size for attention computations [EXPERIMENTAL]
         bool fused_moe_up_gate; // whether to use fused MoE up/gate op
         bool grouped_expert_routing; // whether to use grouped expert routing (BailingMoeV2 arch)

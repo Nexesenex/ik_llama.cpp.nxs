@@ -5177,6 +5177,33 @@ bool create_tensors_helper::create_minimaxm3_tensors(const LLM_TN & tn) {
         layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
         layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
 
+        // MiniMax-M3 MSA indexer (optional, sparse layers only). Loaded NOT_REQUIRED so
+        // GGUFs that dropped the index_* tensors still load and run the dense fallback.
+        if (hparams.minimax_sparse_index_dim > 0 && i >= (int) hparams.n_layer_dense_lead) {
+            const int64_t d_idx     = hparams.minimax_sparse_index_dim;
+            const int64_t idx_heads = hparams.minimax_sparse_index_heads > 0
+                                          ? (int64_t) hparams.minimax_sparse_index_heads
+                                          : (int64_t) hparams.n_head_kv(i);
+            layer.index_q      = create_tensor(ctx_split, tn(LLM_TENSOR_INDEX_Q,      "weight", i), { n_embd, d_idx * idx_heads }, llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.index_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_INDEX_Q_NORM, "weight", i), { d_idx },                     llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.index_k      = create_tensor(ctx_split, tn(LLM_TENSOR_INDEX_K,      "weight", i), { n_embd, d_idx },             llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.index_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_INDEX_K_NORM, "weight", i), { d_idx },                     llama_model_loader::TENSOR_NOT_REQUIRED);
+            // Mainline llama.cpp's converter names these blk.N.indexer.{q,k}_proj / .{q,k}_norm.
+            // Accept that spelling too, so a GGUF produced by any mainline-based conversion runs
+            // MSA here rather than silently falling back to dense.
+            if (!layer.index_q) {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "blk.%d.indexer.q_proj.weight", i);
+                layer.index_q      = create_tensor(ctx_split, buf, { n_embd, d_idx * idx_heads }, llama_model_loader::TENSOR_NOT_REQUIRED);
+                snprintf(buf, sizeof(buf), "blk.%d.indexer.q_norm.weight", i);
+                layer.index_q_norm = create_tensor(ctx_split, buf, { d_idx },                     llama_model_loader::TENSOR_NOT_REQUIRED);
+                snprintf(buf, sizeof(buf), "blk.%d.indexer.k_proj.weight", i);
+                layer.index_k      = create_tensor(ctx_split, buf, { n_embd, d_idx },             llama_model_loader::TENSOR_NOT_REQUIRED);
+                snprintf(buf, sizeof(buf), "blk.%d.indexer.k_norm.weight", i);
+                layer.index_k_norm = create_tensor(ctx_split, buf, { d_idx },                     llama_model_loader::TENSOR_NOT_REQUIRED);
+            }
+        }
+
         layer.ffn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
 
         if (i < (int) hparams.n_layer_dense_lead) {

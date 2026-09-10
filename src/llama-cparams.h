@@ -52,6 +52,11 @@ struct llama_cparams {
     bool offload_kqv;
     bool flash_attn;
     int  mla_attn;
+    bool msa = false;      // enable MiniMax-M3 sparse attention (off by default; opt-in via --msa)
+    int  msa_top_k = -1;   // MSA top-k blocks override (<0 => use the model's configured topk_blocks)
+    bool msa_gather = false;    // MSA: FA-kernel gather of the selected cells (--msa-gather)
+    bool msa_split_gqa = true;  // MSA: one attention call per GQA group (on by default; --no-msa-split-gqa)
+    int  msa_min_kv = 0;        // MSA: run dense below this n_kv, sparse at or above it; 0 = off (--msa-min-kv)
     int  attn_max_batch;
     bool fused_moe_up_gate;
     bool grouped_expert_routing;

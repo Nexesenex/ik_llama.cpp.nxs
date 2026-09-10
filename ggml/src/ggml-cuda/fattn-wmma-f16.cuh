@@ -43,6 +43,8 @@ static __global__ void flash_attn_ext_f16(
         const int ne13,
         const int ne31,
         const int nb31,
+        const int ne32,
+        const int nb32,
         const int nb01,
         const int nb02,
         const int nb03,
@@ -94,8 +96,10 @@ static __global__ void flash_attn_ext_f16(
     const float * Q_f   = (const float *) (Q + nb02* blockIdx.y              + nb01*ic0);
     const half  * K_h   = (const half  *) (K + nb12*(blockIdx.y / gqa_ratio));
     const half  * V_h   = (const half  *) (V + nb22*(blockIdx.y / gqa_ratio)); // K and V have same shape
-    const half  * maskh = (const half  *)  mask + (nb31/sizeof(half))* ic0;
-    const half2 * mask2 = (const half2 *)  mask + (nb31/sizeof(half))*(ic0/2);
+    // Per-head mask plane (MiniMax-M3 MSA): head = blockIdx.y, plane (head % ne32). nb32==0 (2D mask)
+    // is byte-identical to the previous head-broadcast behaviour.
+    const half  * maskh = (const half  *)  mask + (nb31/sizeof(half))* ic0    + (size_t)(nb32/sizeof(half))*(blockIdx.y % ne32);
+    const half2 * mask2 = (const half2 *)  mask + (nb31/sizeof(half))*(ic0/2) + (size_t)(nb32/sizeof(half2))*(blockIdx.y % ne32);
     [[maybe_unused]] const float * sinks_f = sinks ? (const float *)sinks + blockIdx.y : nullptr;
 
     const int stride_Q = nb01 / sizeof(float);

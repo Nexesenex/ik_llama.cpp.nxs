@@ -6263,6 +6263,136 @@ class MiniMaxM2Model(Model):
         return super().modify_tensors(data_torch, name, bid)
 
 
+@Model.register("MiniMaxM3SparseForCausalLM", "MiniMaxM3SparseForConditionalGeneration", "MiniMaxM3ForCausalLM")
+class MiniMaxM3Model(Model):
+    # MiniMax-M3: MoE GQA (per-head QK-norm, partial RoPE) + DeepSeek-style leading-dense
+    # + routed/shared experts, plus the MSA (block-sparse attention) indexer.
+    #
+    # Preserves the indexer tensors (mapped to blk.N.index_{q,q_norm,k,k_norm}) and writes
+    # the 4 MSA sparse hparams, so the MSA-capable loader can run faithful block-sparse
+    # attention. Mainline llama.cpp spells the same information differently -- see
+    # conversion/minimax.py there: blk.N.indexer.{q,k}_proj / .{q,k}_norm and the five
+    # {arch}.attention.indexer.* keys. The loader here reads BOTH spellings.
+    model_arch = gguf.MODEL_ARCH.MINIMAXM3
+    _experts_cache: dict[int, dict[str, Tensor]] = {}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The official MiniMax-M3 config is a multimodal config: the LM hparams live under
+        # `text_config`. Flatten it so the flat find_hparam() in this fork resolves them.
+        tc = self.hparams.get("text_config")
+        if isinstance(tc, dict):
+            merged = dict(tc)
+            merged.update({k: v for k, v in self.hparams.items() if k not in ("text_config", "vision_config")})
+            # The MSA sparse-attention config nests one level deeper
+            # (text_config.sparse_attention_config). Flatten it too, or find_hparam()
+            # never resolves use_sparse_attention and the 4 sparse hparams are never
+            # written, silently leaving the loader on the dense fallback.
+            sac = merged.get("sparse_attention_config")
+            if isinstance(sac, dict):
+                merged.update({k: v for k, v in sac.items() if k not in merged})
+            self.hparams = merged
+            # block_count / tensor_map were computed in the base __init__ from the *outer*
+            # config; recompute now that the text_config layer count is visible.
+            self.block_count = self.find_hparam(["num_hidden_layers", "n_layers", "n_layer", "num_layers"])
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+        self.hparams["num_experts"] = self.find_hparam(["num_local_experts", "num_experts"])
+
+    def set_gguf_parameters(self):
+        # Swap intermediate_size so the parent writes the *dense* FFN length as the base
+        # ffn length; the routed-expert FFN length is written separately (mirrors PR #24523).
+        expert_ff = self.find_hparam(["intermediate_size"])
+        dense_ff = self.find_hparam(["dense_intermediate_size"], optional=True)
+        if dense_ff is not None:
+            self.hparams["intermediate_size"] = dense_ff
+        super().set_gguf_parameters()
+        self.gguf_writer.add_expert_feed_forward_length(expert_ff)
+        self.gguf_writer.add_rope_dimension_count(self.find_hparam(["rotary_dim"]))
+        self.gguf_writer.add_expert_shared_count(self.find_hparam(["n_shared_experts"]))
+        self.gguf_writer.add_expert_weights_scale(self.find_hparam(["routed_scaling_factor"]))
+        self.gguf_writer.add_expert_weights_norm(True)
+
+        scoring_func = self.find_hparam(["scoring_func"], optional=True)
+        if scoring_func == "sigmoid" or scoring_func is None:
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        elif scoring_func == "softmax":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
+        else:
+            raise ValueError(f"Unsupported scoring_func value: {scoring_func}")
+
+        # leading dense layers: from moe_layer_freq (ints) or mlp_layer_types (strings)
+        moe_layer_freq = self.find_hparam(["moe_layer_freq", "mlp_layer_types"], optional=True)
+        if moe_layer_freq is not None:
+            n_dense = 0
+            for v in moe_layer_freq:
+                if v == 0 or v == "dense":
+                    n_dense += 1
+                else:
+                    break
+            self.gguf_writer.add_leading_dense_block_count(n_dense)
+
+        # MSA (block-sparse attention) hparams. These let the MSA-capable loader pick up
+        # the preserved indexer tensors; absent them, the loader falls back to dense.
+        if self.find_hparam(["use_sparse_attention"], optional=True):
+            # Mainline llama.cpp's spelling (conversion/minimax.py), so a GGUF produced here
+            # also runs MSA there. The loader on this side reads this spelling first.
+            self.gguf_writer.add_attention_indexer_head_count(self.find_hparam(["sparse_num_index_heads"]))
+            self.gguf_writer.add_attention_indexer_key_length(self.find_hparam(["sparse_index_dim"]))
+            self.gguf_writer.add_attention_indexer_top_k(self.find_hparam(["sparse_topk_blocks"]))
+            self.gguf_writer.add_attention_indexer_block_size(self.find_hparam(["sparse_block_size"]))
+            local_blocks = self.find_hparam(["sparse_local_block"], optional=True)
+            if local_blocks is not None:
+                self.gguf_writer.add_attention_indexer_local_blocks(local_blocks)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        # Drop vision / projector / patch-merge (text-only). The `.index_` indexer tensors
+        # are NOT dropped -- they are preserved below.
+        if name.startswith(("vision_tower", "multi_modal_projector", "patch_merge_mlp")):
+            return []
+
+        # strip the VL wrapper prefix so names match the tensor map
+        if name.startswith("language_model."):
+            name = name[len("language_model."):]
+
+        # Gemma-style (1 + w) RMSNorm: bake the +1 so llama.cpp can use plain RMSNorm.
+        # Applies to attn/ffn norms AND the indexer norms (index_q_norm/index_k_norm).
+        if name.endswith("norm.weight"):
+            data_torch = data_torch + 1.0
+
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+
+        # merge routed experts (w1=gate, w2=down, w3=up), like MiniMax-M2.
+        if "block_sparse_moe.experts." in name:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            expert_cache = self._experts_cache.setdefault(bid, {})
+            expert_cache[name] = data_torch
+            expert_weights = ["w1", "w2", "w3"]
+
+            if len(expert_cache) < n_experts * len(expert_weights):
+                return []
+
+            tensors: list[tuple[str, Tensor]] = []
+            for w_name in expert_weights:
+                datas: list[Tensor] = []
+                for xid in range(n_experts):
+                    ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{w_name}.weight"
+                    datas.append(expert_cache[ename])
+                    del expert_cache[ename]
+
+                data_torch = torch.stack(datas, dim=0)
+                merged_name = f"model.layers.{bid}.block_sparse_moe.experts.{w_name}.weight"
+                new_name = self.map_tensor_name(merged_name)
+                tensors.append((new_name, data_torch))
+
+            del self._experts_cache[bid]
+            return tensors
+
+        return super().modify_tensors(data_torch, name, bid)
+
+
 @Model.register("SmolLM3ForCausalLM")
 class SmolLM3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.SMOLLM3
