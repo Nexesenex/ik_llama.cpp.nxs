@@ -4309,7 +4309,10 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
 
                             // push the prompt into the sampling context (do not apply grammar)
                             for (int i = 0; i < slot.n_past; ++i) {
-                                common_sampler_accept(slot.ctx_sampling, ctx, slot.cache_tokens[i], false);
+                                llama_token tok = slot.cache_tokens[i];
+                                if (tok != LLAMA_TOKEN_NULL) {
+                                    common_sampler_accept(slot.ctx_sampling, ctx, tok, false);
+                                }
                             }
                         }
                     }
