@@ -42,6 +42,10 @@ static bool is_period_piece(const std::string & piece) {
     return strip_leading_space_markers(piece) == ".";
 }
 
+static bool is_comma_piece(const std::string & piece) {
+    return strip_leading_space_markers(piece) == ",";
+}
+
 struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params) {
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -62,14 +66,17 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         }
     }
 
-    // precompute which vocab rows are "." (after stripping leading space markers) for
+    // precompute which vocab rows are "." and "," (after stripping leading space markers) for
     // break_endless_sentences; the bias is applied in llama_sampling_prepare_impl and the
     // counter is updated in common_sampler_accept
     if (result->params.break_endless_sentences > 0.0f && vocab != nullptr) {
         const int32_t n_vocab = llama_vocab_n_tokens(vocab);
         result->is_period_token.resize(n_vocab);
+        result->is_comma_token.resize(n_vocab);
         for (llama_token id = 0; id < n_vocab; ++id) {
-            result->is_period_token[id] = is_period_piece(common_token_to_piece(vocab, id, false));
+            const auto piece = common_token_to_piece(vocab, id, false);
+            result->is_period_token[id] = is_period_piece(piece);
+            result->is_comma_token[id]  = is_comma_piece(piece);
         }
     }
     result->tokens_since_period = 0;
@@ -323,6 +330,7 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
     dst->starts_with_space = src->starts_with_space;
     dst->tokens_since_period = src->tokens_since_period;
     dst->is_period_token = src->is_period_token;
+    dst->is_comma_token = src->is_comma_token;
 
     if (dst->grammar) {
         llama_grammar_free(dst->grammar);
@@ -825,9 +833,9 @@ static llama_token_data_array llama_sampling_prepare_impl(
         }
     }
 
-    // break endless sentences: boost "." logits by N percent per generated token since the previous "."
-    // (e.g. -bes 5 adds +0.05 per token, so +1.0 after 20 words without a period).
-    // 3-token grace delay: no boost for the first 3 tokens after a period.
+    // break endless sentences: boost "." logits and reduce "," logits by N percent per generated
+    // token since the previous "." (e.g. -bes 5 adds +0.05 per token, so +1.0 after 20 words without a period).
+    // 3-token grace delay: no bias for the first 3 tokens after a period.
     if (params.break_endless_sentences > 0.0f && ctx_sampling->tokens_since_period > 3) {
         if (ctx_sampling->is_period_token.size() != (size_t) n_vocab) {
             // lazy (re)build: sampler was created before the flag was set (e.g. server per-request
@@ -835,8 +843,11 @@ static llama_token_data_array llama_sampling_prepare_impl(
             const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx_main));
             if (vocab != nullptr) {
                 ctx_sampling->is_period_token.assign(n_vocab, false);
+                ctx_sampling->is_comma_token.assign(n_vocab, false);
                 for (llama_token id = 0; id < n_vocab; ++id) {
-                    ctx_sampling->is_period_token[id] = is_period_piece(common_token_to_piece(vocab, id, false));
+                    const auto piece = common_token_to_piece(vocab, id, false);
+                    ctx_sampling->is_period_token[id] = is_period_piece(piece);
+                    ctx_sampling->is_comma_token[id]  = is_comma_piece(piece);
                 }
             }
         }
@@ -844,8 +855,13 @@ static llama_token_data_array llama_sampling_prepare_impl(
             const float bias = (ctx_sampling->tokens_since_period - 3) * params.break_endless_sentences / 100.0f;
             for (size_t idx = 0; idx < cur_p.size; ++idx) {
                 const llama_token id = cur_p.data[idx].id;
-                if (id >= 0 && (size_t) id < ctx_sampling->is_period_token.size() && ctx_sampling->is_period_token[id]) {
+                if (id < 0 || (size_t) id >= ctx_sampling->is_period_token.size()) {
+                    continue;
+                }
+                if (ctx_sampling->is_period_token[id]) {
                     cur_p.data[idx].logit += bias;
+                } else if ((size_t) id < ctx_sampling->is_comma_token.size() && ctx_sampling->is_comma_token[id]) {
+                    cur_p.data[idx].logit -= bias;
                 }
             }
         }
