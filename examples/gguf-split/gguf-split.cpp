@@ -44,6 +44,7 @@ struct split_params {
     bool no_tensor_first_split = false;
     bool dry_run = false;
     bool write_tensor_log = false;
+    bool ignore_routed_ffns = false;
 };
 
 static void split_print_usage(const char * executable) {
@@ -63,6 +64,7 @@ static void split_print_usage(const char * executable) {
     printf("  --no-tensor-first-split do not add tensors to the first split (disabled by default)\n");
     printf("  --dry-run               only print out a split plan and exit, without writing any new files\n");
     printf("  --write-tensor-log      write tensor to chunk file mapping to log file (disabled by default)\n");
+    printf("  --ignore-routed-ffns       skip routed expert shards (write empty placeholder instead), requires --split-max-tensors 1\n");
     printf("\n");
 }
 
@@ -148,6 +150,9 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
         } else if (arg == "--write-tensor-log") {
             arg_found = true;
             params.write_tensor_log = true;
+        } else if (arg == "--ignore-routed-ffns") {
+            arg_found = true;
+            params.ignore_routed_ffns = true;
         }
 
         if (!arg_found) {
@@ -162,6 +167,15 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
     // the split mode is by tensor if not specified
     if (params.mode == MODE_NONE) {
         params.mode = MODE_TENSOR;
+    }
+
+    if (params.ignore_routed_ffns) {
+        if (params.operation == OP_MERGE) {
+            throw std::invalid_argument("error: --ignore-routed-ffns can only be used with --split, not --merge");
+        }
+        if (params.mode != MODE_TENSOR || params.n_split_tensors != 1) {
+            throw std::invalid_argument("error: --ignore-routed-ffns requires --split-max-tensors 1");
+        }
     }
 
     if (invalid_param) {
@@ -220,6 +234,20 @@ static void ensure_output_directory(const std::string & filepath) {
             exit(EXIT_FAILURE);
         }
     }
+}
+
+// Routed MoE experts only (for --ignore-routed-ffns).
+// Matches blk.*.ffn_{up,down,gate,gate_up}_exps.{weight,scale,bias,...}
+// but not dense FFNs (ffn_up/ffn_down/ffn_gate without _exps),
+// not shared experts (_shexp), norms or routers (ffn_norm, ffn_gate_inp).
+static bool is_routed_expert_tensor(const std::string & name) {
+    if (name.find("ffn_") == std::string::npos) {
+        return false;
+    }
+    if (name.find("_exps") == std::string::npos) {
+        return false;
+    }
+    return true;
 }
 
 struct split_strategy {
@@ -344,6 +372,18 @@ split_strategy(const split_params & params,
             }
             i = j;
         }
+        if (params.ignore_routed_ffns) {
+            int n_experts = 0;
+            for (auto & ctx_out : ctx_outs) {
+                if (gguf_get_n_tensors(ctx_out) == 1) {
+                    const char * t_name = gguf_get_tensor_name(ctx_out, 0);
+                    if (t_name != nullptr && is_routed_expert_tensor(t_name)) {
+                        n_experts++;
+                    }
+                }
+            }
+            printf("--ignore-routed-ffns: %d routed expert shard(s) will be written as empty placeholders\n", n_experts);
+        }
     }
 
     void write() {
@@ -355,6 +395,7 @@ split_strategy(const split_params & params,
             output_prefix.compare(output_prefix.size() - suffix.size(), suffix.size(), suffix) == 0) {
             output_prefix.resize(output_prefix.size() - suffix.size());
         }
+        int n_skipped = 0;
         for (auto & ctx_out : ctx_outs) {
             // construct file path
             char split_path[PATH_MAX] = {0};
@@ -362,6 +403,23 @@ split_strategy(const split_params & params,
 
             // ensure output directory exists
             ensure_output_directory(split_path);
+
+            // --ignore-routed-ffns: with --split-max-tensors 1 each shard holds a single tensor,
+            // write an empty placeholder instead of the routed expert data to save SSD writes.
+            // Shard numbering is preserved so old low-precision expert shards can be copied over.
+            if (params.ignore_routed_ffns && gguf_get_n_tensors(ctx_out) == 1) {
+                const char * t_skip = gguf_get_tensor_name(ctx_out, 0);
+                if (t_skip != nullptr && is_routed_expert_tensor(t_skip)) {
+                    printf("Skipping routed expert %s ... empty placeholder %s\n", t_skip, split_path);
+                    fflush(stdout);
+                    std::ofstream fout_empty(split_path, std::ios::binary | std::ios::trunc);
+                    fout_empty.close();
+                    write_tensor_log(params, params.output, std::string(t_skip) + " (skipped, empty)", std::string(split_path));
+                    n_skipped++;
+                    i_split++;
+                    continue;
+                }
+            }
 
             // open the output file
             printf("Writing file %s ... ", split_path);
@@ -408,6 +466,9 @@ split_strategy(const split_params & params,
             // close the file
             fout.close();
             i_split++;
+        }
+        if (params.ignore_routed_ffns) {
+            printf("Skipped %d routed expert shard(s) (empty placeholders written)\n", n_skipped);
         }
     }
 
