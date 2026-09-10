@@ -45,6 +45,7 @@ struct split_params {
     bool dry_run = false;
     bool write_tensor_log = false;
     bool ignore_routed_ffns = false;
+    bool ignore_dense_ffns = false;
 };
 
 static void split_print_usage(const char * executable) {
@@ -64,7 +65,8 @@ static void split_print_usage(const char * executable) {
     printf("  --no-tensor-first-split do not add tensors to the first split (disabled by default)\n");
     printf("  --dry-run               only print out a split plan and exit, without writing any new files\n");
     printf("  --write-tensor-log      write tensor to chunk file mapping to log file (disabled by default)\n");
-    printf("  --ignore-routed-ffns       skip routed expert shards (write empty placeholder instead), requires --split-max-tensors 1\n");
+    printf("  --ignore-routed-ffns    skip routed expert shards (write empty placeholder instead), requires --split-max-tensors 1\n");
+    printf("  --ignore-dense-ffns     skip dense FFN shards (write empty placeholder instead), requires --split-max-tensors 1\n");
     printf("\n");
 }
 
@@ -153,6 +155,9 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
         } else if (arg == "--ignore-routed-ffns") {
             arg_found = true;
             params.ignore_routed_ffns = true;
+        } else if (arg == "--ignore-dense-ffns") {
+            arg_found = true;
+            params.ignore_dense_ffns = true;
         }
 
         if (!arg_found) {
@@ -175,6 +180,14 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
         }
         if (params.mode != MODE_TENSOR || params.n_split_tensors != 1) {
             throw std::invalid_argument("error: --ignore-routed-ffns requires --split-max-tensors 1");
+        }
+    }
+    if (params.ignore_dense_ffns) {
+        if (params.operation == OP_MERGE) {
+            throw std::invalid_argument("error: --ignore-dense-ffns can only be used with --split, not --merge");
+        }
+        if (params.mode != MODE_TENSOR || params.n_split_tensors != 1) {
+            throw std::invalid_argument("error: --ignore-dense-ffns requires --split-max-tensors 1");
         }
     }
 
@@ -248,6 +261,29 @@ static bool is_routed_expert_tensor(const std::string & name) {
         return false;
     }
     return true;
+}
+
+// Massive dense FFNs only (for --ignore-dense-ffns).
+// Matches blk.*.ffn_{up,down,gate,gate_up,up_gate}.weight/bias
+// via ".ffn_X." so routed experts (_exps), shared experts (_shexp),
+// norms (ffn_norm) and routers (ffn_gate_inp) are NOT matched.
+static bool is_dense_ffn_tensor(const std::string & name) {
+    if (name.find(".ffn_up.") != std::string::npos) {
+        return true;
+    }
+    if (name.find(".ffn_down.") != std::string::npos) {
+        return true;
+    }
+    if (name.find(".ffn_gate.") != std::string::npos) {
+        return true;
+    }
+    if (name.find(".ffn_gate_up.") != std::string::npos) {
+        return true;
+    }
+    if (name.find(".ffn_up_gate.") != std::string::npos) {
+        return true;
+    }
+    return false;
 }
 
 struct split_strategy {
@@ -372,17 +408,28 @@ split_strategy(const split_params & params,
             }
             i = j;
         }
-        if (params.ignore_routed_ffns) {
-            int n_experts = 0;
+        if (params.ignore_routed_ffns || params.ignore_dense_ffns) {
+            int n_routed = 0;
+            int n_dense = 0;
             for (auto & ctx_out : ctx_outs) {
                 if (gguf_get_n_tensors(ctx_out) == 1) {
                     const char * t_name = gguf_get_tensor_name(ctx_out, 0);
-                    if (t_name != nullptr && is_routed_expert_tensor(t_name)) {
-                        n_experts++;
+                    if (t_name == nullptr) {
+                        continue;
+                    }
+                    if (params.ignore_routed_ffns && is_routed_expert_tensor(t_name)) {
+                        n_routed++;
+                    } else if (params.ignore_dense_ffns && is_dense_ffn_tensor(t_name)) {
+                        n_dense++;
                     }
                 }
             }
-            printf("--ignore-routed-ffns: %d routed expert shard(s) will be written as empty placeholders\n", n_experts);
+            if (params.ignore_routed_ffns) {
+                printf("--ignore-routed-ffns: %d routed expert shard(s) will be written as empty placeholders\n", n_routed);
+            }
+            if (params.ignore_dense_ffns) {
+                printf("--ignore-dense-ffns: %d dense FFN shard(s) will be written as empty placeholders\n", n_dense);
+            }
         }
     }
 
@@ -395,7 +442,8 @@ split_strategy(const split_params & params,
             output_prefix.compare(output_prefix.size() - suffix.size(), suffix.size(), suffix) == 0) {
             output_prefix.resize(output_prefix.size() - suffix.size());
         }
-        int n_skipped = 0;
+        int n_skipped_routed = 0;
+        int n_skipped_dense = 0;
         for (auto & ctx_out : ctx_outs) {
             // construct file path
             char split_path[PATH_MAX] = {0};
@@ -404,18 +452,25 @@ split_strategy(const split_params & params,
             // ensure output directory exists
             ensure_output_directory(split_path);
 
-            // --ignore-routed-ffns: with --split-max-tensors 1 each shard holds a single tensor,
-            // write an empty placeholder instead of the routed expert data to save SSD writes.
-            // Shard numbering is preserved so old low-precision expert shards can be copied over.
-            if (params.ignore_routed_ffns && gguf_get_n_tensors(ctx_out) == 1) {
+            // --ignore-routed-ffns / --ignore-dense-ffns: with --split-max-tensors 1
+            // each shard holds a single tensor, write an empty placeholder instead of
+            // the FFN data to save SSD writes. Shard numbering is preserved so old
+            // low-precision FFN shards can be copied over.
+            if ((params.ignore_routed_ffns || params.ignore_dense_ffns) && gguf_get_n_tensors(ctx_out) == 1) {
                 const char * t_skip = gguf_get_tensor_name(ctx_out, 0);
-                if (t_skip != nullptr && is_routed_expert_tensor(t_skip)) {
-                    printf("Skipping routed expert %s ... empty placeholder %s\n", t_skip, split_path);
+                bool skip_routed = t_skip != nullptr && params.ignore_routed_ffns && is_routed_expert_tensor(t_skip);
+                bool skip_dense = t_skip != nullptr && !skip_routed && params.ignore_dense_ffns && is_dense_ffn_tensor(t_skip);
+                if (skip_routed || skip_dense) {
+                    printf("Skipping %s %s ... empty placeholder %s\n", skip_routed ? "routed expert" : "dense FFN", t_skip, split_path);
                     fflush(stdout);
                     std::ofstream fout_empty(split_path, std::ios::binary | std::ios::trunc);
                     fout_empty.close();
                     write_tensor_log(params, params.output, std::string(t_skip) + " (skipped, empty)", std::string(split_path));
-                    n_skipped++;
+                    if (skip_routed) {
+                        n_skipped_routed++;
+                    } else {
+                        n_skipped_dense++;
+                    }
                     i_split++;
                     continue;
                 }
@@ -468,7 +523,10 @@ split_strategy(const split_params & params,
             i_split++;
         }
         if (params.ignore_routed_ffns) {
-            printf("Skipped %d routed expert shard(s) (empty placeholders written)\n", n_skipped);
+            printf("Skipped %d routed expert shard(s) (empty placeholders written)\n", n_skipped_routed);
+        }
+        if (params.ignore_dense_ffns) {
+            printf("Skipped %d dense FFN shard(s) (empty placeholders written)\n", n_skipped_dense);
         }
     }
 
