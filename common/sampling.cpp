@@ -826,8 +826,9 @@ static llama_token_data_array llama_sampling_prepare_impl(
     }
 
     // break endless sentences: boost "." logits by N percent per generated token since the previous "."
-    // (e.g. -bes 5 adds +0.05 per token, so +1.0 after 20 words without a period)
-    if (params.break_endless_sentences > 0.0f && ctx_sampling->tokens_since_period > 0) {
+    // (e.g. -bes 5 adds +0.05 per token, so +1.0 after 20 words without a period).
+    // 3-token grace delay: no boost for the first 3 tokens after a period.
+    if (params.break_endless_sentences > 0.0f && ctx_sampling->tokens_since_period > 3) {
         if (ctx_sampling->is_period_token.size() != (size_t) n_vocab) {
             // lazy (re)build: sampler was created before the flag was set (e.g. server per-request
             // params) or for a different vocab size
@@ -840,7 +841,7 @@ static llama_token_data_array llama_sampling_prepare_impl(
             }
         }
         if (!ctx_sampling->is_period_token.empty()) {
-            const float bias = ctx_sampling->tokens_since_period * params.break_endless_sentences / 100.0f;
+            const float bias = (ctx_sampling->tokens_since_period - 3) * params.break_endless_sentences / 100.0f;
             for (size_t idx = 0; idx < cur_p.size; ++idx) {
                 const llama_token id = cur_p.data[idx].id;
                 if (id >= 0 && (size_t) id < ctx_sampling->is_period_token.size() && ctx_sampling->is_period_token[id]) {
