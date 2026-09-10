@@ -657,8 +657,24 @@ static void gguf_split(const split_params & split_params) {
             n_split_detect = gguf_get_val_u16(ctx_gguf_temp, key_n_split);
             
             if (n_split_detect > 1) {
-                llama_split_prefix(split_prefix, sizeof(split_prefix), split_path, 0, n_split_detect);
-                fprintf(stderr, "Detected input is a split file with : %d parts, prefix: %s\n", n_split_detect, split_prefix);
+                // The input can be any shard of the split, not necessarily shard 0,
+                // so try every shard index to recover the prefix (origin: e5ef4bd4312
+                // only tried index 0, which yields an empty prefix for e.g.
+                // *-00002-of-00006.gguf and makes every shard path unresolvable).
+                int input_idx = -1;
+                for (int i = 0; i < n_split_detect; i++) {
+                    if (llama_split_prefix(split_prefix, sizeof(split_prefix), split_path, i, n_split_detect) > 0) {
+                        input_idx = i;
+                        break;
+                    }
+                }
+                if (input_idx < 0) {
+                    fprintf(stderr, "error: input claims %d splits but file name does not match *-00000-of-00000.gguf pattern: %s\n", n_split_detect, split_path);
+                    gguf_free(ctx_gguf_temp);
+                    ggml_free(ctx_meta_temp);
+                    exit(EXIT_FAILURE);
+                }
+                fprintf(stderr, "Detected input is a split file with : %d parts, input shard %d, prefix: %s\n", n_split_detect, input_idx + 1, split_prefix);
             }
         }
         gguf_free(ctx_gguf_temp);
