@@ -1518,8 +1518,13 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
             // without MTP at runtime the tail trunk is never computed either
             layer_flags |= llama_model_loader::TENSOR_SKIP;
         }
+        // MTP tail layers may lack standard tensors in the GGUF; load leniently instead of
+        // aborting (the graph builder aborts at runtime if truly critical tensors are null)
+        if (is_mtp_layer) {
+            layer_flags |= llama_model_loader::TENSOR_NOT_REQUIRED;
+        }
         const int optional_layer_flags = layer_flags | llama_model_loader::TENSOR_NOT_REQUIRED;
-        int nextn_required_flags = mtp_layer_present ? 0 : llama_model_loader::TENSOR_NOT_REQUIRED;
+        int nextn_required_flags = llama_model_loader::TENSOR_NOT_REQUIRED;
         if (!model.mtp && is_mtp_layer) {
             // without MTP at runtime the tail is never computed (trunk graph stops
             // at n_layer_base): skip it instead of loading dead weights
@@ -2077,6 +2082,11 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
         int lf = is_nextn && !model.mtp ? llama_model_loader::TENSOR_SKIP : 0;
         if (mtp_only && !is_nextn) {
             lf |= trunk_flags;
+        }
+        // MTP tail layers may lack standard tensors in the GGUF; load leniently instead of
+        // aborting (the graph builder aborts at runtime if truly critical tensors are null)
+        if (is_nextn) {
+            lf |= llama_model_loader::TENSOR_NOT_REQUIRED;
         }
 
         layer.hc_attn_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_NORM,   "weight", i), {hc_dim}, lf);
@@ -3697,22 +3707,28 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
         ggml_context * ctx_split = ctx_for_layer_split(i);
         auto & layer = model.layers[i];
 
-        layer.attn_norm      = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_norm"));
+        const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
+                                  static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
+        // MTP tail layers may lack standard tensors in the GGUF; load leniently instead of
+        // aborting (the graph builder aborts at runtime if truly critical tensors are null)
+        const int mtp_opt = is_mtp_layer ? llama_model_loader::TENSOR_NOT_REQUIRED : 0;
+
+        layer.attn_norm      = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_norm"), mtp_opt);
         layer.attn_sinks     = create_tensor_from_meta(ctx_split, format("blk.%d.attn_sinks.weight", i), llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.wq_a           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_a"));
-        layer.attn_q_a_norm  = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_a_norm"));
-        layer.wq_b           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_b"));
+        layer.wq_a           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_a"), mtp_opt);
+        layer.attn_q_a_norm  = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_a_norm"), mtp_opt);
+        layer.wq_b           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_b"), mtp_opt);
         layer.wkv_latent     = create_tensor_from_meta(ctx_split, pick_tensor_name({
             layer_weight_name(i, "attn_kv_latent"),
             layer_weight_name(i, "attn_kv"),
             layer_weight_name(i, "attn_kv_a_mqa"),
-        }));
+        }), mtp_opt);
         layer.wkv_b          = layer.wkv_latent;
         layer.wkv_a_mqa      = layer.wkv_latent;
-        layer.attn_kv_a_norm = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_kv_a_norm"));
+        layer.attn_kv_a_norm = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_kv_a_norm"), mtp_opt);
         layer.attn_kv_norm   = layer.attn_kv_a_norm;
-        layer.wo_a           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_output_a"));
-        layer.wo_b           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_output_b"));
+        layer.wo_a           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_output_a"), mtp_opt);
+        layer.wo_b           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_output_b"), mtp_opt);
         layer.wo             = layer.wo_b;
 
         layer.hc_attn_base  = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_base.weight", i),  llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -3760,14 +3776,14 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
             layer_weight_name(i, "indexer_compressor_norm"),
         }), llama_model_loader::TENSOR_NOT_REQUIRED);
 
-        layer.ffn_gate_inp   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_inp"));
-        layer.ffn_norm       = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_norm"));
+        layer.ffn_gate_inp   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_inp"), mtp_opt);
+        layer.ffn_norm       = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_norm"), mtp_opt);
 
-        use_mmap_buffer &= !create_std_ffn_exps_from_meta(tn, i, 0);
+        use_mmap_buffer &= !create_std_ffn_exps_from_meta(tn, i, mtp_opt);
 
-        layer.ffn_gate_shexp = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_shexp"));
-        layer.ffn_down_shexp = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_down_shexp"));
-        layer.ffn_up_shexp   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_up_shexp"));
+        layer.ffn_gate_shexp = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_shexp"), mtp_opt);
+        layer.ffn_down_shexp = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_down_shexp"), mtp_opt);
+        layer.ffn_up_shexp   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_up_shexp"), mtp_opt);
 
         layer.ffn_gate_tid2eid = create_tensor_from_meta(ctx_split, format("blk.%d.ffn_gate_tid2eid.weight", i), llama_model_loader::TENSOR_NOT_REQUIRED);
         if (layer.ffn_gate_tid2eid == nullptr) {
@@ -3825,6 +3841,11 @@ bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
                 flags |= llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED;
             }
         }
+        // MTP tail layers may lack standard tensors in the GGUF; load leniently instead of
+        // aborting (the graph builder aborts at runtime if truly critical tensors are null)
+        if (is_mtp_layer) {
+            flags |= llama_model_loader::TENSOR_NOT_REQUIRED;
+        }
         ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
@@ -3845,10 +3866,9 @@ bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
         if (ml.merge_qkv) {
             auto q_name = tn(LLM_TENSOR_ATTN_Q_A, "weight", i);
             auto k_name = tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i);
-            auto wq = ml.require_tensor_meta(q_name.c_str());
-            auto wk = ml.require_tensor_meta(k_name.c_str());
-            GGML_ASSERT(wq && wk);
-            if (wq->type == wk->type) {
+            auto wq = is_mtp_layer ? ml.get_tensor_meta(q_name.c_str()) : ml.require_tensor_meta(q_name.c_str());
+            auto wk = is_mtp_layer ? ml.get_tensor_meta(k_name.c_str()) : ml.require_tensor_meta(k_name.c_str());
+            if (wq && wk && wq->type == wk->type) {
                 GGML_ASSERT(wq->ne[0] == wk->ne[0]);
                 layer.wkq_a_mqa = ggml_new_tensor_2d(ctx_split, wq->type, wq->ne[0], wq->ne[1] + wk->ne[1]);
                 snprintf(layer.wkq_a_mqa->name, GGML_MAX_NAME, "blk.%d.attn_qk_a_mqa.weight", i);
@@ -3871,8 +3891,8 @@ bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
         }
 
             // Incompatible mainline model. Let's see if we can still load it
-        layer.wk_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B, "weight", i), {n_embd_head_qk_nope, kv_lora_rank, n_head}, 0);
-        layer.wv_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B, "weight", i), {kv_lora_rank, n_embd_head_v, n_head}, 0);
+        layer.wk_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B, "weight", i), {n_embd_head_qk_nope, kv_lora_rank, n_head}, flags);
+        layer.wv_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B, "weight", i), {kv_lora_rank, n_embd_head_v, n_head}, flags);
         layer.wo   = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head * n_embd_head_v, n_embd}, flags);
 
                        // DSA indexer
@@ -3977,6 +3997,11 @@ bool create_tensors_helper::create_openpangu_tensors(const LLM_TN & tn) {
         int flags = 0;
         if (!model.mtp && is_mtp_layer) {
             flags |= llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED;
+        }
+        // MTP tail layers may lack standard tensors in the GGUF; load leniently instead of
+        // aborting (the graph builder aborts at runtime if truly critical tensors are null)
+        if (is_mtp_layer) {
+            flags |= llama_model_loader::TENSOR_NOT_REQUIRED;
         }
         ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
@@ -4101,6 +4126,11 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
                 // skip all tensors in the NextN layers
                 flags |= llama_model_loader::TENSOR_SKIP;
             }
+        }
+        // MTP tail layers may lack standard tensors in the GGUF; load leniently instead of
+        // aborting (the graph builder aborts at runtime if truly critical tensors are null)
+        if (is_mtp_layer) {
+            flags |= llama_model_loader::TENSOR_NOT_REQUIRED;
         }
 
         auto & layer = model.layers[i];
@@ -4668,8 +4698,9 @@ bool create_tensors_helper::create_bailingmoe2_tensors(const LLM_TN & tn) {
 
         int flags = 0;
         if (is_mtp_layer) {
-            // skip all tensors in the NextN layers
-            flags |= llama_model_loader::TENSOR_SKIP;
+            // skip all tensors in the NextN layers; NOT_REQUIRED so GGUFs lacking
+            // the preserved-but-unused tail tensors still load
+            flags |= llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED;
         }
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, flags);
@@ -4736,7 +4767,9 @@ bool create_tensors_helper::create_bailingmoe3_tensors(const LLM_TN & tn) {
         ggml_context * norm_ctx = graph_or_attn ? ctx_split : ctx_layer;
         ggml_context * moe_ctx  = graph_or_attn ? ctx_split : ctx_layer;
         const bool is_mtp_layer = !hparams.has_kv(il);
-        const int flags = is_mtp_layer ? llama_model_loader::TENSOR_SKIP : 0;
+        // MTP layers are never loaded (no-KV heuristic); NOT_REQUIRED so GGUFs lacking
+        // the tail tensors still load instead of aborting
+        const int flags = is_mtp_layer ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0;
         const bool is_kda = hparams.is_recurrent(il);
 
         layer.attn_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_ATTN_NORM, "weight", il), {n_embd}, flags);
@@ -4859,6 +4892,11 @@ bool create_tensors_helper::create_glm5next_tensors(const LLM_TN & tn) {
         // nextn_predict_layers at hparam load, so the MTP loop below never runs for them
         if (is_mtp_layer && !model.mtp) {
             flags |= llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED;
+        }
+        // MTP tail layers may lack standard tensors in the GGUF; load leniently instead of
+        // aborting (the graph builder aborts at runtime if truly critical tensors are null)
+        if (is_mtp_layer) {
+            flags |= llama_model_loader::TENSOR_NOT_REQUIRED;
         }
         // hyper-connections wrap the trunk blocks only: the MTP tail has no mHC,
         // so never load tail hc_* (the MTP graph does not read them)
