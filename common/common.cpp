@@ -3319,7 +3319,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --penalize-nl",          "penalize newline tokens (default: %s)", sparams.penalize_nl ? "true" : "false" });
     options.push_back({ "*",           "-nsaq, --no-space-after-quote", "contextual rule: while inside an open \" quote, disallow tokens that begin with a space (e.g. \" You -> \"You)" });
     options.push_back({ "*",         "-bsaq N, --boost-space-after-quote N", "contextual rule: while inside an open \" quote, boost logits of tokens that begin with a space (e.g. \"You -> \" You) (default: %.1f)", (double)sparams.boost_space_after_quote });
-    options.push_back({ "*",         "-bes N, --break-endless-sentences N", "boost \".\" logits by N percent per generated token since the previous \".\" (3-token grace delay) to break endless sentences (default: %.1f, 0.0 = disabled)", (double)sparams.break_endless_sentences });
+    options.push_back({ "*",         "-bes N, --break-endless-sentences N", "boost \".\" logits and reduce \",\" logits by N percent per generated token since the previous \".\" (3-token grace delay) to break endless sentences (default: %.1f, 0.0 = disabled)", (double)sparams.break_endless_sentences });
     options.push_back({ "*",           "       --temp N",               "temperature (default: %.1f)", (double)sparams.temp });
     options.push_back({ "*",           "       --top-k N",              "top-k sampling (default: %d, 0 = disabled)", sparams.top_k });
     options.push_back({ "*",           "       --max-candidates N",     "max candidates to keep as prefilter (default: %d, 0 = disabled)", sparams.max_candidates });
