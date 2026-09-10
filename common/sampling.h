@@ -240,6 +240,7 @@ struct common_sampler {
 
     int               tokens_since_period = 0;         // generated tokens since the last "." (for break_endless_sentences)
     std::vector<bool> is_period_token;                 // vocab rows whose piece is "." after stripping leading space markers (only built when break_endless_sentences is set)
+    std::vector<bool> is_comma_token;                  // vocab rows whose piece is "," after stripping leading space markers (only built when break_endless_sentences is set)
 
     llama_sampler_adaptive_p * adapt_p_ctx;    // adaptive p sampler
 
