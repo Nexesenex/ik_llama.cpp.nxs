@@ -48,6 +48,7 @@ struct split_params {
     bool ignore_dense_ffns = false;
     bool only_routed_ffns = false;
     bool only_dense_ffns = false;
+    bool skip_missing_splits = false;
 };
 
 static void split_print_usage(const char * executable) {
@@ -71,6 +72,7 @@ static void split_print_usage(const char * executable) {
     printf("  --ignore-dense-ffns     skip dense FFN shards (write empty placeholder instead), requires --split-max-tensors 1\n");
     printf("  --only-routed-ffns      keep only routed expert shards (others written as empty placeholders), requires --split-max-tensors 1\n");
     printf("  --only-dense-ffns       keep only dense FFN shards (others written as empty placeholders), requires --split-max-tensors 1\n");
+    printf("  --skip-missing-splits  allow resplit from an incomplete split source (skip missing input shards with a warning)\n");
     printf("\n");
 }
 
@@ -168,6 +170,9 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
         } else if (arg == "--only-dense-ffns") {
             arg_found = true;
             params.only_dense_ffns = true;
+        } else if (arg == "--skip-missing-splits") {
+            arg_found = true;
+            params.skip_missing_splits = true;
         }
 
         if (!arg_found) {
@@ -220,6 +225,11 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
         }
         if (params.ignore_dense_ffns) {
             throw std::invalid_argument("error: --only-dense-ffns cannot be combined with --ignore-dense-ffns");
+        }
+    }
+    if (params.skip_missing_splits) {
+        if (params.operation == OP_MERGE) {
+            throw std::invalid_argument("error: --skip-missing-splits can only be used with --split, not --merge");
         }
     }
 
@@ -665,6 +675,8 @@ if (n_split_detect > 1) {
         std::vector<int> tensor_source_file;
         auto * ctx_all_gguf = gguf_init_empty();
         
+        int n_missing_shards = 0;
+        bool first_loaded = false;
         for (int i_split = 0; i_split < n_split_detect; i_split++) {
             llama_split_path(split_path, sizeof(split_path), split_prefix, i_split, n_split_detect);
             struct ggml_context * ctx_meta_file = NULL;
@@ -673,21 +685,41 @@ if (n_split_detect > 1) {
             fprintf(stderr, "Reading split file %d: %s ...", i_split, split_path);
             auto * ctx_gguf = gguf_init_from_file(split_path, file_params);
             if (!ctx_gguf) {
+                if (split_params.skip_missing_splits) {
+                    fprintf(stderr, " missing, skipping (--skip-missing-splits)\n");
+                    if (ctx_meta_file != NULL) {
+                        ggml_free(ctx_meta_file);
+                    }
+                    n_missing_shards++;
+                    continue;
+                }
                 fprintf(stderr, "\n%s:  failed to load input GGUF from %s\n", __func__, split_path);
                 exit(EXIT_FAILURE);
             }
-            
-            f_inputs.push_back(new std::ifstream(split_path, std::ios::binary));
-            if (!f_inputs.back()->is_open()) {
+
+            std::ifstream * f_in = new std::ifstream(split_path, std::ios::binary);
+            if (!f_in->is_open()) {
+                if (split_params.skip_missing_splits) {
+                    fprintf(stderr, " unreadable, skipping (--skip-missing-splits)\n");
+                    gguf_free(ctx_gguf);
+                    if (ctx_meta_file != NULL) {
+                        ggml_free(ctx_meta_file);
+                    }
+                    delete f_in;
+                    n_missing_shards++;
+                    continue;
+                }
                 fprintf(stderr, "\n%s: failed to open %s\n", __func__, split_path);
                 exit(EXIT_FAILURE);
             }
-            
+            f_inputs.push_back(f_in);
+
             ctx_ggufs.push_back(ctx_gguf);
             ctx_metas.push_back(ctx_meta_file);
 
-            if (i_split == 0) {
+            if (!first_loaded) {
                 gguf_set_kv(ctx_all_gguf, ctx_gguf);
+                first_loaded = true;
             }
 
             for (int i_tensor = 0; i_tensor < gguf_get_n_tensors(ctx_gguf); i_tensor++) {
@@ -696,6 +728,30 @@ if (n_split_detect > 1) {
                 tensor_source_file.push_back(i_split);
             }
             fprintf(stderr, " done\n");
+        }
+
+        if (f_inputs.empty()) {
+            fprintf(stderr, "\n%s: no input shards could be loaded\n", __func__);
+            exit(EXIT_FAILURE);
+        }
+
+        if (n_missing_shards > 0) {
+            int n_loaded = gguf_get_n_tensors(ctx_all_gguf);
+            int n_expected = -1;
+            auto key_n_tensors = gguf_find_key(ctx_all_gguf, LLM_KV_SPLIT_TENSORS_COUNT);
+            if (key_n_tensors >= 0) {
+                n_expected = gguf_get_val_i32(ctx_all_gguf, key_n_tensors);
+            }
+            // Same relaxed sanity rule as llama_model_loader with skip_missing_splits/
+            // tensor_ids: a partial load is expected to find fewer tensors.
+            if (n_expected >= 0) {
+                fprintf(stderr, "Warning: %d of %d input split file(s) missing, proceeding with %d of %d tensors (--skip-missing-splits)\n",
+                    n_missing_shards, n_split_detect, n_loaded, n_expected);
+            } else {
+                fprintf(stderr, "Warning: %d of %d input split file(s) missing, proceeding with %d tensors (--skip-missing-splits)\n",
+                    n_missing_shards, n_split_detect, n_loaded);
+            }
+            fprintf(stderr, "Note: output shard numbering is relative to the loaded subset, use --write-tensor-log to map tensors\n");
         }
         
         write_tensor_log(split_params, split_params.output, "", "", true);
