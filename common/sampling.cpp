@@ -20,6 +20,28 @@ using json = nlohmann::ordered_json;
 struct llama_sampler_adaptive_p * llama_clone_adaptive_p(const struct llama_sampler_adaptive_p * adapt_p_ctx);
 void llama_free_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx);
 
+// Strip leading space markers (ASCII space, SentencePiece U+2581, BPE U+0120) so "." is found
+// across tokenizers whether the piece is ".", " .", "▁." or "Ġ.".
+static std::string strip_leading_space_markers(const std::string & piece) {
+    size_t pos = 0;
+    while (pos < piece.size()) {
+        if (piece[pos] == ' ') {
+            pos += 1;
+        } else if (pos + 3 <= piece.size() && piece.compare(pos, 3, "\xE2\x96\x81") == 0) {
+            pos += 3;
+        } else if (pos + 2 <= piece.size() && piece.compare(pos, 2, "\xC4\xA0") == 0) {
+            pos += 2;
+        } else {
+            break;
+        }
+    }
+    return piece.substr(pos);
+}
+
+static bool is_period_piece(const std::string & piece) {
+    return strip_leading_space_markers(piece) == ".";
+}
+
 struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params) {
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -39,6 +61,18 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
             result->starts_with_space[id] = !piece.empty() && piece[0] == ' ';
         }
     }
+
+    // precompute which vocab rows are "." (after stripping leading space markers) for
+    // break_endless_sentences; the bias is applied in llama_sampling_prepare_impl and the
+    // counter is updated in common_sampler_accept
+    if (result->params.break_endless_sentences > 0.0f && vocab != nullptr) {
+        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+        result->is_period_token.resize(n_vocab);
+        for (llama_token id = 0; id < n_vocab; ++id) {
+            result->is_period_token[id] = is_period_piece(common_token_to_piece(vocab, id, false));
+        }
+    }
+    result->tokens_since_period = 0;
 
     struct llama_grammar* grmr = nullptr;
     const std::string & grammar_str = common_grammar_value(params.grammar);
@@ -248,6 +282,7 @@ void common_sampler_reset(common_sampler * ctx) {
     // llama_grammar_reset(ctx);
     ctx->prev.clear();
     ctx->quote_open = false;
+    ctx->tokens_since_period = 0;
     llama_sampler_dry_reset(ctx->smpl);
 
     llama_free_adaptive_p(ctx->adapt_p_ctx);
@@ -286,6 +321,8 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
     dst->eosg_token = src->eosg_token;
     dst->quote_open = src->quote_open;
     dst->starts_with_space = src->starts_with_space;
+    dst->tokens_since_period = src->tokens_since_period;
+    dst->is_period_token = src->is_period_token;
 
     if (dst->grammar) {
         llama_grammar_free(dst->grammar);
@@ -788,6 +825,31 @@ static llama_token_data_array llama_sampling_prepare_impl(
         }
     }
 
+    // break endless sentences: boost "." logits by N percent per generated token since the previous "."
+    // (e.g. -bes 5 adds +0.05 per token, so +1.0 after 20 words without a period)
+    if (params.break_endless_sentences > 0.0f && ctx_sampling->tokens_since_period > 0) {
+        if (ctx_sampling->is_period_token.size() != (size_t) n_vocab) {
+            // lazy (re)build: sampler was created before the flag was set (e.g. server per-request
+            // params) or for a different vocab size
+            const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx_main));
+            if (vocab != nullptr) {
+                ctx_sampling->is_period_token.assign(n_vocab, false);
+                for (llama_token id = 0; id < n_vocab; ++id) {
+                    ctx_sampling->is_period_token[id] = is_period_piece(common_token_to_piece(vocab, id, false));
+                }
+            }
+        }
+        if (!ctx_sampling->is_period_token.empty()) {
+            const float bias = ctx_sampling->tokens_since_period * params.break_endless_sentences / 100.0f;
+            for (size_t idx = 0; idx < cur_p.size; ++idx) {
+                const llama_token id = cur_p.data[idx].id;
+                if (id >= 0 && (size_t) id < ctx_sampling->is_period_token.size() && ctx_sampling->is_period_token[id]) {
+                    cur_p.data[idx].logit += bias;
+                }
+            }
+        }
+    }
+
     // apply grammar checks before sampling logic
     if (grammar_first && ctx_sampling->grammar != NULL) {
         llama_grammar_apply(ctx_sampling->grammar, ctx_main, &cur_p);
@@ -842,6 +904,21 @@ void common_sampler_accept(
         if (std::count(piece.begin(), piece.end(), '"') & 1) {
             ctx_sampling->quote_open = !ctx_sampling->quote_open;
         }
+    }
+
+    // break endless sentences: count generated tokens since the previous "."; reset on "."
+    // (also resets on tokens ending with "." such as "word." so already-terminated sentences restart the count)
+    if (ctx_sampling->params.break_endless_sentences > 0.0f && is_generated) {
+        bool is_period = false;
+        if (token >= 0 && (size_t) token < ctx_sampling->is_period_token.size()) {
+            is_period = ctx_sampling->is_period_token[token];
+        }
+        if (!is_period) {
+            const auto piece = common_token_to_piece(ctx_main, token, false);
+            const auto stripped = strip_leading_space_markers(piece);
+            is_period = !stripped.empty() && stripped.back() == '.';
+        }
+        ctx_sampling->tokens_since_period = is_period ? 0 : ctx_sampling->tokens_since_period + 1;
     }
 
     // grammar_should_apply() checks the reasoning budget state, so calculate this before we accept

@@ -112,6 +112,7 @@ inline bool common_grammar_needs_prefill(const common_grammar & g) {
     */  X( float   , adaptive_target     , -1.0f ,            )  /*  select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled) \
     */  X( float   , adaptive_decay      , 0.90f ,            )  /*  decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation) \
     */  X( bool    , adaptive_updt_w_cur , false , std::round )  /*  update state with current probability \
+    */  X( float   , break_endless_sentences , 0.0f ,            )  /*  0.0 = disabled; boost "." logits by N percent per generated token since the previous "." \
     */
 
 enum {
@@ -236,6 +237,9 @@ struct common_sampler {
 
     bool              quote_open = false;              // true when the accepted text is inside an open " quote (contextual no_space_after_quote rule)
     std::vector<bool> starts_with_space;               // vocab rows whose piece begins with a space (only built when no_space_after_quote is set)
+
+    int               tokens_since_period = 0;         // generated tokens since the last "." (for break_endless_sentences)
+    std::vector<bool> is_period_token;                 // vocab rows whose piece is "." after stripping leading space markers (only built when break_endless_sentences is set)
 
     llama_sampler_adaptive_p * adapt_p_ctx;    // adaptive p sampler
 
