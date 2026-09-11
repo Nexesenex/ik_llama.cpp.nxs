@@ -1997,7 +1997,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
 
         if (err != cudaSuccess) {
             GGML_CUDA_LOG_WARN("%s: pinmem=2 could not pin any of %.2f GiB\n", __func__, size_GiB);
-            free(ptr);
+            _aligned_free(ptr);
             ggml_cuda_pinmem2_stopped = true;
             return nullptr;
         }
@@ -2038,7 +2038,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
             cudaGetLastError();
             GGML_CUDA_LOG_WARN("%s: pinmem=4 cudaHostRegister of %.2f GiB failed: %s\n", __func__,
                                amount / (1024.0 * 1024.0 * 1024.0), cudaGetErrorString(err));
-            free(ptr);
+            _aligned_free(ptr);
             GGML_CUDA_LOG_WARN("%s: pinmem=4 falling back to pinmem=1 (token_embd only)\n", __func__);
             ggml_backend_cuda_set_pinmem(1);
             return ggml_cuda_host_malloc(size);
@@ -2106,7 +2106,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
             cudaGetLastError();
             GGML_CUDA_LOG_WARN("%s: cudaHostRegister of %.2f MiB failed: %s\n", __func__,
                                size / 1024.0 / 1024.0, cudaGetErrorString(err));
-            free(ptr);
+            _aligned_free(ptr);
             if (ggml_cuda_pinmem == 3) {
                 GGML_CUDA_LOG_WARN("%s: falling back to pinmem=1 (token_embd only)\n", __func__);
                 ggml_backend_cuda_set_pinmem(1);
