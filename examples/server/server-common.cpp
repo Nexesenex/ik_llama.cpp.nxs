@@ -51,7 +51,7 @@ void server_log(const char* level, const char* function, int line, const char* m
     }
     else {
         char buf[1024];
-        snprintf(buf, 1024, "%4s [%24s] %s", level, function, message);
+        snprintf(buf, 1024, "%4s [%8s] %s", level, function, message);
 
         if (!extra.empty()) {
             log.merge_patch(extra);
