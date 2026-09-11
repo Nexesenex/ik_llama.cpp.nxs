@@ -1798,10 +1798,20 @@ static void * ggml_cuda_host_malloc(size_t size) {
     if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
         return nullptr;
     }
+
+    // Use _aligned_malloc + cudaHostRegister instead of cudaMallocHost to allow partial
+    // pinning and to avoid WDDM per-process quota limits.
+    void * ptr = _aligned_malloc(size, 32);
+    if (ptr == nullptr) {
+        GGML_CUDA_LOG_WARN("%s: _aligned_malloc of %.2f MiB failed\n", __func__, size / 1024.0 / 1024.0);
+        return nullptr;
+    }
+
     if (size > ggml_cuda_pinned_cap() - g_cuda_pinned_bytes) {
         static bool logged = false;
         if (!logged) {
             logged = true;
+            _aligned_free(ptr);
             int cur_dev;
             cudaGetDevice(&cur_dev);
             GGML_CUDA_LOG_INFO("%s: current CUDA device = %d\n", __func__, cur_dev);
@@ -1814,7 +1824,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
     }
     constexpr double k_warn_limit = 8.0;
 
-    void * ptr = nullptr;
+    // void * ptr = nullptr;
     double size_GiB = size/(1024.*1024.*1024.);
     auto tim1 = ggml_time_us();
     if (size_GiB > k_warn_limit) {
@@ -1833,6 +1843,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
         cudaGetLastError();
         GGML_CUDA_LOG_WARN("%s: failed to allocate %.2f MiB of pinned memory: %s\n", __func__,
                            size / 1024.0 / 1024.0, cudaGetErrorString(err));
+        _aligned_free(ptr);
         return nullptr;
     }
 
