@@ -1205,7 +1205,7 @@ int32_t server_context::populate_vocab_pieces() {
     return n_vocab;
 }
 
-bool server_context::launch_slot_with_task(server_slot& slot, server_task& task) {
+bool server_context::l_s_w_t(server_slot& slot, server_task& task) {
     slot_params defaults;
     defaults.speculative = params_base.speculative;
 
@@ -3064,7 +3064,7 @@ void server_context::process_single_task(server_task&& task) {
         slot->infill = task.infill;
         slot->embedding = task.embedding;
 
-        if (!launch_slot_with_task(*slot, task)) {
+        if (!l_s_w_t(*slot, task)) {
             LOG_ERROR("error while launching slot", task.data);
             break;
         }
@@ -4155,7 +4155,7 @@ bool server_context::create_checkpoint(server_slot & slot, bool prompt_end) {
     return do_checkpoint;
 }
 
-void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type) {
+void server_context::b_p_p(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type) {
     if (params_base.cont_batching || batch.n_tokens == 0) {
         for (auto& slot : slots) {
             slot.prompt_batch_i0 = -1;
@@ -5160,8 +5160,7 @@ void server_context::update_allowlist_state(server_slot& slot) {
     }
 }
 
-
-void server_context::process_batch_tokens(int32_t & n_batch) {
+void server_context::p_b_t(int32_t & n_batch) {
     for (int32_t i = 0; i < batch.n_tokens; i += n_batch) {
         const int32_t n_tokens = std::min(n_batch, batch.n_tokens - i);
         bool finish_prompt_warmup_batch = false;
@@ -5461,7 +5460,7 @@ void server_context::update_slots() {
     int32_t batch_type = batch.n_tokens > 0 ? 0 : -1;
 
     // next, batch any pending prompts without exceeding n_batch
-    batch_pending_prompt(n_ubatch, n_batch, batch_type); // Prepare batch for prompt process
+    b_p_p(n_ubatch, n_batch, batch_type); // Prepare batch for prompt process
 
     if (batch.n_tokens == 0) {
         LOG_VERBOSE("no tokens to decode", {});
@@ -5562,7 +5561,7 @@ void server_context::update_slots() {
     }
 
     // process the created batch of tokens
-    process_batch_tokens(n_batch); // Decode with batch
+    p_b_t(n_batch); // Decode with batch
 
     {
         LOG_VERBOSE("posting NEXT_RESPONSE", {});
