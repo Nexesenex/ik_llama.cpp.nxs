@@ -309,7 +309,8 @@ struct server_context {
 
     int32_t populate_vocab_pieces();
 
-    bool launch_slot_with_task(server_slot& slot, server_task& task);
+    // launch_slot_with_task
+    bool l_s_w_t(server_slot& slot, server_task& task);
 
     void kv_cache_clear();
 
@@ -374,9 +375,11 @@ struct server_context {
 
     void add_sampled_tokens();
 
-    void batch_pending_prompt(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type);
+    // batch_pending_prompt
+    void b_p_p(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type);
 
-    void process_batch_tokens(int32_t & n_batch);
+    // process_batch_tokens
+    void p_b_t(int32_t & n_batch);
 
     void extend_context(const int32_t n_tokens);
 
