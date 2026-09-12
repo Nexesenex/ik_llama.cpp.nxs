@@ -4480,6 +4480,10 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         ggml_type cache_type_k, ggml_type cache_type_v, ggml_type idx_type_k, uint32_t max_ctx_size, int mla_attn, int n_seq_max, int n_ubatch,
         int amb, int worst_case_tokens, bool flash_attn, bool swa_compress,
         std::vector<expert_tensors> & experts) {
+    // mirror llama_init_from_model: cparams.n_ctx is padded for kv_self.n, so the
+    // load-time estimate must use the same padded size, otherwise it undercounts
+    // by up to 255 cells vs the real KV allocation
+    max_ctx_size = GGML_PAD(max_ctx_size, llama_kv_cache::get_padding(flash_attn));
     int n_layer = model.hparams.n_layer;
     std::vector<double> result(n_layer+1, 0);
     std::vector<double> compute(n_layer+1, 0);
