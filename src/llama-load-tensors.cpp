@@ -229,7 +229,12 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     std::unordered_set<ggml_tensor *> split_tensors;
 
-    std::vector<std::pair<std::regex, ggml_backend_buffer_type_t>> overrides;
+    struct buft_override {
+        std::string pattern_str;
+        std::regex pattern;
+        ggml_backend_buffer_type_t buft;
+    };
+    std::vector<buft_override> overrides;
 
     inline ggml_context * ctx_for_buft(ggml_backend_buffer_type_t buft) {
         if (auto it = ctx_map.find(buft); it != ctx_map.end()) return it->second;
@@ -330,7 +335,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
 #else
             if (ggml_backend_buft_is_host(buft)) buft = default_cpu_buft;
 #endif
-            overrides.emplace_back(std::make_pair(std::regex(o->pattern), buft));
+            overrides.push_back({std::string(o->pattern), std::regex(o->pattern), buft});
         }
     } else {
         LLAMA_LOG_DEBUG("%s: tensor_buft_overrides is NULL\n", __func__);
@@ -353,7 +358,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
                 auto d_meta = ml.get_tensor_meta(d_name.c_str());
                 if (d_meta) {
                     std::string pattern = "blk\\." + std::to_string(i) + "\\.ffn_(up|down|gate|gate_up)_exps\\.(weight|scale)";
-                    this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+                    this->overrides.push_back({pattern, std::regex(pattern), buft});
                     if (++ndone == ml.ncmoe) break;
                 }
             }
@@ -421,7 +426,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
                 if (n_override[id] > 0) {
                     std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
                     printf("Adding override %s=%s\n", pattern.c_str(), ggml_backend_buft_name(buft));
-                    this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+                    this->overrides.push_back({pattern, std::regex(pattern), buft});
                     --n_override[id];
                 }
             }
@@ -623,12 +628,26 @@ ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx,
         }
     }
     for (auto & o : overrides) {
-        if (std::regex_search(name, o.first)) {
-            if (o.second == default_cpu_buft) has_buft_overrides = true;
+        if (std::regex_search(name, o.pattern)) {
+            // Protect routed-expert biases from broad weight overrides (e.g. "-ot exps=CPU"
+            // or "-ot \.ffn_.*_exps\.=CPU"). Biases are tiny and must stay on the default
+            // layer device (GPU) for performance; forcing them to CPU causes a big hit
+            // on models with FFN biases (e.g. GPT-OSS). An explicit bias override
+            // (pattern containing "bias") is still honoured.
+            if (name.find("_exps.bias") != std::string::npos &&
+                o.pattern_str.find("bias") == std::string::npos) {
+                bool is_cpu = (o.buft == default_cpu_buft) || ggml_backend_buft_is_host(o.buft);
+                if (is_cpu) {
+                    LLAMA_LOG_DEBUG("%s: skipping CPU override '%s' for expert bias %s (keeping on default device)\n",
+                        __func__, o.pattern_str.c_str(), name.c_str());
+                    continue;
+                }
+            }
+            if (o.buft == default_cpu_buft) has_buft_overrides = true;
             const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
             const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
-            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overridden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(o.second));
-            ctx = ctx_for_buft(o.second);
+            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overridden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(o.buft));
+            ctx = ctx_for_buft(o.buft);
             break;
         }
     }
