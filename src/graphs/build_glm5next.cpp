@@ -40,7 +40,13 @@ static ggml_tensor * glm5next_build_hc_pre(
     auto mixes = ggml_mul_mat(ctx0, hc_fn, normed);
     cb(mixes, "hc_pre_mixes", il);
 
-    auto all = ggml_hc_pre(ctx0, mixes, hc_scale, hc_base, hc, hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps);
+    // ggml_hc_pre requires F32 scale/base (cf. build_deepseek4.cpp, fix 449afdc2c94).
+    // GGUFs may store them as BF16 — upcast here to avoid the BF16 hc_pre crash.
+    auto to_f32 = [&](ggml_tensor * t) -> ggml_tensor * {
+        return t && t->type != GGML_TYPE_F32 ? ggml_cast(ctx0, t, GGML_TYPE_F32) : t;
+    };
+
+    auto all = ggml_hc_pre(ctx0, mixes, to_f32(hc_scale), to_f32(hc_base), hc, hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps);
 
     auto pre  = ggml_view_2d(ctx0, all, hc, nt, hc * sizeof(float), 0);
     auto post = ggml_view_2d(ctx0, all, hc, nt, hc * sizeof(float), hc * nt * sizeof(float));
