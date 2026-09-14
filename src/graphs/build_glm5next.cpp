@@ -312,10 +312,16 @@ static ggml_tensor * build_glm5next_mla_attention(
     // matrix [n_kv, n_tokens, n_head], whose compute buffer scales linearly with ctx-size.
     // Absorbed NoPE MLA: K = V = the compressed latent (kv_lora_rank, no rope part), MQA.
     ggml_tensor * kqv_cmpr = nullptr;
+    // F32 attention precision for short caches (accuracy) or decode/small batches
+    // (cheap, more accurate) — mirrors build_deepseek2's use_f32 || q->ne[1] <= 8.
+    // Previously only the short-cache half was covered, so long-context TG ran F16
+    // while short-cache PP paid for F32. A full PP de-absorb branch (wk_b_pp
+    // tensors + loader, cf. deepseek2 pp_opt) is deferred as follow-up work.
+    const bool use_f32_attn = K_cache->ne[1] < 256 || llm.n_tokens <= 8;
     if (lctx.cparams.flash_attn) {
         kqv_cmpr = ggml_flash_attn_ext(ctx0, Qcur, K_cache, K_cache, attn_mask,
                 kq_scale, hparams.f_max_alibi_bias, 0.f);
-        if (K_cache->ne[1] < 256) {
+        if (use_f32_attn) {
             ggml_flash_attn_ext_set_prec(kqv_cmpr, GGML_PREC_F32);
         }
         cb(kqv_cmpr, "kqv_compressed", il);
@@ -345,7 +351,7 @@ static ggml_tensor * build_glm5next_mla_attention(
 
         // kq = K_cache @ Qcur → [n_kv, n_tokens, n_head]
         auto kq = ggml_mul_mat(ctx0, K_cache, Qcur);
-        if (K_cache->ne[1] < 256) {
+        if (use_f32_attn) {
             ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
         }
         cb(kq, "kq", il);
