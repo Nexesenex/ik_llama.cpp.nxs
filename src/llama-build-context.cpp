@@ -1870,9 +1870,9 @@ llm_expert_gating_func_type   gating_op,
     auto split_up_shexp   = up_shexp   ? (ggml_split_tensor_t *)up_shexp->extra   : nullptr;
     auto split_gate_shexp = gate_shexp ? (ggml_split_tensor_t *)gate_shexp->extra : nullptr;
     auto split_down_shexp = down_shexp ? (ggml_split_tensor_t *)down_shexp->extra : nullptr;
-    auto split_up_b_shexp   = up_b_shexp   ? (ggml_split_tensor_t *)up_b_shexp   : nullptr;
-    auto split_gate_b_shexp = gate_b_shexp ? (ggml_split_tensor_t *)gate_b_shexp : nullptr;
-    auto split_down_b_shexp = down_b_shexp ? (ggml_split_tensor_t *)down_b_shexp : nullptr;
+    auto split_up_b_shexp   = up_b_shexp   ? (ggml_split_tensor_t *)up_b_shexp->extra   : nullptr;
+    auto split_gate_b_shexp = gate_b_shexp ? (ggml_split_tensor_t *)gate_b_shexp->extra : nullptr;
+    auto split_down_b_shexp = down_b_shexp ? (ggml_split_tensor_t *)down_b_shexp->extra : nullptr;
     auto split_up_gate_exps = up_gate_exps ? (ggml_split_tensor_t *)up_gate_exps->extra : nullptr;
     if (!split_up_exps && !split_gate_exps && !split_up_gate_exps && !split_down_exps) {
         auto cur = input;

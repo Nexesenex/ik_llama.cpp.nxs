@@ -643,7 +643,7 @@ ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx,
                     continue;
                 }
             }
-            if (o.buft == default_cpu_buft) has_buft_overrides = true;
+            if (o.buft == default_cpu_buft || ggml_backend_buft_is_host(o.buft)) has_buft_overrides = true;
             const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
             const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
             LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overridden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(o.buft));
