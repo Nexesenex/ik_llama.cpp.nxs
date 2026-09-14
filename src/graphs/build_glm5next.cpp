@@ -70,6 +70,21 @@ static ggml_tensor * build_glm5next_dsa_top_k(
     }
     ggml_build_forward_expand(gf, kr_cpy);
 
+    // ---- dense fallback before the expensive pooling/scoring (cf. GLM-DSA #2090) ----
+    // The kr_cpy write above must still run so future tokens see these keys, but the
+    // pool-key softmax + [n_pool, nh, T] score matmul are pure overhead when dense
+    // flash_attn is cheaper: cache fits in top-k, cache too small, or we'd select
+    // every pool anyway (sparse-select-all == dense, plus tail).
+    {
+        const int64_t tail_cnt = tail_cells ? (r - 1) : 0;
+        const int64_t n_sel = std::min<int64_t>({n_pool,
+                (int64_t) hparams.indexer_top_k / r,
+                (n_kv - tail_cnt) / r});
+        if (n_kv <= (int64_t) hparams.indexer_top_k || n_sel < 1 || n_sel >= n_pool) {
+            return nullptr;
+        }
+    }
+
     // ---- read back the full cached key+gate set: [2*d, n_kv] ----
     auto all = ggml_view_2d(ctx0, kv_self.kr_l[il], 2 * d, n_kv, kr_row, 0);
     cb(all, "dsa_cached_all", il);
