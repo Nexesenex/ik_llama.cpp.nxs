@@ -680,14 +680,13 @@ ggml_cgraph * llm_build_context::build_glm5next() {
         auto flat = ggml_reshape_2d(ctx0, inpL, n_embd * hc, n_tokens);
         flat = ggml_get_rows(ctx0, flat, inp_out_ids);
         const int64_t n_out = flat->ne[1];
-        // sum the hc streams
-        ggml_tensor * summed = nullptr;
-        for (int64_t s = 0; s < hc; ++s) {
-            auto stream = ggml_view_2d(ctx0, flat, n_embd, n_out,
-                    flat->nb[1], s * n_embd * ggml_element_size(flat));
-            summed = summed ? ggml_add(ctx0, summed, stream) : stream;
-        }
-        inpL = ggml_scale(ctx0, summed, 1.0f / hc);
+        // mean over streams via one reduction instead of hc-1 elementwise adds:
+        // [n_embd*hc, n_out] -> [n_embd, hc, n_out] -> [hc, n_embd, n_out] -> sum_rows.
+        // (fp summation order differs from the sequential adds by ~1e-7.)
+        auto h3 = ggml_reshape_3d(ctx0, flat, n_embd, hc, n_out);
+        auto hp = ggml_cont(ctx0, ggml_permute(ctx0, h3, 1, 0, 2, 3));  // [hc, n_embd, n_out]
+        auto sum = ggml_sum_rows(ctx0, hp);                            // [1, n_embd, n_out]
+        inpL = ggml_scale(ctx0, ggml_reshape_2d(ctx0, sum, n_embd, n_out), 1.0f / hc);
         cb(inpL, "hc_collapse", -1);
     }
 
