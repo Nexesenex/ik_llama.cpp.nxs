@@ -675,51 +675,9 @@ static ggml_tensor * dsv4_build_attn(
     return ggml_cont_2d(ctx, cur, cur->ne[0] * cur->ne[1], cur->ne[2] * cur->ne[3]);
 }
 
-static ggml_tensor * build_hc_pre(
-        ggml_context * ctx0,
-        llm_build_context & llm,
-        const llama_hparams & hparams,
-        int64_t n_embd,
-        float norm_rms_eps,
-        ggml_tensor * x,
-        ggml_tensor * hc_fn,
-        ggml_tensor * hc_scale,
-        ggml_tensor * hc_base,
-        ggml_tensor ** post_out,
-        ggml_tensor ** comb_out,
-        const llm_build_cb & cb, int il,
-        ggml_tensor * pre_in = nullptr,      // V4.1: collapse with the mix the previous sublayer produced
-        ggml_tensor ** pre_out = nullptr) {  // V4.1: hand this sublayer's mix to the next one
-    const int64_t hc         = hparams.dsv4_hc_mult;
-    const int64_t nt         = x->ne[2];
-
-    if (!ggml_is_contiguous(x)) {
-        x = ggml_cont(ctx0, x);
-    }
-    auto flat = ggml_reshape_2d(ctx0, x, n_embd * hc, nt);
-    auto normed = ggml_rms_norm(ctx0, flat, norm_rms_eps);
-    cb(normed, "hc_pre", il);
-    auto mixes  = ggml_mul_mat(ctx0, hc_fn, normed);
-    cb(mixes, "hc_pre_mixes", il);
-
-    auto to_f32 = [&](ggml_tensor * t) -> ggml_tensor * {
-        return t && t->type != GGML_TYPE_F32 ? ggml_cast(ctx0, t, GGML_TYPE_F32) : t;
-    };
-
-    auto all = ggml_hc_pre(ctx0, mixes, to_f32(hc_scale), to_f32(hc_base), hc, hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps);
-
-    auto pre  = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), 0);
-    auto post = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), hc*nt*sizeof(float));
-    auto comb = ggml_view_3d(ctx0, all, hc, hc, nt, hc*sizeof(float), hc*hc*sizeof(float), 2*hc*nt*sizeof(float));
-
-    *post_out = post;
-    *comb_out = comb;
-    if (pre_out) {
-        *pre_out = pre;
-    }
-
-    return llm.build_mhc_weighted_sum(x, pre_in ? pre_in : pre, n_embd, hc);
-}
+// NOTE: build_hc_pre lived here until it was hoisted to
+// llm_build_context::build_mhc_pre (see llama-build-context.cpp) per PR 2376
+// review, so deepseek4 and glm5next share one implementation.
 
 static ggml_tensor * build_hc_head(
         ggml_context * ctx0,
@@ -1135,11 +1093,12 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
     const auto n_head   = llm.n_head;
     const auto n_kv     = llm.n_kv;
 
-    ggml_tensor * cur = build_hc_pre(ctx0, llm, hparams, llm.n_embd, hparams.f_norm_rms_eps, inpL,
+    ggml_tensor * cur = llm.build_mhc_pre(inpL,
             layer.hc_attn_fn,
             layer.hc_attn_scale,
             layer.hc_attn_base,
-            &post, &comb, llm.cb, il, hc_pre_in, hc_pre_out);
+            llm.n_embd, hparams.f_norm_rms_eps,
+            &post, &comb, il, hc_pre_in, hc_pre_out);
     llm.cb(cur, "hc_attn_pre", il);
 
     cur = llm.llm_build_norm(ctx0, cur, hparams, layer.attn_norm, nullptr, LLM_NORM_RMS, llm.cb, il);
@@ -1645,12 +1604,12 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
 
         ggml_tensor *post, *comb;
         auto residual = inpL;
-        cur = build_hc_pre(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps,
-                inpL,
+        cur = build_mhc_pre(inpL,
                 model.layers[il].hc_ffn_fn,
                 model.layers[il].hc_ffn_scale,
                 model.layers[il].hc_ffn_base,
-                &post, &comb, cb, il,
+                n_embd, hparams.f_norm_rms_eps,
+                &post, &comb, il,
                 hc_attn_pre, hc_lag ? &hc_pre_mix : nullptr);
         cb(cur, "hc_ffn_pre", il);
 
@@ -1946,16 +1905,18 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
         ggml_tensor * post = nullptr;
         ggml_tensor * comb = nullptr;
         ggml_tensor * hc_attn_pre = nullptr;
-        ggml_tensor * cur = build_hc_pre(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps, inpL,
-                layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, &post, &comb, cb, il,
+        ggml_tensor * cur = build_mhc_pre(inpL,
+                layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base,
+                n_embd, hparams.f_norm_rms_eps, &post, &comb, il,
                 hc_pre_mix, hc_lag ? &hc_attn_pre : nullptr);
         cur = llm_build_norm(ctx0, cur, hparams, layer.attn_norm, nullptr, LLM_NORM_RMS, cb, il);
         cur = build_attention(il, cur, inp_pos);
         inpL = build_mhc_post(cur, post, residual, comb, n_embd, hparams.dsv4_hc_mult, true);
 
         residual = inpL;
-        cur = build_hc_pre(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps, inpL,
-                layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &post, &comb, cb, il,
+        cur = build_mhc_pre(inpL,
+                layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base,
+                n_embd, hparams.f_norm_rms_eps, &post, &comb, il,
                 hc_attn_pre, hc_lag ? &hc_pre_mix : nullptr);
         cur = llm_build_norm(ctx0, cur, hparams, layer.ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
         ggml_tensor * moe = llm_build_moe_ffn(ctx0, lctx, cur,

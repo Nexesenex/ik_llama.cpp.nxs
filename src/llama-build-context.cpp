@@ -766,6 +766,49 @@ ggml_tensor * llm_build_context::build_mhc_pre_projection(
     return ggml_mul_mat(ctx0, fn, normed);
 }
 
+ggml_tensor * llm_build_context::build_mhc_pre(
+        ggml_tensor * x,
+        ggml_tensor * fn,
+        ggml_tensor * scale,
+        ggml_tensor * base,
+        int64_t n_embd,
+        float norm_rms_eps,
+        ggml_tensor ** post_out,
+        ggml_tensor ** comb_out,
+        int il,
+        ggml_tensor * pre_in,
+        ggml_tensor ** pre_out) {
+    const int64_t hc = hparams.dsv4_hc_mult;
+    const int64_t nt = x->ne[2];
+
+    if (!ggml_is_contiguous(x)) {
+        x = ggml_cont(ctx0, x);
+    }
+    auto flat = ggml_reshape_2d(ctx0, x, n_embd * hc, nt);
+    auto normed = ggml_rms_norm(ctx0, flat, norm_rms_eps);
+    cb(normed, "hc_pre", il);
+    auto mixes = ggml_mul_mat(ctx0, fn, normed);
+    cb(mixes, "hc_pre_mixes", il);
+
+    auto to_f32 = [&](ggml_tensor * t) -> ggml_tensor * {
+        return t && t->type != GGML_TYPE_F32 ? ggml_cast(ctx0, t, GGML_TYPE_F32) : t;
+    };
+
+    auto all = ggml_hc_pre(ctx0, mixes, to_f32(scale), to_f32(base), hc, hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps);
+
+    auto pre  = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), 0);
+    auto post = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), hc*nt*sizeof(float));
+    auto comb = ggml_view_3d(ctx0, all, hc, hc, nt, hc*sizeof(float), hc*hc*sizeof(float), 2*hc*nt*sizeof(float));
+
+    *post_out = post;
+    *comb_out = comb;
+    if (pre_out) {
+        *pre_out = pre;
+    }
+
+    return build_mhc_weighted_sum(x, pre_in ? pre_in : pre, n_embd, hc);
+}
+
 ggml_tensor * llm_build_context::build_inp_mean() {
     lctx.inp_mean = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, n_tokens);
     cb(lctx.inp_mean, "inp_mean", -1);

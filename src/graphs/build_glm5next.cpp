@@ -13,50 +13,8 @@ static constexpr int64_t GLM5NEXT_IDX_SCORE_CHUNK = 256;
 // in hyper-connection streams (mHC, Sinkhorn). NoPE-only (rope.dimension_count = 0).
 // The NextN/MTP block is loaded but not wired for generation.
 
-// mHC pre (copied from build_deepseek4.cpp)
-
-static ggml_tensor * glm5next_build_hc_pre(
-        ggml_context * ctx0,
-        llm_build_context & llm,
-        const llama_hparams & hparams,
-        int64_t n_embd,
-        float norm_rms_eps,
-        ggml_tensor * x,
-        ggml_tensor * hc_fn,
-        ggml_tensor * hc_scale,
-        ggml_tensor * hc_base,
-        ggml_tensor ** post_out,
-        ggml_tensor ** comb_out,
-        const llm_build_cb & cb, int il) {
-    const int64_t hc = hparams.dsv4_hc_mult;
-    const int64_t nt = x->ne[2];
-
-    if (!ggml_is_contiguous(x)) {
-        x = ggml_cont(ctx0, x);
-    }
-    auto flat   = ggml_reshape_2d(ctx0, x, n_embd * hc, nt);
-    auto normed = ggml_rms_norm(ctx0, flat, norm_rms_eps);
-    cb(normed, "hc_pre", il);
-    auto mixes = ggml_mul_mat(ctx0, hc_fn, normed);
-    cb(mixes, "hc_pre_mixes", il);
-
-    // ggml_hc_pre requires F32 scale/base (cf. build_deepseek4.cpp, fix 449afdc2c94).
-    // GGUFs may store them as BF16 — upcast here to avoid the BF16 hc_pre crash.
-    auto to_f32 = [&](ggml_tensor * t) -> ggml_tensor * {
-        return t && t->type != GGML_TYPE_F32 ? ggml_cast(ctx0, t, GGML_TYPE_F32) : t;
-    };
-
-    auto all = ggml_hc_pre(ctx0, mixes, to_f32(hc_scale), to_f32(hc_base), hc, hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps);
-
-    auto pre  = ggml_view_2d(ctx0, all, hc, nt, hc * sizeof(float), 0);
-    auto post = ggml_view_2d(ctx0, all, hc, nt, hc * sizeof(float), hc * nt * sizeof(float));
-    auto comb = ggml_view_3d(ctx0, all, hc, hc, nt, hc * sizeof(float), hc * hc * sizeof(float), 2 * hc * nt * sizeof(float));
-
-    *post_out = post;
-    *comb_out = comb;
-
-    return llm.build_mhc_weighted_sum(x, pre, n_embd, hc);
-}
+// NOTE: mHC pre lives in llm_build_context::build_mhc_pre (llama-build-context.cpp),
+// shared with deepseek4 per PR 2376 review.
 
 // DSA k-pool indexer: scores k-pools of kpool tokens (a pool key is a learned convex mix of
 // the member keys) and returns top-k cell indices [n_sel*kpool, n_tokens] into the KV cache,
@@ -577,12 +535,12 @@ ggml_cgraph * llm_build_context::build_glm5next() {
         ggml_tensor * post_attn, * comb_attn;
         auto residual_attn = inpL;
 
-        auto cur = glm5next_build_hc_pre(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps,
-                inpL,
+        auto cur = build_mhc_pre(inpL,
                 model.layers[il].hc_attn_fn,
                 model.layers[il].hc_attn_scale,
                 model.layers[il].hc_attn_base,
-                &post_attn, &comb_attn, cb, il);
+                n_embd, hparams.f_norm_rms_eps,
+                &post_attn, &comb_attn, il);
         cb(cur, "hc_attn_pre", il);
 
         if (hparams.is_recurrent(il)) {
@@ -602,12 +560,12 @@ ggml_cgraph * llm_build_context::build_glm5next() {
         ggml_tensor * post_ffn, * comb_ffn;
         auto residual_ffn = inpL;
 
-        cur = glm5next_build_hc_pre(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps,
-                inpL,
+        cur = build_mhc_pre(inpL,
                 model.layers[il].hc_ffn_fn,
                 model.layers[il].hc_ffn_scale,
                 model.layers[il].hc_ffn_base,
-                &post_ffn, &comb_ffn, cb, il);
+                n_embd, hparams.f_norm_rms_eps,
+                &post_ffn, &comb_ffn, il);
         cb(cur, "hc_ffn_pre", il);
 
         // cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, cb, il);

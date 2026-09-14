@@ -365,6 +365,23 @@ struct llm_build_context {
         float norm_rms_eps,
         bool force_contiguous);
 
+    // Shared mHC pre (Sinkhorn): rms_norm -> mixes -> ggml_hc_pre -> weighted sum.
+    // Hoisted from build_deepseek4.cpp:build_hc_pre per PR 2376 review so deepseek4
+    // and glm5next share one implementation (incl. the F32 upcast for BF16 GGUFs).
+    // pre_in/pre_out carry the V4.1 lagged hyper-connection mix between sublayers.
+    ggml_tensor * build_mhc_pre(
+        ggml_tensor * x,
+        ggml_tensor * fn,
+        ggml_tensor * scale,
+        ggml_tensor * base,
+        int64_t n_embd,
+        float norm_rms_eps,
+        ggml_tensor ** post_out,
+        ggml_tensor ** comb_out,
+        int il,
+        ggml_tensor * pre_in = nullptr,      // V4.1: collapse with the mix the previous sublayer produced
+        ggml_tensor ** pre_out = nullptr);  // V4.1: hand this sublayer's mix to the next one
+
     ggml_tensor * build_deepseek2_tp_attention(
             ggml_cgraph * gf, int il,
             ggml_tensor * inpL,
