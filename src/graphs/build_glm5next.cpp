@@ -137,11 +137,33 @@ static ggml_tensor * build_glm5next_dsa_top_k(
     }
 
     // ---- score: relu(pooled . q), weighted by proj, summed over heads ----
-    // chunk the score over the query dim to bound the [n_pool, nh, Tc] tensor
+    // Fused path (-fidx): single ggml_indexer_topk avoids materializing the
+    // [n_pool, nh, T] score tensor (cf. openpangu bdb23e8, dsv4 fused branch).
+    // Falls back to the unfused mul_mat/relu/top_k chain below when the backend
+    // lacks the op. chunk the score over the query dim to bound the [n_pool, nh, Tc] tensor
     // (mirrors OPENPANGU_IDX_SCORE_CHUNK); pooled/q/wts are built whole, sel concatenates the
     // per-chunk top-k results along the token dim
-    const bool chunk_scores = GLM5NEXT_IDX_SCORE_CHUNK > 0 && n_tok > GLM5NEXT_IDX_SCORE_CHUNK;
     ggml_tensor * sel = nullptr;
+    if (llm.cparams.fused_idx_topk) {
+        // Fused CUDA impl handles F16/quantized K natively; F32 hits the cublas
+        // fallback and BF16 asserts — route through F16 like openpangu/dsv4.
+        ggml_tensor * k_fused = pooled;
+        if (!ggml_is_quantized(k_fused->type) && k_fused->type != GGML_TYPE_F16) {
+            k_fused = ggml_cast(ctx0, k_fused, GGML_TYPE_F16);
+        }
+        ggml_tensor * w_fused = ggml_reshape_2d(ctx0, wts, nh, n_tok);  // [nh, T]
+        ggml_tensor * fused = ggml_indexer_topk(ctx0, k_fused, q, w_fused, pool_bias,
+                nullptr, GGML_UNARY_OP_RELU, (int) n_sel);
+        if (fused && llm.supports_op(fused)) {
+            sel = ggml_cont(ctx0, fused);  // [n_sel, n_tok]
+            cb(sel, "dsa_top_k_pools", il);
+        }
+    }
+    if (sel) {
+        // fused path taken — skip the unfused scoring below
+    } else
+    {
+    const bool chunk_scores = GLM5NEXT_IDX_SCORE_CHUNK > 0 && n_tok > GLM5NEXT_IDX_SCORE_CHUNK;
     if (!chunk_scores) {
         // small batch (decode or short prefill): no chunking needed
         auto score = ggml_mul_mat(ctx0, pooled, q);                  // [n_pool, nh, n_tok]
@@ -178,6 +200,7 @@ static ggml_tensor * build_glm5next_dsa_top_k(
         }
         cb(sel, "dsa_top_k_pools", il);
     }
+    }  // end unfused fallback (skipped when the fused -fidx path produced sel)
 
     // ---- expand each selected pool into its r member cells ----
     // pool_cells is 1D [r*n_pool] → reshape to [r, n_pool] for the gather
