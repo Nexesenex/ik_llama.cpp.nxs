@@ -424,7 +424,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
             for (int i = n_layer-1; i >= 0; --i) {
                 int id = model.default_layer_device[i];
                 if (n_override[id] > 0) {
-                    std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                    std::string pattern = "blk\\." + std::to_string(i) + "\\.ffn_(up|down|gate|gate_up)_exps\\.(weight|scale)";
                     printf("Adding override %s=%s\n", pattern.c_str(), ggml_backend_buft_name(buft));
                     this->overrides.push_back({pattern, std::regex(pattern), buft});
                     --n_override[id];
