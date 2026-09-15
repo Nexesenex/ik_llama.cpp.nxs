@@ -762,6 +762,9 @@ extern "C" {
     // Returns true if the model is openPangu (conv-only recurrent state that rides the spec-rollback checkpoint)
     LLAMA_API bool llama_model_is_openpangu(const struct llama_model * model);
 
+    // Returns whether the model uses the GLM-5.3-Flash (glm5next) architecture (KDA recurrent + DSA indexer state).
+    LLAMA_API bool llama_model_is_glm5next(const struct llama_model * model);
+
     LLAMA_API bool llama_kv_cache_is_compacted(const struct llama_context * ctx);
 
     LLAMA_API llama_pos llama_kv_cache_swa_rewind_floor(const struct llama_context * ctx);
