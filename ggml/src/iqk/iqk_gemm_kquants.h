@@ -18,6 +18,11 @@ bool iqk_convert_kquants_q8X_r8(int type, int n, const void * vx, size_t bx, voi
 // (output is Q8_K_R16 when FANCY, Q8_K_R8 otherwise).
 extern "C" void iqk_test_convert_iq4_xs_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x);
 
+#ifdef __x86_64__
+extern "C" void iqk_test_gemm_q8_k_r8(int n, const void * vx, size_t bx,
+                                      const DataInfo& info, int nrc_x, int nrc_y);
+#endif
+
 #ifdef HAVE_FANCY_SIMD
 extern "C" void iqk_test_gemm_q8_k_r16(int n, const void * vx, size_t bx,
                                        const DataInfo& info, int nrc_x, int nrc_y);

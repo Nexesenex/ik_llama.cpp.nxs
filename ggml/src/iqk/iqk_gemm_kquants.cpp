@@ -1918,6 +1918,24 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
     }
 }
 
+// Exported thin wrapper so external tests can drive the R8 GEMM kernel
+// directly (it has internal linkage inside the anonymous namespace).
+// Mirrors iqk_test_gemm_q8_k_r16 below, but is available on all x86_64
+// builds (the R8 kernel is AVX2; the R16 one needs HAVE_FANCY_SIMD).
+extern "C" void iqk_test_gemm_q8_k_r8(int n, const void * vx, size_t bx,
+                                      const DataInfo& info, int nrc_x, int nrc_y) {
+    switch (nrc_y) {
+        case 1: mul_mat_q8_k_r8_q8_k<1>(n, vx, bx, info, nrc_x); break;
+        case 2: mul_mat_q8_k_r8_q8_k<2>(n, vx, bx, info, nrc_x); break;
+        case 3: mul_mat_q8_k_r8_q8_k<3>(n, vx, bx, info, nrc_x); break;
+        case 4: mul_mat_q8_k_r8_q8_k<4>(n, vx, bx, info, nrc_x); break;
+        case 5: mul_mat_q8_k_r8_q8_k<5>(n, vx, bx, info, nrc_x); break;
+        case 6: mul_mat_q8_k_r8_q8_k<6>(n, vx, bx, info, nrc_x); break;
+        case 7: mul_mat_q8_k_r8_q8_k<7>(n, vx, bx, info, nrc_x); break;
+        default: mul_mat_q8_k_r8_q8_k<8>(n, vx, bx, info, nrc_x); break;
+    }
+}
+
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
 static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
