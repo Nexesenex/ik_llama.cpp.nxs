@@ -8,6 +8,7 @@ add_executable(unit_test
     ../unit_test/fp16_table.cpp
     ../unit_test/stubs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../ggml/src/iqk/iqk_gemm_kquants.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../ggml/src/iqk/iqk_gemm_legacy_quants.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../ggml/src/iqk/iqk_quantize.cpp
 )
 

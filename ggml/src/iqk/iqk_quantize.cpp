@@ -5688,6 +5688,12 @@ static void repack_q6_0(int nrows, int n_per_row, const block_q6_0 * x, block_q6
     }
 }
 
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_convert_iq4_xs_r8 in iqk_gemm_kquants.cpp).
+extern "C" void iqk_test_repack_q6_0(int nrows, int n_per_row, const block_q6_0 * x, block_q6_0_r4 * y) {
+    repack_q6_0(nrows, n_per_row, x, y, false);
+}
+
 size_t quantize_q6_0_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         const quantize_user_data * user_data) {
     GGML_ASSERT(nrows%4 == 0);
