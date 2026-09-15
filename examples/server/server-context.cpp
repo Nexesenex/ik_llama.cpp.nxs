@@ -3847,6 +3847,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
     const auto pos_min_thold = std::max(0, pos_next - 1);
     const bool is_dsv4 = llama_model_is_deepseek4(model);
     const bool is_openpangu = llama_model_is_openpangu(model);
+    const bool is_glm5next = llama_model_is_glm5next(model);
     const bool is_compacted = llama_kv_cache_is_compacted(slot.ctx);
     if (slot.n_past > 0 && slot.n_past < slot.cache_tokens.n_tokens()) {
         int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
@@ -3891,7 +3892,14 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 }
 
                 if (!do_reset) {
-                    if (is_dsv4 || is_openpangu || is_compacted) {
+                    // Stateful arches must resume at pos_max + 1: their restored state already
+                    // contains the boundary token (DSV4/openPangu private state, compacted window,
+                    // glm5next cumulative KDA state + DSA indexer rows). Re-processing it would
+                    // double-apply it to the recurrence (transformer KV just overwrites idempotently,
+                    // which is why the generic branch below gets away with pos_max). glm5next takes
+                    // the generic branch's max(pos_min + 1, pos_max) = pos_max for full-history
+                    // checkpoints (pos_min == 0) and corrupts generation from the restore point on.
+                    if (is_dsv4 || is_openpangu || is_compacted || is_glm5next) {
                         pos_next = std::min(pos_next, it->pos_max + 1);
                     } else {
                         pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));

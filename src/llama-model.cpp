@@ -2504,6 +2504,10 @@ bool llama_model_is_openpangu(const llama_model * model) {
     return model && model->arch == LLM_ARCH_OPENPANGU;
 }
 
+bool llama_model_is_glm5next(const llama_model * model) {
+    return model && model->arch == LLM_ARCH_GLM5NEXT;
+}
+
 bool llama_model_is_gemma4_mtp_assistant(const llama_model * model) {
     return model && (model->arch == LLM_ARCH_GEMMA4_MTP || model->arch == LLM_ARCH_GEMMA4_ASSISTANT);
 }
