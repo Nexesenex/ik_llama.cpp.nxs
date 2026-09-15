@@ -3163,6 +3163,13 @@ inline void iqk_transpose_8x8(__m256i * m) {
     }
 }
 
+// Exported thin wrapper so external tests can drive the IQ4_XS_R8 converter
+// directly (it has internal linkage inside the anonymous namespace).
+// Mirrors iqk_test_gemm_q8_k_r16 below.
+extern "C" void iqk_test_convert_iq4_xs_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    iqk_convert_iq4_xs_r8_q8_k_r16(n, vx, bx, vy, nrc_x);
+}
+
 void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
 
 #ifdef HAVE_FANCY_SIMD
