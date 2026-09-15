@@ -65,7 +65,10 @@ void ggml_abort(const char * file, int line, const char * fmt, ...) {
 static size_t type_size(enum ggml_type t) {
     switch (t) {
         case GGML_TYPE_F32:         return sizeof(float);
-        case GGML_TYPE_Q8_0:        return 34;   // 32 qs + 2 d (legacy); unused here
+        case GGML_TYPE_Q6_0:        return sizeof(block_q6_0);
+        case GGML_TYPE_Q6_0_R4:     return sizeof(block_q6_0_r4);
+        case GGML_TYPE_Q8_0:        return sizeof(block_q8_0);
+        case GGML_TYPE_Q8_0_R8:     return sizeof(block_q8_0_r8);
         case GGML_TYPE_Q8_K:        return 2*sizeof(float) + QK_K + (QK_K/16)*sizeof(int16_t); // block_q8_K
         case GGML_TYPE_Q8_K_R8:     return sizeof(block_q8_k_r8);
         case GGML_TYPE_Q8_K_R16:    return sizeof(block_q8_k_r16);
@@ -77,6 +80,10 @@ static size_t type_size(enum ggml_type t) {
 static int64_t blck_size(enum ggml_type t) {
     switch (t) {
         case GGML_TYPE_F32:         return 1;
+        case GGML_TYPE_Q6_0:        return QK6_0;
+        case GGML_TYPE_Q6_0_R4:     return 4 * QK6_0;
+        case GGML_TYPE_Q8_0:        return QK8_0;
+        case GGML_TYPE_Q8_0_R8:     return 8 * QK8_0;
         case GGML_TYPE_Q8_K:        return QK_K;
         case GGML_TYPE_Q8_K_R8:     return QK_K;
         case GGML_TYPE_Q8_K_R16:    return QK_K;
