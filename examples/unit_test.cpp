@@ -121,9 +121,18 @@ static size_t q8_row_size(bool r16, int n) {
     return (size_t)(n / QK_K) * sizeof(block_q8_k_r8);
 }
 
+// Local block_q8_K dequant (ggml-quants.c is not linked into this test).
+// block_q8_K holds plain int8 quants: y[j] = d * qs[j].
+static void dequant_q8_K_row(const block_q8_K * x, float * y, int64_t k) {
+    int64_t nb = k / QK_K;
+    for (int64_t i = 0; i < nb; ++i) {
+        float d = x[i].d;
+        for (int j = 0; j < QK_K; ++j) y[i * QK_K + j] = d * x[i].qs[j];
+    }
+}
+
 // Dequantize the interleaved fbuf from IQ4_XS_R8 src blocks.
-static void fill_interleaved_fbuf(const block_iq4_xs_r8 * src, float * fbuf, int nrc_x, int n, int nb) {
-    float * fp = fbuf;
+static void fill_interleaved_fbuf(const block_iq4_xs_r8 * src, float * fbuf, int nrc_x, int n, int nb) {    float * fp = fbuf;
     for (int r = 0; r < nrc_x; r += 8) {
         dequantize_row_iq4_xs_r8(&src[(r / 8) * nb], fp, 8 * n);
         fp += (size_t)8 * n;
@@ -1223,6 +1232,120 @@ static void test_gemm_r16(int, int, int, bool) {
 #endif
 
 // ---------------------------------------------------------------------------
+// Test: R8 GEMM vs float (converted weights through the real R8 kernel).
+//   Drives mul_mat_q8_k_r8_q8_k on the converter's Q8_K_R8 output and
+//   compares against a naive float GEMM over the dequantized converter
+//   weights. Covers nrc_y=1 (TG-like) and nrc_y=8 (PP chunk), plus MoE-style
+//   row_mapping variants (identity / reversed / strided subset) of the kind
+//   the production MoE path (iqk_mul_mat_moe / iqk_moe_fused_up_gate) uses
+//   and that no other test exercises (test_gemm_r16 is FANCY-only).
+//   Requires !HAVE_FANCY_SIMD: with AVX-512 the converter emits R16 blocks.
+// ---------------------------------------------------------------------------
+static void test_gemm_r8(int n, int nrc_x, int nrc_y) {
+#ifdef HAVE_FANCY_SIMD
+    (void)n; (void)nrc_x; (void)nrc_y;
+    printf("  [SKIP] gemm-r8(conv): converter emits R16 with HAVE_FANCY_SIMD\n");
+    return;
+#else
+    GGML_ASSERT(n % QK_K == 0);
+    GGML_ASSERT(nrc_x % 8 == 0);
+    GGML_ASSERT(nrc_y >= 1 && nrc_y <= 8);
+    const int nb = n / QK_K;
+    const size_t bx_w = ggml_row_size(GGML_TYPE_IQ4_XS_R8, n);
+    const size_t bx_B = ggml_row_size(GGML_TYPE_Q8_K, n);
+    // Per-model-row stride of packed Q8_K_R8 (8 rows share nb blocks).
+    const size_t rowsz_r8 = (size_t)nb * (sizeof(block_q8_k_r8) / 8);
+
+    // Random repacked weights: (nrc_x/8) groups of nb blocks.
+    std::vector<block_iq4_xs_r8> W((size_t)(nrc_x / 8) * nb);
+    for (auto & b : W) make_random_iq4_xs_r8(&b);
+
+    // Converter output in the packed-group layout the GEMM kernel reads.
+    std::vector<uint8_t> Wconv((size_t)(nrc_x / 8) * nb * sizeof(block_q8_k_r8) + 64, 0);
+    iqk_test_convert_iq4_xs_r8(n, W.data(), bx_w, Wconv.data(), nrc_x);
+
+    // Float ground truth = dequant of the converter output (fair target: a
+    // quantized GEMM cannot beat its own input quantization).
+    std::vector<float> Wf((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 8; ++g)
+        dequantize_row_q8_k_r8((const block_q8_k_r8 *)Wconv.data() + g * nb,
+                               Wf.data() + (size_t)g * 8 * n, 8 * n);
+
+    // Random activations; 8 token rows so subset mappings fit too.
+    const int NE11 = 8;
+    std::vector<float> Bf((size_t)NE11 * n);
+    // NOTE: cast g_rng()%41 to int before subtracting, otherwise the unsigned
+    // modulo result wraps when the value is < 20 (uint32_t arithmetic).
+    for (size_t j = 0; j < Bf.size(); ++j) Bf[j] = 0.05f * ((int)(g_rng() % 41) - 20);
+    std::vector<uint8_t> B((size_t)NE11 * bx_B);
+    for (int iy = 0; iy < NE11; ++iy)
+        iqk_quantize_row_q8_K(Bf.data() + (size_t)iy * n, B.data() + (size_t)iy * bx_B, n);
+    // Dequantized activations for the naive reference: comparing against the
+    // pre-quant floats would fold activation quantization noise (tens of
+    // units at these scales) into the verdict. The kernel reads the quantized
+    // rows, so the fair truth is their dequant.
+    std::vector<float> Bfq((size_t)NE11 * n, 0.f);
+    for (int iy = 0; iy < NE11; ++iy)
+        dequant_q8_K_row((const block_q8_K *)(B.data() + (size_t)iy * bx_B),
+                         Bfq.data() + (size_t)iy * n, n);
+
+    // C holds ne11 token rows (MoE dst layout); the kernel scatters via mapping.
+    auto run_case = [&](const char * tag, int ne11, const std::vector<mmid_row_mapping> * mapping, int ny) {
+        std::vector<float> C((size_t)ne11 * nrc_x, -1.f);
+        DataInfo info;
+        info.s   = C.data();
+        info.cy  = (const char *)B.data();
+        info.bs  = nrc_x;
+        info.by  = bx_B;
+        info.cur_y = 0;
+        info.ne11  = ne11;
+        info.row_mapping = mapping ? mapping->data() : nullptr;
+        iqk_test_gemm_q8_k_r8(n, Wconv.data(), rowsz_r8, info, nrc_x, ny);
+
+        float max_err = 0.f, max_ref = 0.f;
+        size_t nbad = 0;
+        for (int iy = 0; iy < ny; ++iy) {
+            int i1 = mapping ? (*mapping)[iy].i1 : iy;
+            for (int r = 0; r < nrc_x; ++r) {
+                const float * wr = Wf.data() + (size_t)r * n;
+                const float * br = Bfq.data() + (size_t)i1 * n;
+                double s = 0.0;
+                for (int k = 0; k < n; ++k) s += (double)wr[k] * (double)br[k];
+                float got = C[(size_t)i1 * nrc_x + r];
+                float e = fabsf(got - (float)s);
+                if (fabsf((float)s) > max_ref) max_ref = fabsf((float)s);
+                if (e > max_err) max_err = e;
+                // Tight: both sides consume identical quantized inputs, so
+                // only float rounding (<1e-2) may remain.
+                if (e > 1e-2f + 1e-4f * fabsf((float)s)) ++nbad;
+            }
+        }
+        if (nbad == 0)
+            printf("  [OK]   gemm-r8 %-12s n=%-5d nrc_x=%-3d nrc_y=%d : max|err|=%.4g (scale %.4g)\n",
+                   tag, n, nrc_x, ny, (double)max_err, (double)max_ref);
+        else {
+            printf("  [FAIL] gemm-r8 %-12s n=%-5d nrc_x=%-3d nrc_y=%d : %zu bad (max|err|=%.4g scale %.4g)\n",
+                   tag, n, nrc_x, ny, nbad, (double)max_err, (double)max_ref);
+            ++g_failures;
+        }
+    };
+
+    run_case("plain", nrc_y, nullptr, nrc_y);
+    {
+        std::vector<mmid_row_mapping> rev(nrc_y);
+        for (int iy = 0; iy < nrc_y; ++iy) { rev[iy].i1 = nrc_y - 1 - iy; rev[iy].i2 = 0; }
+        run_case("rev-map", nrc_y, &rev, nrc_y);
+    }
+    if (nrc_y >= 4) {
+        // Strided subset: 4 rows out of 8 tokens (MoE expert sees a fraction).
+        std::vector<mmid_row_mapping> sub(4);
+        for (int iy = 0; iy < 4; ++iy) { sub[iy].i1 = 2 * iy; sub[iy].i2 = 0; }
+        run_case("sub-map", NE11, &sub, 4);
+    }
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 static void usage(const char * prog) {
@@ -1365,6 +1488,20 @@ int main(int argc, char ** argv) {
             for (int nrc_y : ny_g) {
                 for (int nrc_x : nx_g) {
                     test_gemm_r16(n, nrc_x, nrc_y, /*use_ref=*/false);
+                }
+            }
+        }
+    }
+
+    {
+        printf("\n--- Test: R8 GEMM vs float (converted weights, plain + row_mapping) ---\n");
+        int ns_g8[] = {1024};
+        int nx_g8[] = {8, 64};
+        int ny_g8[] = {1, 8};
+        for (int n : ns_g8) {
+            for (int nrc_x : nx_g8) {
+                for (int nrc_y : ny_g8) {
+                    test_gemm_r8(n, nrc_x, nrc_y);
                 }
             }
         }
