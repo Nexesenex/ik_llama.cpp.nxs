@@ -974,7 +974,9 @@ static void test_kv_sweep(bool r16, int ctx) {
 //   the R16 path (see iqk_dequant_type). This is the decisive correctness
 //   check: it verifies the converter's qs byte layout is exactly what the
 //   GEMM kernel reads, under realistic long-prompt nrc_y.
+//   Requires HAVE_FANCY_SIMD: the R16 GEMM kernel is AVX-512 only.
 // ---------------------------------------------------------------------------
+#ifdef HAVE_FANCY_SIMD
 static void test_gemm_r16(int n, int nrc_x, int nrc_y, bool /*use_ref*/) {
     GGML_ASSERT(nrc_x % 16 == 0);
     GGML_ASSERT(nrc_y >= 32);
@@ -1191,6 +1193,11 @@ static void test_gemm_r16(int n, int nrc_x, int nrc_y, bool /*use_ref*/) {
         ++g_failures;
     }
 }
+#else
+static void test_gemm_r16(int, int, int, bool) {
+    printf("  [SKIP] gemm-r16(conv): requires HAVE_FANCY_SIMD (AVX-512 R16 kernel not compiled in)\n");
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Main

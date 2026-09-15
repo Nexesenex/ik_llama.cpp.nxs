@@ -1964,9 +1964,9 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
 
 // Exported thin wrapper so external tests can drive the R16 GEMM kernel
 // directly (bypassing the full iqk_mul_mat dispatch). Selects the nrc_y
-// instantiation. Only the non-AVX-512 instantiation is wrapped here; the
-// AVX-512 variant lives behind HAVE_FANCY_SIMD.
-#if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+// instantiation. Requires HAVE_FANCY_SIMD: mul_mat_q8_k_r16_q8_k is an
+// AVX-512 (__m512) kernel defined only behind HAVE_FANCY_SIMD.
+#ifdef HAVE_FANCY_SIMD
 extern "C" void iqk_test_gemm_q8_k_r16(int n, const void * vx, size_t bx,
                                        const DataInfo& info, int nrc_x, int nrc_y) {
     switch (nrc_y) {
