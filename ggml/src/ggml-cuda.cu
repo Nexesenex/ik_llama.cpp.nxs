@@ -833,6 +833,12 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     if (compute_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(compute_event));
     }
+    if (copy_buffer != nullptr) {
+        ggml_cuda_set_device(device);
+        CUDA_CHECK(cudaFree(copy_buffer));
+        copy_buffer = nullptr;
+        copy_size = 0;
+    }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
             if (streams[i][j] != nullptr) {
