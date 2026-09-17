@@ -171,6 +171,11 @@ static void fill_interleaved_fbuf(const block_iq4_xs_r8 * src, float * fbuf, int
 // Test 1: Delta integrity — every row must have a finite, non-zero delta
 // ---------------------------------------------------------------------------
 static void test_delta_integrity(bool r16, int nrc_x, int n) {
+#ifndef HAVE_FANCY_SIMD
+    // Without AVX-512 the converter emits Q8_K_R8 blocks, so an R16-layout
+    // check would misread R8 payload bytes as deltas.
+    if (r16) { printf("  [SKIP] R16 integrity nrc_x=%-3d n=%-5d : requires HAVE_FANCY_SIMD\n", nrc_x, n); return; }
+#endif
     const int nb = n / QK_K;
     const int nblk_x = (nrc_x / 8) * nb;
     std::vector<block_iq4_xs_r8> src(nblk_x);
@@ -354,6 +359,11 @@ static void test_r16_fallback(int nrc_x, int n) {
 // converter and reference share the same bug).
 // ---------------------------------------------------------------------------
 static void test_roundtrip(bool r16, int nrc_x, int n) {
+#ifndef HAVE_FANCY_SIMD
+    // Without AVX-512 the converter emits Q8_K_R8 blocks; dequantizing them
+    // as R16 is meaningless on this build.
+    if (r16) { printf("  [SKIP] R16 roundtrip nrc_x=%-3d n=%-5d : requires HAVE_FANCY_SIMD\n", nrc_x, n); return; }
+#endif
     const int nb = n / QK_K;
     const int nblk_x = (nrc_x / 8) * nb;
     const size_t bx = ggml_row_size(GGML_TYPE_IQ4_XS_R8, n);
@@ -704,6 +714,11 @@ static void test_path(bool r16, int nrc_x, int n) {
 //       native IQ4_XS → Q8_K_R8 / Q8_K_R16, without prior repack to R8 format.
 // ---------------------------------------------------------------------------
 static void test_native_path(bool r16, int nrc_x, int n) {
+#ifndef HAVE_FANCY_SIMD
+    // Without AVX-512 the native converter emits Q8_K_R8 blocks, so an
+    // R16-layout reference comparison is meaningless on this build.
+    if (r16) { printf("  [SKIP] native-r16  nrc_x=%-3d n=%-5d : requires HAVE_FANCY_SIMD\n", nrc_x, n); return; }
+#endif
     const int nb = n / QK_K;
     const int nblk = nrc_x * nb;
 
