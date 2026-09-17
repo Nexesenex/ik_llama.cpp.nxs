@@ -61,16 +61,13 @@ delta_net::delta_net(llama_context & _lctx, const llama_batch & _batch) : lctx(_
     }
 
     const uint32_t qnext_state_slots = llm_build_context::llama_kv_qnext_state_slots(lctx.kv_self);
-    // An MTP sub-graph may contain no recurrent (KDA) layers, in which case the
-    // context KV cache has no state slots at all. That is fine as long as no
-    // KDA layer is actually built (build_layer_attn_kda asserts its presence).
+    GGML_ASSERT(qnext_state_slots > 0);
+
     // Reserve-graph builds may not carry explicit sequence IDs, in which case
     // the fallback sequence slot is 0.
     for (llama_seq_id s : token_seq_ids) {
         GGML_ASSERT(s >= 0);
-        if (qnext_state_slots > 0) {
-            GGML_ASSERT((uint32_t) s < qnext_state_slots);
-        }
+        GGML_ASSERT((uint32_t) s < qnext_state_slots);
     }
 
     int max_per_step = lctx.kv_self.save_per_step_ssm
