@@ -81,6 +81,9 @@ void init_unit_test_fp16_table();
 // Test-only repack entry point (defined in iqk_quantize.cpp next to the
 // other test hooks; declared locally to keep this test self-contained).
 extern "C" void iqk_test_repack_q5_0(int nrows, int n_per_row, const block_q5_0 * x, block_q5_0_r4 * y);
+extern "C" void iqk_test_repack_q4_0(int nrows, int n_per_row, const block_q4_0 * x, block_iq4_nl_r8 * y);
+extern "C" void iqk_test_repack_mxfp4(int nrows, int n_per_row, const block_mxfp4 * x, block_mxfp4_r8 * y);
+extern "C" void iqk_test_repack_iq4_nl(int nrows, int n_per_row, const block_iq4_nl * x, block_iq4_nl_r4 * y);
 
 // g_iqk_r16_path is extern'd in iqk_common.h but defined in iqk_mul_mat.cpp
 // which is NOT linked into this standalone test.  Provide our own definition.
@@ -1478,6 +1481,68 @@ static void test_gemm_iq4_xs_r8_direct(int n, int nrc_x, int nrc_y) {
     }
 }
 
+// Build a random but *valid* block_q4_0: random half delta, random nibbles.
+static void make_random_q4_0(block_q4_0 * blk) {
+    float d = (g_rng() % 1000) * 0.001f + 0.01f;
+    blk->d = GGML_FP32_TO_FP16(d);
+    for (auto & v : blk->qs) v = (uint8_t)(g_rng() & 0xff);
+}
+
+// Natural-order Q4_0 dequant: signed nibbles with -8 bias.
+static void dequant_q4_0_row(const block_q4_0 * x, float * y, int64_t k) {
+    int64_t nb = k / QK4_0;
+    for (int64_t i = 0; i < nb; ++i) {
+        float d = GGML_FP16_TO_FP32(x[i].d);
+        for (int j = 0; j < QK4_0 / 2; ++j) {
+            y[i * QK4_0 + j]              = d * ((x[i].qs[j] & 0x0F) - 8);
+            y[i * QK4_0 + j + QK4_0 / 2]  = d * ((x[i].qs[j] >> 4) - 8);
+        }
+    }
+}
+
+// Build a random but *valid* block_iq4_nl.
+static void make_random_iq4_nl(block_iq4_nl * blk) {
+    float d = (g_rng() % 1000) * 0.001f + 0.01f;
+    blk->d = GGML_FP32_TO_FP16(d);
+    for (auto & v : blk->qs) v = (uint8_t)(g_rng() & 0xff);
+}
+
+// Natural-order IQ4_NL dequant through the shared values table.
+static void dequant_iq4_nl_row(const block_iq4_nl * x, float * y, int64_t k) {
+    int64_t nb = k / QK4_NL;
+    for (int64_t i = 0; i < nb; ++i) {
+        float d = GGML_FP16_TO_FP32(x[i].d);
+        for (int j = 0; j < QK4_NL / 2; ++j) {
+            y[i * QK4_NL + j]             = d * iq4k_values[x[i].qs[j] & 0x0F];
+            y[i * QK4_NL + j + QK4_NL/2]  = d * iq4k_values[x[i].qs[j] >> 4];
+        }
+    }
+}
+
+// Build a random block_mxfp4: random E8M0 exponent, random nibbles.
+// NOTE: e is kept in [114, 143] so the shared scale 2^(e-128) is a normal
+// fp16. The converter stores scales as fp16, which cannot hold E8M0's full
+// range: tiny scales (e < ~104) flush to zero and huge ones (e > 143)
+// overflow to Inf (then Inf*0-valued quants become NaN on dequant).
+// That clipping is inherent to Q8_0 half scales, not a routing bug; wild
+// exponents would only test the clipping, so keep them out here.
+static void make_random_mxfp4(block_mxfp4 * blk) {
+    blk->e = (uint8_t)(114 + (g_rng() % 30));
+    for (auto & v : blk->qs) v = (uint8_t)(g_rng() & 0xff);
+}
+
+// Natural-order MXFP4 dequant.
+static void dequant_mxfp4_row(const block_mxfp4 * x, float * y, int64_t k) {
+    int64_t nb = k / QK_MXFP4;
+    for (int64_t i = 0; i < nb; ++i) {
+        float d = GGML_E8M0_TO_FP32_HALF(x[i].e);
+        for (int j = 0; j < QK_MXFP4 / 2; ++j) {
+            y[i * QK_MXFP4 + j]               = d * kvalues_mxfp4[x[i].qs[j] & 0x0F];
+            y[i * QK_MXFP4 + j + QK_MXFP4/2]  = d * kvalues_mxfp4[x[i].qs[j] >> 4];
+        }
+    }
+}
+
 // Build a random but *valid* block_q5_0: random half delta, random high
 // bits and nibbles.
 static void make_random_q5_0(block_q5_0 * blk) {
@@ -1704,6 +1769,276 @@ static void test_q6_0_r4_convert(int n, int nrc_x) {
 }
 
 // ---------------------------------------------------------------------------
+// Test: Q4_0_R8 repack integrity (H1).
+// ---------------------------------------------------------------------------
+static void test_q4_0_repack(int n, int nrc_x) {
+    GGML_ASSERT(n % QK4_0 == 0);
+    GGML_ASSERT(nrc_x % 8 == 0);
+    const int nb = n / QK4_0;
+    std::vector<block_q4_0> src((size_t)nrc_x * nb);
+    for (auto & b : src) make_random_q4_0(&b);
+
+    std::vector<float> f1((size_t)nrc_x * n);
+    for (int r = 0; r < nrc_x; ++r)
+        dequant_q4_0_row(&src[(size_t)r * nb], f1.data() + (size_t)r * n, n);
+
+    std::vector<block_iq4_nl_r8> rep((size_t)(nrc_x / 8) * nb);
+    iqk_test_repack_q4_0(nrc_x, n, src.data(), rep.data());
+
+    std::vector<float> f2((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 8; ++g)
+        dequantize_row_q4_0_r8(&rep[(size_t)g * nb], f2.data() + (size_t)g * 8 * n, 8 * n);
+
+    long mm = 0; size_t first = (size_t)-1;
+    for (size_t j = 0; j < (size_t)nrc_x * n; ++j)
+        if (f1[j] != f2[j]) { ++mm; if (first == (size_t)-1) first = j; }
+    if (mm == 0)
+        printf("  [OK]   q4_0-repack  n=%-5d nrc_x=%-3d : repack is lossless (bit-exact)\n", n, nrc_x);
+    else {
+        printf("  [FAIL] q4_0-repack  n=%-5d nrc_x=%-3d : %ld diffs first@%zu (native=%.4g repacked=%.4g)\n",
+               n, nrc_x, mm, first, (double)f1[first], (double)f2[first]);
+        ++g_failures;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test: Q4_0_R8 -> Q8_0_R8 converter (H2) — added by PR 2448.
+// ---------------------------------------------------------------------------
+static void test_q4_0_r8_convert(int n, int nrc_x) {
+    GGML_ASSERT(n % QK4_0 == 0);
+    GGML_ASSERT(nrc_x % 8 == 0);
+    const int nb = n / QK4_0; // == n / QK8_0
+    std::vector<block_q4_0> src((size_t)nrc_x * nb);
+    for (auto & b : src) make_random_q4_0(&b);
+    std::vector<block_iq4_nl_r8> rep((size_t)(nrc_x / 8) * nb);
+    iqk_test_repack_q4_0(nrc_x, n, src.data(), rep.data());
+
+    const size_t bx = ggml_row_size(GGML_TYPE_Q4_0_R8, n);
+    std::vector<uint8_t> got((size_t)(nrc_x / 8) * nb * sizeof(block_q8_0_r8) + 64, 0);
+    bool ok = iqk_convert_legacy_quants_q8_r8(GGML_TYPE_Q4_0_R8, n, rep.data(), bx, got.data(), nrc_x);
+    if (!ok) {
+        printf("  [FAIL] q4_0-conv   n=%-5d nrc_x=%-3d : converter returned false\n", n, nrc_x);
+        ++g_failures;
+        return;
+    }
+
+    const auto * gout = (const block_q8_0_r8 *)got.data();
+    long mm_d = 0;
+    for (int g = 0; g < nrc_x / 8; ++g) {
+        for (int i = 0; i < nb; ++i) {
+            if (memcmp(gout[(size_t)g * nb + i].d, rep[(size_t)g * nb + i].d, 8 * sizeof(ggml_half)) != 0) ++mm_d;
+        }
+    }
+    if (mm_d != 0) {
+        printf("  [FAIL] q4_0-conv   n=%-5d nrc_x=%-3d : %ld delta mismatches (d not copied)\n", n, nrc_x, mm_d);
+        ++g_failures;
+        return;
+    }
+
+    std::vector<float> f1((size_t)nrc_x * n);
+    for (int g = 0; g < nrc_x / 8; ++g)
+        dequantize_row_q4_0_r8(&rep[(size_t)g * nb], f1.data() + (size_t)g * 8 * n, 8 * n);
+    std::vector<float> f2((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 8; ++g)
+        dequantize_row_q8_0_r8(&gout[(size_t)g * nb], f2.data() + (size_t)g * 8 * n, 8 * n);
+
+    long mm = 0; size_t first = (size_t)-1;
+    for (size_t j = 0; j < (size_t)nrc_x * n; ++j)
+        if (f1[j] != f2[j]) { ++mm; if (first == (size_t)-1) first = j; }
+    if (mm == 0)
+        printf("  [OK]   q4_0-conv   n=%-5d nrc_x=%-3d : deltas copied, floats bit-exact\n", n, nrc_x);
+    else {
+        size_t r0 = first / (size_t)n, c0 = first % (size_t)n;
+        printf("  [FAIL] q4_0-conv   n=%-5d nrc_x=%-3d : %ld float diffs first@(row=%zu,col=%zu) r8=%.4g q8=%.4g\n",
+               n, nrc_x, mm, r0, c0, (double)f1[first], (double)f2[first]);
+        ++g_failures;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test: MXFP4_R8 repack integrity (H1).
+// ---------------------------------------------------------------------------
+static void test_mxfp4_repack(int n, int nrc_x) {
+    GGML_ASSERT(n % QK_MXFP4 == 0);
+    GGML_ASSERT(nrc_x % 8 == 0);
+    const int nb = n / QK_MXFP4;
+    std::vector<block_mxfp4> src((size_t)nrc_x * nb);
+    for (auto & b : src) make_random_mxfp4(&b);
+
+    std::vector<float> f1((size_t)nrc_x * n);
+    for (int r = 0; r < nrc_x; ++r)
+        dequant_mxfp4_row(&src[(size_t)r * nb], f1.data() + (size_t)r * n, n);
+
+    std::vector<block_mxfp4_r8> rep((size_t)(nrc_x / 8) * nb);
+    iqk_test_repack_mxfp4(nrc_x, n, src.data(), rep.data());
+
+    std::vector<float> f2((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 8; ++g)
+        dequantize_row_mxfp4_r8(&rep[(size_t)g * nb], f2.data() + (size_t)g * 8 * n, 8 * n);
+
+    long mm = 0; size_t first = (size_t)-1;
+    for (size_t j = 0; j < (size_t)nrc_x * n; ++j)
+        if (f1[j] != f2[j]) { ++mm; if (first == (size_t)-1) first = j; }
+    if (mm == 0)
+        printf("  [OK]   mxfp4-repack n=%-5d nrc_x=%-3d : repack is lossless (bit-exact)\n", n, nrc_x);
+    else {
+        printf("  [FAIL] mxfp4-repack n=%-5d nrc_x=%-3d : %ld diffs first@%zu (native=%.4g repacked=%.4g)\n",
+               n, nrc_x, mm, first, (double)f1[first], (double)f2[first]);
+        ++g_failures;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test: MXFP4_R8 -> Q8_0_R8 converter (H2) — added by PR 2448.
+// ---------------------------------------------------------------------------
+static void test_mxfp4_r8_convert(int n, int nrc_x) {
+    GGML_ASSERT(n % QK_MXFP4 == 0);
+    GGML_ASSERT(nrc_x % 8 == 0);
+    const int nb = n / QK_MXFP4; // == n / QK8_0
+    std::vector<block_mxfp4> src((size_t)nrc_x * nb);
+    for (auto & b : src) make_random_mxfp4(&b);
+    std::vector<block_mxfp4_r8> rep((size_t)(nrc_x / 8) * nb);
+    iqk_test_repack_mxfp4(nrc_x, n, src.data(), rep.data());
+
+    const size_t bx = ggml_row_size(GGML_TYPE_MXFP4_R8, n);
+    std::vector<uint8_t> got((size_t)(nrc_x / 8) * nb * sizeof(block_q8_0_r8) + 64, 0);
+    bool ok = iqk_convert_legacy_quants_q8_r8(GGML_TYPE_MXFP4_R8, n, rep.data(), bx, got.data(), nrc_x);
+    if (!ok) {
+        printf("  [FAIL] mxfp4-conv  n=%-5d nrc_x=%-3d : converter returned false\n", n, nrc_x);
+        ++g_failures;
+        return;
+    }
+
+    const auto * gout = (const block_q8_0_r8 *)got.data();
+    long mm_d = 0;
+    for (int g = 0; g < nrc_x / 8; ++g) {
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                ggml_half exp = GGML_FP32_TO_FP16(GGML_E8M0_TO_FP32_HALF(rep[(size_t)g * nb + i].e[k]));
+                if (memcmp(&gout[(size_t)g * nb + i].d[k], &exp, sizeof(ggml_half)) != 0) ++mm_d;
+            }
+        }
+    }
+    if (mm_d != 0) {
+        printf("  [FAIL] mxfp4-conv  n=%-5d nrc_x=%-3d : %ld scale mismatches\n", n, nrc_x, mm_d);
+        ++g_failures;
+        return;
+    }
+
+    std::vector<float> f1((size_t)nrc_x * n);
+    for (int g = 0; g < nrc_x / 8; ++g)
+        dequantize_row_mxfp4_r8(&rep[(size_t)g * nb], f1.data() + (size_t)g * 8 * n, 8 * n);
+    std::vector<float> f2((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 8; ++g)
+        dequantize_row_q8_0_r8(&gout[(size_t)g * nb], f2.data() + (size_t)g * 8 * n, 8 * n);
+
+    long mm = 0; size_t first = (size_t)-1;
+    for (size_t j = 0; j < (size_t)nrc_x * n; ++j)
+        if (f1[j] != f2[j]) { ++mm; if (first == (size_t)-1) first = j; }
+    if (mm == 0)
+        printf("  [OK]   mxfp4-conv  n=%-5d nrc_x=%-3d : scales converted, floats bit-exact\n", n, nrc_x);
+    else {
+        size_t r0 = first / (size_t)n, c0 = first % (size_t)n;
+        printf("  [FAIL] mxfp4-conv  n=%-5d nrc_x=%-3d : %ld float diffs first@(row=%zu,col=%zu) r8=%.4g q8=%.4g\n",
+               n, nrc_x, mm, r0, c0, (double)f1[first], (double)f2[first]);
+        ++g_failures;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test: IQ4_NL_R4 repack integrity (H1) — previous V-cache path.
+// ---------------------------------------------------------------------------
+static void test_iq4_nl_repack(int n, int nrc_x) {
+    GGML_ASSERT(n % QK4_NL == 0);
+    GGML_ASSERT(nrc_x % 4 == 0);
+    const int nb = n / QK4_NL;
+    std::vector<block_iq4_nl> src((size_t)nrc_x * nb);
+    for (auto & b : src) make_random_iq4_nl(&b);
+
+    std::vector<float> f1((size_t)nrc_x * n);
+    for (int r = 0; r < nrc_x; ++r)
+        dequant_iq4_nl_row(&src[(size_t)r * nb], f1.data() + (size_t)r * n, n);
+
+    std::vector<block_iq4_nl_r4> rep((size_t)(nrc_x / 4) * nb);
+    iqk_test_repack_iq4_nl(nrc_x, n, src.data(), rep.data());
+
+    std::vector<float> f2((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 4; ++g)
+        dequantize_row_iq4_nl_r4(&rep[(size_t)g * nb], f2.data() + (size_t)g * 4 * n, 4 * n);
+
+    long mm = 0; size_t first = (size_t)-1;
+    for (size_t j = 0; j < (size_t)nrc_x * n; ++j)
+        if (f1[j] != f2[j]) { ++mm; if (first == (size_t)-1) first = j; }
+    if (mm == 0)
+        printf("  [OK]   iq4_nl-repack n=%-5d nrc_x=%-3d : repack is lossless (bit-exact)\n", n, nrc_x);
+    else {
+        printf("  [FAIL] iq4_nl-repack n=%-5d nrc_x=%-3d : %ld diffs first@%zu (native=%.4g repacked=%.4g)\n",
+               n, nrc_x, mm, first, (double)f1[first], (double)f2[first]);
+        ++g_failures;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test: IQ4_NL_R4 -> Q8_0_R8 converter (H2) — added by PR 2448.
+// ---------------------------------------------------------------------------
+static void test_iq4_nl_r4_convert(int n, int nrc_x) {
+    GGML_ASSERT(n % QK4_NL == 0);
+    GGML_ASSERT(nrc_x % 8 == 0);
+    const int nb = n / QK4_NL; // == n / QK8_0
+    std::vector<block_iq4_nl> src((size_t)nrc_x * nb);
+    for (auto & b : src) make_random_iq4_nl(&b);
+    std::vector<block_iq4_nl_r4> rep((size_t)(nrc_x / 4) * nb);
+    iqk_test_repack_iq4_nl(nrc_x, n, src.data(), rep.data());
+
+    const size_t bx = ggml_row_size(GGML_TYPE_IQ4_NL_R4, n);
+    std::vector<uint8_t> got((size_t)(nrc_x / 8) * nb * sizeof(block_q8_0_r8) + 64, 0);
+    bool ok = iqk_convert_legacy_quants_q8_r8(GGML_TYPE_IQ4_NL_R4, n, rep.data(), bx, got.data(), nrc_x);
+    if (!ok) {
+        printf("  [FAIL] iq4_nl-conv n=%-5d nrc_x=%-3d : converter returned false\n", n, nrc_x);
+        ++g_failures;
+        return;
+    }
+
+    const auto * gout = (const block_q8_0_r8 *)got.data();
+    long mm_d = 0;
+    for (int g = 0; g < nrc_x / 8; ++g) {
+        for (int i = 0; i < nb; ++i) {
+            const auto & r8 = gout[(size_t)g * nb + i];
+            const auto & ra = rep[(size_t)(2 * g) * nb + i];
+            const auto & rb = rep[(size_t)(2 * g + 1) * nb + i];
+            for (int k = 0; k < 4; ++k) {
+                if (memcmp(&r8.d[k], &ra.d[k], sizeof(ggml_half)) != 0) ++mm_d;
+                if (memcmp(&r8.d[k + 4], &rb.d[k], sizeof(ggml_half)) != 0) ++mm_d;
+            }
+        }
+    }
+    if (mm_d != 0) {
+        printf("  [FAIL] iq4_nl-conv n=%-5d nrc_x=%-3d : %ld delta mismatches (d not copied)\n", n, nrc_x, mm_d);
+        ++g_failures;
+        return;
+    }
+
+    std::vector<float> f1((size_t)nrc_x * n);
+    for (int g = 0; g < nrc_x / 4; ++g)
+        dequantize_row_iq4_nl_r4(&rep[(size_t)g * nb], f1.data() + (size_t)g * 4 * n, 4 * n);
+    std::vector<float> f2((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 8; ++g)
+        dequantize_row_q8_0_r8(&gout[(size_t)g * nb], f2.data() + (size_t)g * 8 * n, 8 * n);
+
+    long mm = 0; size_t first = (size_t)-1;
+    for (size_t j = 0; j < (size_t)nrc_x * n; ++j)
+        if (f1[j] != f2[j]) { ++mm; if (first == (size_t)-1) first = j; }
+    if (mm == 0)
+        printf("  [OK]   iq4_nl-conv n=%-5d nrc_x=%-3d : deltas copied, floats bit-exact\n", n, nrc_x);
+    else {
+        size_t r0 = first / (size_t)n, c0 = first % (size_t)n;
+        printf("  [FAIL] iq4_nl-conv n=%-5d nrc_x=%-3d : %ld float diffs first@(row=%zu,col=%zu) r4=%.4g q8=%.4g\n",
+               n, nrc_x, mm, r0, c0, (double)f1[first], (double)f2[first]);
+        ++g_failures;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 static void usage(const char * prog) {
@@ -1723,6 +2058,7 @@ static void usage(const char * prog) {
 }
 
 int main(int argc, char ** argv) {
+    setvbuf(stdout, NULL, _IONBF, 0); // unbuffered: crash location stays visible
     init_unit_test_fp16_table();
     printf("=== IQK iq4_xs_r8 -> q8_k_r8 / q8_k_r16 converter verification ===\n");
     fflush(stdout);
@@ -1893,6 +2229,23 @@ int main(int argc, char ** argv) {
                 for (int nrc_y : ny_d8) {
                     test_gemm_iq4_xs_r8_direct(n, nrc_x, nrc_y);
                 }
+            }
+        }
+    }
+
+    {
+        printf("\n--- Test: Q4_0_R8/MXFP4_R8/IQ4_NL_R4 repack + converters ---\n");
+        int ns_l[] = {256};
+        for (int n : ns_l) {
+            for (int nrc_x : {4, 8}) test_iq4_nl_repack(n, nrc_x);
+            for (int nrc_x : {8, 16}) test_iq4_nl_r4_convert(n, nrc_x);
+            for (int nrc_x : {8, 16}) {
+                test_q4_0_repack(n, nrc_x);
+                test_mxfp4_repack(n, nrc_x);
+            }
+            for (int nrc_x : {8, 16}) {
+                test_q4_0_r8_convert(n, nrc_x);
+                test_mxfp4_r8_convert(n, nrc_x);
             }
         }
     }

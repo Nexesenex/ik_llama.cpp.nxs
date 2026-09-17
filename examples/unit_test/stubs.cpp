@@ -69,6 +69,12 @@ static size_t type_size(enum ggml_type t) {
         case GGML_TYPE_Q5_0_R4:     return sizeof(block_q5_0_r4);
         case GGML_TYPE_Q6_0:        return sizeof(block_q6_0);
         case GGML_TYPE_Q6_0_R4:     return sizeof(block_q6_0_r4);
+        case GGML_TYPE_Q4_0:        return sizeof(block_q4_0);
+        case GGML_TYPE_Q4_0_R8:     return sizeof(block_iq4_nl_r8);
+        case GGML_TYPE_IQ4_NL:      return sizeof(block_iq4_nl);
+        case GGML_TYPE_IQ4_NL_R4:   return sizeof(block_iq4_nl_r4);
+        case GGML_TYPE_MXFP4:       return sizeof(block_mxfp4);
+        case GGML_TYPE_MXFP4_R8:    return sizeof(block_mxfp4_r8);
         case GGML_TYPE_Q8_0:        return sizeof(block_q8_0);
         case GGML_TYPE_Q8_0_R8:     return sizeof(block_q8_0_r8);
         case GGML_TYPE_Q8_K:        return 2*sizeof(float) + QK_K + (QK_K/16)*sizeof(int16_t); // block_q8_K
@@ -86,6 +92,12 @@ static int64_t blck_size(enum ggml_type t) {
         case GGML_TYPE_Q5_0_R4:     return 4 * QK5_0;
         case GGML_TYPE_Q6_0:        return QK6_0;
         case GGML_TYPE_Q6_0_R4:     return 4 * QK6_0;
+        case GGML_TYPE_Q4_0:        return QK4_0;
+        case GGML_TYPE_Q4_0_R8:     return 8 * QK4_0;
+        case GGML_TYPE_IQ4_NL:      return QK4_NL;
+        case GGML_TYPE_IQ4_NL_R4:   return 4 * QK4_NL;
+        case GGML_TYPE_MXFP4:       return QK_MXFP4;
+        case GGML_TYPE_MXFP4_R8:    return 8 * QK_MXFP4;
         case GGML_TYPE_Q8_0:        return QK8_0;
         case GGML_TYPE_Q8_0_R8:     return 8 * QK8_0;
         case GGML_TYPE_Q8_K:        return QK_K;
