@@ -5247,6 +5247,12 @@ static void repack_iq4_nl(int nrows, int n_per_row, const block_iq4_nl * x, bloc
     }
 }
 
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_repack_q6_0 below).
+extern "C" void iqk_test_repack_iq4_nl(int nrows, int n_per_row, const block_iq4_nl * x, block_iq4_nl_r4 * y) {
+    repack_iq4_nl(nrows, n_per_row, x, y, false);
+}
+
 size_t quantize_iq4_nl_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         const quantize_user_data * user_data) {
     GGML_ASSERT(nrows%4 == 0);
@@ -5345,6 +5351,12 @@ static void repack_q4_0(int nrows, int n_per_row, const block_q4_0 * x, block_iq
         y += nblock;
     }
 }
+
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_repack_q6_0 below).
+extern "C" void iqk_test_repack_q4_0(int nrows, int n_per_row, const block_q4_0 * x, block_iq4_nl_r8 * y) {
+    repack_q4_0(nrows, n_per_row, x, y, false);
+}
 #ifdef __ARM_NEON
 static void modify_q4_0_r8(int64_t k, char * cy) {
     auto y = (block_iq4_nl_r8 *)cy;
@@ -5382,6 +5394,12 @@ static void repack_mxfp4(int nrows, int n_per_row, const block_mxfp4 * x, block_
         x += 8*nblock;
         y += nblock;
     }
+}
+
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_repack_q6_0 below).
+extern "C" void iqk_test_repack_mxfp4(int nrows, int n_per_row, const block_mxfp4 * x, block_mxfp4_r8 * y) {
+    repack_mxfp4(nrows, n_per_row, x, y, false);
 }
 
 size_t quantize_q4_0_r8(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
