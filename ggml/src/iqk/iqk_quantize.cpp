@@ -5590,6 +5590,12 @@ static void repack_q5_0(int nrows, int n_per_row, const block_q5_0 * x, block_q5
     }
 }
 
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_repack_q6_0 below).
+extern "C" void iqk_test_repack_q5_0(int nrows, int n_per_row, const block_q5_0 * x, block_q5_0_r4 * y) {
+    repack_q5_0(nrows, n_per_row, x, y, false);
+}
+
 size_t quantize_q5_0_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         [[maybe_unused]] const quantize_user_data * user_data) {
     GGML_ASSERT(nrows%4 == 0);

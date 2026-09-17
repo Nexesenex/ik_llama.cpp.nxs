@@ -78,6 +78,10 @@ extern bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx,
 // ggml_table_f32_f16). Declared here; do not redefine.
 void init_unit_test_fp16_table();
 
+// Test-only repack entry point (defined in iqk_quantize.cpp next to the
+// other test hooks; declared locally to keep this test self-contained).
+extern "C" void iqk_test_repack_q5_0(int nrows, int n_per_row, const block_q5_0 * x, block_q5_0_r4 * y);
+
 // g_iqk_r16_path is extern'd in iqk_common.h but defined in iqk_mul_mat.cpp
 // which is NOT linked into this standalone test.  Provide our own definition.
 bool g_iqk_r16_path = false;
@@ -1389,6 +1393,216 @@ static void test_gemm_r8(int n, int nrc_x, int nrc_y) {
 }
 
 // ---------------------------------------------------------------------------
+// Test: direct R8 GEMM vs float (the production CPU path for repacked
+// experts: 189/201 IQ4_XS on the reporter's box stay on CPU/RAM).
+//   Drives mul_mat_iq4_xs_r8_q8_k_avx2 on repacked weights with Q8_K32
+//   activations (vec_dot_type of IQ4_XS_R8) and compares against a naive
+//   double-precision GEMM over the dequantized inputs. Covers nrc_y=1
+//   (TG-like) and 8 (PP chunk) plus MoE-style row_mappings. No FANCY gate:
+//   this kernel exists on all x86_64 builds.
+// ---------------------------------------------------------------------------
+static void test_gemm_iq4_xs_r8_direct(int n, int nrc_x, int nrc_y) {
+    GGML_ASSERT(n % QK_K == 0);
+    GGML_ASSERT(nrc_x % 8 == 0);
+    GGML_ASSERT(nrc_y >= 1 && nrc_y <= 8);
+    const int nb = n / QK_K;
+    const size_t bx_w = ggml_row_size(GGML_TYPE_IQ4_XS_R8, n);
+    const size_t bx_B = ggml_row_size(GGML_TYPE_Q8_K, n); // Q8_K32 shares block_q8_K
+
+    std::vector<block_iq4_xs_r8> W((size_t)(nrc_x / 8) * nb);
+    for (auto & b : W) make_random_iq4_xs_r8(&b);
+
+    std::vector<float> Wf((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 8; ++g)
+        dequantize_row_iq4_xs_r8(&W[(size_t)g * nb], Wf.data() + (size_t)g * 8 * n, 8 * n);
+
+    const int NE11 = 8;
+    std::vector<float> Bf((size_t)NE11 * n);
+    for (size_t j = 0; j < Bf.size(); ++j) Bf[j] = 0.05f * ((int)(g_rng() % 41) - 20);
+    std::vector<uint8_t> B((size_t)NE11 * bx_B);
+    for (int iy = 0; iy < NE11; ++iy)
+        quantize_row_q8_K32(Bf.data() + (size_t)iy * n, B.data() + (size_t)iy * bx_B, n);
+    std::vector<float> Bfq((size_t)NE11 * n, 0.f);
+    for (int iy = 0; iy < NE11; ++iy)
+        dequant_q8_K_row((const block_q8_K *)(B.data() + (size_t)iy * bx_B),
+                         Bfq.data() + (size_t)iy * n, n);
+
+    auto run_case = [&](const char * tag, int ne11, const std::vector<mmid_row_mapping> * mapping, int ny) {
+        std::vector<float> C((size_t)ne11 * nrc_x, -1.f);
+        DataInfo info;
+        info.s   = C.data();
+        info.cy  = (const char *)B.data();
+        info.bs  = nrc_x;
+        info.by  = bx_B;
+        info.cur_y = 0;
+        info.ne11  = ne11;
+        info.row_mapping = mapping ? mapping->data() : nullptr;
+        iqk_test_gemm_iq4_xs_r8(n, W.data(), bx_w, info, nrc_x, ny);
+
+        float max_err = 0.f, max_ref = 0.f;
+        size_t nbad = 0;
+        for (int iy = 0; iy < ny; ++iy) {
+            int i1 = mapping ? (*mapping)[iy].i1 : iy;
+            for (int r = 0; r < nrc_x; ++r) {
+                const float * wr = Wf.data() + (size_t)r * n;
+                const float * br = Bfq.data() + (size_t)i1 * n;
+                double s = 0.0;
+                for (int k = 0; k < n; ++k) s += (double)wr[k] * (double)br[k];
+                float got = C[(size_t)i1 * nrc_x + r];
+                float e = fabsf(got - (float)s);
+                if (fabsf((float)s) > max_ref) max_ref = fabsf((float)s);
+                if (e > max_err) max_err = e;
+                if (e > 1e-2f + 1e-4f * fabsf((float)s)) ++nbad;
+            }
+        }
+        if (nbad == 0)
+            printf("  [OK]   gemm-r8d %-12s n=%-5d nrc_x=%-3d nrc_y=%d : max|err|=%.4g (scale %.4g)\n",
+                   tag, n, nrc_x, ny, (double)max_err, (double)max_ref);
+        else {
+            printf("  [FAIL] gemm-r8d %-12s n=%-5d nrc_x=%-3d nrc_y=%d : %zu bad (max|err|=%.4g scale %.4g)\n",
+                   tag, n, nrc_x, ny, nbad, (double)max_err, (double)max_ref);
+            ++g_failures;
+        }
+    };
+
+    run_case("plain", nrc_y, nullptr, nrc_y);
+    {
+        std::vector<mmid_row_mapping> rev(nrc_y);
+        for (int iy = 0; iy < nrc_y; ++iy) { rev[iy].i1 = nrc_y - 1 - iy; rev[iy].i2 = 0; }
+        run_case("rev-map", nrc_y, &rev, nrc_y);
+    }
+    if (nrc_y >= 4) {
+        std::vector<mmid_row_mapping> sub(4);
+        for (int iy = 0; iy < 4; ++iy) { sub[iy].i1 = 2 * iy; sub[iy].i2 = 0; }
+        run_case("sub-map", NE11, &sub, 4);
+    }
+}
+
+// Build a random but *valid* block_q5_0: random half delta, random high
+// bits and nibbles.
+static void make_random_q5_0(block_q5_0 * blk) {
+    float d = (g_rng() % 1000) * 0.001f + 0.01f;
+    blk->d = GGML_FP32_TO_FP16(d);
+    for (auto & v : blk->qh) v = (uint8_t)(g_rng() & 0xff);
+    for (auto & v : blk->qs) v = (uint8_t)(g_rng() & 0xff);
+}
+
+// Natural-order Q5_0 dequant mirroring convert_q5_0 in iqk_quantize.cpp.
+static void dequant_q5_0_row(const block_q5_0 * x, float * y, int64_t k) {
+    int64_t nb = k / QK5_0;
+    for (int64_t i = 0; i < nb; ++i) {
+        float d = GGML_FP16_TO_FP32(x[i].d);
+        uint32_t qh;
+        memcpy(&qh, x[i].qh, sizeof(qh));
+        for (int j = 0; j < QK5_0 / 2; ++j) {
+            uint8_t xh_0 = (uint8_t)(((qh >> (j +  0)) << 4) & 0x10);
+            uint8_t xh_1 = (uint8_t)(((qh >> (j + 12))     ) & 0x10);
+            int l0 = (x[i].qs[j] & 0x0F) | xh_0;
+            int l1 = (x[i].qs[j] >> 4)   | xh_1;
+            y[i * QK5_0 + j]             = d * (l0 - 16);
+            y[i * QK5_0 + j + QK5_0 / 2] = d * (l1 - 16);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test: Q5_0_R4 repack integrity (H1) — the current K/V-cache path
+// (-ctk/-ctv q5_0). Random Q5_0 rows -> real repack_q5_0 -> real
+// dequantize_row_q5_0_r4 must equal the natural-order dequant EXACTLY.
+// ---------------------------------------------------------------------------
+static void test_q5_0_repack(int n, int nrc_x) {
+    GGML_ASSERT(n % QK5_0 == 0);
+    GGML_ASSERT(nrc_x % 4 == 0);
+    const int nb = n / QK5_0;
+    std::vector<block_q5_0> src((size_t)nrc_x * nb);
+    for (auto & b : src) make_random_q5_0(&b);
+
+    std::vector<float> f1((size_t)nrc_x * n);
+    for (int r = 0; r < nrc_x; ++r)
+        dequant_q5_0_row(&src[(size_t)r * nb], f1.data() + (size_t)r * n, n);
+
+    std::vector<block_q5_0_r4> rep((size_t)(nrc_x / 4) * nb);
+    iqk_test_repack_q5_0(nrc_x, n, src.data(), rep.data());
+
+    std::vector<float> f2((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 4; ++g)
+        dequantize_row_q5_0_r4(&rep[(size_t)g * nb], f2.data() + (size_t)g * 4 * n, 4 * n);
+
+    long mm = 0; size_t first = (size_t)-1;
+    for (size_t j = 0; j < (size_t)nrc_x * n; ++j)
+        if (f1[j] != f2[j]) { ++mm; if (first == (size_t)-1) first = j; }
+    if (mm == 0)
+        printf("  [OK]   q5_0-repack  n=%-5d nrc_x=%-3d : repack is lossless (bit-exact)\n", n, nrc_x);
+    else {
+        printf("  [FAIL] q5_0-repack  n=%-5d nrc_x=%-3d : %ld diffs first@%zu (native=%.4g repacked=%.4g)\n",
+               n, nrc_x, mm, first, (double)f1[first], (double)f2[first]);
+        ++g_failures;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test: Q5_0_R4 -> Q8_0_R8 converter (H2) — added by PR 2448.
+//   5-bit values fit int8 losslessly at the same scale: deltas bit-copied,
+//   floats bit-exact.
+// ---------------------------------------------------------------------------
+static void test_q5_0_r4_convert(int n, int nrc_x) {
+    GGML_ASSERT(n % QK5_0 == 0);
+    GGML_ASSERT(nrc_x % 8 == 0);
+    const int nb = n / QK5_0; // == n / QK8_0
+    std::vector<block_q5_0> src((size_t)nrc_x * nb);
+    for (auto & b : src) make_random_q5_0(&b);
+    std::vector<block_q5_0_r4> rep((size_t)(nrc_x / 4) * nb);
+    iqk_test_repack_q5_0(nrc_x, n, src.data(), rep.data());
+
+    const size_t bx = ggml_row_size(GGML_TYPE_Q5_0_R4, n);
+    std::vector<uint8_t> got((size_t)(nrc_x / 8) * nb * sizeof(block_q8_0_r8) + 64, 0);
+    bool ok = iqk_convert_legacy_quants_q8_r8(GGML_TYPE_Q5_0_R4, n, rep.data(), bx, got.data(), nrc_x);
+    if (!ok) {
+        printf("  [FAIL] q5_0-conv   n=%-5d nrc_x=%-3d : converter returned false\n", n, nrc_x);
+        ++g_failures;
+        return;
+    }
+
+    const auto * gout = (const block_q8_0_r8 *)got.data();
+    long mm_d = 0;
+    for (int g = 0; g < nrc_x / 8; ++g) {
+        for (int i = 0; i < nb; ++i) {
+            const auto & r8 = gout[(size_t)g * nb + i];
+            const auto & ra = rep[(size_t)(2 * g) * nb + i];
+            const auto & rb = rep[(size_t)(2 * g + 1) * nb + i];
+            for (int k = 0; k < 4; ++k) {
+                if (memcmp(&r8.d[k], &ra.d[k], sizeof(ggml_half)) != 0) ++mm_d;
+                if (memcmp(&r8.d[k + 4], &rb.d[k], sizeof(ggml_half)) != 0) ++mm_d;
+            }
+        }
+    }
+    if (mm_d != 0) {
+        printf("  [FAIL] q5_0-conv   n=%-5d nrc_x=%-3d : %ld delta mismatches (d not copied)\n", n, nrc_x, mm_d);
+        ++g_failures;
+        return;
+    }
+
+    std::vector<float> f1((size_t)nrc_x * n);
+    for (int g = 0; g < nrc_x / 4; ++g)
+        dequantize_row_q5_0_r4(&rep[(size_t)g * nb], f1.data() + (size_t)g * 4 * n, 4 * n);
+    std::vector<float> f2((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 8; ++g)
+        dequantize_row_q8_0_r8(&gout[(size_t)g * nb], f2.data() + (size_t)g * 8 * n, 8 * n);
+
+    long mm = 0; size_t first = (size_t)-1;
+    for (size_t j = 0; j < (size_t)nrc_x * n; ++j)
+        if (f1[j] != f2[j]) { ++mm; if (first == (size_t)-1) first = j; }
+    if (mm == 0)
+        printf("  [OK]   q5_0-conv   n=%-5d nrc_x=%-3d : deltas copied, floats bit-exact\n", n, nrc_x);
+    else {
+        size_t r0 = first / (size_t)n, c0 = first % (size_t)n;
+        printf("  [FAIL] q5_0-conv   n=%-5d nrc_x=%-3d : %ld float diffs first@(row=%zu,col=%zu) r4=%.4g q8=%.4g\n",
+               n, nrc_x, mm, r0, c0, (double)f1[first], (double)f2[first]);
+        ++g_failures;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Test: Q6_0_R4 repack integrity (H1) — the embeddings path.
 //   Random Q6_0 rows -> real repack_q6_0 -> real dequantize_row_q6_0_r4 must
 //   equal the natural-order dequant EXACTLY (repacking is lossless).
@@ -1652,11 +1866,34 @@ int main(int argc, char ** argv) {
     }
 
     {
+        printf("\n--- Test: Q5_0_R4 repack + R8 converter (K/V-cache path) ---\n");
+        int ns_q5[] = {128, 512};
+        for (int n : ns_q5) {
+            for (int nrc_x : {4, 8}) test_q5_0_repack(n, nrc_x);
+            for (int nrc_x : {8, 16}) test_q5_0_r4_convert(n, nrc_x);
+        }
+    }
+
+    {
         printf("\n--- Test: Q6_0_R4 repack + R8 converter (embeddings path) ---\n");
         int ns_q6[] = {128, 512};
         for (int n : ns_q6) {
             for (int nrc_x : {4, 8}) test_q6_0_repack(n, nrc_x);
             for (int nrc_x : {8, 16}) test_q6_0_r4_convert(n, nrc_x);
+        }
+    }
+
+    {
+        printf("\n--- Test: direct R8 GEMM vs float (expert path, Q8_K32 act) ---\n");
+        int ns_d8[] = {1024};
+        int nx_d8[] = {8, 64};
+        int ny_d8[] = {1, 8};
+        for (int n : ns_d8) {
+            for (int nrc_x : nx_d8) {
+                for (int nrc_y : ny_d8) {
+                    test_gemm_iq4_xs_r8_direct(n, nrc_x, nrc_y);
+                }
+            }
         }
     }
 

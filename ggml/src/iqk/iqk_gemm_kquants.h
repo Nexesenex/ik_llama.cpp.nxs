@@ -21,6 +21,8 @@ extern "C" void iqk_test_convert_iq4_xs_r8(int n, const void * vx, size_t bx, vo
 #ifdef __x86_64__
 extern "C" void iqk_test_gemm_q8_k_r8(int n, const void * vx, size_t bx,
                                       const DataInfo& info, int nrc_x, int nrc_y);
+extern "C" void iqk_test_gemm_iq4_xs_r8(int n, const void * vx, size_t bx,
+                                        const DataInfo& info, int nrc_x, int nrc_y);
 #endif
 
 #ifdef HAVE_FANCY_SIMD
