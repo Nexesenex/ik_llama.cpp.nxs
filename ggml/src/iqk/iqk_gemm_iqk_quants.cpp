@@ -3757,21 +3757,23 @@ bool iqk_convert_iqk_quants_q80_r8(int type, int n, const void * vx, size_t bx, 
     switch (ggml_type(type)) {
         case GGML_TYPE_IQ2_KS : iqk_convert_iq2_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ2_K  : iqk_convert_iq2_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ2_K_R4: iqk_convert_iq2_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ2_KL : iqk_convert_iq2_kl_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ3_KS : iqk_convert_iq3_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ3_K  : iqk_convert_iq3_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ3_K_R4: iqk_convert_iq3_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_KSS: iqk_convert_iq4_kss_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_KS : iqk_convert_iq4_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ4_KS_R4: iqk_convert_iq4_ks_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_K  : iqk_convert_iq4_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ4_K_R4: iqk_convert_iq4_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ5_KS : iqk_convert_iq5_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ5_KS_R4: iqk_convert_iq5_ks_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ5_K  : iqk_convert_iq5_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ5_K_R4: iqk_convert_iq5_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ6_K  : iqk_convert_iq6_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
+#ifdef HAVE_FANCY_SIMD
+        case GGML_TYPE_IQ2_K_R4: iqk_convert_iq2_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ3_K_R4: iqk_convert_iq3_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ4_KS_R4: iqk_convert_iq4_ks_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ4_K_R4: iqk_convert_iq4_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ5_KS_R4: iqk_convert_iq5_ks_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ5_K_R4: iqk_convert_iq5_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+#endif
         default: return false;
     }
     return true;

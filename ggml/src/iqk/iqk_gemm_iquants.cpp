@@ -3119,15 +3119,17 @@ bool iqk_convert_iquants_q80_r8(int type, int n, const void * vx, size_t bx, voi
     if (n%QK_K != 0 || nrc_x%8 != 0) return false;
     switch (ggml_type(type)) {
         case GGML_TYPE_IQ2_XXS: iqk_convert_iq2_xxs_q8_k_r8(n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ2_XXS_R4: iqk_convert_iq2_xxs_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ2_XS : iqk_convert_iq2_xs_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ2_XS_R4: iqk_convert_iq2_xs_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ2_S  : iqk_convert_iq2_s_q8_k_r8  (n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ2_S_R4: iqk_convert_iq2_s_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ3_XXS: iqk_convert_iq3_xxs_q8_k_r8(n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ3_XXS_R4: iqk_convert_iq3_xxs_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ3_S  : iqk_convert_iq3_s_q8_k_r8  (n, vx, bx, vy, nrc_x); break;
+#ifndef HAVE_FANCY_SIMD
+        case GGML_TYPE_IQ2_XXS_R4: iqk_convert_iq2_xxs_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ2_XS_R4: iqk_convert_iq2_xs_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ2_S_R4: iqk_convert_iq2_s_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ3_XXS_R4: iqk_convert_iq3_xxs_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ3_S_R4: iqk_convert_iq3_s_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+#endif
         default: return false;
     }
     return true;
