@@ -245,54 +245,60 @@ struct MulMat {
 #endif
         switch (type) {
             case GGML_TYPE_IQ2_XXS: return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ2_XXS_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ2_XS : return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ2_XS_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ2_S  : return nrc_y >= 16 ? q8_k_type : type;
-            case GGML_TYPE_IQ2_S_R4: return nrc_y >= 16 ? q8_k_type : type;
             case GGML_TYPE_IQ3_XXS: return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ3_XXS_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ4_XS : return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ4_XS_R8: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ3_S  : return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ3_S_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ1_S  : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ1_M  : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_Q2_K   : return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_Q2_K_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_Q3_K   : return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_Q3_K_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_Q4_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
-            case GGML_TYPE_Q4_K_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_Q5_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
-            case GGML_TYPE_Q5_K_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_Q6_K   : return nrc_y >= 64 ? GGML_TYPE_Q8_0_R8 : type;
-            case GGML_TYPE_Q6_K_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ2_KS : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ2_K  : return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ2_K_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ2_KL : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ3_KS : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ3_K  : return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ3_K_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ4_KS : return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ4_KS_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ4_KSS: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ4_K  : return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ4_K_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ5_KS : return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ5_KS_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ5_K  : return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ5_K_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ6_K  : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_Q4_0   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
 #ifdef HAVE_FANCY_SIMD
-            case GGML_TYPE_Q4_0_R8 : return nrc_y >= 128 ? GGML_TYPE_Q8_0_R8 : type;
-            case GGML_TYPE_MXFP4_R8: return nrc_y >= 128 ? GGML_TYPE_Q8_0_R8 : type;
+            // Repacked (R4/R8, -rtr) layouts already reuse unpacked quants in the direct GEMM.
+            // Converting to Q8 only pays off on AVX512 (Q8_K_R16 path, where fijam validated
+            // pp512 parity). On vanilla AVX2+VNNI direct wins at PP256 (79.4 vs 71.8 t/s) and
+            // PP512 (74.5 vs 66.9 t/s) on llama-3.2-1b IQ4_XS, so keep direct there by gating
+            // this whole block. Fijam's original thresholds kept untouched (untestable here).
+            // Origin of the vanilla regression: 6a2e729a20f (PR 2448), dc31024448b (PR 2474), 13fdd4ec05b (PR 2497).
+            case GGML_TYPE_IQ2_XXS_R4: return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ2_XS_R4 : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ2_S_R4  : return nrc_y >= 16  ? q8_k_type : type;
+            case GGML_TYPE_IQ3_XXS_R4: return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ4_XS_R8 : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ3_S_R4  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_Q2_K_R4   : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_Q3_K_R4   : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_Q4_K_R4   : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_Q5_K_R4   : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_Q6_K_R4   : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ2_K_R4  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ3_K_R4  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ4_KS_R4 : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ4_K_R4  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ5_KS_R4 : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ5_K_R4  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_Q4_0_R8   : return nrc_y >= 128 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_MXFP4_R8  : return nrc_y >= 128 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_IQ4_NL_R4 : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_Q5_0_R4   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_Q6_0_R4   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
 #endif
-            case GGML_TYPE_IQ4_NL_R4: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
-            case GGML_TYPE_Q5_0_R4: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
-            case GGML_TYPE_Q6_0_R4: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_Q4_1   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
             case GGML_TYPE_Q5_0   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_Q5_1   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
