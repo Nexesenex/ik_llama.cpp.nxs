@@ -1469,7 +1469,7 @@ static void mul_mat_q5_0_r4_q8_2_avx2(int n, const void * vx, size_t bx, const D
 #ifndef HAVE_VNNI256
     auto m1 = _mm256_set1_epi16(1);
 #endif
-    auto mscale = _mm256_set_m128(_mm_set1_ps(-8.f), _mm_set1_ps(1.f));
+    auto mscale = MM256_SET_M128(_mm_set1_ps(-8.f), _mm_set1_ps(1.f));
     int nb = n / QK5_0;
     __m256 acc[nrc_y] = {};
     __m256i qx[4];
@@ -1638,7 +1638,7 @@ static void mul_mat_q6_0_r4_q8_2_avx2(int n, const void * vx, size_t bx, const D
     Q8<nrc_y, block_q8_2_x4> q8(info);
     auto m4 = _mm256_set1_epi8(0xf);
     auto m6 = _mm256_set1_epi8(0x30);
-    auto mscale = _mm256_set_m128(_mm_set1_ps(-16.f), _mm_set1_ps(1.f));
+    auto mscale = MM256_SET_M128(_mm_set1_ps(-16.f), _mm_set1_ps(1.f));
 #ifndef HAVE_VNNI256
     auto m1 = _mm256_set1_epi16(1);
 #endif

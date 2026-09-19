@@ -573,8 +573,8 @@ inline void iqk_transpose_8x8(__m256 * m) {
         m[k+3] = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t2), _mm256_castps_pd(t3)));
     }
     for (int k = 0; k < 4; ++k) {
-        auto t = _mm256_set_m128(_mm256_extractf128_ps(m[k+4], 1), _mm256_extractf128_ps(m[k], 1));
-        m[k+0] = _mm256_set_m128(_mm256_castps256_ps128(m[k+4]), _mm256_castps256_ps128(m[k+0]));
+        auto t = MM256_SET_M128(_mm256_extractf128_ps(m[k+4], 1), _mm256_extractf128_ps(m[k], 1));
+        m[k+0] = MM256_SET_M128(_mm256_castps256_ps128(m[k+4]), _mm256_castps256_ps128(m[k+0]));
         m[k+4] = t;
     }
 }
