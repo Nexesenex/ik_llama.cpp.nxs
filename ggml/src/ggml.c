@@ -20014,10 +20014,13 @@ static void ggml_compute_forward_mul_mat_id(
         }
 
         int chunk_id = ith;
+        int last_a = 0;
+        int last_acc = 0;
         while (chunk_id < total_chunks) {
             // Map global chunk_id to (expert_index, local_chunk_index)
-            int acc = 0, cur_a = -1, local_chunk = 0;
-            for (int a = 0; a < n_as; a++) {
+            // chunk_id grows monotonically per thread, so resume scan from last position.
+            int acc = last_acc, cur_a = -1, local_chunk = 0;
+            for (int a = last_a; a < n_as; a++) {
                 if (matrix_row_counts[a] == 0) continue;
                 if (chunk_id < acc + chunks_per_expert) {
                     cur_a = a;
@@ -20026,6 +20029,9 @@ static void ggml_compute_forward_mul_mat_id(
                 }
                 acc += chunks_per_expert;
             }
+            if (cur_a < 0) goto IQK_MulMat_Not_Available0;
+            last_a = cur_a;
+            last_acc = acc;
 
             const char * src0_cur = (const char *) src0->data + cur_a*nb02;
 
