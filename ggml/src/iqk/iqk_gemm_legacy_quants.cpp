@@ -1101,30 +1101,26 @@ inline void prepare_q4_0_quants_avx2(const uint8_t * qs, __m256i * v, const __m2
 
 inline __m256i accum_q4_0_quants(const __m256i * v, const int8_t * qs) {
 #if defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
-    auto y4l = _mm_loadu_si128((const __m128i*)qs+0);
-    auto y4h = _mm_loadu_si128((const __m128i*)qs+1);
-    auto yl  = MM256_SET1_M128I(y4l);
-    auto yh  = MM256_SET1_M128I(y4h);
 #if defined(HAVE_VNNIINT8)
     auto sumi = _mm256_setzero_si256();
-    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0x00), v[0]);
-    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0x55), v[1]);
-    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0xaa), v[2]);
-    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yl, 0xff), v[3]);
-    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0x00), v[4]);
-    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0x55), v[5]);
-    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0xaa), v[6]);
-    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_shuffle_epi32(yh, 0xff), v[7]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_set1_epi32(*((const int32_t *)(qs +  0))), v[0]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_set1_epi32(*((const int32_t *)(qs +  4))), v[1]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_set1_epi32(*((const int32_t *)(qs +  8))), v[2]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_set1_epi32(*((const int32_t *)(qs + 12))), v[3]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_set1_epi32(*((const int32_t *)(qs + 16))), v[4]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_set1_epi32(*((const int32_t *)(qs + 20))), v[5]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_set1_epi32(*((const int32_t *)(qs + 24))), v[6]);
+    sumi = ggml_mm256_dpbsud_epi32(sumi, _mm256_set1_epi32(*((const int32_t *)(qs + 28))), v[7]);
 #else
     auto sumi = _mm256_setzero_si256();
-    sumi = ggml_mm256_dpbusd_epi32(sumi, v[0], _mm256_shuffle_epi32(yl, 0x00));
-    sumi = ggml_mm256_dpbusd_epi32(sumi, v[1], _mm256_shuffle_epi32(yl, 0x55));
-    sumi = ggml_mm256_dpbusd_epi32(sumi, v[2], _mm256_shuffle_epi32(yl, 0xaa));
-    sumi = ggml_mm256_dpbusd_epi32(sumi, v[3], _mm256_shuffle_epi32(yl, 0xff));
-    sumi = ggml_mm256_dpbusd_epi32(sumi, v[4], _mm256_shuffle_epi32(yh, 0x00));
-    sumi = ggml_mm256_dpbusd_epi32(sumi, v[5], _mm256_shuffle_epi32(yh, 0x55));
-    sumi = ggml_mm256_dpbusd_epi32(sumi, v[6], _mm256_shuffle_epi32(yh, 0xaa));
-    sumi = ggml_mm256_dpbusd_epi32(sumi, v[7], _mm256_shuffle_epi32(yh, 0xff));
+    sumi = ggml_mm256_dpbusd_epi32(sumi, v[0], _mm256_set1_epi32(*((const int32_t *)(qs +  0))));
+    sumi = ggml_mm256_dpbusd_epi32(sumi, v[1], _mm256_set1_epi32(*((const int32_t *)(qs +  4))));
+    sumi = ggml_mm256_dpbusd_epi32(sumi, v[2], _mm256_set1_epi32(*((const int32_t *)(qs +  8))));
+    sumi = ggml_mm256_dpbusd_epi32(sumi, v[3], _mm256_set1_epi32(*((const int32_t *)(qs + 12))));
+    sumi = ggml_mm256_dpbusd_epi32(sumi, v[4], _mm256_set1_epi32(*((const int32_t *)(qs + 16))));
+    sumi = ggml_mm256_dpbusd_epi32(sumi, v[5], _mm256_set1_epi32(*((const int32_t *)(qs + 20))));
+    sumi = ggml_mm256_dpbusd_epi32(sumi, v[6], _mm256_set1_epi32(*((const int32_t *)(qs + 24))));
+    sumi = ggml_mm256_dpbusd_epi32(sumi, v[7], _mm256_set1_epi32(*((const int32_t *)(qs + 28))));
 #endif
 #else
     auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(v[0], _mm256_set1_epi32(*((const int32_t *)(qs +  0)))),
