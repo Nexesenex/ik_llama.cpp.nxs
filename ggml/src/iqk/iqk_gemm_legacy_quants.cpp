@@ -1508,7 +1508,7 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
                         _mm256_storeu_ps(d8 + 8*iy, scales);
                         if constexpr (!k_mxfp4_signed_vnni) {
                             auto m4 = _mm256_extractf128_ps(scales, 1);
-                            auto m8 = _mm256_set_m128(m4, m4);
+                            auto m8 = MM256_SET1_M128(m4);
                             auto sumf = _mm256_mul_ps(d4[0], _mm256_shuffle_ps(m8, m8, 0x00));
                             sumf = _mm256_fmadd_ps(d4[1], _mm256_shuffle_ps(m8, m8, 0x55), sumf);
                             sumf = _mm256_fmadd_ps(d4[2], _mm256_shuffle_ps(m8, m8, 0xaa), sumf);
