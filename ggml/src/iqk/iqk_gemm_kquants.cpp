@@ -2250,18 +2250,17 @@ static void mul_mat_q8_KV_r8_q8_KV(int n, const void * vx, size_t bx, const Data
             qx[3] = _mm256_add_epi8(qx[3], _mm256_set1_epi8(127));
 #endif
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto y128 = _mm_loadu_si128((const __m128i*)q8y[iy]+ib);
-                auto y = MM256_SET1_M128I(y128);
+                auto qy = q8y[iy]+16*ib;
 #ifdef HAVE_VNNI256
-                acc[iy] = ggml_mm256_dpbusd_epi32(acc[iy], qx[0], _mm256_shuffle_epi32(y, 0x00));
-                acc[iy] = ggml_mm256_dpbusd_epi32(acc[iy], qx[1], _mm256_shuffle_epi32(y, 0x55));
-                acc[iy] = ggml_mm256_dpbusd_epi32(acc[iy], qx[2], _mm256_shuffle_epi32(y, 0xaa));
-                acc[iy] = ggml_mm256_dpbusd_epi32(acc[iy], qx[3], _mm256_shuffle_epi32(y, 0xff));
+                acc[iy] = ggml_mm256_dpbusd_epi32(acc[iy], qx[0], _mm256_set1_epi32(*((const int32_t *)(qy +  0))));
+                acc[iy] = ggml_mm256_dpbusd_epi32(acc[iy], qx[1], _mm256_set1_epi32(*((const int32_t *)(qy +  4))));
+                acc[iy] = ggml_mm256_dpbusd_epi32(acc[iy], qx[2], _mm256_set1_epi32(*((const int32_t *)(qy +  8))));
+                acc[iy] = ggml_mm256_dpbusd_epi32(acc[iy], qx[3], _mm256_set1_epi32(*((const int32_t *)(qy + 12))));
 #else
-                auto sumi1 = _mm256_maddubs_epi16(s0, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x00), qx[0]));
-                auto sumi2 = _mm256_maddubs_epi16(s1, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x55), qx[1]));
-                auto sumi3 = _mm256_maddubs_epi16(s2, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xaa), qx[2]));
-                auto sumi4 = _mm256_maddubs_epi16(s3, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xff), qx[3]));
+                auto sumi1 = _mm256_maddubs_epi16(s0, _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy +  0))), qx[0]));
+                auto sumi2 = _mm256_maddubs_epi16(s1, _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy +  4))), qx[1]));
+                auto sumi3 = _mm256_maddubs_epi16(s2, _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy +  8))), qx[2]));
+                auto sumi4 = _mm256_maddubs_epi16(s3, _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy + 12))), qx[3]));
                 auto sumi12 = _mm256_add_epi32(_mm256_madd_epi16(m1, sumi1), _mm256_madd_epi16(m1, sumi2));
                 auto sumi34 = _mm256_add_epi32(_mm256_madd_epi16(m1, sumi3), _mm256_madd_epi16(m1, sumi4));
                 acc[iy] = _mm256_add_epi32(acc[iy], _mm256_add_epi32(sumi12, sumi34));
