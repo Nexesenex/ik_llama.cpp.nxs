@@ -486,7 +486,24 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].smpbo = prop.sharedMemPerBlock;
         info.devices[id].cc = 100*prop.major + 10*prop.minor + CC_OFFSET_AMD;
 #else
-        info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
+        // Blackwell (sm_120) drivers have been observed to report a bogus
+        // sharedMemPerBlockOptin of 0x100000001 (4294967297), or 0 on some
+        // Windows setups, instead of the real ~101376 bytes (see
+        // ik_llama.cpp issue 2484, llama.cpp issues 23385/25060, PRs 22338/27215,
+        // NVIDIA forum thread 368102). The value is later passed to
+        // cudaFuncSetAttribute(..., MaxDynamicSharedMemorySize, smpbo) which
+        // takes an int: 0x100000001 truncates to 1, so any later kernel launch
+        // needing dynamic shared memory (e.g. mmq_ids_helper in
+        // compute_row_ids with 60 bytes) fails with "invalid argument".
+        // Sanity-clamp to the guaranteed-valid base limit when insane.
+        {
+            size_t smpbo = prop.sharedMemPerBlockOptin;
+            if (smpbo == 0 || smpbo > 512*1024) {
+                GGML_CUDA_LOG_WARN("%s: CUDA%d (Device %d): bogus sharedMemPerBlockOptin %zu, falling back to sharedMemPerBlock %zu\n", __func__, id, cuda_id, smpbo, (size_t) prop.sharedMemPerBlock);
+                smpbo = prop.sharedMemPerBlock;
+            }
+            info.devices[id].smpbo = smpbo;
+        }
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
     }
