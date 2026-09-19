@@ -2007,30 +2007,28 @@ static inline void mul_mat_q8_0_r8_q8_2_avx2(int n, const void * vx, size_t bx, 
     float d8[4*nrc_y];
     __m256i qx[4], sx[4];
     auto dot = [&qx, &sx, &m1] (const int8_t * qy) {
-        auto y128 = _mm_loadu_si128((const __m128i*)qy);
-        auto y = MM256_SET1_M128I(y128);
 #ifdef HAVE_VNNIINT8
         auto sumi = _mm256_setzero_si256();
-        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[0], _mm256_shuffle_epi32(y, 0x00));
-        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
-        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[2], _mm256_shuffle_epi32(y, 0xaa));
-        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[3], _mm256_shuffle_epi32(y, 0xff));
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[0], _mm256_set1_epi32(*((const int32_t *)(qy +  0))));
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[1], _mm256_set1_epi32(*((const int32_t *)(qy +  4))));
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[2], _mm256_set1_epi32(*((const int32_t *)(qy +  8))));
+        sumi = ggml_mm256_dpbssd_epi32(sumi, qx[3], _mm256_set1_epi32(*((const int32_t *)(qy + 12))));
         return sumi;
 #elif defined(HAVE_VNNI256)
         auto sumi = _mm256_setzero_si256();
-        sumi = ggml_mm256_dpbusd_epi32(sumi, sx[0], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x00), qx[0]));
-        sumi = ggml_mm256_dpbusd_epi32(sumi, sx[1], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x55), qx[1]));
-        sumi = ggml_mm256_dpbusd_epi32(sumi, sx[2], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xaa), qx[2]));
-        sumi = ggml_mm256_dpbusd_epi32(sumi, sx[3], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xff), qx[3]));
+        sumi = ggml_mm256_dpbusd_epi32(sumi, sx[0], _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy +  0))), qx[0]));
+        sumi = ggml_mm256_dpbusd_epi32(sumi, sx[1], _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy +  4))), qx[1]));
+        sumi = ggml_mm256_dpbusd_epi32(sumi, sx[2], _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy +  8))), qx[2]));
+        sumi = ggml_mm256_dpbusd_epi32(sumi, sx[3], _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy + 12))), qx[3]));
         return sumi;
 #else
         auto sumi1 = _mm256_add_epi32(
-                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(sx[0], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x00), qx[0]))),
-                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(sx[1], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x55), qx[1])))
+                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(sx[0], _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy +  0))), qx[0]))),
+                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(sx[1], _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy +  4))), qx[1])))
         );
         auto sumi2 = _mm256_add_epi32(
-                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(sx[2], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xaa), qx[2]))),
-                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(sx[3], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xff), qx[3])))
+                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(sx[2], _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy +  8))), qx[2]))),
+                _mm256_madd_epi16(m1, _mm256_maddubs_epi16(sx[3], _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(qy + 12))), qx[3])))
         );
         return _mm256_add_epi32(sumi1, sumi2);
 #endif
