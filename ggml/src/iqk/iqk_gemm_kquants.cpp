@@ -2078,18 +2078,17 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
                     // 16-byte B window at ib covers the same k-positions
                     // (16*ib+0..15) regardless of hi — both halves process
                     // identical sub-blocks, only different columns.
-                    auto y128 = _mm_loadu_si128((const __m128i *)q8.y[iy][ibl].qs + ib);
-                    auto y = MM256_SET1_M128I(y128);
+                    auto qy = q8.y[iy][ibl].qs+16*ib;
 #if defined(HAVE_VNNIINT8)
-                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_shuffle_epi32(y, 0x00), qx[0]);
-                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_shuffle_epi32(y, 0x55), qx[1]);
-                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_shuffle_epi32(y, 0xaa), qx[2]);
-                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_shuffle_epi32(y, 0xff), qx[3]);
+                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_set1_epi32(*((const int32_t *)(qy +  0))), qx[0]);
+                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_set1_epi32(*((const int32_t *)(qy +  4))), qx[1]);
+                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_set1_epi32(*((const int32_t *)(qy +  8))), qx[2]);
+                    isum[iy] = ggml_mm256_dpbsud_epi32(isum[iy], _mm256_set1_epi32(*((const int32_t *)(qy + 12))), qx[3]);
 #else
-                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[0], _mm256_shuffle_epi32(y, 0x00));
-                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[1], _mm256_shuffle_epi32(y, 0x55));
-                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[2], _mm256_shuffle_epi32(y, 0xaa));
-                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[3], _mm256_shuffle_epi32(y, 0xff));
+                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[0], _mm256_set1_epi32(*((const int32_t *)(qy +  0))));
+                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[1], _mm256_set1_epi32(*((const int32_t *)(qy +  4))));
+                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[2], _mm256_set1_epi32(*((const int32_t *)(qy +  8))));
+                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[3], _mm256_set1_epi32(*((const int32_t *)(qy + 12))));
 #endif
                 }
             }
