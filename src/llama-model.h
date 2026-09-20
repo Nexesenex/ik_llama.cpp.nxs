@@ -340,6 +340,11 @@ struct llama_layer {
     struct ggml_tensor * attn_v_gate_b = nullptr;
     struct ggml_tensor * attn_v_exps   = nullptr;
 
+    // K2 Horizon MoVA per-device shards (-sm tenpar/graph: router mirrored, value experts head-split)
+    llama_split_tensor split_attn_v_gate;
+    llama_split_tensor split_attn_v_gate_b;
+    llama_split_tensor split_attn_v_exps;
+
     llama_split_tensor split_ffn_up_shexp;
     llama_split_tensor split_ffn_gate_shexp;
     llama_split_tensor split_ffn_down_shexp;

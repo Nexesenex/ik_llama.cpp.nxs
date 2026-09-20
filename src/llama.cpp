@@ -1709,6 +1709,11 @@ static bool llama_kv_cache_init(
             if (!V && model.arch == LLM_ARCH_GEMMA4) {
                 V = K;
             }
+            if (!V && model.arch == LLM_ARCH_K2_HORIZON) {
+                // K2 MoVA layers have no wv; the value comes from the MoVA value
+                // experts (attn_v_exps, head-split like wv in split mode)
+                V = model.layers[i].attn_v_exps;
+            }
             if (split_cache && (!K || !V || !K->extra || !V->extra)) {
                 ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
                 split_cache_i = false;
@@ -4461,6 +4466,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_GEMMA4_ASSISTANT,
         LLM_ARCH_DEEPSEEK2,
         LLM_ARCH_BAILINGMOE3,
+        LLM_ARCH_K2_HORIZON,
         LLM_ARCH_GLM_DSA,
         LLM_ARCH_MISTRAL4,
         LLM_ARCH_MELLUM,

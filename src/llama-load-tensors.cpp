@@ -6475,7 +6475,8 @@ bool create_tensors_helper::create_tensors() {
                     prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, o_split, mem_used);
                 }
             }
-            else if (layer.wo && layer.wq && layer.wk && (layer.wv || model.arch == LLM_ARCH_GEMMA4)) {
+            else if (layer.wo && layer.wq && layer.wk && (layer.wv || model.arch == LLM_ARCH_GEMMA4 ||
+                     (model.arch == LLM_ARCH_K2_HORIZON && layer.attn_v_exps))) {
                 const int gqa_ratio = hparams.n_head(il) / hparams.n_head_kv(il);
                 auto granularity_kq = hparams.n_embd_head_k(il) * gqa_ratio;
                 int wq_ne1 = layer.wq->ne[1];
@@ -6504,7 +6505,17 @@ bool create_tensors_helper::create_tensors() {
                 LLAMA_LOG_DEBUG("  split_kq:"); for ([[maybe_unused]] auto s : split_kq) LLAMA_LOG_DEBUG(" %d", s);
                 LLAMA_LOG_DEBUG("\n");
 
-                if (layer.attn_q_norm && layer.attn_q_norm->ne[0] == wq_ne1) {
+                if (model.arch == LLM_ARCH_K2_HORIZON && layer.attn_q_norm && layer.attn_q_norm->ne[0] == wq_ne1) {
+                    // K2-Horizon applies a grouped (per-head) Q norm, so unlike the
+                    // whole-tensor norm case below, sharding wq by heads stays valid:
+                    // split wq by heads and the 1D norm along its only dimension.
+                    prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
+                    prepare_split_tensors(0, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
+                    if (layer.bq) {
+                        prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split_kq, mem_used);
+                    }
+                    LLAMA_LOG_DEBUG("Splitting wq, attn_q_norm by heads in layer %d (K2-Horizon grouped Q norm)\n", il);
+                } else if (layer.attn_q_norm && layer.attn_q_norm->ne[0] == wq_ne1) {
                     // If RMS norm is not applied per attention head, as it is usually the case, but is applied to the
                     // entire Q tensor (e.g., MiniMax-2), we need to have a copy of the entire wq and attn_q_norm tensors
                     // on each participating GPU.
@@ -6559,7 +6570,16 @@ bool create_tensors_helper::create_tensors() {
                     for (auto & s : split_kq) s /= gqa_ratio;
                 }
                 for (auto & s : split_vo) s /= gqa_ratio;
-                if (layer.attn_k_norm && layer.attn_k_norm->ne[0] == layer.wk->ne[1]) {
+                if (model.arch == LLM_ARCH_K2_HORIZON && layer.attn_k_norm && layer.attn_k_norm->ne[0] == layer.wk->ne[1]) {
+                    // K2-Horizon grouped (per-head) K norm: head-split like the Q norm above.
+                    // split_kq was already divided by the GQA ratio, matching wk->ne[1].
+                    prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split_kq, mem_used);
+                    prepare_split_tensors(0, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
+                    if (layer.bk) {
+                        prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split_kq, mem_used);
+                    }
+                    LLAMA_LOG_DEBUG("Splitting wk, attn_k_norm by heads in layer %d (K2-Horizon grouped K norm)\n", il);
+                } else if (layer.attn_k_norm && layer.attn_k_norm->ne[0] == layer.wk->ne[1]) {
                     // If RMS norm is not applied per attention head, as it is usually the case, but is applied to the
                     // entire K tensor (e.g., MiniMax-2), we need to have a copy of the entire wk and attn_k_norm tensors
                     // on each participating GPU.
@@ -6592,6 +6612,16 @@ bool create_tensors_helper::create_tensors() {
                     if (layer.bv) {
                         prepare_split_tensors(0, ctx_split, layer.bv, layer.split_bv, split_vo, mem_used);
                     }
+                } else if (model.arch == LLM_ARCH_K2_HORIZON && layer.attn_v_exps) {
+                    // K2-Horizon MoVA layers have no wv: the value router is replicated
+                    // so every device selects the same experts, and the value experts
+                    // are head-split along ne[1] like wv (split_vo was already divided
+                    // by the GQA ratio above, matching n_embd_v_gqa).
+                    prepare_split_tensors(-1, ctx_split, layer.attn_v_gate, layer.split_attn_v_gate, mirror, mem_used);
+                    if (layer.attn_v_gate_b) {
+                        prepare_split_tensors(-1, ctx_split, layer.attn_v_gate_b, layer.split_attn_v_gate_b, mirror, mem_used);
+                    }
+                    prepare_split_tensors(1, ctx_split, layer.attn_v_exps, layer.split_attn_v_exps, split_vo, mem_used);
                 }
             }
 
