@@ -451,6 +451,34 @@ static void get_rows_q3_K_cuda(const ggml_tensor * src0, const ggml_tensor * src
     GGML_UNUSED(src1); GGML_UNUSED(dst);
 }
 
+// Gather + dequantize Q8_K rows. 256 threads, blockIdx.x = block-in-row, blockIdx.y = token, blockIdx.z = batch.
+template<typename dst_t>
+static __global__ void k_get_rows_q8_K(
+        const void * src0, const int32_t * src1, dst_t * dst,
+        int64_t ne01, int64_t ne12,
+        int64_t s1, int64_t s2, int64_t s3,
+        int64_t nb01, int64_t nb02, int64_t nb03,
+        int64_t s10, int64_t s11, int64_t s12) {
+    const int64_t i_block = blockIdx.x;
+    const int64_t i10 = blockIdx.y;
+    const int64_t i11 = blockIdx.z / ne12;
+    const int64_t i12 = blockIdx.z % ne12;
+
+    const int32_t row_idx = src1[i10*s10 + i11*s11 + i12*s12];
+    dst_t * y = dst + i10*s1 + i11*s2 + i12*s3 + i_block*QK_K;
+
+    const int64_t tid = threadIdx.x;
+
+    if (row_idx < 0 || row_idx >= ne01) {
+        y[tid] = 0;
+        return;
+    }
+
+    const block_q8_K * x = (const block_q8_K *)((const char *)src0 + row_idx*nb01 + i11*nb02 + i12*nb03) + i_block;
+
+    y[tid] = x->d * x->qs[tid];
+}
+
 static void get_rows_q4_K_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
         const void * src0_d, const int32_t * src1_d, float * dst_d, cudaStream_t stream) {
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -500,6 +528,24 @@ static void get_rows_q6_K_cuda(const ggml_tensor * src0, const ggml_tensor * src
     const int64_t s12 = nb12 / ggml_element_size(src1);
     const dim3 block_nums(ne00 / QK_K, ne10, ne11 * ne12);
     k_get_rows_q6_K<float><<<block_nums, 64, 0, stream>>>(
+        src0_d, src1_d, dst_d, ne01, ne12,
+        s1_dst, s2_dst, s3_dst, nb01, nb02, nb03, s10, s11, s12);
+    GGML_UNUSED(src1); GGML_UNUSED(dst);
+}
+
+static void get_rows_q8_K_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+        const void * src0_d, const int32_t * src1_d, float * dst_d, cudaStream_t stream) {
+    GGML_TENSOR_BINARY_OP_LOCALS
+    GGML_ASSERT(ne00 % QK_K == 0);
+    GGML_ASSERT(ne11*ne12 < 65536);
+    const int64_t s1_dst = nb1 / ggml_element_size(dst);
+    const int64_t s2_dst = nb2 / ggml_element_size(dst);
+    const int64_t s3_dst = nb3 / ggml_element_size(dst);
+    const int64_t s10 = nb10 / ggml_element_size(src1);
+    const int64_t s11 = nb11 / ggml_element_size(src1);
+    const int64_t s12 = nb12 / ggml_element_size(src1);
+    const dim3 block_nums(ne00 / QK_K, ne10, ne11 * ne12);
+    k_get_rows_q8_K<float><<<block_nums, QK_K, 0, stream>>>(
         src0_d, src1_d, dst_d, ne01, ne12,
         s1_dst, s2_dst, s3_dst, nb01, nb02, nb03, s10, s11, s12);
     GGML_UNUSED(src1); GGML_UNUSED(dst);
@@ -612,6 +658,9 @@ void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             break;
         case GGML_TYPE_Q6_K:
             get_rows_q6_K_cuda(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
+            break;
+        case GGML_TYPE_Q8_K:
+            get_rows_q8_K_cuda(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
             break;
         default:
             GGML_ABORT("%s: unsupported type: %s\n", __func__, ggml_type_name(src0->type));
