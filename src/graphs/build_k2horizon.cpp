@@ -393,6 +393,11 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
 
                 cur = llm_build_lora_mm(lctx, ctx0, split_wo, cur);
                 cb(cur, "kqv_wo", il_cb);
+                if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+                    // keep peer-copy traffic at reduce_type (same as llm_build_ffn);
+                    // the next grouped norm upcasts back to F32
+                    cur = ggml_cast(ctx0, cur, lctx.cparams.reduce_type);
+                }
                 ggml_build_forward_expand(gf, cur);
                 attn_parts[id] = cur;
                 last_id = id;
