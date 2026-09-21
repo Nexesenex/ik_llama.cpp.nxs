@@ -2623,7 +2623,12 @@ void server_context::send_final_response(server_slot& slot) {
     res->oaicompat = slot.params.oaicompat;
     res->oaicompat_cmpl_id = slot.params.oaicompat_cmpl_id;
     if (server_response_needs_chat_parse(slot.params.oaicompat)) {
-        res->oaicompat_msg = slot.update_chat_msg(false, res->oaicompat_msg_diffs);
+        try {
+            res->oaicompat_msg = slot.update_chat_msg(false, res->oaicompat_msg_diffs);
+        } catch (const std::exception & e) {
+            send_error(slot, e.what(), ERROR_TYPE_SERVER);
+            return;
+        }
     }
     res->oai_resp_id = slot.oai_resp_id;
     res->oai_resp_reasoning_id = slot.oai_resp_reasoning_id;
