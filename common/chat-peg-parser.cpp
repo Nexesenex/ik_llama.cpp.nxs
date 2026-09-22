@@ -75,6 +75,34 @@ static std::string escape_json_string_inner(const std::string & s) {
     return escaped;
 }
 
+// Repair lone backslashes from unconstrained generation (PR 2470) so streamed
+// tool arguments stay valid JSON. A backslash not followed by a valid JSON
+// escape (" \/bfnrtu) is doubled. Keeps the PR 2470 fallback (no grammar for
+// multi-token markers) while preventing malformed-JSON on Windows paths such
+// as {"filePath":"D:\pinokio\..."} (issue 2492).
+static std::string repair_lone_backslashes_for_json(const std::string & s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (c != '\\') {
+            out += c;
+            continue;
+        }
+        char n = (i + 1 < s.size()) ? s[i + 1] : '\0';
+        if (n == '"' || n == '\\' || n == '/' || n == 'b' || n == 'f' || n == 'n' || n == 'r' || n == 't' || n == 'u') {
+            out += c;
+            if (n != '\0') {
+                out += n;
+                ++i;
+            }
+        } else {
+            out += "\\\\";
+        }
+    }
+    return out;
+}
+
 static bool truncate_json_strings_at_marker(ordered_json & value, const std::string & marker) {
     bool changed = false;
 
@@ -366,7 +394,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
         // For tagged format: built up from individual arg_name/arg_value nodes
         auto text = trim_trailing_space(node.text);
         if (!text.empty() && text.front() == '{') {
-            args_target() = std::string(text);
+            args_target() = repair_lone_backslashes_for_json(std::string(text));
         }
     }
 
