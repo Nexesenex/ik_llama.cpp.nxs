@@ -423,6 +423,10 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
                 ++n_have;
             }
             GGML_ASSERT(n_have > 0);
+            // fold the block residual into the last shard pre-reduce (saves a
+            // full-tensor add; same convention as build_std_attention)
+            attn_parts[last_id] = ggml_add(ctx0, attn_parts[last_id], inpL);
+            cb(attn_parts[last_id], "attn_out_with_input", il);
             if (n_have > 1) {
                 cur = ggml_reduce(ctx0, attn_parts.data(), n_device, GGML_OP_ADD);
             } else {
@@ -509,14 +513,24 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
         }
 
         // last token selection
-        if (il == n_layer - 1 && inp_out_ids != nullptr) {
-            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-        }
+        // (in split mode the attention residual was already folded pre-reduce,
+        // so only the combined output is sliced here)
+        ggml_tensor * ffn_inp;
+        if (is_tp_layer) {
+            if (il == n_layer - 1 && inp_out_ids != nullptr) {
+                cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+            }
+            ffn_inp = cur;
+        } else {
+            if (il == n_layer - 1 && inp_out_ids != nullptr) {
+                cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            }
 
-        // residual
-        cur = ggml_add(ctx0, cur, inpSA);
-        ggml_tensor * ffn_inp = cur;
+            // residual
+            cur = ggml_add(ctx0, cur, inpSA);
+            ffn_inp = cur;
+        }
         cb(ffn_inp, "ffn_inp", il);
 
         // === grouped RMS norm before FFN ===
