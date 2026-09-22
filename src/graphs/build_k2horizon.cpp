@@ -196,12 +196,16 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
         }
 
         // === grouped RMS norm before attention ===
-        // The norm weights are mirrored on every device, so a single norm node
-        // on the full hidden state feeds all per-device matmuls below.
-        cur = ggml_fused_grouped_rms_norm(ctx0, inpL, k2_tp_full_weight(model.layers[il].attn_norm), hparams.f_norm_rms_eps, hparams.n_norm_groups);
-        cb(cur, "attn_norm", il);
+        // Layer path: a single norm node on the full hidden state (the norm
+        // weights are mirrored, so k2_tp_full_weight is a no-op without splits).
+        // Split path: each device norms its local replica inside the loop below.
+        ggml_tensor * attn_inp = nullptr;
+        if (!is_tp_layer) {
+            cur = ggml_fused_grouped_rms_norm(ctx0, inpL, k2_tp_full_weight(model.layers[il].attn_norm), hparams.f_norm_rms_eps, hparams.n_norm_groups);
+            cb(cur, "attn_norm", il);
 
-        ggml_tensor * attn_inp = cur;
+            attn_inp = cur;
+        }
 
         if (is_tp_layer) {
             // === tensor-parallel attention ===
@@ -217,6 +221,9 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
             std::vector<ggml_tensor *> attn_parts(n_device, nullptr);
             int n_have = 0;
             int last_id = -1;
+            // mirrored input-norm weights: full copy on every device
+            auto an_sp = model.layers[il].attn_norm && model.layers[il].attn_norm->extra
+                ? (ggml_split_tensor_t *) model.layers[il].attn_norm->extra : nullptr;
             for (int id = 0; id < n_device; ++id) {
                 const int il_cb = 1000*(id+1) + il;
                 auto split_wq = wq_sp->splits[id];
@@ -243,8 +250,20 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
                     continue;
                 }
 
+                // norm the local hidden-state replica (already on this device
+                // after the previous all-reduce, so no broadcast is needed)
+                ggml_tensor * an_w = model.layers[il].attn_norm;
+                if (an_sp) {
+                    GGML_ASSERT(an_sp->splits[id]);
+                    an_w = an_sp->splits[id];
+                }
+                ggml_tensor * normed = ggml_fused_grouped_rms_norm(ctx0,
+                        get_input_tensor_sm_graph(ctx0, inpL, id),
+                        an_w, hparams.f_norm_rms_eps, hparams.n_norm_groups);
+                cb(normed, "attn_norm", il_cb);
+
                 // === Q ===
-                ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, split_wq, attn_inp);
+                ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, split_wq, normed);
                 cb(Qcur, "Qcur", il_cb);
                 if (model.layers[il].attn_q_norm) {
                     auto qn_sp = (ggml_split_tensor_t *) model.layers[il].attn_q_norm->extra;
@@ -257,7 +276,7 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
                 ggml_build_forward_expand(gf, Qcur);
 
                 // === K ===
-                ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, split_wk, attn_inp);
+                ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, split_wk, normed);
                 cb(Kcur, "Kcur", il_cb);
                 if (model.layers[il].attn_k_norm) {
                     auto kn_sp = (ggml_split_tensor_t *) model.layers[il].attn_k_norm->extra;
@@ -284,10 +303,10 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
                         vgb = vgb_sp ? vgb_sp->splits[id] : model.layers[il].attn_v_gate_b;
                     }
                     Vcur = k2_horizon_routed_value_tensors(ctx0, lctx, vg, vgb, split_vexps,
-                            attn_inp, hparams, cb, il_cb);
+                            normed, hparams, cb, il_cb);
                     n_embd_v_local = split_vexps->ne[1];
                 } else {
-                    Vcur = llm_build_lora_mm(lctx, ctx0, split_wv, attn_inp);
+                    Vcur = llm_build_lora_mm(lctx, ctx0, split_wv, normed);
                     cb(Vcur, "Vcur", il_cb);
                     n_embd_v_local = split_wv->ne[1];
                 }
@@ -381,7 +400,7 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
                     constexpr float LN2 = 0.6931471805599453f;
                     constexpr float ONE_OVER_LN2 = 1.4426950408889634f;
 
-                    ggml_tensor * gate = llm_build_lora_mm(lctx, ctx0, gate_w, attn_inp);
+                    ggml_tensor * gate = llm_build_lora_mm(lctx, ctx0, gate_w, normed);
                     gate = ggml_scale(ctx0, gate, LN2);
                     gate = ggml_softplus(ctx0, gate);
                     gate = ggml_scale(ctx0, gate, ONE_OVER_LN2);
