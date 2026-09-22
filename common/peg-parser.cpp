@@ -706,7 +706,10 @@ struct parser_executor {
         } else if (c == 'u') {
             return handle_unicode_escape(ctx, start, pos);
         } else {
-            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
+            // Lone backslash from unconstrained generation (PR 2470, e.g. Windows
+            // paths D:\... in tool arguments): keep as literal so the chat mapper
+            // can re-escape to valid JSON (issue 2492). Do not fail here.
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start, pos);
         }
     }
 
