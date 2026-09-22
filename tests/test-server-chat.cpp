@@ -27,7 +27,6 @@ static void test_update_chat_msg_forwards_partial_flag(testing & t) {
     const std::string partial_output = "<think>working through the request</thx";
 
     server_slot partial_slot;
-    partial_slot.stop = STOP_TYPE_EOS;
     partial_slot.params.chat_parser_params = params;
     partial_slot.generated_text = partial_output;
 
@@ -40,7 +39,6 @@ static void test_update_chat_msg_forwards_partial_flag(testing & t) {
     }
 
     server_slot final_slot;
-    final_slot.stop = STOP_TYPE_NONE;
     final_slot.params.chat_parser_params = params;
     final_slot.generated_text = partial_output;
 
