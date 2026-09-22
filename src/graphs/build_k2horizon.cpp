@@ -560,7 +560,8 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
                         LLM_FFN_SILU, hparams.expert_weights_norm,
                         true, hparams.expert_weights_scale,
                         (llm_expert_gating_func_type) hparams.expert_gating_func,
-                        LLM_FFN_SILU, cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
+                        LLM_FFN_SILU, cb, il, gf, false, model.layers[il].ffn_up_gate_exps,
+                        nullptr, nullptr, ffn_inp);
             } else {
                 moe_out = llm_build_moe_ffn(ctx0, lctx, cur,
                         model.layers[il].ffn_gate_inp,
@@ -596,8 +597,10 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
         }
         cb(cur, "ffn_out", il);
 
-        // FFN residual
-        cur = ggml_add(ctx0, cur, ffn_inp);
+        // FFN residual (MoE split mode already folded it pre-reduce above)
+        if (!(is_moe_layer && is_tp_layer)) {
+            cur = ggml_add(ctx0, cur, ffn_inp);
+        }
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
 
