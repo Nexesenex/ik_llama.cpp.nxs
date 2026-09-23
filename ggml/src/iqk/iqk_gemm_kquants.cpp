@@ -2000,14 +2000,14 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
     // computed. Process that trailing half block here: it is a single
     // block_q8_k_r16 at ix = nrc_x-8 whose only the first 8 columns are valid,
     // so we run the exact same per-column body but stop at QK_K/16/2 columns and
-    // use the low 8 of the 16 FP16 scales. The d4/-128.f bias and block-level
+    // use the low 8 of the 16 FP32 scales. The d4/-128.f bias and block-level
     // q8.scale/q8.y[].sum math is unchanged, keeping results bit-consistent with
     // the 8-wide path exposed by funcs[7] = mul_mat_q8_k_r16_q8_k<8>.
     if (nrc_x % 16 != 0) {
         int ix = nrc_x - 8;
         const block_q8_k_r16 * iq16 = (const block_q8_k_r16 *)((const char *)vx + ix*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
-            auto d4 = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)iq16[ibl].d));
+            auto d4 = _mm512_loadu_ps(iq16[ibl].d);
             for (int ib = 0; ib < QK_K/16/2; ++ib) {
                 qx[0] = _mm512_loadu_si512((const __m512i *)iq16[ibl].qs+4*ib+0);
                 qx[1] = _mm512_loadu_si512((const __m512i *)iq16[ibl].qs+4*ib+1);
