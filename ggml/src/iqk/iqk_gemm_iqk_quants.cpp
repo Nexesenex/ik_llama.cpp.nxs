@@ -2389,7 +2389,7 @@ void iqk_convert_iq2_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
             }
 #else
             auto vd = _mm256_mul_ps(_mm256_loadu_ps(dnew), _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)dh)));
-            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(vd, _MM_ROUND_NEAREST));
+            _mm256_storeu_ps(y[i].d, vd);
 #endif
         }
         y += nb;
@@ -2632,7 +2632,7 @@ void iqk_convert_iq2_kl_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
             }
 #else
             auto vd = _mm256_mul_ps(_mm256_loadu_ps(dnew), _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)dh)));
-            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(vd, _MM_ROUND_NEAREST));
+            _mm256_storeu_ps(y[i].d, vd);
 #endif
         }
         y += nb;
@@ -2710,7 +2710,7 @@ void iqk_convert_iq3_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
             }
 #else
-            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_mul_ps(vd, _mm256_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm256_storeu_ps(y[i].d, _mm256_mul_ps(vd, _mm256_loadu_ps(dnew)));
 #endif
         }
         y += nb;
@@ -2944,7 +2944,7 @@ void iqk_convert_iq4_kss_q8_k_r8(int n, const void * vx, size_t bx, void * vy, i
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
             }
 #else
-            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_mul_ps(vd, _mm256_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm256_storeu_ps(y[i].d, _mm256_mul_ps(vd, _mm256_loadu_ps(dnew)));
 #endif
         }
         y += nb;
@@ -3012,7 +3012,7 @@ void iqk_convert_iq4_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
             }
 #else
-            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_mul_ps(vd, _mm256_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm256_storeu_ps(y[i].d, _mm256_mul_ps(vd, _mm256_loadu_ps(dnew)));
 #endif
         }
         y += nb;
@@ -3088,7 +3088,7 @@ void iqk_convert_iq4_ks_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
             }
 #else
-            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_mul_ps(vd, _mm256_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm256_storeu_ps(y[i].d, _mm256_mul_ps(vd, _mm256_loadu_ps(dnew)));
 #endif
         }
         y += nb;
@@ -3320,7 +3320,7 @@ void iqk_convert_iq5_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
             }
 #else
-            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_mul_ps(vd, _mm256_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm256_storeu_ps(y[i].d, _mm256_mul_ps(vd, _mm256_loadu_ps(dnew)));
 #endif
         }
         y += nb;
@@ -3406,7 +3406,7 @@ void iqk_convert_iq5_ks_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
             }
 #else
-            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_mul_ps(vd, _mm256_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm256_storeu_ps(y[i].d, _mm256_mul_ps(vd, _mm256_loadu_ps(dnew)));
 #endif
         }
         y += nb;
@@ -5219,8 +5219,8 @@ void iqk_convert_iq2_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
             auto d = vld1q_f32_x2(dnew);
             d.val[0] = vmulq_f32(d.val[0], vd.val[0]);
             d.val[1] = vmulq_f32(d.val[1], vd.val[1]);
-            vst1_f16((float16_t *)y[i].d + 0,vcvt_f16_f32(d.val[0]));
-            vst1_f16((float16_t *)y[i].d + 4,vcvt_f16_f32(d.val[1]));
+            vst1q_f32(y[i].d + 0, d.val[0]);
+            vst1q_f32(y[i].d + 4, d.val[1]);
         }
         y += nb;
     }
@@ -5355,8 +5355,8 @@ void iqk_convert_iq2_kl_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
             auto d = vld1q_f32_x2(dnew);
             d.val[0] = vmulq_f32(d.val[0], vd.val[0]);
             d.val[1] = vmulq_f32(d.val[1], vd.val[1]);
-            vst1_f16((float16_t *)y[i].d + 0,vcvt_f16_f32(d.val[0]));
-            vst1_f16((float16_t *)y[i].d + 4,vcvt_f16_f32(d.val[1]));
+            vst1q_f32(y[i].d + 0, d.val[0]);
+            vst1q_f32(y[i].d + 4, d.val[1]);
         }
         y += nb;
     }
@@ -5406,8 +5406,8 @@ void iqk_convert_iq4_kss_q8_k_r8(int n, const void * vx, size_t bx, void * vy, i
             auto d = vld1q_f32_x2(dnew);
             d.val[0] = vmulq_f32(d.val[0], vd.val[0]);
             d.val[1] = vmulq_f32(d.val[1], vd.val[1]);
-            vst1_f16((float16_t *)y[i].d + 0, vcvt_f16_f32(d.val[0]));
-            vst1_f16((float16_t *)y[i].d + 4, vcvt_f16_f32(d.val[1]));
+            vst1q_f32(y[i].d + 0, d.val[0]);
+            vst1q_f32(y[i].d + 4, d.val[1]);
         }
         y += nb;
     }
@@ -5454,8 +5454,8 @@ void iqk_convert_iq4_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
             auto d = vld1q_f32_x2(dnew);
             d.val[0] = vmulq_f32(d.val[0], vd.val[0]);
             d.val[1] = vmulq_f32(d.val[1], vd.val[1]);
-            vst1_f16((float16_t *)y[i].d + 0, vcvt_f16_f32(d.val[0]));
-            vst1_f16((float16_t *)y[i].d + 4, vcvt_f16_f32(d.val[1]));
+            vst1q_f32(y[i].d + 0, d.val[0]);
+            vst1q_f32(y[i].d + 4, d.val[1]);
         }
         y += nb;
     }
@@ -5515,8 +5515,8 @@ void iqk_convert_iq5_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
             auto d = vld1q_f32_x2(dnew);
             d.val[0] = vmulq_f32(d.val[0], vd.val[0]);
             d.val[1] = vmulq_f32(d.val[1], vd.val[1]);
-            vst1_f16((float16_t *)y[i].d + 0, vcvt_f16_f32(d.val[0]));
-            vst1_f16((float16_t *)y[i].d + 4, vcvt_f16_f32(d.val[1]));
+            vst1q_f32(y[i].d + 0, d.val[0]);
+            vst1q_f32(y[i].d + 4, d.val[1]);
         }
         y += nb;
     }
@@ -5574,7 +5574,7 @@ void iqk_convert_iq2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     xv[4*i128+3].val[1] = vqtbl1q_s8(values.val[extra & 1], vshrq_n_u8(bits.val[1], 6)); extra >>= 1;
                 }
                 float dnew = convert_to_q8_k_r8(1.f/127, xv, ls, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                y[i].d[k] = d*dnew;
             }
         }
         y += nb;
@@ -5639,7 +5639,7 @@ void iqk_convert_iq3_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                     extra >>= 4;
                 }
                 float dnew = convert_to_q8_k_r8(1.f/127, xv, ls, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = GGML_FP32_TO_FP16(GGML_FP16_TO_FP32(dh[k])*dnew);
+                y[i].d[k] = GGML_FP16_TO_FP32(dh[k])*dnew;
             }
         }
         y += nb;
@@ -5704,7 +5704,7 @@ void iqk_convert_iq3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     sh >>= 8;
                 }
                 float dnew = convert_to_q8_k_r8(1.f/127, xv, ls, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                y[i].d[k] = d*dnew;
             }
         }
         y += nb;
@@ -5744,7 +5744,7 @@ void iqk_convert_iq4_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     xv[ib32].val[1] = vqtbl1q_s8(values.val[extra & 1], vshrq_n_u8(bits, 4)); extra >>= 1;
                 }
                 float dnew = convert_to_q8_k_r8(1.f/127, xv, ls, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                y[i].d[k] = d*dnew;
             }
         }
         y += nb;
@@ -5794,7 +5794,7 @@ void iqk_convert_iq5_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     extra >>= 4;
                 }
                 float dnew = convert_to_q8_k_r8(1.f/127, xv, ls, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                y[i].d[k] = d*dnew;
             }
         }
         y += nb;
@@ -5841,7 +5841,7 @@ void iqk_convert_iq6_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     extra >>= 8;
                 }
                 float dnew = convert_to_q8_k_r8(1.f/127, xv, x8[k][i].scales, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                y[i].d[k] = d*dnew;
             }
         }
         y += nb;

@@ -432,11 +432,15 @@ typedef struct {
 } block_q8_K128;
 static_assert(sizeof(block_q8_K128) == sizeof(float) + 4*sizeof(int16_t) + 128, "wrong q8_K128 block size/padding");
 
+#define GGML_Q8_K_R8_ALIGN 32
+
 typedef struct {
-    ggml_half d[8];         // delta
-    int8_t    qs[8*QK_K];   // quants, stored as unsigned ints
+    float     d[8];          // delta
+    int8_t    qs[8*QK_K];    // quants, stored as unsigned ints
 } block_q8_k_r8;
-static_assert(sizeof(block_q8_k_r8) == 8*sizeof(ggml_half) + 8*QK_K, "wrong q8_k_r8 block size/padding");
+static_assert(8*sizeof(float) == GGML_Q8_K_R8_ALIGN, "q8_k_r8 header must be exactly one alignment unit");
+static_assert(sizeof(block_q8_k_r8) == GGML_Q8_K_R8_ALIGN + 8*QK_K, "wrong q8_k_r8 block size/padding");
+static_assert(sizeof(block_q8_k_r8) % GGML_Q8_K_R8_ALIGN == 0, "q8_k_r8 block stride must keep qs aligned");
 
 #define GGML_Q8_K_R16_ALIGN 64
 

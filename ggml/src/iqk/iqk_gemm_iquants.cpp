@@ -3768,7 +3768,7 @@ void iqk_convert_iq2_xxs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, i
                     apply_signs_2((uint8x16_t *)xv[ib32].val, keven_signs, aux32[1]);
                 }
                 float dnew = convert_to_q8_k_r8(1.f/124, xv, ls, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                y[i].d[k] = d*dnew;
             }
         }
         y += nb;
@@ -3810,7 +3810,7 @@ void iqk_convert_iq2_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                     xv[ib32].val[1] = vmulq_s8(xv[ib32].val[1], s2);
                 }
                 float dnew = convert_to_q8_k_r8(1.f/124, xv, helper.val, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                y[i].d[k] = d*dnew;
             }
         }
         y += nb;
@@ -3853,7 +3853,7 @@ void iqk_convert_iq2_s_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     DequantizerIQ2S::make4(sh, signs16, qs+8, qh+2, (uint8x16_t *)&xv[4*j+2]);
                 }
                 float dnew = convert_to_q8_k_r8(1.f/124, xv, helper.val, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                y[i].d[k] = d*dnew;
             }
         }
         y += nb;
@@ -3891,7 +3891,7 @@ void iqk_convert_iq3_xxs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, i
                     qs += 8;
                 }
                 float dnew = convert_to_q8_k_r8(1.f/124, xv, ls, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                y[i].d[k] = d*dnew;
             }
         }
         y += nb;
@@ -3992,7 +3992,7 @@ void iqk_convert_iq3_s_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     ls[2*ib32 + 0] = ls[2*ib32 + 1] = (2*((x8[k][i].scales[ib32/2] >> 4*(ib32%2)) & 0xf) + 1);
                 }
                 float dnew = convert_to_q8_k_r8(1.f/127, xv, ls, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                y[i].d[k] = d*dnew;
             }
         }
         y += nb;
