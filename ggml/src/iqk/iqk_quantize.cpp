@@ -8411,7 +8411,7 @@ static void repack_q8_k(int nrows, int n_per_row, const block_q8_K * x, block_q8
         for (int k = 0; k < 8; ++k) x8[k] = x + nblock*k;
         for (int ibl = 0; ibl < nblock; ++ibl) {
             for (int k = 0; k < 8; ++k) {
-                y[ibl].d[k] = GGML_FP32_TO_FP16(x8[k][ibl].d);
+                y[ibl].d[k] = x8[k][ibl].d;
                 for (int ib = 0; ib < QK_K/4; ++ib) {
                     for (int i = 0; i < 4; ++i) y[ibl].qs[32*ib + 4*k + i] = x8[k][ibl].qs[4*ib+i];
                 }
@@ -8466,7 +8466,7 @@ void dequantize_row_q8_k_r8(const block_q8_k_r8 * x, float * y, int64_t k) {
     int nblock = n_per_row/QK_K;
     for (int ibl = 0; ibl < nblock; ++ibl) {
         for (int k = 0; k < 8; ++k) {
-            const float d = GGML_FP16_TO_FP32(x[ibl].d[k]);
+            const float d = x[ibl].d[k];
 #ifdef __AVX2__
             // out[4*ib+i] = d * qs[32*ib+4*k+i] (l-major, int8); 4 ib per helper call
             for (int ib = 0; ib < QK_K/4; ib += 4) {
