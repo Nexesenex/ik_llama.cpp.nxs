@@ -1607,6 +1607,12 @@ static bool llama_kv_cache_init(
         if (qnext_recurrent) {
             // a PLE layer keeps its convolution history in the tail of the same row, so the
             // delta-net slice it opens with keeps the offsets every other layer uses
+            if ((split_cache || replicate_mla) && (model.layers[i].ssm_out == nullptr || model.layers[i].ssm_out->extra == nullptr)) {
+                // Whole recurrent state is viewed and copied directly: views of a
+                // split buffer abort (CUDA split-buffer guard), so keep it on the
+                // layer device. Layers whose weights are sharded keep split ctx.
+                ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+            }
             s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
                     hparams.n_embd_v_s() + hparams.n_embd_ple_conv(i), qnext_state_slots);
             auto s_name = std::string{"cache_s_l"} + std::to_string(i);
@@ -1718,6 +1724,10 @@ static bool llama_kv_cache_init(
                 ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
                 split_cache_i = false;
             }
+            // Whole (never sharded) caches viewed or scattered directly cannot live
+            // in the split buffer either (same guard as above): qwen4exp PLE history
+            // and QSA indexer keys/pools below.
+            struct ggml_context * ctx_whole = split_cache_i ? (offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front()) : ctx;
             int n_embd_head_v = hparams.n_embd_head_v(i);
             const uint32_t kv_size_l = (cache.swa_ring && hparams.swa_layers[i]) ? cache.size_swa : cache.rows(i);
             auto this_type_k = type_k;
@@ -1757,7 +1767,7 @@ static bool llama_kv_cache_init(
             // a PLE layer that is not recurrent has no state row to extend, so it gets one
             // holding nothing but the convolution history
             if (hparams.n_embd_ple_conv(i) > 0 && cache.s_l[i] == nullptr) {
-                ggml_tensor * s_ple = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                ggml_tensor * s_ple = ggml_new_tensor_2d(model.arch == LLM_ARCH_QWEN4EXP ? ctx_whole : ctx, GGML_TYPE_F32,
                         hparams.n_embd_ple_conv(i), qnext_state_slots);
                 ggml_format_name(s_ple, "cache_s_l%d", i);
                 cache.s_l[i] = s_ple;
@@ -1765,12 +1775,12 @@ static bool llama_kv_cache_init(
 
             if (has_qwen4exp_indexer && hparams.is_qsa(i)) {
                 const uint32_t ratio = hparams.dsv4_compress_ratios[i];
-                ggml_tensor * idxk = ggml_new_tensor_2d(ctx, idx_type_k, hparams.indexer_head_size, cache.rows(i));
+                ggml_tensor * idxk = ggml_new_tensor_2d(ctx_whole, idx_type_k, hparams.indexer_head_size, cache.rows(i));
                 ggml_format_name(idxk, "cache_kr_l%d", i);
                 cache.kr_l[i] = idxk;
 
                 // one pooled key per block of `ratio` positions, so this costs 1/ratio of the raw cache
-                ggml_tensor * idxp = ggml_new_tensor_2d(ctx, idx_type_k, hparams.indexer_head_size,
+                ggml_tensor * idxp = ggml_new_tensor_2d(ctx_whole, idx_type_k, hparams.indexer_head_size,
                         (cache.rows(i) + ratio - 1)/ratio);
                 ggml_format_name(idxp, "cache_kp_l%d", i);
                 cache.kp_l[i] = idxp;

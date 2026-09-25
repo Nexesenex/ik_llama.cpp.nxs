@@ -2092,6 +2092,15 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
+        // In TP/ATTN mode, tensors read directly (not via splits[] and not by
+        // matmul, which is exempt) cannot live in ctx_split: the CUDA
+        // split-buffer guard rejects every other op with a split-buffer parent
+        // while CPU cannot use that buffer (abort at ggml-backend.cpp:1437).
+        // Norm gammas, the viewed PLE conv and unsplit recurrent weights below
+        // use this; sharded (GQA, MoE) and pure-matmul weights stay in ctx_split.
+        ggml_context * ctx_direct = (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
+                                     model.split_mode == LLAMA_SPLIT_MODE_ATTN) ? ctx_for_layer(i) : ctx_split;
+
         auto & layer = model.layers[i];
 
         // the nextn (MTP) tail loads only when speculative MTP is requested
@@ -2107,11 +2116,11 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
             lf |= llama_model_loader::TENSOR_NOT_REQUIRED;
         }
 
-        layer.hc_attn_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_NORM,   "weight", i), {hc_dim}, lf);
+        layer.hc_attn_norm   = create_tensor(ctx_direct, tn(LLM_TENSOR_HC_ATTN_NORM,   "weight", i), {hc_dim}, lf);
         layer.hc_attn_down   = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_DOWN,   "weight", i), {hc_dim, hc_rank}, lf);
         layer.hc_attn_up     = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_UP,     "weight", i), {hc_rank, hc_dim}, lf);
         layer.hc_attn_inject = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_INJECT, "weight", i), {hc_dim, hc}, lf);
-        layer.hc_ffn_norm    = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_NORM,    "weight", i), {hc_dim}, lf);
+        layer.hc_ffn_norm    = create_tensor(ctx_direct, tn(LLM_TENSOR_HC_FFN_NORM,    "weight", i), {hc_dim}, lf);
         layer.hc_ffn_down    = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_DOWN,    "weight", i), {hc_dim, hc_rank}, lf);
         layer.hc_ffn_up      = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_UP,      "weight", i), {hc_rank, hc_dim}, lf);
         layer.hc_ffn_inject  = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_INJECT,  "weight", i), {hc_dim, hc}, lf);
@@ -2119,10 +2128,10 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
         if (hparams.is_ple(i)) {
             layer.ple_key        = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_KEY,        "weight", i), {n_embd, hc_dim}, lf);
             layer.ple_value      = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_VALUE,      "weight", i), {n_embd, n_embd}, lf);
-            layer.ple_norm_key   = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_NORM_KEY,   "weight", i), {hc_dim}, lf);
-            layer.ple_norm_query = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_NORM_QUERY, "weight", i), {hc_dim}, lf);
-            layer.ple_norm_conv  = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_NORM_CONV,  "weight", i), {hc_dim}, lf);
-            layer.ple_conv1d     = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_CONV1D,     "weight", i), {hparams.ple_conv_kernel, hc_dim}, lf);
+            layer.ple_norm_key   = create_tensor(ctx_direct, tn(LLM_TENSOR_PLE_NORM_KEY,   "weight", i), {hc_dim}, lf);
+            layer.ple_norm_query = create_tensor(ctx_direct, tn(LLM_TENSOR_PLE_NORM_QUERY, "weight", i), {hc_dim}, lf);
+            layer.ple_norm_conv  = create_tensor(ctx_direct, tn(LLM_TENSOR_PLE_NORM_CONV,  "weight", i), {hc_dim}, lf);
+            layer.ple_conv1d     = create_tensor(ctx_direct, tn(LLM_TENSOR_PLE_CONV1D,     "weight", i), {hparams.ple_conv_kernel, hc_dim}, lf);
         }
 
         if (!hparams.is_recurrent(i)) {
@@ -2138,18 +2147,20 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
             // one indexer key is shared across the indexer heads
             layer.indexer_q_proj = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i), {n_embd, idx_head * idx_n_head}, lf);
             layer.indexer_k_proj = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_K_PROJ, "weight", i), {n_embd, idx_head}, lf);
-            layer.indexer_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_Q_NORM, "weight", i), {idx_head}, lf);
-            layer.indexer_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_K_NORM, "weight", i), {idx_head}, lf);
+            layer.indexer_q_norm = create_tensor(ctx_direct, tn(LLM_TENSOR_INDEXER_Q_NORM, "weight", i), {idx_head}, lf);
+            layer.indexer_k_norm = create_tensor(ctx_direct, tn(LLM_TENSOR_INDEXER_K_NORM, "weight", i), {idx_head}, lf);
         } else {
-            layer.wqkv       = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_QKV,   "weight", i), {n_embd, key_dim * 2 + value_dim}, lf);
-            layer.wqkv_gate  = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_GATE,  "weight", i), {n_embd, value_dim}, lf);
-            layer.ssm_conv1d = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {hparams.ssm_d_conv, conv_dim}, lf);
-            layer.ssm_dt     = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_DT,     "bias",   i), {hparams.ssm_dt_rank}, lf);
-            layer.ssm_a      = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_A_NOSCAN,         i), {hparams.ssm_dt_rank}, lf);
-            layer.ssm_beta   = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_BETA,   "weight", i), {n_embd, num_v_heads}, lf);
-            layer.ssm_alpha  = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_ALPHA,  "weight", i), {n_embd, num_v_heads}, lf);
-            layer.ssm_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_NORM,   "weight", i), {head_v_dim}, lf);
-            layer.ssm_out    = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_OUT,    "weight", i), {value_dim, n_embd}, lf);
+            // Whole recurrent set stays directly readable (norm/add/mul readers)
+            // until recurrent weights are sharded (delta TP); see ctx_direct.
+            layer.wqkv       = create_tensor(ctx_direct, tn(LLM_TENSOR_ATTN_QKV,   "weight", i), {n_embd, key_dim * 2 + value_dim}, lf);
+            layer.wqkv_gate  = create_tensor(ctx_direct, tn(LLM_TENSOR_ATTN_GATE,  "weight", i), {n_embd, value_dim}, lf);
+            layer.ssm_conv1d = create_tensor(ctx_direct, tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {hparams.ssm_d_conv, conv_dim}, lf);
+            layer.ssm_dt     = create_tensor(ctx_direct, tn(LLM_TENSOR_SSM_DT,     "bias",   i), {hparams.ssm_dt_rank}, lf);
+            layer.ssm_a      = create_tensor(ctx_direct, tn(LLM_TENSOR_SSM_A_NOSCAN,         i), {hparams.ssm_dt_rank}, lf);
+            layer.ssm_beta   = create_tensor(ctx_direct, tn(LLM_TENSOR_SSM_BETA,   "weight", i), {n_embd, num_v_heads}, lf);
+            layer.ssm_alpha  = create_tensor(ctx_direct, tn(LLM_TENSOR_SSM_ALPHA,  "weight", i), {n_embd, num_v_heads}, lf);
+            layer.ssm_norm   = create_tensor(ctx_direct, tn(LLM_TENSOR_SSM_NORM,   "weight", i), {head_v_dim}, lf);
+            layer.ssm_out    = create_tensor(ctx_direct, tn(LLM_TENSOR_SSM_OUT,    "weight", i), {value_dim, n_embd}, lf);
         }
 
         auto ffn_ctx = ctx_split;
@@ -2167,6 +2178,10 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
         const int bid = n_layer - 1;
         auto & nextn = model.layers[bid].nextn;
         auto * head_ctx = ctx_for_layer_split(bid);
+        // Head norms are read directly by RMS (not matmul): same ctx_direct
+        // rule as the trunk norms above in TP/ATTN mode.
+        auto * head_direct = (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
+                              model.split_mode == LLAMA_SPLIT_MODE_ATTN) ? ctx_for_layer(bid) : head_ctx;
 
         // Head-level tensors are optional at file-load time. A normal load skips any
         // that are present, while an MTP load resolves and validates one complete layout below.
@@ -2184,17 +2199,17 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
         const std::string hc_up_name   = tn(LLM_TENSOR_NEXTN_HC_HEAD_UP,   "weight", bid);
 
         nextn.eh_proj = create_tensor(head_ctx, eh_proj_name, {2 * n_embd, n_embd}, flags);
-        nextn.enorm   = create_tensor(head_ctx, enorm_name,   {n_embd}, flags);
-        nextn.hnorm   = create_tensor(head_ctx, hnorm_name,   {hc_dim}, flags);
+        nextn.enorm   = create_tensor(head_direct, enorm_name,   {n_embd}, flags);
+        nextn.hnorm   = create_tensor(head_direct, hnorm_name,   {hc_dim}, flags);
 
         // Flavor A: the upstream converter's head-local mixer.
-        nextn.hc_head_norm = create_tensor(head_ctx, hc_norm_name, {hc_dim}, flags);
+        nextn.hc_head_norm = create_tensor(head_direct, hc_norm_name, {hc_dim}, flags);
         nextn.hc_head_down = create_tensor(head_ctx, hc_down_name, {hc_dim, hc_rank}, flags);
         nextn.hc_head_up   = create_tensor(head_ctx, hc_up_name,   {hc_rank, hc_dim}, flags);
 
         // Flavor B: community merge-script files retain only the head norm and
         // use the trunk's already-loaded output_hc_down/output_hc_up pair.
-        nextn.shared_head_norm = create_tensor(head_ctx, shared_norm_name, {hc_dim}, flags);
+        nextn.shared_head_norm = create_tensor(head_direct, shared_norm_name, {hc_dim}, flags);
 
         // Legacy files carry the head under fork-local mtp.* names: register them
         // known-and-skipped so a non-MTP load balances tensor accounting.
