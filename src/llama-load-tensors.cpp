@@ -6424,6 +6424,12 @@ bool create_tensors_helper::create_tensors() {
             if (hparams.is_recurrent(il)) {
                 if (model.arch == LLM_ARCH_LFM2 || model.arch == LLM_ARCH_LFM2MOE) {
                     LLAMA_LOG_DEBUG("%s: keeping LFM2 shortconv tensors whole for layer %d\n", __func__, il);
+                } else if (model.arch == LLM_ARCH_QWEN4EXP) {
+                    // qwen4exp recurrent layers stay whole for now: the delta-net TP path
+                    // assumes a per-layer attn_norm (llama-delta-net.cpp) that the hc topology
+                    // does not have, and the PLE history tail of s_l is outside the split
+                    // state slices. Full-attention and MoE tensors above are still sharded.
+                    LLAMA_LOG_DEBUG("%s: keeping QWEN4EXP recurrent tensors whole for layer %d\n", __func__, il);
                 } else if (model.arch == LLM_ARCH_BAILINGMOE3) {
                     split_bailingmoe3_kda_tensors(hparams, layer, cur_splits, mem_used, vram_free, vram_total, model.split_vram_reserve_factor, ctx_split,
                         model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
