@@ -2100,7 +2100,7 @@ static void mul_mat_iq4_ks_r4_q8_k(int n, const void * vx, size_t bx, const Data
             h_shift.vec = _mm512_mullo_epi16(_mm512_cvtepi8_epi16(shift), _mm512_cvtepi8_epi16(h.vec));
 #endif
             for (int ib = 0; ib < QK_K/32; ++ib) {
-#ifdef HAVE_VNNI256
+#ifdef HAVE_FANCY_SIMD
                 auto iscales = _mm256_cvtepi8_epi32(_mm_set1_epi32(h.val[ib]));
                 auto ishifts = _mm256_cvtepi16_epi32(_mm_set1_epi64x(h_shift.val[ib]));
                 auto scales_m = _mm256_cvtepi32_ps(ishifts);
@@ -2108,6 +2108,11 @@ static void mul_mat_iq4_ks_r4_q8_k(int n, const void * vx, size_t bx, const Data
                     float m8 = ((const float *)q8.y[iy][ibl].bsums)[ib];
                     acc[iy] = _mm256_fmadd_ps(scales_m, _mm256_set1_ps(m8), acc[iy]);
                 }
+#elif defined(HAVE_VNNI256)
+                // VNNI-only (no AVX-512): mins already handled by the non-FANCY v1-v4 path above.
+                // Only define iscales for the VNNI dot-product below. Do not use h_shift here:
+                // on this path it is helper_t (0/4 flags), not the FANCY helper512_t product.
+                auto iscales = _mm256_cvtepi8_epi32(_mm_set1_epi32(h.val[ib]));
 #endif
                 auto bits1 = _mm256_loadu_si256((const __m256i *)iq4[ibl].qs+2*ib+0);
                 auto bits2 = _mm256_loadu_si256((const __m256i *)iq4[ibl].qs+2*ib+1);
@@ -2216,7 +2221,7 @@ static void mul_mat_iq5_ks_r4_q8_k(int n, const void * vx, size_t bx, const Data
             h_shift.vec = _mm512_mullo_epi16(_mm512_cvtepi8_epi16(shift), _mm512_cvtepi8_epi16(h.vec));
 #endif
             for (int ib = 0; ib < QK_K/32; ++ib) {
-#ifdef HAVE_VNNI256
+#ifdef HAVE_FANCY_SIMD
                 auto iscales = _mm256_cvtepi8_epi32(_mm_set1_epi32(h.val[ib]));
                 auto ishifts = _mm256_cvtepi16_epi32(_mm_set1_epi64x(h_shift.val[ib]));
                 auto scales_m = _mm256_cvtepi32_ps(ishifts);
@@ -2224,6 +2229,11 @@ static void mul_mat_iq5_ks_r4_q8_k(int n, const void * vx, size_t bx, const Data
                     float m8 = ((const float *)q8.y[iy][ibl].bsums)[ib];
                     acc[iy] = _mm256_fmadd_ps(scales_m, _mm256_set1_ps(m8), acc[iy]);
                 }
+#elif defined(HAVE_VNNI256)
+                // VNNI-only (no AVX-512): mins already handled by the non-FANCY v1-v4 path above.
+                // Only define iscales for the VNNI dot-product below. Do not use h_shift here:
+                // on this path it is helper_t (0/4 flags), not the FANCY helper512_t product.
+                auto iscales = _mm256_cvtepi8_epi32(_mm_set1_epi32(h.val[ib]));
 #endif
                 auto lbits1 = _mm256_loadu_si256((const __m256i *)iq5[ibl].qs+2*ib+0);
                 auto lbits2 = _mm256_loadu_si256((const __m256i *)iq5[ibl].qs+2*ib+1);
