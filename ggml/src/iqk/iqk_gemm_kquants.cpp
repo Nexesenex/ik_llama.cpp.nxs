@@ -1894,7 +1894,7 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
     for (int ix = 0; ix < nrc_x; ix += 8) {
         const block_q8_k_r8 * iq8 = (const block_q8_k_r8 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
-            auto d4 = _mm256_loadu_ps(iq8[ibl].d);
+            auto d4 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq8[ibl].d));
             for (int ib = 0; ib < QK_K/16; ++ib) {
                 qx[0] = _mm256_loadu_si256((const __m256i *)iq8[ibl].qs+4*ib+0);
                 qx[1] = _mm256_loadu_si256((const __m256i *)iq8[ibl].qs+4*ib+1);
@@ -3127,7 +3127,7 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
             }
 #else
-            _mm256_storeu_ps(y[i].d, _mm256_loadu_ps(dnew));
+            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_loadu_ps(dnew), _MM_ROUND_NEAREST));
 #endif
         }
         y += nb;
@@ -3248,7 +3248,7 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
 #ifdef HAVE_FANCY_SIMD
             _mm512_storeu_ps(y[i].d, _mm512_loadu_ps(dnew));
 #else
-            _mm256_storeu_ps(y[i].d, _mm256_loadu_ps(dnew));
+            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_loadu_ps(dnew), _MM_ROUND_NEAREST));
 #endif
             for (int ib32 = 0; ib32 < 8; ++ib32) {
                 for (int k = 0; k < 8; ++k) {
@@ -4178,8 +4178,8 @@ void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataInfo& inf
     for (int ix = 0; ix < nrc_x; ix += 8) {
         const block_q8_k_r8 * iq8 = (const block_q8_k_r8 *)((const char *)vx + ix*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) {
-            auto d4l = vld1q_f32(iq8[ibl].d+0);
-            auto d4h = vld1q_f32(iq8[ibl].d+4);
+            auto d4l = vcvt_f32_f16(vld1_f16((const float16_t *)iq8[ibl].d+0));
+            auto d4h = vcvt_f32_f16(vld1_f16((const float16_t *)iq8[ibl].d+4));
             int32x4_t isum[2*nrc_y] = {};
             for (int ib = 0; ib < QK_K/16; ++ib) {
                 auto q1 = vld1q_s8_x4(iq8[ibl].qs + 128*ib +  0);
@@ -5081,8 +5081,8 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                 }
                 dnew[k] = d * convert_to_q8_k_r8(1.f/127, xv, ls, block, (uint32_t *)y[i].qs + k);
             }
-            vst1q_f32(y[i].d + 0, vld1q_f32(dnew+0));
-            vst1q_f32(y[i].d + 4, vld1q_f32(dnew+4));
+            vst1_f16((float16_t *)y[i].d + 0, vcvt_f16_f32(vld1q_f32(dnew+0)));
+            vst1_f16((float16_t *)y[i].d + 4, vcvt_f16_f32(vld1q_f32(dnew+4)));
         }
         y += nb;
     }

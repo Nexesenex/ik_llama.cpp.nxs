@@ -2828,7 +2828,7 @@ void iqk_convert_iq1_s_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     qs += 4;
                 }
                 float dnew = convert_to_q8_k_r8(1.f/126, qx, ls, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = d*dnew;
+                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
             }
         }
         y += nb;
@@ -2885,7 +2885,7 @@ void iqk_convert_iq1_m_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     qh += 2;
                 }
                 float dnew = convert_to_q8_k_r8(1.f/126, qx, ls, block, (uint32_t *)y[i].qs + k);
-                y[i].d[k] = d*dnew;
+                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
             }
         }
         y += nb;
