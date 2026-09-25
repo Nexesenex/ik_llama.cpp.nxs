@@ -3374,19 +3374,17 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
 bool iqk_convert_kquants_q8X_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     switch (ggml_type(type)) {
         case GGML_TYPE_Q2_K: iqk_convert_q2_k_q8_k_r8(n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_Q3_K: iqk_convert_q3_k_q8_k_r8(n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_Q4_K: iqk_convert_q4_k_q8_1_r8(n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_Q5_K: iqk_convert_q5_k_q8_1_r8(n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_Q6_K: iqk_convert_q6_k_q8_0_r8(n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ4_XS: iqk_convert_iq4_xs_q8_k_r8(n, vx, bx, vy, nrc_x); break;
-#ifdef HAVE_FANCY_SIMD
         case GGML_TYPE_Q2_K_R4: iqk_convert_q2_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q3_K: iqk_convert_q3_k_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q3_K_R4: iqk_convert_q3_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q4_K: iqk_convert_q4_k_q8_1_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q4_K_R4: iqk_convert_q4_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q5_K: iqk_convert_q5_k_q8_1_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q5_K_R4: iqk_convert_q5_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q6_K: iqk_convert_q6_k_q8_0_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_K_R4: iqk_convert_q6_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ4_XS: iqk_convert_iq4_xs_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_XS_R8: iqk_convert_iq4_xs_r8_q8_k_r16(n, vx, bx, vy, nrc_x); break;
-#endif	
         default: return false;
     }
     return true;
