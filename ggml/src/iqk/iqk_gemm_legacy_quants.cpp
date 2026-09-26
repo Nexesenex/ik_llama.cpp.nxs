@@ -1462,6 +1462,11 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
             auto acc2 = _mm256_setzero_ps();
             (void)acc2;
             for (int ib4 = 0; ib4 < nb/4; ++ib4) {
+                // Stream-bound over iq4 + q8: prefetch next group (hint-only, never faults).
+                if (ib4 + 1 < nb/4) {
+                    _mm_prefetch((const char *)&iq4[4*ib4+4], _MM_HINT_T0);
+                    _mm_prefetch((const char *)q8.y[0][ib4+1].qs, _MM_HINT_T0);
+                }
                 helper.vec = convert_scales((const uint16_t *)q8.y[0][ib4].d);
                 for (int k = 0; k < 4; ++k) {
                     auto scales = convert_mxfp4_scales(iq4[4*ib4+k].e);
@@ -1475,6 +1480,10 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
                 }
             }
             for (int ib = 4*(nb/4); ib < nb; ++ib) {
+                if (ib + 1 < nb) {
+                    _mm_prefetch((const char *)&iq4[ib+1], _MM_HINT_T0);
+                    _mm_prefetch((const char *)q8.y[0][ib+1].qs, _MM_HINT_T0);
+                }
                 auto qy = (const block_q8_2 *)q8.y[0];
                 auto scales = convert_mxfp4_scales(iq4[ib].e);
                 prepare_mxfp4_quants_avx2(iq4[ib].qs, v, m4, table);
@@ -1502,6 +1511,11 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
         for (int ix = 0; ix < nrc_x; ix += 8) {
             auto * iq4 = (const block_mxfp4_r8 *)((const char *)vx + ix*bx);
             for (int ib4 = 0; ib4 < nb/4; ++ib4) {
+                // Stream-bound over iq4 + q8: prefetch next group (hint-only, never faults).
+                if (ib4 + 1 < nb/4) {
+                    _mm_prefetch((const char *)&iq4[4*ib4+4], _MM_HINT_T0);
+                    _mm_prefetch((const char *)q8.y[0][ib4+1].qs, _MM_HINT_T0);
+                }
                 __m256 d4[4];
                 {
                     for (int k = 0; k < 4; ++k) {
@@ -1532,6 +1546,10 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
                 }
             }
             for (int ib = 4*(nb/4); ib < nb; ++ib) {
+                if (ib + 1 < nb) {
+                    _mm_prefetch((const char *)&iq4[ib+1], _MM_HINT_T0);
+                    _mm_prefetch((const char *)q8.y[0][ib+1].qs, _MM_HINT_T0);
+                }
                 auto scales = convert_mxfp4_scales(iq4[ib].e);
                 __m256 scales_m;
                 if constexpr (!k_mxfp4_signed_vnni) {
