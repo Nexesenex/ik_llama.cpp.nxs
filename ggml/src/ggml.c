@@ -2119,7 +2119,7 @@ static inline int ggml_packed_rows(enum ggml_type type) {
     return type == GGML_TYPE_BF16_R16 || type == GGML_TYPE_Q8_K_R16 ? 16
          : type == GGML_TYPE_Q8_K_R8 || type == GGML_TYPE_Q8_KV_R8 ||
            type == GGML_TYPE_Q8_0_R8 || type == GGML_TYPE_Q4_0_R8 ||
-           type == GGML_TYPE_IQ4_XS_R8 || type == GGML_TYPE_MXFP4_R8 ? 8
+           type == GGML_TYPE_IQ4_XS_R8 ? 8
            : type >= GGML_TYPE_Q4_0_R8 && type <= GGML_TYPE_Q8_K_R8 ? 4
          : 1;
 }
