@@ -1487,6 +1487,8 @@ static void test_gemm_iq4_xs_r8_direct(int n, int nrc_x, int nrc_y) {
 // (mul_mat_mxfp4_r8_q8_2_avx2, nrc_y=1/8, MoE row_mapping) that the
 // repack+converter tests do not exercise.
 // ---------------------------------------------------------------------------
+// Forward declaration: defined with the other MXFP4 helpers below.
+static void make_random_mxfp4(block_mxfp4 * blk);
 static void test_gemm_mxfp4_r8_direct(int n, int nrc_x, int nrc_y) {
     GGML_ASSERT(n % QK_MXFP4 == 0);
     GGML_ASSERT(nrc_x % 8 == 0);
