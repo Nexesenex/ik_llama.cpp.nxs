@@ -5615,6 +5615,19 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 params.defer_experts,
                 params.kv_overrides, params.tensor_buft_overrides);
 
+        // Optional donor file(s) replacing token_embd.weight / output.weight.
+        // Applied before any tensor is created so a differently quantized donor
+        // type is honored (create_tensor dups the donor meta, dims still checked).
+        if (params.token_embd_path && params.token_embd_path[0] != '\0') {
+            ml.override_tensor_from_file("token_embd.weight", params.token_embd_path);
+        }
+        if (params.output_weight_path && params.output_weight_path[0] != '\0') {
+            ml.override_tensor_from_file("output.weight", params.output_weight_path);
+            if (ml.get_tensor_meta("output_extra.weight") != nullptr) {
+                ml.override_tensor_from_file("output_extra.weight", params.output_weight_path);
+            }
+        }
+
         model.hparams.vocab_only = params.vocab_only;
         model.split_output_tensor = params.split_output_tensor;
         model.split_output_tensor_subset = params.split_output_tensor_subset;
@@ -9074,6 +9087,8 @@ struct llama_model_params llama_model_default_params() {
         /*.defer_experts               =*/ false,
         /*.defer_ple                   =*/ false,
         /*.swa_compress                =*/ false,
+        /*.token_embd_path             =*/ nullptr,
+        /*.output_weight_path          =*/ nullptr,
     };
 
 #ifdef GGML_USE_METAL

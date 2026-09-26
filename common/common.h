@@ -385,6 +385,8 @@ struct gpt_params {
     std::string hf_token             = ""; // HF token
     std::string hf_repo              = ""; // HF repo
     std::string hf_file              = ""; // HF file
+    std::string token_embd_path      = ""; // GGUF file overriding token_embd.weight (may hold a single tensor)
+    std::string output_weight_path   = ""; // GGUF file overriding output.weight (may hold a single tensor)
     std::string prompt               = "";
     std::string prompt_file          = ""; // store the external prompt file name
     bool prompt_is_binary            = false; // don't fool around when the prompt contains binary data (as it is for multiple choice)

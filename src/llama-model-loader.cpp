@@ -647,6 +647,124 @@ llama_model_loader::~llama_model_loader() {
     }
 }
 
+void llama_model_loader::override_tensor_from_file(const char * tensor_name, const std::string & donor_path) {
+    struct ggml_context * donor_ctx = NULL;
+    struct gguf_init_params donor_params = {
+        /*.no_alloc = */ true,
+        /*.ctx      = */ &donor_ctx,
+    };
+
+    struct gguf_context * donor_gguf = gguf_init_from_file(donor_path.c_str(), donor_params);
+    if (!donor_gguf) {
+        throw std::runtime_error(format("%s: failed to load donor GGUF from %s for tensor '%s'\n",
+                __func__, donor_path.c_str(), tensor_name));
+    }
+
+    // Collect donor tensors.
+    std::vector<ggml_tensor *> donor_tensors;
+    for (ggml_tensor * cur = ggml_get_first_tensor(donor_ctx); cur; cur = ggml_get_next_tensor(donor_ctx, cur)) {
+        donor_tensors.push_back(cur);
+    }
+    if (donor_tensors.empty()) {
+        gguf_free(donor_gguf);
+        ggml_free(donor_ctx);
+        throw std::runtime_error(format("%s: donor file %s contains no tensors (wanted '%s')",
+                __func__, donor_path.c_str(), tensor_name));
+    }
+
+    ggml_tensor * donor_tensor = nullptr;
+    int donor_pos = -1;
+    for (int i = 0; i < (int) donor_tensors.size(); ++i) {
+        if (strcmp(ggml_get_name(donor_tensors[i]), tensor_name) == 0) {
+            donor_tensor = donor_tensors[i];
+            donor_pos = i;
+            break;
+        }
+    }
+    if (!donor_tensor) {
+        if (donor_tensors.size() == 1) {
+            donor_tensor = donor_tensors[0];
+            donor_pos = 0;
+            LLAMA_LOG_INFO("%s: donor %s holds single tensor '%s', using it for '%s'\n",
+                    __func__, donor_path.c_str(), ggml_get_name(donor_tensor), tensor_name);
+        } else {
+            gguf_free(donor_gguf);
+            ggml_free(donor_ctx);
+            throw std::runtime_error(format("%s: tensor '%s' not found in donor %s (%d tensors)",
+                    __func__, tensor_name, donor_path.c_str(), (int) donor_tensors.size()));
+        }
+    }
+
+    // Rename a single-tensor donor to the target name so get_weight() finds it.
+    if (strcmp(ggml_get_name(donor_tensor), tensor_name) != 0) {
+        ggml_set_name(donor_tensor, tensor_name);
+    }
+
+    // Validate offset against the donor file size before keeping it.
+    // Note: donor_pos tracks the tensor position in case the GGUF entry keeps
+    // the old (pre-rename) name and gguf_find_tensor() misses.
+    std::unique_ptr<llama_file> donor_file(new llama_file(donor_path.c_str(), "rb"));
+    const size_t data_off = gguf_get_data_offset(donor_gguf);
+    int meta_idx = gguf_find_tensor(donor_gguf, tensor_name);
+    if (meta_idx < 0) {
+        meta_idx = donor_pos;
+    }
+    const size_t tensor_off = gguf_get_tensor_offset(donor_gguf, meta_idx);
+    const size_t offs = data_off + tensor_off;
+    const size_t nbytes = ggml_nbytes(donor_tensor);
+    if (offs + nbytes < offs || offs + nbytes > donor_file->size()) {
+        gguf_free(donor_gguf);
+        ggml_free(donor_ctx);
+        throw std::runtime_error(format("%s: donor tensor '%s' data is not within file bounds in %s",
+                __func__, tensor_name, donor_path.c_str()));
+    }
+
+    // Allocate a fresh split index that cannot collide with real model splits.
+    // Real splits use 0..n_split_total-1, so start donor indices at 0xF000.
+    uint16_t donor_idx = (uint16_t) (0xF000 + files.size());
+    while (split_to_file_idx.find(donor_idx) != split_to_file_idx.end()) {
+        donor_idx++;
+    }
+
+    const size_t file_idx = files.size();
+    files.emplace_back(std::move(donor_file));
+    contexts.emplace_back(donor_ctx);
+    split_to_file_idx[donor_idx] = file_idx;
+
+    bool replaced = false;
+    for (auto & w : weights) {
+        if (strcmp(w.tensor->name, tensor_name) == 0) {
+            n_bytes -= ggml_nbytes(w.tensor);
+            n_bytes += nbytes;
+            w.idx    = donor_idx;
+            w.offs   = offs;
+            w.tensor = donor_tensor;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) {
+        // e.g. tied output models have no output.weight in the main file:
+        // insert a new entry so create_tensor() can find the donor tensor.
+        // Use the direct (idx, offs) constructor: the GGUF entry may keep the
+        // old pre-rename name, so the (file, name, gguf) constructor would miss.
+        weights.emplace_back(donor_idx, offs, donor_tensor);
+        n_tensors = (int) weights.size();
+        n_bytes += nbytes;
+        // n_elements counts elements for logging; donor dims must match the
+        // expected shape (checked later in check_tensor_dims), so just add them.
+        n_elements += ggml_nelements(donor_tensor);
+        LLAMA_LOG_INFO("%s: donor tensor '%s' not present in main model, added from %s\n",
+                __func__, tensor_name, donor_path.c_str());
+    }
+
+    gguf_free(donor_gguf);
+
+    LLAMA_LOG_INFO("%s: tensor '%s' will be loaded from %s (type=%s, %s)\n",
+            __func__, tensor_name, donor_path.c_str(),
+            ggml_type_name(donor_tensor->type), llama_format_tensor_shape(donor_tensor).c_str());
+}
+
 void llama_model_loader::build_expert_tensor_index(const llama_hparams & hparams) {
     expert_tensor_index = {};
 

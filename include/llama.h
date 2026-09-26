@@ -448,6 +448,16 @@ extern "C" {
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
         bool defer_ple;        // keep the per-layer token embedding on the file instead of resident in memory (Linux only)
         bool swa_compress;     // must match llama_context_params::swa_compress; the fit also assumes that context's n_ubatch
+
+        // Optional GGUF file(s) containing a replacement for token_embd.weight / output.weight.
+        // Useful to swap in a differently quantized embedding or output tensor without
+        // re-quantizing the whole model. The donor file may contain only that single tensor
+        // (if it holds exactly one tensor, its name is ignored and it is used as the
+        // replacement); otherwise the tensor with the matching name is used.
+        // If output_weight_path is set and the model uses output_extra.weight, the donor
+        // tensor is also used for output_extra.weight.
+        const char * token_embd_path;    // GGUF file overriding token_embd.weight (nullptr = unused)
+        const char * output_weight_path; // GGUF file overriding output.weight (nullptr = unused)
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations

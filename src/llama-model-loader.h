@@ -89,6 +89,10 @@ struct llama_model_loader {
                 throw std::runtime_error(format("tensor '%s' data is not within the file bounds, model is corrupted or incomplete", name));
             }
         }
+
+        // Direct constructor for donor overrides where the offset is already known
+        // (e.g. single-tensor donor renamed to the target name).
+        llama_tensor_weight(uint16_t idx, size_t offs, ggml_tensor * tensor) : idx(idx), offs(offs), tensor(tensor) {}
     };
     std::vector<llama_tensor_weight> weights;
 
@@ -192,6 +196,13 @@ struct llama_model_loader {
             const std::string & name, const std::vector<int64_t> & ne, size_t offset, bool required = true);
 
     void done_getting_tensors() const;
+
+    // Replace the tensor `tensor_name` (e.g. "token_embd.weight") with the
+    // matching tensor from the donor GGUF file `donor_path`. The donor file may
+    // contain only that single tensor: if it holds exactly one tensor, that
+    // tensor is used regardless of its stored name (renamed to `tensor_name`).
+    // Must be called before tensors are created (i.e. before llm_load_tensors).
+    void override_tensor_from_file(const char * tensor_name, const std::string & donor_path);
 
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr, bool use_thp = false);
 

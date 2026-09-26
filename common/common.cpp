@@ -1868,6 +1868,16 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.model = argv[i];
         return true;
     }
+    if (arg == "-tokembed" || arg == "--token-embeddings") {
+        CHECK_ARG
+        params.token_embd_path = argv[i];
+        return true;
+    }
+    if (arg == "-outweight" || arg == "--output-weight") {
+        CHECK_ARG
+        params.output_weight_path = argv[i];
+        return true;
+    }
     if (arg == "-md" || arg == "--model-draft") {
         CHECK_ARG
         params.speculative.model = argv[i];
@@ -4351,6 +4361,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "layer range to apply the control vector(s) to, start and end inclusive" });
     options.push_back({ "*",           "-m,    --model FNAME",          "model path (default: models/$filename with filename from --hf-file\n"
                                                                         "or --model-url if set, otherwise %s)", DEFAULT_MODEL_PATH });
+    options.push_back({ "*",           "-tokembed, --token-embeddings FNAME", "GGUF file overriding token_embd.weight (may hold only that single tensor)" });
+    options.push_back({ "*",           "-outweight, --output-weight FNAME",   "GGUF file overriding output.weight (may hold only that single tensor)" });
     options.push_back({ "*",           "-md,   --model-draft FNAME",    "draft model for speculative decoding (default: unused)" });
     options.push_back({ "*",           "-mu,   --model-url MODEL_URL",  "model download url (default: unused)" });
     options.push_back({ "*",           "-hfr,  --hf-repo REPO",         "Hugging Face model repository (default: unused)" });
@@ -5501,6 +5513,8 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.defer_experts   = params.defer_experts;
     mparams.defer_ple       = params.defer_ple;
     mparams.swa_compress    = params.swa_compress;
+    mparams.token_embd_path    = params.token_embd_path.empty()    ? nullptr : params.token_embd_path.c_str();
+    mparams.output_weight_path = params.output_weight_path.empty() ? nullptr : params.output_weight_path.c_str();
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
