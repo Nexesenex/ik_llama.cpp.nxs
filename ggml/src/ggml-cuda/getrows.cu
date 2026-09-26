@@ -454,6 +454,42 @@ static __global__ void k_get_rows_iq4_xs(
     }
 }
 
+// Gather + dequantize MXFP4 rows. 32 threads (one float each),
+// blockIdx.x = block-in-row, blockIdx.y = token, blockIdx.z = batch.
+// Mirrors dequantize_block_mxfp4 in convert.cu (E8M0 scale + kvalues_mxfp4).
+template<typename dst_t>
+static __global__ void k_get_rows_mxfp4(
+        const void * src0, const int32_t * src1, dst_t * dst,
+        int64_t ne01, int64_t ne12,
+        int64_t s1, int64_t s2, int64_t s3,
+        int64_t nb01, int64_t nb02, int64_t nb03,
+        int64_t s10, int64_t s11, int64_t s12) {
+    constexpr uint32_t uval[2] = { 0x00200000, 0x00400000 };
+    const int64_t i_block = blockIdx.x;
+    const int64_t i10 = blockIdx.y;
+    const int64_t i11 = blockIdx.z / ne12;
+    const int64_t i12 = blockIdx.z % ne12;
+
+    const int32_t row_idx = src1[i10*s10 + i11*s11 + i12*s12];
+
+    const int64_t tid = threadIdx.x;
+
+    dst_t * y = dst + i10*s1 + i11*s2 + i12*s3 + i_block*QK_MXFP4 + tid;
+
+    if (row_idx < 0 || row_idx >= ne01) {
+        y[0] = 0;
+        return;
+    }
+
+    const block_mxfp4 * x = (const block_mxfp4 *)((const char *)src0 + row_idx*nb01 + i11*nb02 + i12*nb03) + i_block;
+
+    const uint8_t q = x->qs[tid/2];
+    const int qb = (tid%2 == 0) ? (q & 0xf) : (q >> 4);
+    union { float f; uint32_t u; } helper;
+    helper.u = x->e >= 2 ? uint32_t(x->e - 1) << 23u : uval[x->e];
+    y[0] = helper.f * kvalues_mxfp4[qb];
+}
+
 static void get_rows_q2_K_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
         const void * src0_d, const int32_t * src1_d, float * dst_d, cudaStream_t stream) {
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -608,6 +644,24 @@ static void get_rows_iq4_xs_cuda(const ggml_tensor * src0, const ggml_tensor * s
     GGML_UNUSED(src1); GGML_UNUSED(dst);
 }
 
+static void get_rows_mxfp4_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+        const void * src0_d, const int32_t * src1_d, float * dst_d, cudaStream_t stream) {
+    GGML_TENSOR_BINARY_OP_LOCALS
+    GGML_ASSERT(ne00 % QK_MXFP4 == 0);
+    GGML_ASSERT(ne11*ne12 < 65536);
+    const int64_t s1_dst = nb1 / ggml_element_size(dst);
+    const int64_t s2_dst = nb2 / ggml_element_size(dst);
+    const int64_t s3_dst = nb3 / ggml_element_size(dst);
+    const int64_t s10 = nb10 / ggml_element_size(src1);
+    const int64_t s11 = nb11 / ggml_element_size(src1);
+    const int64_t s12 = nb12 / ggml_element_size(src1);
+    const dim3 block_nums(ne00 / QK_MXFP4, ne10, ne11 * ne12);
+    k_get_rows_mxfp4<float><<<block_nums, 32, 0, stream>>>(
+        src0_d, src1_d, dst_d, ne01, ne12,
+        s1_dst, s2_dst, s3_dst, nb01, nb02, nb03, s10, s11, s12);
+    GGML_UNUSED(src1); GGML_UNUSED(dst);
+}
+
 void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -735,6 +789,9 @@ void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             break;
         case GGML_TYPE_IQ4_XS:
             get_rows_iq4_xs_cuda(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
+            break;
+        case GGML_TYPE_MXFP4:
+            get_rows_mxfp4_cuda(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
             break;
         default:
             GGML_ABORT("%s: unsupported type: %s\n", __func__, ggml_type_name(src0->type));
