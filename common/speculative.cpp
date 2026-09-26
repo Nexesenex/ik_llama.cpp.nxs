@@ -2012,6 +2012,11 @@ bool common_speculative_load_draft_model(
     }
 
     gpt_params params_dft = params_base;
+    // Donor embedding/output overrides target the main model (vocab dims must
+    // match); do not inherit them for the draft unless explicitly requested
+    // via the draft params string parsed below.
+    params_dft.token_embd_path.clear();
+    params_dft.output_weight_path.clear();
     if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
         params_dft.has_mtp = true;
     }
