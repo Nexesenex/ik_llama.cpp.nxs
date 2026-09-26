@@ -4761,6 +4761,7 @@ static bool llm_load_tensors(
         float split_usage_penalty_factor,
         const float * split_vram_reserve_factor,
         const float * tensor_split,
+        bool tensor_split_strict,
         ggml_type cache_type_k,
         ggml_type cache_type_v,
         ggml_type idx_type_k,
@@ -5041,7 +5042,47 @@ static bool llm_load_tensors(
                 }
             }
         }
-        if (device_count > 1 && (model.split_mode == LLAMA_SPLIT_MODE_LAYER ? (fit || has_tensor_split) : fit)) {
+        if (tensor_split_strict) {
+            if (device_count < 2) {
+                throw std::runtime_error("--tensor-split-strict requires at least 2 devices");
+            }
+            if (model.split_mode != LLAMA_SPLIT_MODE_LAYER) {
+                throw std::runtime_error("--tensor-split-strict is only supported with split-mode 'layer'");
+            }
+            if (!has_tensor_split) {
+                throw std::runtime_error("--tensor-split-strict requires -ts/--tensor-split with per-device layer counts");
+            }
+            // Strict mode: -ts values are exact layer counts per device, not byte ratios.
+            // The total must match the number of assigned layer buckets, i.e. the
+            // repeating layers plus the output bucket on full offload. token_embd
+            // is never assigned, so it does not count.
+            int n_last_strict = n_layer;
+            if (n_gpu_layers > n_layer) ++n_last_strict;
+            int total = 0;
+            for (int id = 0; id < device_count; ++id) {
+                const float v = tensor_split[id];
+                const int count = (int) v;
+                if (v < 0 || v != (float) count) {
+                    throw std::runtime_error(format("--tensor-split-strict requires non-negative integer layer counts, got %g for device %d", (double) v, id));
+                }
+                total += count;
+            }
+            const int n_rep = n_layer - i_gpu_start;
+            const int n_out = (n_gpu_layers > n_layer) ? 1 : 0;
+            if (total != n_rep + n_out) {
+                throw std::runtime_error(format("--tensor-split-strict: -ts counts sum to %d but %d layer buckets are assigned (%d repeating + %d output; token_embd is never assigned)",
+                        total, n_rep + n_out, n_rep, n_out));
+            }
+            int il_strict = i_gpu_start;
+            for (int id = 0; id < device_count; ++id) {
+                const int count = (int) tensor_split[id];
+                for (int k = 0; k < count; ++k, ++il_strict) {
+                    model.default_layer_device[il_strict] = id;
+                    LLAMA_LOG_INFO("Setting default device in layer %2d to %d (strict -ts)\n", il_strict, id);
+                }
+            }
+        }
+        if (device_count > 1 && (model.split_mode == LLAMA_SPLIT_MODE_LAYER ? (fit || has_tensor_split) : fit) && !tensor_split_strict) {
             int n_last = n_layer;
             if (n_gpu_layers > n_layer) ++n_last;
             double sum = max_compute * device_count;
@@ -5716,6 +5757,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             params.split_usage_penalty_factor,
             params.split_vram_reserve_factor,
             params.tensor_split,
+            params.tensor_split_strict,
             params.type_k,
             params.type_v,
             params.idx_type_k,
@@ -9089,6 +9131,7 @@ struct llama_model_params llama_model_default_params() {
         /*.swa_compress                =*/ false,
         /*.token_embd_path             =*/ nullptr,
         /*.output_weight_path          =*/ nullptr,
+        /*.tensor_split_strict         =*/ false,
     };
 
 #ifdef GGML_USE_METAL

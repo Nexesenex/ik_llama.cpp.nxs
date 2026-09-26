@@ -2017,6 +2017,9 @@ bool common_speculative_load_draft_model(
     // via the draft params string parsed below.
     params_dft.token_embd_path.clear();
     params_dft.output_weight_path.clear();
+    // Strict -ts counts target the main model's layer count; a draft model
+    // almost surely has fewer layers, so never inherit the flag.
+    params_dft.tensor_split_strict = false;
     if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
         params_dft.has_mtp = true;
     }

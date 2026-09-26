@@ -347,6 +347,7 @@ struct gpt_params {
     bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)
     int32_t worst_graph_tokens    =       0; // number of tokens to use when reserving the worst graph
     float   tensor_split[128]     =     {0}; // how split tensors should be distributed across GPUs
+    bool    tensor_split_strict   =   false; // interpret -ts values as exact layer counts per GPU, not ratios
     int32_t grp_attn_n            =       1; // group-attention factor
     int32_t grp_attn_w            =     512; // group-attention width
     int32_t n_print               =      -1; // print token count every n tokens (-1 = disabled)

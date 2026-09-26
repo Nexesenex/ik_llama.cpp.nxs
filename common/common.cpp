@@ -2422,6 +2422,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
 #endif // GGML_USE_CUDA_SYCL_VULKAN
         return true;
     }
+    if (arg == "-tss" || arg == "--tensor-split-strict") {
+        params.tensor_split_strict = true;
+        return true;
+    }
     if (arg == "--rpc") {
         CHECK_ARG
 #ifdef GGML_USE_RPC
@@ -4323,6 +4327,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "  - layer (default): split layers and KV across GPUs\n" });
         options.push_back({ "*",           "-ts,   --tensor-split SPLIT",
                                                                         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1" });
+        options.push_back({ "*",           "-tss,  --tensor-split-strict",
+                                                                        "interpret -ts values as exact layer counts per GPU instead of proportions\n"
+                                                                        "e.g. -ts 28,9,7 assigns layers 0-27 to GPU 0, 28-36 to GPU 1, 37-43 to GPU 2\n"
+                                                                        "the counts must sum to the assigned layers (repeating + output; token_embd excluded)" });
         options.push_back({ "*",           "-dev,   --device dev1,dev2",
                                                                          "comma-separated list of devices to use for offloading (none = don't offload)\n"
                                                                          "Example: CUDA0,CUDA1,RPC[192.168.0.1:8080]\n" });
@@ -5489,6 +5497,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.amb             = params.attn_max_batch;
     mparams.split_mode      = params.split_mode;
     mparams.tensor_split    = params.tensor_split;
+    mparams.tensor_split_strict = params.tensor_split_strict;
     mparams.use_mmap        = params.use_mmap;
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
