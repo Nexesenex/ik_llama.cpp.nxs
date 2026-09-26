@@ -13,4 +13,9 @@ void iqk_gemm_legacy_fa(int D, int nq, int type_k, const char * k, size_t stride
 
 bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x);
 
+#ifdef __x86_64__
+extern "C" void iqk_test_gemm_mxfp4_r8(int n, const void * vx, size_t bx,
+                                       const DataInfo& info, int nrc_x, int nrc_y);
+#endif
+
 #endif

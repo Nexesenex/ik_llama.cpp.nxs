@@ -1580,6 +1580,21 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
     }
 }
 
+// Mirrors iqk_test_gemm_iq4_xs_r8 in iqk_gemm_kquants.cpp.
+extern "C" void iqk_test_gemm_mxfp4_r8(int n, const void * vx, size_t bx,
+                                        const DataInfo& info, int nrc_x, int nrc_y) {
+    switch (nrc_y) {
+        case 1: mul_mat_mxfp4_r8_q8_2_avx2<1>(n, vx, bx, info, nrc_x); break;
+        case 2: mul_mat_mxfp4_r8_q8_2_avx2<2>(n, vx, bx, info, nrc_x); break;
+        case 3: mul_mat_mxfp4_r8_q8_2_avx2<3>(n, vx, bx, info, nrc_x); break;
+        case 4: mul_mat_mxfp4_r8_q8_2_avx2<4>(n, vx, bx, info, nrc_x); break;
+        case 5: mul_mat_mxfp4_r8_q8_2_avx2<5>(n, vx, bx, info, nrc_x); break;
+        case 6: mul_mat_mxfp4_r8_q8_2_avx2<6>(n, vx, bx, info, nrc_x); break;
+        case 7: mul_mat_mxfp4_r8_q8_2_avx2<7>(n, vx, bx, info, nrc_x); break;
+        default: mul_mat_mxfp4_r8_q8_2_avx2<8>(n, vx, bx, info, nrc_x); break;
+    }
+}
+
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
 static void mul_mat_mxfp4_r8_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {

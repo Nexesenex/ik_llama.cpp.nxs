@@ -1481,6 +1481,97 @@ static void test_gemm_iq4_xs_r8_direct(int n, int nrc_x, int nrc_y) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Test: direct MXFP4_R8 GEMM vs float (expert path, Q8_2_X4 act) — mirrors
+// test_gemm_iq4_xs_r8_direct. Covers the production expert arithmetic
+// (mul_mat_mxfp4_r8_q8_2_avx2, nrc_y=1/8, MoE row_mapping) that the
+// repack+converter tests do not exercise.
+// ---------------------------------------------------------------------------
+static void test_gemm_mxfp4_r8_direct(int n, int nrc_x, int nrc_y) {
+    GGML_ASSERT(n % QK_MXFP4 == 0);
+    GGML_ASSERT(nrc_x % 8 == 0);
+    GGML_ASSERT(nrc_y >= 1 && nrc_y <= 8);
+    const int nb = n / QK_MXFP4;
+    const size_t bx_w = ggml_row_size(GGML_TYPE_MXFP4_R8, n);
+    const size_t bx_B = ggml_row_size(GGML_TYPE_Q8_2_X4, n);
+
+    std::vector<block_mxfp4> src((size_t)nrc_x * nb);
+    for (auto & b : src) make_random_mxfp4(&b);
+    std::vector<block_mxfp4_r8> W((size_t)(nrc_x / 8) * nb);
+    iqk_test_repack_mxfp4(nrc_x, n, src.data(), W.data());
+
+    std::vector<float> Wf((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 8; ++g)
+        dequantize_row_mxfp4_r8(&W[(size_t)g * nb], Wf.data() + (size_t)g * 8 * n, 8 * n);
+
+    const int NE11 = 8;
+    std::vector<float> Bf((size_t)NE11 * n);
+    for (size_t j = 0; j < Bf.size(); ++j) Bf[j] = 0.05f * ((int)(g_rng() % 41) - 20);
+    std::vector<uint8_t> B((size_t)NE11 * bx_B);
+    for (int iy = 0; iy < NE11; ++iy)
+        quantize_row_q8_2_x4(Bf.data() + (size_t)iy * n, B.data() + (size_t)iy * bx_B, n);
+    // Dequant B for the reference: block_q8_2 is {bf16 d, bf16 sum, qs[32]}.
+    std::vector<float> Bfq((size_t)NE11 * n, 0.f);
+    for (int iy = 0; iy < NE11; ++iy) {
+        const auto * brow = (const block_q8_2 *)(B.data() + (size_t)iy * bx_B);
+        float * fout = Bfq.data() + (size_t)iy * n;
+        for (int ib = 0; ib < n / QK8_2; ++ib) {
+            float d = GGML_BF16_TO_FP32(ggml_bf16_t{brow[ib].d});
+            for (int j = 0; j < QK8_2; ++j) fout[ib * QK8_2 + j] = d * brow[ib].qs[j];
+        }
+    }
+
+    auto run_case = [&](const char * tag, int ne11, const std::vector<mmid_row_mapping> * mapping, int ny) {
+        std::vector<float> C((size_t)ne11 * nrc_x, -1.f);
+        DataInfo info;
+        info.s   = C.data();
+        info.cy  = (const char *)B.data();
+        info.bs  = nrc_x;
+        info.by  = bx_B;
+        info.cur_y = 0;
+        info.ne11  = ne11;
+        info.row_mapping = mapping ? mapping->data() : nullptr;
+        iqk_test_gemm_mxfp4_r8(n, W.data(), bx_w, info, nrc_x, ny);
+
+        float max_err = 0.f, max_ref = 0.f;
+        size_t nbad = 0;
+        for (int iy = 0; iy < ny; ++iy) {
+            int i1 = mapping ? (*mapping)[iy].i1 : iy;
+            for (int r = 0; r < nrc_x; ++r) {
+                const float * wr = Wf.data() + (size_t)r * n;
+                const float * br = Bfq.data() + (size_t)i1 * n;
+                double s = 0.0;
+                for (int k = 0; k < n; ++k) s += (double)wr[k] * (double)br[k];
+                float got = C[(size_t)i1 * nrc_x + r];
+                float e = fabsf(got - (float)s);
+                if (fabsf((float)s) > max_ref) max_ref = fabsf((float)s);
+                if (e > max_err) max_err = e;
+                if (e > 1e-2f + 1e-4f * fabsf((float)s)) ++nbad;
+            }
+        }
+        if (nbad == 0)
+            printf("  [OK]   gemm-mxfp4d %-11s n=%-5d nrc_x=%-3d nrc_y=%d : max|err|=%.4g (scale %.4g)\n",
+                   tag, n, nrc_x, ny, (double)max_err, (double)max_ref);
+        else {
+            printf("  [FAIL] gemm-mxfp4d %-11s n=%-5d nrc_x=%-3d nrc_y=%d : %zu bad (max|err|=%.4g scale %.4g)\n",
+                   tag, n, nrc_x, ny, nbad, (double)max_err, (double)max_ref);
+            ++g_failures;
+        }
+    };
+
+    run_case("plain", nrc_y, nullptr, nrc_y);
+    {
+        std::vector<mmid_row_mapping> rev(nrc_y);
+        for (int iy = 0; iy < nrc_y; ++iy) { rev[iy].i1 = nrc_y - 1 - iy; rev[iy].i2 = 0; }
+        run_case("rev-map", nrc_y, &rev, nrc_y);
+    }
+    if (nrc_y >= 4) {
+        std::vector<mmid_row_mapping> sub(4);
+        for (int iy = 0; iy < 4; ++iy) { sub[iy].i1 = 2 * iy; sub[iy].i2 = 0; }
+        run_case("sub-map", NE11, &sub, 4);
+    }
+}
+
 // Build a random but *valid* block_q4_0: random half delta, random nibbles.
 static void make_random_q4_0(block_q4_0 * blk) {
     float d = (g_rng() % 1000) * 0.001f + 0.01f;
@@ -2228,6 +2319,20 @@ int main(int argc, char ** argv) {
             for (int nrc_x : nx_d8) {
                 for (int nrc_y : ny_d8) {
                     test_gemm_iq4_xs_r8_direct(n, nrc_x, nrc_y);
+                }
+            }
+        }
+    }
+
+    {
+        printf("\n--- Test: direct MXFP4_R8 GEMM vs float (expert path, Q8_2_X4 act) ---\n");
+        int ns_mx[] = {1024};
+        int nx_mx[] = {8, 64};
+        int ny_mx[] = {1, 8};
+        for (int n : ns_mx) {
+            for (int nrc_x : nx_mx) {
+                for (int nrc_y : ny_mx) {
+                    test_gemm_mxfp4_r8_direct(n, nrc_x, nrc_y);
                 }
             }
         }
