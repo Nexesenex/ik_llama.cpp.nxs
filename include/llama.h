@@ -458,6 +458,12 @@ extern "C" {
         // tensor is also used for output_extra.weight.
         const char * token_embd_path;    // GGUF file overriding token_embd.weight (nullptr = unused)
         const char * output_weight_path; // GGUF file overriding output.weight (nullptr = unused)
+
+        // Strict tensor-split mode: interpret tensor_split[] as exact layer
+        // counts per device instead of byte ratios (see -tss). The counts must
+        // sum to the number of assigned layer buckets (repeating layers +
+        // output bucket; token_embd is never assigned).
+        bool tensor_split_strict; // interpret -ts values as layer counts, not ratios (default: false)
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
