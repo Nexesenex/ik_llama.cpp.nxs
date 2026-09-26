@@ -2071,6 +2071,13 @@ bool common_speculative_load_draft_model(
     params_dft.cpu_affinity.clear();
     params_dft.cpu_affinity_auto = false;
     params_dft.cpu_affinity_configured = false;
+
+    // Donor embedding/output overrides target the main model (vocab dims must
+    // match); do not inherit them for the draft unless explicitly requested
+    // via the draft params string parsed below.
+    params_dft.token_embd_path.clear();
+    params_dft.output_weight_path.clear();
+
     if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
         params_dft.has_mtp = true;
     }
