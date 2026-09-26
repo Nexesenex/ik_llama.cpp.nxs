@@ -734,6 +734,11 @@ void llama_model_loader::override_tensor_from_file(const char * tensor_name, con
     bool replaced = false;
     for (auto & w : weights) {
         if (strcmp(w.tensor->name, tensor_name) == 0) {
+            LLAMA_LOG_INFO("%s: replacing tensor '%s' (type=%s, %s, %.2f MiB) with donor tensor (type=%s, %.2f MiB)\n",
+                    __func__, tensor_name,
+                    ggml_type_name(w.tensor->type), llama_format_tensor_shape(w.tensor).c_str(),
+                    ggml_nbytes(w.tensor)/1024.0/1024.0,
+                    ggml_type_name(donor_tensor->type), nbytes/1024.0/1024.0);
             n_bytes -= ggml_nbytes(w.tensor);
             n_bytes += nbytes;
             w.idx    = donor_idx;
