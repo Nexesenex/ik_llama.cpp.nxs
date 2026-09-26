@@ -5382,6 +5382,12 @@ static void repack_mxfp4(int nrows, int n_per_row, const block_mxfp4 * x, block_
     for (int row = 0; row < nrows; row += 8) {
         for (int k = 0; k < 8; ++k) x8[k] = x + nblock*k;
         for (int ib = 0; ib < nblock; ++ib) {
+            // Offline repack is stream-bound: prefetch the next source blocks while shuffling the current one.
+#if defined(__x86_64__) || defined(_M_X64)
+            if (ib + 1 < nblock) {
+                for (int k = 0; k < 8; ++k) _mm_prefetch((const char *)&x8[k][ib+1], _MM_HINT_T0);
+            }
+#endif
             for (int k = 0; k < 8; ++k) {
                 y[ib].e[k] = x8[k][ib].e;
                 for (int l = 0; l < 4; ++l) {
