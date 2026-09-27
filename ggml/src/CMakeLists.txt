@@ -617,6 +617,13 @@ if (GGML_RPC)
 		
 endif()
 
+if (WIN32)
+    # ggml-rpc-transport.cpp is unconditionally part of ggml (PR 2531) and uses
+    # Winsock even when GGML_RPC is off, so always link ws2_32. Otherwise shared
+    # (ggml.dll) builds fail with unresolved WSA/socket symbols.
+    set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} ws2_32)
+endif()
+
 function(detect_host_compiler)
     if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
         find_program(HOST_C_COMPILER NAMES cl gcc clang NO_CMAKE_FIND_ROOT_PATH)
