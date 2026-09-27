@@ -83,6 +83,41 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     }
     result->tokens_since_sentence_end = 0;
 
+    // --antislop-coding: reduce the logits of tokens spelling common coding filler phrases
+    // (" perhaps", " wait", " however", ...) by params.antislop_coding. Each phrase is tokenized
+    // with the model vocab and every resulting token gets the bias in llama_sampling_prepare_impl.
+    if (result->params.antislop_coding != 0.0f && vocab != nullptr) {
+        static const char * const antislop_coding_phrases[] = {
+            "perhaps", "Perhaps", "maybe", "Maybe", "wait", "Wait", "actually", "Actually",
+            "hold", "Hold", "Hmm", "hmm",
+            "anyway", "Anyway",
+            "uncertain", "unsure", "possibly", "might",
+            "could", " reconsider", "rethink",
+            "doubt", "confused",
+            // " perhaps", " maybe", " wait", " Wait", " actually",
+            // " hold", " Hmm", " hmm", " Alternatively", " alternatively",
+            // " However", " however", " instead", " Instead", " But",
+            // " but", " though", " although", " yet", " rather",
+            // " unless", " otherwise", " nonetheless", " nevertheless", " regardless",
+            // " still", " anyway", " Or", " or", " either",
+            // " whether", " uncertain", " unsure", " possibly", " might",
+            // " could", " another", " different", " reconsider", " rethink",
+            // " backtrack", " retry", " revisit", " doubt", " confused",
+            // " wrong", " mistake", " error", " incorrect",
+        };
+        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+        std::set<llama_token> unique_tokens;
+        for (const char * phrase : antislop_coding_phrases) {
+            const auto tokens = common_tokenize(vocab, phrase, false, false);
+            for (const llama_token token : tokens) {
+                if (token >= 0 && token < n_vocab) {
+                    unique_tokens.insert(token);
+                }
+            }
+        }
+        result->antislop_tokens.assign(unique_tokens.begin(), unique_tokens.end());
+    }
+
     struct llama_grammar* grmr = nullptr;
     const std::string & grammar_str = common_grammar_value(params.grammar);
     if (grammar_str.compare(0, 11, "%llguidance") == 0) {
@@ -752,6 +787,13 @@ static llama_token_data_array llama_sampling_prepare_impl(
     // apply params.logit_bias map
     for (auto it = params.logit_bias.begin(); it != params.logit_bias.end(); it++) {
         logits[it->first] += it->second;
+    }
+
+    // --antislop-coding: reduce the logits of the coding filler phrase tokens
+    if (params.antislop_coding != 0.0f) {
+        for (const llama_token token : ctx_sampling->antislop_tokens) {
+            logits[token] -= params.antislop_coding;
+        }
     }
 
     if (ctx_cfg) {

@@ -134,6 +134,7 @@ typedef struct common_params_sampling {
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
     bool        no_space_after_quote  = false;              // contextual rule: while inside an open " quote, disallow tokens that begin with a space (e.g. " You -> "You)
     float       boost_space_after_quote = 0.0f;             // contextual rule: while inside an open " quote, boost logits of tokens that begin with a space (e.g. "You -> " You)
+    float       antislop_coding       = 0.0f;               // reduction applied to the logits of common coding filler phrases (--antislop-coding; 0.0 = disabled)
     float       eos_token_probability = 1.0f;               // scale factor for the probability of the EOS/EOG tokens (1.0 = no change, 0.0 = EOG tokens effectively disabled)
     std::vector<std::string> special_eosg_tokens;          // if non-empty, the first occurrence of any of these strings in the generated text stops generation like an EOG/EOS token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
@@ -248,6 +249,8 @@ struct common_sampler {
     int               tokens_since_sentence_end = 0;   // generated tokens since the last sentence end (for break_endless_sentences)
     std::vector<bool> is_sentence_end_token;             // vocab rows whose piece is ".", "?" or "!" after stripping leading space markers (only built when break_endless_sentences is set)
     std::vector<bool> is_continuation_token;             // vocab rows whose piece is ",", ";" or "-" after stripping leading space markers (only built when break_endless_sentences is set)
+
+    std::vector<llama_token> antislop_tokens;            // tokens spelling coding filler phrases (only built when antislop_coding is set); each gets params.antislop_coding logit bias
 
     llama_sampler_adaptive_p * adapt_p_ctx;    // adaptive p sampler
 
