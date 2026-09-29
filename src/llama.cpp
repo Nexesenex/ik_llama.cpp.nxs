@@ -5187,11 +5187,6 @@ static bool llm_load_tensors(
             ml.apply_ple_mmap_policy();
         }
 #if defined(_WIN32)
-        // Windows MapViewOfFile is demand-paged and PrefetchVirtualMemory is
-        // best-effort/trimmable, so a sparsely-accessed PLE table faults from
-        // the file on every miss even without --defer-ple (de facto deferred).
-        // Fault it in synchronously to match Linux MAP_POPULATE default.
-        // Only for host-mapped tensors; CUDA-offloaded PLE is already copied to VRAM.
         if (ml.use_mmap && use_mmap_buffer && !defer_ple_mmap &&
                 model.tok_embd_per_layer && model.tok_embd_per_layer->data &&
                 model.tok_embd_per_layer->buffer &&
