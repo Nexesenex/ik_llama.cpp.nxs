@@ -1129,9 +1129,29 @@ extern "C" {
     // n_threads_batch is the number of threads used for prompt and batch processing (multiple tokens)
     LLAMA_API void llama_set_n_threads(struct llama_context * ctx, uint32_t n_threads, uint32_t n_threads_batch);
 
-    // pin CPU worker threads to the given logical CPUs (Linux only); thread t ->
-    // cpus[t % n_cpus]. Configure before compute, n_cpus == 0 disables pinning.
+    // pin CPU worker threads to the given logical CPUs; thread t -> cpus[t % n_cpus].
+    // Linux via pthread_setaffinity_np, Windows via SetThreadGroupAffinity (group-aware).
+    // Flat ids follow OS enumeration order. Configure before compute, n_cpus == 0 disables pinning.
+    // Explicit list applies to both PP and TG phases.
     LLAMA_API void llama_set_cpu_affinity(struct llama_context * ctx, const int32_t * cpus, int n_cpus);
+
+    // CPU affinity auto-pinning phases (trisection, opt-in). The auto list is
+    // stored and applied per graph compute: PP-only pins prompt/batch graphs,
+    // TG-only pins single-token graphs, ALL pins both. Phase is detected from
+    // the graph's thread count vs cparams n_threads (TG) / n_threads_batch (PP);
+    // when both counts are equal the phases are indistinguishable and both pin.
+    // A phase whose thread count exceeds the auto list is left unpinned so
+    // E-cores can join instead of oversubscribing P-cores.
+    enum llama_cpu_affinity_mode {
+        LLAMA_CPU_AFFINITY_DISABLED = 0,
+        LLAMA_CPU_AFFINITY_AUTO_ALL = 1,
+        LLAMA_CPU_AFFINITY_AUTO_PP  = 2,
+        LLAMA_CPU_AFFINITY_AUTO_TG  = 3,
+    };
+
+    // store auto P-core list + phase mode; applied per graph compute (see above).
+    // n_cpus == 0 or mode == DISABLED disables auto pinning.
+    LLAMA_API void llama_set_cpu_affinity_auto(struct llama_context * ctx, const int32_t * cpus, int n_cpus, int mode);
 
     // Get the number of threads used for generation of a single token.
     LLAMA_API uint32_t llama_n_threads(struct llama_context * ctx);
