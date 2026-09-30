@@ -364,9 +364,11 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  -ncmoe, --n-cpu-moe <n>             (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
     printf("  -cmoe, --cpu-moe                    (same as -ncmoe 999)\n");
-    printf("  --cpu-affinity                      pin threads to the physical P-cores (hybrid CPUs)\n");
-    printf("  -cm, --cpu-mask <mask>              pin threads to CPUs in bitmask (e.g. 0x55, 64 CPUs max)\n");
-    printf("  -cr, --cpu-range <list>             pin threads to CPUs (e.g. 0-3,8,10-11)\n");
+    printf("  -cm, --cpu-mask <mask>              opt-in: pin threads to CPUs in bitmask (e.g. 0x55, 64 CPUs max)\n");
+    printf("  -cr, --cpu-range <list>             opt-in: pin threads to CPUs (e.g. 0-3,8,10-11)\n");
+    printf("  --cpu-affinity                      opt-in: auto-pin threads to physical P-cores (alias of -ca)\n");
+    printf("  -ca, --cpu-affinity-auto            opt-in: auto-pin threads to physical P-cores\n");
+    printf("  --no-cpu-affinity                   disable CPU affinity pinning (default: disabled, kept for compat)\n");
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
     printf("  -sm, --split-mode <none|layer|graph>(default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
@@ -913,8 +915,15 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             params.cpu_affinity_auto = false;
         } else if (arg == "--cpu-affinity") {
-            params.cpu_affinity.clear();
+            // alias of -ca, kept for upstream (PR 2565) compatibility
+            params.cpu_affinity.clear(); // last flag wins: drop any explicit list
             params.cpu_affinity_auto = true;
+        } else if (arg == "-ca" || arg == "--cpu-affinity-auto") {
+            params.cpu_affinity.clear(); // last flag wins: drop any explicit list
+            params.cpu_affinity_auto = true;
+        } else if (arg == "--no-cpu-affinity") {
+            params.cpu_affinity.clear();
+            params.cpu_affinity_auto = false;
         } else {
             const int i0 = i;
             try {
@@ -974,7 +983,14 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
         }
         params.n_threads = std::move(n_threads);
     }
-    params.cpu_affinity = cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto);
+    // resolve explicit -cm/-cr or the P-core auto list; either way the result is a
+    // plain explicit list for all phases. Use the largest batch pool so automatic
+    // affinity is cleared when it cannot cover prompt processing.
+    int n_threads_batch = 0;
+    for (const auto & t : params.n_threads) {
+        n_threads_batch = std::max(n_threads_batch, t.second);
+    }
+    common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto, n_threads_batch);
     gpt_params_terminate_lists(params.extra);
     params.extra.n_ctx = 0;
     if (params.extra.has_mtp || !params.extra.speculative.stages.empty()) {
@@ -1121,6 +1137,7 @@ struct cmd_params_instance {
         cparams.embeddings = embeddings;
         cparams.cuda_params = (void *)cuda_params.data();
         cparams.scheduler_async = sas;
+        // the affinity was resolved at parse: always an explicit all-phase list
         cparams.cpu_affinity    = cpu_affinity.empty() ? nullptr : cpu_affinity.data();
         cparams.n_cpu_affinity  = (int32_t) cpu_affinity.size();
         common_check_v_cache_types(cparams);
@@ -2358,6 +2375,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
+        common_cpu_affinity_apply(ctx, inst.cpu_affinity, __func__);
         test t(inst, lmodel, ctx);
 
         llama_kv_cache_clear(ctx);
