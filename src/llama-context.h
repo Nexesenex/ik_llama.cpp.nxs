@@ -365,6 +365,11 @@ struct llama_context {
 #endif
     ggml_backend_t backend_cpu = nullptr;
 
+    // CPU affinity trisection state (opt-in). Explicit list wins over auto when non-empty.
+    std::vector<int32_t> cpu_affinity_explicit;
+    std::vector<int32_t> cpu_affinity_auto_cpus;
+    int cpu_affinity_mode = 0; // LLAMA_CPU_AFFINITY_DISABLED by default (see llama.h)
+
     bool has_evaluated_once = false;
 
     int64_t t_start_us;

@@ -81,6 +81,8 @@ int32_t cpu_get_num_physical_cores();
 int32_t cpu_get_num_math();
 
 // P-cores, one thread per physical core (no E-cores, no SMT siblings)
+// Linux: CPUID + thread_siblings_list. Windows: EfficiencyClass (highest=P),
+// flat ids in RelationProcessorCore order, as in ggml.c. Empty = no hybrid/opt-out.
 std::vector<int32_t> cpu_get_math_cpus();
 
 // E-cores, one per physical core (Intel hybrid)
@@ -312,8 +314,9 @@ struct gpt_params {
     int32_t n_threads             = cpu_get_num_math();
     int32_t n_threads_batch       =      -1; // number of threads to use for batch processing (-1 = use n_threads)
     std::vector<int32_t> cpu_affinity;       // logical CPU ids to pin worker threads to (empty = no explicit pinning)
-    bool    cpu_affinity_auto     = false;   // pin to hybrid P-cores when cpu_affinity is empty (--cpu-affinity)
+    bool    cpu_affinity_auto     = false;   // pin to hybrid P-cores when cpu_affinity is empty (--cpu-affinity/-ca)
     bool    cpu_affinity_configured = false; // a CPU affinity option was given
+    int     cpu_affinity_mode     = LLAMA_CPU_AFFINITY_DISABLED; // opt-in auto phases: ALL/-ca, PP/-capp, TG/-catg (see llama.h)
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
