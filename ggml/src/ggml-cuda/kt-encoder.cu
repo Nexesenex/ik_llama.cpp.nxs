@@ -759,6 +759,18 @@ static kt_codebook kt_get_codebook(int device, ggml_type type) {
 
 #endif
 
+GGML_CALL bool ggml_cuda_quantize_supported(enum ggml_type type) {
+#if defined(GGML_USE_HIPBLAS) || defined(GGML_USE_MUSA)
+    GGML_UNUSED(type);
+    return false;
+#else
+    // Mirrors the ggml_cuda_quantize dispatcher below; extend alongside it.
+    const bool ks = type == GGML_TYPE_IQ3_KS || type == GGML_TYPE_IQ4_KS || type == GGML_TYPE_IQ5_KS || type == GGML_TYPE_IQ4_KS_R4 ||
+        type == GGML_TYPE_IQ4_KS_R16 || type == GGML_TYPE_IQ5_KS_R4;
+    return type == GGML_TYPE_IQ4_KT || type == GGML_TYPE_IQ3_KT || ks;
+#endif
+}
+
 GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float * src, void * dst, int64_t nrows, int64_t n_per_row, int64_t nslice,
         const float * imatrix) {
     const bool ks = type == GGML_TYPE_IQ3_KS || type == GGML_TYPE_IQ4_KS || type == GGML_TYPE_IQ5_KS || type == GGML_TYPE_IQ4_KS_R4 ||
