@@ -171,6 +171,14 @@ void iq2xs_free_impl(enum ggml_type type);
 void iq3xs_init_impl(int grid_size);
 void iq3xs_free_impl(int grid_size);
 
+// CUDA GGUF quant accessors (grid/map/neighbours for device upload; init if needed).
+// grid_size 256 (XXS) or 512 (S); sets *grid, *map, *neighbours and counts; returns 0 on failure.
+int iq3xs_grid_data(int grid_size, const uint32_t ** grid, const int ** map, const uint16_t ** neighbours,
+        int * grid_n, int * map_n, int * neighbours_n);
+// type IQ2_XXS (256), IQ2_XS (512) or IQ2_S (1024); map is 256/512/1024? see impl (u 16-bit for S).
+int iq2xs_grid_data(int type, const uint64_t ** grid, const int ** map, const uint16_t ** neighbours,
+        int * grid_n, int * map_n, int * neighbours_n);
+
 void iq1s_process_1block(int block_size, const float * xb, const float * weight, int8_t * L,
         float * the_scale, uint16_t * the_index, int * the_shift, float * pairs, float * sumx, float * sumw);
 void iq1m_process_1block(const float * xb, const float * weight, int8_t * L,
