@@ -1,5 +1,5 @@
 //
-// unit_test_cuda.cpp - byte-exact CUDA vs CPU vs REF quant check; KT order Q8_0,Q6_0,Q5_0,Q4_0,Q5_1,Q4_1,IQ4_NL,IQ4_XS (+imatrix).
+// unit_test_cuda.cpp - byte-exact CUDA vs CPU vs REF quant check; KT order Q8_0,Q6_0,Q5_0,Q4_0,Q5_1,Q4_1,IQ4_NL,IQ4_XS,IQ4_KT,IQ3_KT (+imatrix).
 // Producers: GPU ggml_cuda_quantize (Joel single entry, nslice=1) vs CPU ggml_quantize_chunk vs local REF copies of ggml-quants.c.
 // Layout: 32-val blocks tile rows contiguously; test_slices reproduces do_quantize ne[2] slicing; edge cases per docs/cuda-quantize.md S6.
 // Build (GGML_CUDA on): cmake --build build --target unit_test_cuda -j
@@ -21,6 +21,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "ggml-cuda.h"
+#include "iqk/iqk_quantize.h"
 
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
@@ -47,7 +48,7 @@ struct quant_spec {
     bool         nan_block_equal; // skip the whole block when both d are non-finite
 };
 
-// Joel single-entry wrappers (nslice=1); order Q8_0,Q6_0,Q5_0,Q4_0,Q5_1,Q4_1,IQ4_NL,IQ4_XS.
+// Joel single-entry wrappers (nslice=1); order Q8_0,Q6_0,Q5_0,Q4_0,Q5_1,Q4_1,IQ4_NL,IQ4_XS,IQ4_KT,IQ3_KT.
 template<ggml_type T>
 static size_t cuda_plain(const float * s, void * d, int64_t r, int64_t n) {
     return ggml_cuda_quantize(g_cuda_device, T, s, d, r, n, 1, nullptr);
@@ -1048,6 +1049,27 @@ static void ref_quantize_iq4_xs_imatrix(void * dst, const float * src, int64_t n
     }
 }
 
+// REF IQ4_KT/IQ3_KT: CPU wrappers (verbatim copy impractical: ~700 lines + AVX2); gpu/cpu is the meaningful check.
+static void ref_quantize_iq4_kt(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    quantize_iq4_kt(src, dst, nrows, n_per_row, nullptr, nullptr);
+}
+
+// REF IQ4_KT with imatrix: same CPU path, weight=qw*sqrt(sigma2+x*x) per 32-block.
+static void ref_quantize_iq4_kt_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    quantize_iq4_kt(src, dst, nrows, n_per_row, imatrix, nullptr);
+}
+
+static void ref_quantize_iq3_kt(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    quantize_iq3_kt(src, dst, nrows, n_per_row, nullptr, nullptr);
+}
+
+// REF IQ3_KT with imatrix: same CPU path, weight=qw*sqrt(sigma2+x*x) per 32-block.
+static void ref_quantize_iq3_kt_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    quantize_iq3_kt(src, dst, nrows, n_per_row, imatrix, nullptr);
+}
+
 // Local copy of quantize_row_q6_0_impl (ggml-quants.c:3697): make_qx_quants
 // with nmax == 32, plus the 2-bit qh packing (6-bit quants).
 static void ref_quantize_q6_0_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
@@ -1504,6 +1526,16 @@ int main(int argc, char ** argv) {
                 false, nullptr, nullptr, false, true },
         { "iq4_xs-imatrix", GGML_TYPE_IQ4_XS, QK_K, sizeof(block_iq4_xs), cuda_plain<GGML_TYPE_IQ4_XS>, ref_quantize_iq4_xs,
                 true, cuda_imatrix<GGML_TYPE_IQ4_XS>, ref_quantize_iq4_xs_imatrix, false, true },
+        // IQ4_KT (+imatrix): qk=32 allows tail rows (ne%32==0, nt>0 via iqk_kt_finish_row); d is float, no fp16 NaN waiver
+        { "iq4_kt", GGML_TYPE_IQ4_KT, 32, sizeof(block_iq4_kt), cuda_plain<GGML_TYPE_IQ4_KT>, ref_quantize_iq4_kt,
+                false, nullptr, nullptr, false, false },
+        { "iq4_kt-imatrix", GGML_TYPE_IQ4_KT, 32, sizeof(block_iq4_kt), cuda_plain<GGML_TYPE_IQ4_KT>, ref_quantize_iq4_kt,
+                true, cuda_imatrix<GGML_TYPE_IQ4_KT>, ref_quantize_iq4_kt_imatrix, false, false },
+        // IQ3_KT (+imatrix): same tail coverage as IQ4_KT
+        { "iq3_kt", GGML_TYPE_IQ3_KT, 32, sizeof(block_iq3_kt), cuda_plain<GGML_TYPE_IQ3_KT>, ref_quantize_iq3_kt,
+                false, nullptr, nullptr, false, false },
+        { "iq3_kt-imatrix", GGML_TYPE_IQ3_KT, 32, sizeof(block_iq3_kt), cuda_plain<GGML_TYPE_IQ3_KT>, ref_quantize_iq3_kt,
+                true, cuda_imatrix<GGML_TYPE_IQ3_KT>, ref_quantize_iq3_kt_imatrix, false, false },
     };
     const size_t nspec = sizeof(specs)/sizeof(specs[0]);
 
