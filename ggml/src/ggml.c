@@ -31907,9 +31907,9 @@ void ggml_quantize_free(void) {
 }
 
 bool ggml_quantize_requires_imatrix(enum ggml_type type) {
+    // IQ2_XS/XXS plain (no imatrix) is well-defined (w = 0.25*sigma2 + x*x)
+    // and covered by CUDA, so plain is allowed like IQ2_S/IQ3_*.
     return
-        type == GGML_TYPE_IQ2_XXS ||
-        type == GGML_TYPE_IQ2_XS  ||
         type == GGML_TYPE_IQ1_S;//   ||
         //type == GGML_TYPE_IQ1_M;
 }
