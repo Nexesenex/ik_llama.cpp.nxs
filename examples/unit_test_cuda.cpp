@@ -1,5 +1,5 @@
 //
-// unit_test_cuda.cpp - byte-exact CUDA vs CPU vs REF quant check; KT order Q8_0,Q6_0,Q5_0,Q4_0,Q5_1,Q4_1,IQ4_NL,IQ4_XS,IQ3_S,IQ3_XXS,IQ2_S,IQ2_XS,IQ2_XXS,IQ1_M,IQ1_S,IQ4_KT,IQ3_KT (+imatrix, KT disabled).
+// unit_test_cuda.cpp - byte-exact CUDA vs CPU vs REF quant check; KT order Q8_0,Q6_0,Q5_0,Q4_0,Q5_1,Q4_1,IQ4_NL,IQ4_XS,IQ3_S,IQ3_XXS,IQ2_S,IQ2_XS,IQ2_XXS,IQ1_M,IQ1_S,Q6_K,Q5_K,Q4_K,Q3_K,Q2_K,IQ4_KT,IQ3_KT (+imatrix, KT disabled).
 // Producers: GPU ggml_cuda_quantize (Joel single entry, nslice=1) vs CPU ggml_quantize_chunk vs local REF copies of ggml-quants.c.
 // Layout: 32-val blocks tile rows contiguously; test_slices reproduces do_quantize ne[2] slicing; edge cases per docs/cuda-quantize.md S6.
 // Build (GGML_CUDA on): cmake --build build --target unit_test_cuda -j
@@ -67,7 +67,7 @@ struct quant_spec {
     bool         nan_block_equal; // skip the whole block when both d are non-finite
 };
 
-// Joel single-entry wrappers (nslice=1); order Q8_0,Q6_0,Q5_0,Q4_0,Q5_1,Q4_1,IQ4_NL,IQ4_XS,IQ3_S,IQ3_XXS,IQ2_S,IQ2_XS,IQ2_XXS,IQ1_M,IQ1_S,IQ4_KT,IQ3_KT.
+// Joel single-entry wrappers (nslice=1); order Q8_0,Q6_0,Q5_0,Q4_0,Q5_1,Q4_1,IQ4_NL,IQ4_XS,IQ3_S,IQ3_XXS,IQ2_S,IQ2_XS,IQ2_XXS,IQ1_M,IQ1_S,Q6_K,Q5_K,Q4_K,Q3_K,Q2_K,IQ4_KT,IQ3_KT.
 template<ggml_type T>
 static size_t cuda_plain(const float * s, void * d, int64_t r, int64_t n) {
     return ggml_cuda_quantize(g_cuda_device, T, s, d, r, n, 1, nullptr);
@@ -1165,6 +1165,61 @@ static void ref_quantize_iq1_s_imatrix(void * dst, const float * src, int64_t nr
     quantize_iq1_s(src, dst, nrows, n_per_row, imatrix, nullptr);
 }
 
+// REF Q6_K: CPU wrapper (make_qx + super iscale); gpu/cpu is the meaningful check.
+static void ref_quantize_q6_K(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    quantize_q6_K(src, dst, nrows, n_per_row, nullptr, nullptr);
+}
+
+// REF Q6_K with imatrix: same CPU path (raw qw, no sqrt).
+static void ref_quantize_q6_K_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    quantize_q6_K(src, dst, nrows, n_per_row, imatrix, nullptr);
+}
+
+// REF Q5_K: CPU wrapper (make_qkx2 ref); gpu/cpu is the meaningful check.
+static void ref_quantize_q5_K(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    quantize_q5_K(src, dst, nrows, n_per_row, nullptr, nullptr);
+}
+
+// REF Q5_K with imatrix: same CPU path (make_qkx3+make_qp).
+static void ref_quantize_q5_K_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    quantize_q5_K(src, dst, nrows, n_per_row, imatrix, nullptr);
+}
+
+// REF Q4_K: CPU wrapper (make_qkx2 ref); gpu/cpu is the meaningful check.
+static void ref_quantize_q4_K(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    quantize_q4_K(src, dst, nrows, n_per_row, nullptr, nullptr);
+}
+
+// REF Q4_K with imatrix: same CPU path (make_qkx3+make_qp).
+static void ref_quantize_q4_K_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    quantize_q4_K(src, dst, nrows, n_per_row, imatrix, nullptr);
+}
+
+// REF Q3_K: CPU wrapper (make_q3 ref); gpu/cpu is the meaningful check.
+static void ref_quantize_q3_K(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    quantize_q3_K(src, dst, nrows, n_per_row, nullptr, nullptr);
+}
+
+// REF Q3_K with imatrix: same CPU path (make_qx+make_qx).
+static void ref_quantize_q3_K_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    quantize_q3_K(src, dst, nrows, n_per_row, imatrix, nullptr);
+}
+
+// REF Q2_K: CPU wrapper (TriNet + make_qkx2 ref); gpu/cpu is the meaningful check.
+static void ref_quantize_q2_K(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    quantize_q2_K(src, dst, nrows, n_per_row, nullptr, nullptr);
+}
+
+// REF Q2_K with imatrix: same CPU path (make_qkx3+make_qp, no TriNet).
+static void ref_quantize_q2_K_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    quantize_q2_K(src, dst, nrows, n_per_row, imatrix, nullptr);
+}
+
 // Local copy of quantize_row_q6_0_impl (ggml-quants.c:3697): make_qx_quants
 // with nmax == 32, plus the 2-bit qh packing (6-bit quants).
 static void ref_quantize_q6_0_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
@@ -1609,6 +1664,13 @@ int main(int argc, char ** argv) {
     printf("=== unit_test_cuda ===\n");
     printf("seed %d%s\n", g_seed, g_quick ? ", quick mode" : "");
 
+    // Init CPU FP16 tables (ggml_table_f32_f16) for QK requant half round-trips.
+    // Previous types never read back half in quantize, so missing init went unnoticed.
+    {
+        struct ggml_init_params params = { 0, NULL, false };
+        ggml_init(params);
+    }
+
     const int nd = print_devices();
     if (nd == 0) return 1;
 
@@ -1690,6 +1752,31 @@ int main(int argc, char ** argv) {
                 false, nullptr, nullptr, false, false },
         { "iq1_s-imatrix", GGML_TYPE_IQ1_S, QK_K, sizeof(block_iq1_s), cuda_plain<GGML_TYPE_IQ1_S>, ref_quantize_iq1_s,
                 true, cuda_imatrix<GGML_TYPE_IQ1_S>, ref_quantize_iq1_s_imatrix, false, false },
+        // Q6_K (+imatrix): 16x16, QK 256, no tails
+        { "q6_K", GGML_TYPE_Q6_K, QK_K, sizeof(block_q6_K), cuda_plain<GGML_TYPE_Q6_K>, ref_quantize_q6_K,
+                false, nullptr, nullptr, false, false },
+        { "q6_K-imatrix", GGML_TYPE_Q6_K, QK_K, sizeof(block_q6_K), cuda_plain<GGML_TYPE_Q6_K>, ref_quantize_q6_K,
+                true, cuda_imatrix<GGML_TYPE_Q6_K>, ref_quantize_q6_K_imatrix, false, false },
+        // Q5_K (+imatrix): 8x32+1b, QK 256, no tails
+        { "q5_K", GGML_TYPE_Q5_K, QK_K, sizeof(block_q5_K), cuda_plain<GGML_TYPE_Q5_K>, ref_quantize_q5_K,
+                false, nullptr, nullptr, false, false },
+        { "q5_K-imatrix", GGML_TYPE_Q5_K, QK_K, sizeof(block_q5_K), cuda_plain<GGML_TYPE_Q5_K>, ref_quantize_q5_K,
+                true, cuda_imatrix<GGML_TYPE_Q5_K>, ref_quantize_q5_K_imatrix, false, false },
+        // Q4_K (+imatrix): 8x32, QK 256, no tails
+        { "q4_K", GGML_TYPE_Q4_K, QK_K, sizeof(block_q4_K), cuda_plain<GGML_TYPE_Q4_K>, ref_quantize_q4_K,
+                false, nullptr, nullptr, false, false },
+        { "q4_K-imatrix", GGML_TYPE_Q4_K, QK_K, sizeof(block_q4_K), cuda_plain<GGML_TYPE_Q4_K>, ref_quantize_q4_K,
+                true, cuda_imatrix<GGML_TYPE_Q4_K>, ref_quantize_q4_K_imatrix, false, false },
+        // Q3_K (+imatrix): 16x16, QK 256, no tails
+        { "q3_K", GGML_TYPE_Q3_K, QK_K, sizeof(block_q3_K), cuda_plain<GGML_TYPE_Q3_K>, ref_quantize_q3_K,
+                false, nullptr, nullptr, false, false },
+        { "q3_K-imatrix", GGML_TYPE_Q3_K, QK_K, sizeof(block_q3_K), cuda_plain<GGML_TYPE_Q3_K>, ref_quantize_q3_K,
+                true, cuda_imatrix<GGML_TYPE_Q3_K>, ref_quantize_q3_K_imatrix, false, false },
+        // Q2_K (+imatrix): 16x16, QK 256, no tails (plain TriNet-skipped on GPU)
+        { "q2_K", GGML_TYPE_Q2_K, QK_K, sizeof(block_q2_K), cuda_plain<GGML_TYPE_Q2_K>, ref_quantize_q2_K,
+                false, nullptr, nullptr, false, false },
+        { "q2_K-imatrix", GGML_TYPE_Q2_K, QK_K, sizeof(block_q2_K), cuda_plain<GGML_TYPE_Q2_K>, ref_quantize_q2_K,
+                true, cuda_imatrix<GGML_TYPE_Q2_K>, ref_quantize_q2_K_imatrix, false, false },
         // KT at end, disabled: iq4_kt/iq3_kt abort on huge edge-cases (jbest assert) + 1-nibble
         // gpu/cpu diffs on tails; re-enable after lead fix (uncomment block below).
         // IQ4_KT (+imatrix): qk=32 allows tail rows (ne%32==0, nt>0 via iqk_kt_finish_row); d is float, no fp16 NaN waiver

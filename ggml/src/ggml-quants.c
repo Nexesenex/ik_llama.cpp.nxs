@@ -1936,6 +1936,9 @@ static float make_qx_quants(int n, int nmax, const float * restrict x, int8_t * 
 #pragma STDC FP_CONTRACT ON
 #endif
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 static float make_q3_quants(int n, int nmax, const float * restrict x, int8_t * restrict L, bool do_rmse) {
     float max = 0;
     float amax = 0;
@@ -2118,6 +2121,9 @@ static float make_qkx2_quants(int n, int nmax, const float * restrict x, const f
     *the_min = -min;
     return scale;
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 static inline void get_scale_min_k4(int j, const uint8_t * restrict q, uint8_t * restrict d, uint8_t * restrict m) {
     if (j < 4) {
@@ -2130,6 +2136,9 @@ static inline void get_scale_min_k4(int j, const uint8_t * restrict q, uint8_t *
 
 //========================- 2-bit (de)-quantization
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 void quantize_row_q2_K_ref(const float * restrict x, block_q2_K * restrict y, int64_t k) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
@@ -2244,6 +2253,9 @@ void quantize_row_q2_K_ref(const float * restrict x, block_q2_K * restrict y, in
         x += QK_K;
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 void dequantize_row_q2_K(const block_q2_K * restrict x, float * restrict y, int64_t k) {
     assert(k % QK_K == 0);
@@ -2508,6 +2520,9 @@ static float make_qp_quants(int n, int nmax, const float * restrict x, uint8_t *
 #pragma STDC FP_CONTRACT ON
 #endif
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 static void quantize_row_q2_K_impl(const float * restrict x, block_q2_K * restrict y, int k, const float * restrict quant_weights) {
     GGML_ASSERT(quant_weights);
     assert(k % QK_K == 0);
@@ -2562,6 +2577,9 @@ static void quantize_row_q2_K_impl(const float * restrict x, block_q2_K * restri
         x += QK_K;
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 size_t quantize_q2_K(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
@@ -2583,6 +2601,9 @@ size_t quantize_q2_K(const float * restrict src, void * restrict dst, int64_t nr
 
 //========================= 3-bit (de)-quantization
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 void quantize_row_q3_K_ref(const float * restrict x, block_q3_K * restrict y, int64_t k) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
@@ -2660,6 +2681,9 @@ void quantize_row_q3_K_ref(const float * restrict x, block_q3_K * restrict y, in
         x += QK_K;
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 void dequantize_row_q3_K(const block_q3_K * restrict x, float * restrict y, int64_t k) {
     assert(k % QK_K == 0);
@@ -2715,6 +2739,9 @@ void quantize_row_q3_K(const float * restrict x, void * restrict vy, int64_t k) 
     quantize_row_q3_K_ref(x, vy, k);
 }
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 static void quantize_row_q3_K_impl(const float * restrict x, block_q3_K * restrict y, int64_t n_per_row, const float * restrict quant_weights) {
     assert(n_per_row % QK_K == 0);
     const int nb = n_per_row / QK_K;
@@ -2800,6 +2827,9 @@ static void quantize_row_q3_K_impl(const float * restrict x, block_q3_K * restri
         x += QK_K;
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 size_t quantize_q3_K(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
@@ -2821,6 +2851,9 @@ size_t quantize_q3_K(const float * restrict src, void * restrict dst, int64_t nr
 
 // ====================== 4-bit (de)-quantization
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 void quantize_row_q4_K_ref(const float * restrict x, block_q4_K * restrict y, int64_t k) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
@@ -2896,6 +2929,9 @@ void quantize_row_q4_K_ref(const float * restrict x, block_q4_K * restrict y, in
         x += QK_K;
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 void dequantize_row_q4_K(const block_q4_K * restrict x, float * restrict y, int64_t k) {
     assert(k % QK_K == 0);
@@ -2927,6 +2963,9 @@ void quantize_row_q4_K(const float * restrict x, void * restrict vy, int64_t k) 
     quantize_row_q4_K_ref(x, y, k);
 }
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 static void quantize_row_q4_K_impl(const float * restrict x, block_q4_K * restrict y, int64_t n_per_row, const float * quant_weights) {
     assert(n_per_row % QK_K == 0);
     const int64_t nb = n_per_row / QK_K;
@@ -3007,6 +3046,9 @@ static void quantize_row_q4_K_impl(const float * restrict x, block_q4_K * restri
 
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 size_t quantize_q4_K(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
@@ -3028,6 +3070,9 @@ size_t quantize_q4_K(const float * restrict src, void * restrict dst, int64_t nr
 
 // ====================== 5-bit (de)-quantization
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 void quantize_row_q5_K_ref(const float * restrict x, block_q5_K * restrict y, int64_t k) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
@@ -3114,6 +3159,9 @@ void quantize_row_q5_K_ref(const float * restrict x, block_q5_K * restrict y, in
         x += QK_K;
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 void dequantize_row_q5_K(const block_q5_K * restrict x, float * restrict y, int64_t k) {
     assert(k % QK_K == 0);
@@ -3148,6 +3196,9 @@ void quantize_row_q5_K(const float * restrict x, void * restrict vy, int64_t k) 
     quantize_row_q5_K_ref(x, y, k);
 }
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 static void quantize_row_q5_K_impl(const float * restrict x, block_q5_K * restrict y, int64_t n_per_row, const float * quant_weights) {
     assert(n_per_row % QK_K == 0);
     const int64_t nb = n_per_row / QK_K;
@@ -3240,6 +3291,9 @@ static void quantize_row_q5_K_impl(const float * restrict x, block_q5_K * restri
 
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 size_t quantize_q5_K(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
@@ -3261,6 +3315,9 @@ size_t quantize_q5_K(const float * restrict src, void * restrict dst, int64_t nr
 
 // ====================== 6-bit (de)-quantization
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 void quantize_row_q6_K_ref(const float * restrict x, block_q6_K * restrict y, int64_t k) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
@@ -3332,6 +3389,9 @@ void quantize_row_q6_K_ref(const float * restrict x, block_q6_K * restrict y, in
         x += QK_K;
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 void dequantize_row_q6_K(const block_q6_K * restrict x, float * restrict y, int64_t k) {
     assert(k % QK_K == 0);
@@ -3370,6 +3430,9 @@ void quantize_row_q6_K(const float * restrict x, void * restrict vy, int64_t k) 
     quantize_row_q6_K_ref(x, y, k);
 }
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 static void quantize_row_q6_K_impl(const float * restrict x, block_q6_K * restrict y, int64_t n_per_row, const float * quant_weights) {
     assert(n_per_row % QK_K == 0);
     const int64_t nb = n_per_row / QK_K;
@@ -3454,6 +3517,9 @@ static void quantize_row_q6_K_impl(const float * restrict x, block_q6_K * restri
 
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 size_t quantize_q6_K(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
