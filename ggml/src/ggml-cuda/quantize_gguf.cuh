@@ -10,7 +10,7 @@
 
 // Bit-exact CUDA legacy block quants via Joel's ggml_cuda_quantize() entry in kt-encoder.cu.
 // Byte-identical to CPU: exact reductions, fixed rounding, __float2half_rn/__fdiv_rn; sigma2+make_qx_quants replayed in CPU order.
-// Order after KT: Q8_0, Q6_0, Q5_0, Q4_0 (+Q5_1/Q4_1/IQ4_NL/IQ4_XS/IQ3_S/IQ3_XXS/IQ2_S/IQ2_XS/IQ2_XXS); Q5_0/Q4_0 sections removable; Q6_0 OLS kept, Q8_0 ignores imatrix like CPU.
+// Order after KT: Q8_0, Q6_0, Q5_0, Q4_0 (+Q5_1/Q4_1/IQ4_NL/IQ4_XS/IQ3_S/IQ3_XXS/IQ2_S/IQ2_XS/IQ2_XXS/IQ1_M/IQ1_S); Q5_0/Q4_0 sections removable; Q6_0 OLS kept, Q8_0 ignores imatrix like CPU.
 // Chunked host entries (~128 MiB F32/chunk), checked CUDA calls, return 0 for CPU fallback; returns bytes written or 0 if unavailable.
 // Q8_0 (plain ref + fudge; imatrix is ignored to match CPU quantize_q8_0)
 size_t ggml_cuda_quantize_q8_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
@@ -63,4 +63,12 @@ size_t ggml_cuda_quantize_iq2_xs_imatrix(const float * src, void * dst, int64_t 
 // IQ2_XXS (group 32, grid 256, fudge 1.0; parity, plain 0.25*sigma+x*x with sum/256 sigma)
 size_t ggml_cuda_quantize_iq2_xxs(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
 size_t ggml_cuda_quantize_iq2_xxs_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix);
+// IQ1_M (block 16, QK 256, fudge 1.085; 4-variant search, per-32 1.5*sum/32 sigma)
+size_t ggml_cuda_quantize_iq1_m(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
+size_t ggml_cuda_quantize_iq1_m_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix);
+// IQ1_S imatrix-only (block 32, QK 256, fudge 1.125; 2-shift search; plain asserts like CPU)
+size_t ggml_cuda_quantize_iq1_s(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
+size_t ggml_cuda_quantize_iq1_s_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix);
