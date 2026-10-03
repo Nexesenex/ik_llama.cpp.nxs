@@ -13768,10 +13768,11 @@ int iq3xs_grid_data(int grid_size, const uint32_t ** grid, const int ** map, con
     return 0;
 }
 
-// CUDA accessor for IQ2 (XXS 256, XS 512, S 1024; map 43692 ints like init).
+// CUDA accessor for IQ2 (XXS 256, XS 512, S 1024, IQ1_S/M 2048; map 43692 ints like init).
 int iq2xs_grid_data(int type, const uint64_t ** grid, const int ** map, const uint16_t ** neighbours,
         int * grid_n, int * map_n, int * neighbours_n) {
-    if (type != GGML_TYPE_IQ2_XXS && type != GGML_TYPE_IQ2_XS && type != GGML_TYPE_IQ2_S) return -1;
+    if (type != GGML_TYPE_IQ2_XXS && type != GGML_TYPE_IQ2_XS && type != GGML_TYPE_IQ2_S &&
+        type != GGML_TYPE_IQ1_S && type != GGML_TYPE_IQ1_M) return -1;
     iq2xs_init_impl(type);
     const int gindex = iq2_data_index(type);
     const int grid_size = iq2_grid_size(type);
@@ -14360,6 +14361,9 @@ static int iq1_find_best_neighbour(const uint16_t * restrict neighbours, const u
     return grid_index;
 }
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 static int iq1_find_best_neighbour2(const uint16_t * restrict neighbours, const uint64_t * restrict grid,
         const float * restrict xval, const float * restrict weight, float scale, const float * restrict xg, int8_t * restrict L, int ngrid) {
     int num_neighbors = neighbours[0];
@@ -14387,7 +14391,7 @@ static int iq1_find_best_neighbour2(const uint16_t * restrict neighbours, const 
             for (int j = 0; j < 8; ++j) {
                 float w = weight[j];
                 float q = xg[(grid_i[j] - 1)/2];
-                float diff = scale*q - xval[i];
+                float diff = scale*q - xval[j];
                 d2 += w*diff*diff;
             }
             if (d2 < best_score) {
@@ -14416,7 +14420,13 @@ static int iq1_find_best_neighbour2(const uint16_t * restrict neighbours, const 
     for (int i = 0; i < 8; ++i) L[i] = (pg[i] - 1)/2;
     return grid_index;
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 void iq1s_process_1block(int block_size, const float * xb, const float * weight, int8_t * L, float * the_scale, uint16_t * the_index, int * the_shift,
         float * pairs, float * sumx, float * sumw) {
     float max = fabsf(xb[0]);
@@ -14534,7 +14544,8 @@ static void quantize_row_iq1_s_impl(const float * restrict x, void * restrict vy
     const int      * kmap_q2xs       = iq2_data[gindex].map;
     const uint16_t * kneighbors_q2xs = iq2_data[gindex].neighbours;
 
-    GGML_ASSERT(quant_weights   && "missing quantization weights");
+    // TEST-ONLY plain path (revert before mainline): quant_weights may be NULL,
+    // then weight is x*x like IQ1_M plain. Kept for CUDA/CPU parity testing.
     GGML_ASSERT(kgrid_q2xs      && "forgot to call ggml_quantize_init()?");
     GGML_ASSERT(kmap_q2xs       && "forgot to call ggml_quantize_init()?");
     GGML_ASSERT(kneighbors_q2xs && "forgot to call ggml_quantize_init()?");
@@ -14567,8 +14578,13 @@ static void quantize_row_iq1_s_impl(const float * restrict x, void * restrict vy
 
         for (int ib = 0; ib < QK_K/block_size; ++ib) {
             const float * xb = xbl + block_size*ib;
-            const float * qw = quant_weights + QK_K*ibl + block_size*ib;
-            for (int i = 0; i < block_size; ++i) weight[i] = qw[i] * sqrtf(sigma2 + xb[i]*xb[i]);
+            if (quant_weights) {
+                const float * qw = quant_weights + QK_K*ibl + block_size*ib;
+                for (int i = 0; i < block_size; ++i) weight[i] = qw[i] * sqrtf(sigma2 + xb[i]*xb[i]);
+            } else {
+                // TEST-ONLY plain (revert before mainline): w = x*x like IQ1_M plain.
+                for (int i = 0; i < block_size; ++i) weight[i] = xb[i]*xb[i];
+            }
             int best_shift;
             iq1s_process_1block(block_size, xb, weight, L, &scales[ib], index, &best_shift, pairs, sumx, sumw);
 
@@ -14598,6 +14614,9 @@ static void quantize_row_iq1_s_impl(const float * restrict x, void * restrict vy
         }
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 size_t quantize_iq1_s(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
@@ -14634,6 +14653,9 @@ void quantize_row_iq1_s  (const float * GGML_RESTRICT x, void * GGML_RESTRICT y,
     quantize_row_iq1_s_ref(x, (block_iq1_s *)y, k);
 }
 
+#ifdef __clang__
+#pragma STDC FP_CONTRACT OFF
+#endif
 void iq1m_process_1block(const float * xb, const float * weight, int8_t * L, float * the_scale, uint16_t * the_index, int * the_shift,
         float * pairs) {
 
@@ -14846,6 +14868,7 @@ static void quantize_row_iq1_m_impl(const float * restrict x, void * restrict vy
             if (max < GROUP_MAX_EPS_IQ1_M) {
                 scales[ib] = 0;
                 memset(L, 1, block_size);
+                shifts[ib] = 0;
                 continue;
             }
             if (sumwx == 0) {
@@ -14904,6 +14927,9 @@ static void quantize_row_iq1_m_impl(const float * restrict x, void * restrict vy
         sc[3] |= ((s.u16 & 0xf000) <<  0);
     }
 }
+#ifdef __clang__
+#pragma STDC FP_CONTRACT ON
+#endif
 
 size_t quantize_iq1_m(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
