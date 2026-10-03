@@ -605,6 +605,8 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
         { GGML_TYPE_IQ2_S, ggml_cuda_quantize_iq2_s, ggml_cuda_quantize_iq2_s_imatrix },
         { GGML_TYPE_IQ2_XS, ggml_cuda_quantize_iq2_xs, ggml_cuda_quantize_iq2_xs_imatrix },
         { GGML_TYPE_IQ2_XXS, ggml_cuda_quantize_iq2_xxs, ggml_cuda_quantize_iq2_xxs_imatrix },
+        { GGML_TYPE_IQ1_M, ggml_cuda_quantize_iq1_m, ggml_cuda_quantize_iq1_m_imatrix },
+        { GGML_TYPE_IQ1_S, ggml_cuda_quantize_iq1_s, ggml_cuda_quantize_iq1_s_imatrix },
     };
     const legacy_quant_entry * entry = nullptr;
     for (const auto & e : legacy_quants) {

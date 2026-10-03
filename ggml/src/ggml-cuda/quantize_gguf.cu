@@ -1414,10 +1414,11 @@ struct iq2_cuda_tables {
 
 static iq2_cuda_tables iq2_get_tables(int device, int type) {
     static std::mutex mutex;
-    // gi: 0 XXS, 1 XS, 3 S (match iq2_data_index; 2 unused IQ1).
+    // gi matches iq2_data_index: 0 XXS, 1 XS, 2 IQ1_S/M, 3 S.
     static iq2_cuda_tables tables[GGML_CUDA_MAX_DEVICES][4];
     static bool ready[GGML_CUDA_MAX_DEVICES][4] = {};
-    int gi = type == GGML_TYPE_IQ2_XXS ? 0 : type == GGML_TYPE_IQ2_XS ? 1 : 3;
+    int gi = type == GGML_TYPE_IQ2_XXS ? 0 : type == GGML_TYPE_IQ2_XS ? 1 :
+             (type == GGML_TYPE_IQ1_S || type == GGML_TYPE_IQ1_M) ? 2 : 3;
     std::lock_guard<std::mutex> lock(mutex);
     if (!ready[device][gi]) {
         const uint64_t * grid = nullptr;
@@ -1962,7 +1963,531 @@ static __global__ void quantize_iq2_xxs_imatrix_kernel(
     iq2xxs_superblock_device(xs, qs, s2, true, grid, kmap, neighbours, fudge, y + sb);
 }
 
-// --- Removable Q5_0 imatrix (nmax=16 + qh bitmap) ---
+// Weighted neighbour search for IQ1 (xg table, (pg-1)/2 index, full-ngrid fallback like CPU).
+static __device__ int iq1_find_best_neighbour2_device(const uint16_t * neighbours, const uint64_t * grid,
+        const float * xval, const float * weight, float scale, const float * xg, int8_t * L, int ngrid) {
+    const int num_neighbors = neighbours[0];
+    float best_score = FLT_MAX;
+    int grid_index = -1;
+    for (int j = 1; j <= num_neighbors; ++j) {
+        const int8_t * pg = (const int8_t *)(grid + neighbours[j]);
+        float d2 = 0.0f;
+        for (int i = 0; i < 8; ++i) {
+            const float q = xg[(pg[i] - 1)/2];
+            const float diff = __fsub_rn(__fmul_rn(scale, q), xval[i]);
+            d2 = __fadd_rn(d2, __fmul_rn(__fmul_rn(weight[i], diff), diff));
+        }
+        if (d2 < best_score) {
+            best_score = d2;
+            grid_index = neighbours[j];
+        }
+    }
+    if (grid_index < 0) {
+        for (int i = 0; i < ngrid; ++i) {
+            const int8_t * gi = (const int8_t *)(grid + i);
+            float d2 = 0.0f;
+            for (int j = 0; j < 8; ++j) {
+                const float q = xg[(gi[j] - 1)/2];
+                const float diff = __fsub_rn(__fmul_rn(scale, q), xval[j]);
+                d2 = __fadd_rn(d2, __fmul_rn(__fmul_rn(weight[j], diff), diff));
+            }
+            if (d2 < best_score) {
+                best_score = d2;
+                grid_index = i;
+            }
+        }
+    }
+    const int8_t * pg = (const int8_t *)(grid + grid_index);
+    for (int i = 0; i < 8; ++i) L[i] = (int8_t)((pg[i] - 1)/2);
+    return grid_index;
+}
+
+// Stable insertion sort by (value, index) matching iq1_sort_helper total order.
+static __device__ void iq1_sort_pairs_device(float * vals, int * order, int n) {
+    for (int j = 0; j < n; ++j) order[j] = j;
+    for (int j = 1; j < n; ++j) {
+        const float v = vals[j];
+        const int idx = order[j];
+        int k = j - 1;
+        while (k >= 0 && (vals[k] > v || (vals[k] == v && order[k] > idx))) {
+            vals[k + 1] = vals[k];
+            order[k + 1] = order[k];
+            --k;
+        }
+        vals[k + 1] = v;
+        order[k + 1] = idx;
+    }
+}
+
+// --- IQ1_M (block 16, QK 256, fudge 1.085; 4-variant search, per-32 1.5*sum/32 sigma) ---
+// Mirrors quantize_row_iq1_m_impl (no d field; scale folded into scales high bits).
+static __device__ void iq1m_superblock_device(const float * xbl, const float * qw_bl, bool has_imatrix,
+        const uint64_t * grid, const int * kmap, const uint16_t * neighbours, float fudge, block_iq1_m * y) {
+    for (int i = 0; i < 32; ++i) y->qs[i] = 0;
+    for (int i = 0; i < 16; ++i) y->qh[i] = 0;
+    for (int i = 0; i < 8; ++i) y->scales[i] = 0;
+
+    const float x_p[3] = {-1.0f + 0.125f, 0.125f, 1.0f + 0.125f};
+    const float x_m[3] = {-1.0f - 0.125f, -0.125f, 1.0f - 0.125f};
+    const uint8_t masks[4] = {0x00, 0x80, 0x08, 0x88};
+    float all_sigma2[8];
+    for (int ib = 0; ib < 8; ++ib) {
+        const float * xb32 = xbl + 32*ib;
+        float sum = 0.0f;
+        for (int i = 0; i < 32; ++i) sum = __fadd_rn(sum, __fmul_rn(xb32[i], xb32[i]));
+        all_sigma2[ib] = __fdiv_rn(__fmul_rn(1.5f, sum), 32.0f);
+    }
+
+    float scales[16];
+    float weight[16];
+    int8_t L[16];
+    float pairs[16];
+    int order[16];
+    int8_t shifts[16];
+    float max_scale = 0.0f;
+
+    for (int ib = 0; ib < 16; ++ib) {
+        const float sigma2 = all_sigma2[ib/2];
+        const float * xb = xbl + 16*ib;
+        if (has_imatrix) {
+            const float * qb = qw_bl + 16*ib;
+            for (int i = 0; i < 16; ++i) {
+                weight[i] = __fmul_rn(qb[i], __fsqrt_rn(__fadd_rn(sigma2, __fmul_rn(xb[i], xb[i]))));
+            }
+        } else {
+            for (int i = 0; i < 16; ++i) {
+                weight[i] = __fmul_rn(xb[i], xb[i]);
+            }
+        }
+        float max = fabsf(xb[0]);
+        float sumwx = 0.0f;
+        for (int i = 1; i < 16; ++i) {
+            const float ax = fabsf(xb[i]);
+            max = max > ax ? max : ax;
+            sumwx = __fadd_rn(sumwx, __fmul_rn(weight[i], ax));
+        }
+        if (max < 1e-7f) {
+            scales[ib] = 0.0f;
+            shifts[ib] = 0;
+            for (int i = 0; i < 16; ++i) L[i] = 1;
+            continue;
+        }
+        if (sumwx == 0.0f) {
+            for (int i = 0; i < 16; ++i) weight[i] = __fmul_rn(xb[i], xb[i]);
+        }
+
+        int best_k = -1;
+        {
+            for (int j = 0; j < 16; ++j) pairs[j] = xb[j];
+            iq1_sort_pairs_device(pairs, order, 16);
+            float sumw1[17], sumw2[17], sumx1[17], sumx2[17];
+            sumw1[0] = 0.0f; sumw2[0] = 0.0f; sumx1[0] = 0.0f; sumx2[0] = 0.0f;
+            for (int j = 0; j < 16; ++j) {
+                const int i = order[j];
+                if (i < 8) {
+                    sumw1[j + 1] = __fadd_rn(sumw1[j], weight[i]);
+                    sumx1[j + 1] = __fadd_rn(sumx1[j], __fmul_rn(weight[i], xb[i]));
+                    sumw2[j + 1] = sumw2[j];
+                    sumx2[j + 1] = sumx2[j];
+                } else {
+                    sumw2[j + 1] = __fadd_rn(sumw2[j], weight[i]);
+                    sumx2[j + 1] = __fadd_rn(sumx2[j], __fmul_rn(weight[i], xb[i]));
+                    sumw1[j + 1] = sumw1[j];
+                    sumx1[j + 1] = sumx1[j];
+                }
+            }
+            float sumqx[4], sumq2[4];
+            float best_score = 0.0f, scale_loc = 0.0f;
+            int besti1 = -1, besti2 = -1;
+            best_k = -1;
+            for (int i1 = 0; i1 <= 16; ++i1) {
+                for (int i2 = i1; i2 <= 16; ++i2) {
+                    const float a10 = __fsub_rn(sumx1[i1], sumx1[0]);
+                    const float a21 = __fsub_rn(sumx1[i2], sumx1[i1]);
+                    const float a32 = __fsub_rn(sumx1[16], sumx1[i2]);
+                    const float b10 = __fsub_rn(sumx2[i1], sumx2[0]);
+                    const float b21 = __fsub_rn(sumx2[i2], sumx2[i1]);
+                    const float b32 = __fsub_rn(sumx2[16], sumx2[i2]);
+                    const float c10 = __fsub_rn(sumw1[i1], sumw1[0]);
+                    const float c21 = __fsub_rn(sumw1[i2], sumw1[i1]);
+                    const float c32 = __fsub_rn(sumw1[16], sumw1[i2]);
+                    const float e10 = __fsub_rn(sumw2[i1], sumw2[0]);
+                    const float e21 = __fsub_rn(sumw2[i2], sumw2[i1]);
+                    const float e32 = __fsub_rn(sumw2[16], sumw2[i2]);
+                    // Strict left-to-right like CPU (a+b+c+d+e+f); squares as (c*x)*x, not c*(x*x).
+                    sumqx[0] = __fmul_rn(a10, x_p[0]);
+                    sumqx[0] = __fadd_rn(sumqx[0], __fmul_rn(a21, x_p[1]));
+                    sumqx[0] = __fadd_rn(sumqx[0], __fmul_rn(a32, x_p[2]));
+                    sumqx[0] = __fadd_rn(sumqx[0], __fmul_rn(b10, x_p[0]));
+                    sumqx[0] = __fadd_rn(sumqx[0], __fmul_rn(b21, x_p[1]));
+                    sumqx[0] = __fadd_rn(sumqx[0], __fmul_rn(b32, x_p[2]));
+                    sumqx[1] = __fmul_rn(a10, x_p[0]);
+                    sumqx[1] = __fadd_rn(sumqx[1], __fmul_rn(a21, x_p[1]));
+                    sumqx[1] = __fadd_rn(sumqx[1], __fmul_rn(a32, x_p[2]));
+                    sumqx[1] = __fadd_rn(sumqx[1], __fmul_rn(b10, x_m[0]));
+                    sumqx[1] = __fadd_rn(sumqx[1], __fmul_rn(b21, x_m[1]));
+                    sumqx[1] = __fadd_rn(sumqx[1], __fmul_rn(b32, x_m[2]));
+                    sumqx[2] = __fmul_rn(a10, x_m[0]);
+                    sumqx[2] = __fadd_rn(sumqx[2], __fmul_rn(a21, x_m[1]));
+                    sumqx[2] = __fadd_rn(sumqx[2], __fmul_rn(a32, x_m[2]));
+                    sumqx[2] = __fadd_rn(sumqx[2], __fmul_rn(b10, x_p[0]));
+                    sumqx[2] = __fadd_rn(sumqx[2], __fmul_rn(b21, x_p[1]));
+                    sumqx[2] = __fadd_rn(sumqx[2], __fmul_rn(b32, x_p[2]));
+                    sumqx[3] = __fmul_rn(a10, x_m[0]);
+                    sumqx[3] = __fadd_rn(sumqx[3], __fmul_rn(a21, x_m[1]));
+                    sumqx[3] = __fadd_rn(sumqx[3], __fmul_rn(a32, x_m[2]));
+                    sumqx[3] = __fadd_rn(sumqx[3], __fmul_rn(b10, x_m[0]));
+                    sumqx[3] = __fadd_rn(sumqx[3], __fmul_rn(b21, x_m[1]));
+                    sumqx[3] = __fadd_rn(sumqx[3], __fmul_rn(b32, x_m[2]));
+                    sumq2[0] = __fmul_rn(__fmul_rn(c10, x_p[0]), x_p[0]);
+                    sumq2[0] = __fadd_rn(sumq2[0], __fmul_rn(__fmul_rn(c21, x_p[1]), x_p[1]));
+                    sumq2[0] = __fadd_rn(sumq2[0], __fmul_rn(__fmul_rn(c32, x_p[2]), x_p[2]));
+                    sumq2[0] = __fadd_rn(sumq2[0], __fmul_rn(__fmul_rn(e10, x_p[0]), x_p[0]));
+                    sumq2[0] = __fadd_rn(sumq2[0], __fmul_rn(__fmul_rn(e21, x_p[1]), x_p[1]));
+                    sumq2[0] = __fadd_rn(sumq2[0], __fmul_rn(__fmul_rn(e32, x_p[2]), x_p[2]));
+                    sumq2[1] = __fmul_rn(__fmul_rn(c10, x_p[0]), x_p[0]);
+                    sumq2[1] = __fadd_rn(sumq2[1], __fmul_rn(__fmul_rn(c21, x_p[1]), x_p[1]));
+                    sumq2[1] = __fadd_rn(sumq2[1], __fmul_rn(__fmul_rn(c32, x_p[2]), x_p[2]));
+                    sumq2[1] = __fadd_rn(sumq2[1], __fmul_rn(__fmul_rn(e10, x_m[0]), x_m[0]));
+                    sumq2[1] = __fadd_rn(sumq2[1], __fmul_rn(__fmul_rn(e21, x_m[1]), x_m[1]));
+                    sumq2[1] = __fadd_rn(sumq2[1], __fmul_rn(__fmul_rn(e32, x_m[2]), x_m[2]));
+                    sumq2[2] = __fmul_rn(__fmul_rn(c10, x_m[0]), x_m[0]);
+                    sumq2[2] = __fadd_rn(sumq2[2], __fmul_rn(__fmul_rn(c21, x_m[1]), x_m[1]));
+                    sumq2[2] = __fadd_rn(sumq2[2], __fmul_rn(__fmul_rn(c32, x_m[2]), x_m[2]));
+                    sumq2[2] = __fadd_rn(sumq2[2], __fmul_rn(__fmul_rn(e10, x_p[0]), x_p[0]));
+                    sumq2[2] = __fadd_rn(sumq2[2], __fmul_rn(__fmul_rn(e21, x_p[1]), x_p[1]));
+                    sumq2[2] = __fadd_rn(sumq2[2], __fmul_rn(__fmul_rn(e32, x_p[2]), x_p[2]));
+                    sumq2[3] = __fmul_rn(__fmul_rn(c10, x_m[0]), x_m[0]);
+                    sumq2[3] = __fadd_rn(sumq2[3], __fmul_rn(__fmul_rn(c21, x_m[1]), x_m[1]));
+                    sumq2[3] = __fadd_rn(sumq2[3], __fmul_rn(__fmul_rn(c32, x_m[2]), x_m[2]));
+                    sumq2[3] = __fadd_rn(sumq2[3], __fmul_rn(__fmul_rn(e10, x_m[0]), x_m[0]));
+                    sumq2[3] = __fadd_rn(sumq2[3], __fmul_rn(__fmul_rn(e21, x_m[1]), x_m[1]));
+                    sumq2[3] = __fadd_rn(sumq2[3], __fmul_rn(__fmul_rn(e32, x_m[2]), x_m[2]));
+                    for (int k = 0; k < 4; ++k) {
+                        if (sumq2[k] > 0.0f && __fmul_rn(sumqx[k], sumqx[k]) > __fmul_rn(best_score, sumq2[k])) {
+                            scale_loc = __fdiv_rn(sumqx[k], sumq2[k]);
+                            best_score = __fmul_rn(scale_loc, sumqx[k]);
+                            besti1 = i1; besti2 = i2; best_k = k;
+                        }
+                    }
+                }
+            }
+            for (int j = 0; j < besti1; ++j) L[order[j]] = 0;
+            for (int j = besti1; j < besti2; ++j) L[order[j]] = 1;
+            for (int j = besti2; j < 16; ++j) L[order[j]] = 2;
+            float scale = scale_loc;
+            if (scale < 0.0f) {
+                for (int j = 0; j < 16; ++j) L[j] = (int8_t)(2 - L[j]);
+                scale = -scale;
+                best_k = 3 - best_k;
+            }
+            bool all_on_grid = true;
+            const float * xx0 = best_k < 2 ? x_p : x_m;
+            const float * xx1 = best_k % 2 == 0 ? x_p : x_m;
+            uint16_t the_index[2];
+            for (int k = 0; k < 2; ++k) {
+                const float * xx = k == 0 ? xx0 : xx1;
+                uint16_t u = 0;
+                for (int j = 0; j < 8; ++j) u |= (uint16_t)(L[8*k + j] << 2*j);
+                int grid_index = kmap[u];
+                if (grid_index < 0) {
+                    all_on_grid = false;
+                    const uint16_t * nb = neighbours - grid_index - 1;
+                    grid_index = iq1_find_best_neighbour2_device(nb, grid, xb + 8*k, weight + 8*k, scale, xx, L + 8*k, 2048);
+                }
+                the_index[k] = (uint16_t)grid_index;
+            }
+            if (!all_on_grid) {
+                float rq[4], r2[4];
+                for (int k = 0; k < 4; ++k) { rq[k] = 0.0f; r2[k] = 0.0f; }
+                for (int j = 0; j < 16; ++j) {
+                    const float w = weight[j];
+                    const float qp = x_p[L[j]];
+                    const float qm = x_m[L[j]];
+                    rq[0] = __fadd_rn(rq[0], __fmul_rn(__fmul_rn(w, xb[j]), qp));
+                    r2[0] = __fadd_rn(r2[0], __fmul_rn(__fmul_rn(w, qp), qp));
+                    rq[3] = __fadd_rn(rq[3], __fmul_rn(__fmul_rn(w, xb[j]), qm));
+                    r2[3] = __fadd_rn(r2[3], __fmul_rn(__fmul_rn(w, qm), qm));
+                    if (j < 8) {
+                        rq[1] = __fadd_rn(rq[1], __fmul_rn(__fmul_rn(w, xb[j]), qp));
+                        r2[1] = __fadd_rn(r2[1], __fmul_rn(__fmul_rn(w, qp), qp));
+                        rq[2] = __fadd_rn(rq[2], __fmul_rn(__fmul_rn(w, xb[j]), qm));
+                        r2[2] = __fadd_rn(r2[2], __fmul_rn(__fmul_rn(w, qm), qm));
+                    } else {
+                        rq[2] = __fadd_rn(rq[2], __fmul_rn(__fmul_rn(w, xb[j]), qp));
+                        r2[2] = __fadd_rn(r2[2], __fmul_rn(__fmul_rn(w, qp), qp));
+                        rq[1] = __fadd_rn(rq[1], __fmul_rn(__fmul_rn(w, xb[j]), qm));
+                        r2[1] = __fadd_rn(r2[1], __fmul_rn(__fmul_rn(w, qm), qm));
+                    }
+                }
+                best_score = 0.0f;
+                for (int k = 0; k < 4; ++k) {
+                    if (rq[k] > 0.0f && r2[k] > 0.0f && __fmul_rn(rq[k], rq[k]) > __fmul_rn(best_score, r2[k])) {
+                        scale = __fdiv_rn(rq[k], r2[k]);
+                        best_score = __fmul_rn(scale, rq[k]);
+                        best_k = k;
+                    }
+                }
+            }
+            scales[ib] = scale;
+            y->qs[2*ib] = (uint8_t)(the_index[0] & 255);
+            y->qs[2*ib + 1] = (uint8_t)(the_index[1] & 255);
+            y->qh[ib] = (uint8_t)((the_index[0] >> 8) | ((the_index[1] >> 8) << 4));
+            shifts[ib] = (int8_t)best_k;
+            max_scale = max_scale > scale ? max_scale : scale;
+        }
+    }
+
+    if (max_scale == 0.0f) {
+        return;
+    }
+
+    uint16_t sc[4] = {0, 0, 0, 0};
+    float d = __fdiv_rn(max_scale, 15.0f);
+    const float id = __fdiv_rn(1.0f, d);
+    float sumqx_f = 0.0f, sumq2_f = 0.0f;
+    for (int ib = 0; ib < 16; ++ib) {
+        const float sigma2 = all_sigma2[ib/2];
+        int l = nearest_int_device(__fmul_rn(0.5f, __fsub_rn(__fmul_rn(id, scales[ib]), 1.0f)));
+        l = l < 0 ? 0 : (l > 7 ? 7 : l);
+        sc[ib/4] |= (uint16_t)((uint16_t)l << 3*(ib % 4));
+        y->qh[ib] |= masks[shifts[ib]];
+        const float * xb = xbl + 16*ib;
+        float weight[16];
+        if (has_imatrix) {
+            const float * qb = qw_bl + 16*ib;
+            for (int i = 0; i < 16; ++i) {
+                weight[i] = __fmul_rn(qb[i], __fsqrt_rn(__fadd_rn(sigma2, __fmul_rn(xb[i], xb[i]))));
+            }
+        } else {
+            for (int i = 0; i < 16; ++i) {
+                weight[i] = __fmul_rn(xb[i], xb[i]);
+            }
+        }
+        for (int k = 0; k < 2; ++k) {
+            const float * xx = k == 0 ? (shifts[ib] < 2 ? x_p : x_m) : (shifts[ib] % 2 == 0 ? x_p : x_m);
+            const int grid_index = (int)y->qs[2*ib + k] + (int)(((uint16_t)y->qh[ib] << (8 - 4*k)) & 0x700);
+            const int8_t * pg = (const int8_t *)(grid + grid_index);
+            for (int j = 0; j < 8; ++j) {
+                const float q = __fmul_rn(xx[(pg[j] - 1)/2], (float)(2*l + 1));
+                sumqx_f = __fadd_rn(sumqx_f, __fmul_rn(__fmul_rn(weight[8*k + j], q), xb[8*k + j]));
+                sumq2_f = __fadd_rn(sumq2_f, __fmul_rn(__fmul_rn(weight[8*k + j], q), q));
+            }
+        }
+    }
+    if (sumq2_f > 0.0f) d = __fdiv_rn(sumqx_f, sumq2_f);
+    const uint16_t h = fp32_to_fp16_ggml(__fmul_rn(d, fudge));
+    sc[0] |= (uint16_t)((h & 0x000f) << 12);
+    sc[1] |= (uint16_t)((h & 0x00f0) << 8);
+    sc[2] |= (uint16_t)((h & 0x0f00) << 4);
+    sc[3] |= (uint16_t)((h & 0xf000) << 0);
+    for (int i = 0; i < 4; ++i) {
+        y->scales[2*i] = (uint8_t)(sc[i] & 255);
+        y->scales[2*i + 1] = (uint8_t)((sc[i] >> 8) & 255);
+    }
+}
+
+static __global__ void quantize_iq1_m_kernel(
+        const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge,
+        const uint64_t * __restrict__ grid, const int * __restrict__ kmap, const uint16_t * __restrict__ neighbours) {
+    const int64_t sb = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
+    if (sb >= nblocks) {
+        return;
+    }
+    const float * xbl = x + sb*QK_K;
+    block_iq1_m * y = (block_iq1_m *)vy;
+    iq1m_superblock_device(xbl, nullptr, false, grid, kmap, neighbours, fudge, y + sb);
+}
+
+static __global__ void quantize_iq1_m_imatrix_kernel(
+        const float * __restrict__ x, const float * __restrict__ qw,
+        void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row,
+        const float fudge, const uint64_t * __restrict__ grid, const int * __restrict__ kmap,
+        const uint16_t * __restrict__ neighbours) {
+    const int64_t sb = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
+    if (sb >= nblocks) {
+        return;
+    }
+    const int64_t gb = base + sb;
+    const float * xs = x + sb*QK_K;
+    const float * qs = qw + (gb % blocks_per_row)*QK_K;
+    block_iq1_m * y = (block_iq1_m *)vy;
+    iq1m_superblock_device(xs, qs, true, grid, kmap, neighbours, fudge, y + sb);
+}
+
+// --- IQ1_S (block 32, QK 256, fudge 1.125; 2-shift search, 2*sum/256 sigma) ---
+// Mirrors quantize_row_iq1_s_impl. TEST-ONLY plain (revert before mainline): w = x*x like IQ1_M plain.
+static __device__ void iq1s_superblock_device(const float * xbl, const float * qw_bl, bool has_imatrix,
+        const uint64_t * grid, const int * kmap, const uint16_t * neighbours, float fudge, block_iq1_s * y) {
+    y->d = __ushort_as_half(fp32_to_fp16_ggml(0.0f));
+    for (int i = 0; i < 32; ++i) y->qs[i] = 0;
+    for (int i = 0; i < 8; ++i) y->qh[i] = 0;
+
+    const float x_p[3] = {-1.0f + 0.125f, 0.125f, 1.0f + 0.125f};
+    const float x_m[3] = {-1.0f - 0.125f, -0.125f, 1.0f - 0.125f};
+    float sumx2 = 0.0f;
+    for (int i = 0; i < QK_K; ++i) sumx2 = __fadd_rn(sumx2, __fmul_rn(xbl[i], xbl[i]));
+    const float sigma2 = __fmul_rn(sumx2, 2.0f/(float)QK_K);
+
+    float scales[8];
+    float weight[32];
+    int8_t L[32];
+    float sumx[33], sumw[33];
+    float pairs[32];
+    int order[32];
+    uint16_t index[4];
+    int8_t shifts[8];
+    float max_scale = 0.0f;
+
+    for (int ib = 0; ib < 8; ++ib) {
+        const float * xb = xbl + 32*ib;
+        if (has_imatrix) {
+            const float * qb = qw_bl + 32*ib;
+            for (int i = 0; i < 32; ++i) {
+                weight[i] = __fmul_rn(qb[i], __fsqrt_rn(__fadd_rn(sigma2, __fmul_rn(xb[i], xb[i]))));
+            }
+        } else {
+            // TEST-ONLY plain (revert before mainline): w = x*x like IQ1_M plain.
+            for (int i = 0; i < 32; ++i) {
+                weight[i] = __fmul_rn(xb[i], xb[i]);
+            }
+        }
+        // Abs-max like CPU fabsf loop (max_abs_device takes abs values; xb is signed).
+        float amax = fabsf(xb[0]);
+        for (int i = 1; i < 32; ++i) {
+            const float ax = fabsf(xb[i]);
+            amax = amax > ax ? amax : ax;
+        }
+        if (amax < 1e-12f) {
+            scales[ib] = 0.0f;
+            shifts[ib] = 1;
+            continue;
+        }
+        for (int j = 0; j < 32; ++j) pairs[j] = xb[j];
+        iq1_sort_pairs_device(pairs, order, 32);
+        sumx[0] = 0.0f; sumw[0] = 0.0f;
+        for (int j = 0; j < 32; ++j) {
+            const int i = order[j];
+            sumx[j + 1] = __fadd_rn(sumx[j], __fmul_rn(weight[i], xb[i]));
+            sumw[j + 1] = __fadd_rn(sumw[j], weight[i]);
+        }
+        float best_score = -FLT_MIN, scale = amax;
+        int besti1 = -1, besti2 = -1, best_shift = 0;
+        for (int i1 = 0; i1 <= 32; ++i1) {
+            for (int i2 = i1; i2 <= 32; ++i2) {
+                const float a10 = __fsub_rn(sumx[i1], sumx[0]);
+                const float a21 = __fsub_rn(sumx[i2], sumx[i1]);
+                const float a32 = __fsub_rn(sumx[32], sumx[i2]);
+                const float c10 = __fsub_rn(sumw[i1], sumw[0]);
+                const float c21 = __fsub_rn(sumw[i2], sumw[i1]);
+                const float c32 = __fsub_rn(sumw[32], sumw[i2]);
+                float sumqx = __fadd_rn(__fadd_rn(__fmul_rn(a10, x_p[0]), __fmul_rn(a21, x_p[1])), __fmul_rn(a32, x_p[2]));
+                float sumq2 = __fadd_rn(__fadd_rn(__fmul_rn(__fmul_rn(c10, x_p[0]), x_p[0]),
+                        __fmul_rn(__fmul_rn(c21, x_p[1]), x_p[1])), __fmul_rn(__fmul_rn(c32, x_p[2]), x_p[2]));
+                if (sumq2 > 0.0f && __fmul_rn(sumqx, sumqx) > __fmul_rn(best_score, sumq2)) {
+                    scale = __fdiv_rn(sumqx, sumq2);
+                    best_score = __fmul_rn(scale, sumqx);
+                    besti1 = i1; besti2 = i2; best_shift = 1;
+                }
+                sumqx = __fadd_rn(__fadd_rn(__fmul_rn(a10, x_m[0]), __fmul_rn(a21, x_m[1])), __fmul_rn(a32, x_m[2]));
+                sumq2 = __fadd_rn(__fadd_rn(__fmul_rn(__fmul_rn(c10, x_m[0]), x_m[0]),
+                        __fmul_rn(__fmul_rn(c21, x_m[1]), x_m[1])), __fmul_rn(__fmul_rn(c32, x_m[2]), x_m[2]));
+                if (sumq2 > 0.0f && __fmul_rn(sumqx, sumqx) > __fmul_rn(best_score, sumq2)) {
+                    scale = __fdiv_rn(sumqx, sumq2);
+                    best_score = __fmul_rn(scale, sumqx);
+                    besti1 = i1; besti2 = i2; best_shift = -1;
+                }
+            }
+        }
+        for (int j = 0; j < besti1; ++j) L[order[j]] = 0;
+        for (int j = besti1; j < besti2; ++j) L[order[j]] = 1;
+        for (int j = besti2; j < 32; ++j) L[order[j]] = 2;
+        if (scale < 0.0f) {
+            for (int j = 0; j < 32; ++j) L[j] = (int8_t)(2 - L[j]);
+            scale = -scale;
+            best_shift = -best_shift;
+        }
+        bool all_on_grid = true;
+        const float * xx = best_shift == 1 ? x_p : x_m;
+        for (int k = 0; k < 4; ++k) {
+            uint16_t u = 0;
+            for (int j = 0; j < 8; ++j) u |= (uint16_t)(L[8*k + j] << 2*j);
+            int grid_index = kmap[u];
+            if (grid_index < 0) {
+                all_on_grid = false;
+                const uint16_t * nb = neighbours - grid_index - 1;
+                grid_index = iq1_find_best_neighbour2_device(nb, grid, xb + 8*k, weight + 8*k, scale, xx, L + 8*k, 2048);
+            }
+            index[k] = (uint16_t)grid_index;
+        }
+        if (!all_on_grid) {
+            float sumqx = 0.0f, sumq2 = 0.0f;
+            for (int k = 0; k < 4; ++k) {
+                const int8_t * pg = (const int8_t *)(grid + index[k]);
+                for (int j = 0; j < 8; ++j) {
+                    const float q = xx[(pg[j] - 1)/2];
+                    sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(weight[8*k + j], q), xb[8*k + j]));
+                    sumq2 = __fadd_rn(sumq2, __fmul_rn(__fmul_rn(weight[8*k + j], q), q));
+                }
+            }
+            if (sumqx > 0.0f && sumq2 > 0.0f) scale = __fdiv_rn(sumqx, sumq2);
+        }
+        uint16_t h = 0;
+        for (int k = 0; k < 4; ++k) {
+            y->qs[4*ib + k] = (uint8_t)(index[k] & 255);
+            h |= (uint16_t)((index[k] >> 8) << 3*k);
+        }
+        y->qh[ib] = h;
+        scales[ib] = scale;
+        max_scale = max_scale > scale ? max_scale : scale;
+        shifts[ib] = (int8_t)best_shift;
+    }
+
+    if (max_scale == 0.0f) {
+        return;
+    }
+
+    const float d = __fdiv_rn(max_scale, 15.0f);
+    y->d = __ushort_as_half(fp32_to_fp16_ggml(__fmul_rn(d, fudge)));
+    const float id = __fdiv_rn(1.0f, d);
+    for (int ib = 0; ib < 8; ++ib) {
+        int l = nearest_int_device(__fmul_rn(0.5f, __fsub_rn(__fmul_rn(id, scales[ib]), 1.0f)));
+        l = l < 0 ? 0 : (l > 7 ? 7 : l);
+        if (shifts[ib] == -1) l |= 8;
+        y->qh[ib] |= (uint16_t)((uint16_t)l << 12);
+    }
+}
+
+static __global__ void quantize_iq1_s_kernel(
+        const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge,
+        const uint64_t * __restrict__ grid, const int * __restrict__ kmap, const uint16_t * __restrict__ neighbours) {
+    const int64_t sb = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
+    if (sb >= nblocks) {
+        return;
+    }
+    const float * xbl = x + sb*QK_K;
+    block_iq1_s * y = (block_iq1_s *)vy;
+    // TEST-ONLY plain (revert before mainline).
+    iq1s_superblock_device(xbl, nullptr, false, grid, kmap, neighbours, fudge, y + sb);
+}
+
+static __global__ void quantize_iq1_s_imatrix_kernel(
+        const float * __restrict__ x, const float * __restrict__ qw,
+        void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row,
+        const float fudge, const uint64_t * __restrict__ grid, const int * __restrict__ kmap,
+        const uint16_t * __restrict__ neighbours) {
+    const int64_t sb = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
+    if (sb >= nblocks) {
+        return;
+    }
+    const int64_t gb = base + sb;
+    const float * xs = x + sb*QK_K;
+    const float * qs = qw + (gb % blocks_per_row)*QK_K;
+    block_iq1_s * y = (block_iq1_s *)vy;
+    iq1s_superblock_device(xs, qs, true, grid, kmap, neighbours, fudge, y + sb);
+}
+
+        // --- Removable Q5_0 imatrix (nmax=16 + qh bitmap) ---
 static __global__ void quantize_q5_0_imatrix_kernel(
         const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
         void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row,
@@ -2573,4 +3098,29 @@ size_t ggml_cuda_quantize_iq2_xxs_imatrix(const float * src, void * dst, int64_t
         const float * imatrix) {
     return quantize_imatrix_iq_generic<block_iq2_xxs>(src, dst, nrows, n_per_row, imatrix,
             iq2_get_tables, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XXS, quantize_iq2_xxs_imatrix_kernel, "iq2_xxs_imatrix");
+}
+
+// --- IQ1_M (block 16, QK 256, fudge 1.085; 4-variant search, per-32 1.5*sum/32 sigma) ---
+size_t ggml_cuda_quantize_iq1_m(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
+    return quantize_plain_iq_generic<block_iq1_m>(src, dst, nrows, n_per_row,
+            iq2_get_tables, GGML_TYPE_IQ1_M, GGML_TYPE_IQ1_M, quantize_iq1_m_kernel, "iq1_m");
+}
+
+// --- IQ1_M imatrix (device per-32 sigma like CPU) ---
+size_t ggml_cuda_quantize_iq1_m_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    return quantize_imatrix_iq_generic<block_iq1_m>(src, dst, nrows, n_per_row, imatrix,
+            iq2_get_tables, GGML_TYPE_IQ1_M, GGML_TYPE_IQ1_M, quantize_iq1_m_imatrix_kernel, "iq1_m_imatrix");
+}
+
+// --- IQ1_S (block 32, QK 256, fudge 1.125; TEST-ONLY plain, revert before mainline) ---
+size_t ggml_cuda_quantize_iq1_s(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
+    return quantize_plain_iq_generic<block_iq1_s>(src, dst, nrows, n_per_row,
+            iq2_get_tables, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_S, quantize_iq1_s_kernel, "iq1_s");
+}
+
+size_t ggml_cuda_quantize_iq1_s_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    return quantize_imatrix_iq_generic<block_iq1_s>(src, dst, nrows, n_per_row, imatrix,
+            iq2_get_tables, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_S, quantize_iq1_s_imatrix_kernel, "iq1_s_imatrix");
 }

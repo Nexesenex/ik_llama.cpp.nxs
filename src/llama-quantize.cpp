@@ -1080,6 +1080,14 @@ static size_t do_quantize_cuda_quantize_split(const ggml_tensor * tensor, ggml_t
 static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_type, const float * f32_data, char * new_data,
         const float * imatrix, std::vector<std::thread> & workers, size_t & new_size, int chunk_size_multiplier,
         const llama_model_quantize_params * params) {
+    // Types without a plain path (ggml_quantize_requires_imatrix) must not reach the
+    // quantizers with a null matrix: ggml aborts there (ggml.c GGML_ASSERT). Fail here
+    // with a catchable error naming the tensor instead (e.g. --pure IQ1_S forces
+    // token_embd.weight, which has no imatrix data, into IQ1_S).
+    if (ggml_quantize_requires_imatrix(new_type) && imatrix == NULL) {
+        throw std::runtime_error(format("quantization type %s requires an importance matrix for tensor %s",
+                ggml_type_name(new_type), tensor->name));
+    }
 #ifdef GGML_USE_CUDA
     if (params->cuda_quantize) {
         // Symmetric Q4_0 (--symmetric-q4-0, d=amax/7) stays on CPU: no CUDA kernel.
