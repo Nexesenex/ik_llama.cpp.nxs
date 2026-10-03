@@ -584,6 +584,7 @@ static kt_codebook kt_get_codebook(int device, ggml_type type) {
 GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float * src, void * dst, int64_t nrows, int64_t n_per_row, int64_t nslice,
         const float * imatrix) {
     // Legacy block quants after KT (Joel single entry); Q5_0/Q4_0 removable, Q6_0 OLS kept, 0 = CPU fallback.
+    // Order after IQx: Q6_K, Q5_K, Q4_K, Q3_K, Q2_K.
     struct legacy_quant_entry {
         ggml_type type;
         size_t (*plain)(const float *, void *, int64_t, int64_t);
@@ -607,6 +608,11 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
         { GGML_TYPE_IQ2_XXS, ggml_cuda_quantize_iq2_xxs, ggml_cuda_quantize_iq2_xxs_imatrix },
         { GGML_TYPE_IQ1_M, ggml_cuda_quantize_iq1_m, ggml_cuda_quantize_iq1_m_imatrix },
         { GGML_TYPE_IQ1_S, ggml_cuda_quantize_iq1_s, ggml_cuda_quantize_iq1_s_imatrix },
+        { GGML_TYPE_Q6_K,  ggml_cuda_quantize_q6_K,  ggml_cuda_quantize_q6_K_imatrix },
+        { GGML_TYPE_Q5_K,  ggml_cuda_quantize_q5_K,  ggml_cuda_quantize_q5_K_imatrix },
+        { GGML_TYPE_Q4_K,  ggml_cuda_quantize_q4_K,  ggml_cuda_quantize_q4_K_imatrix },
+        { GGML_TYPE_Q3_K,  ggml_cuda_quantize_q3_K,  ggml_cuda_quantize_q3_K_imatrix },
+        { GGML_TYPE_Q2_K,  ggml_cuda_quantize_q2_K,  ggml_cuda_quantize_q2_K_imatrix },
     };
     const legacy_quant_entry * entry = nullptr;
     for (const auto & e : legacy_quants) {
