@@ -53,11 +53,17 @@ tensors never hit this (proven by e2e SHAs).
 
 ## 4. Integration
 
-`llama_model_quantize_params` gains `cuda_quantize` (default false) and
-`cuda_device` (default 0); CLI `--cuda-quantize` plus `--cuda-device N`
-(alias `--device N`). `do_quantize()` calls the single entry (symmetric
-Q4_0 stays on CPU); nonzero output is validated (`ggml_validate_row_data`),
-zero falls back to `ggml_quantize_chunk`. Non-CUDA builds warn and ignore.
+`llama_model_quantize_params` gains `cuda_quantize` (default false),
+`cuda_quantize_device` (default 0) and the `cuda_quantize_n_devices`/`cuda_quantize_devices`/`cuda_quantize_split`
+list (unused when 0); CLI `--cuda-quantize` plus `-dev/--device DEVICES` with
+`-ts/--tensor-split RATIOS` for shares (e.g. `-dev CUDA0,CUDA1,CUDA2
+-ts 3,3,2`, mirroring common's flags). `do_quantize()` calls the single entry
+(symmetric Q4_0 stays on CPU); nonzero output is validated, zero falls back
+to `ggml_quantize_chunk`. Non-CUDA builds warn and ignore.
+
+Row-split (`cuda_quantize_n_devices > 0`): one thread per GPU over disjoint rows with
+per-shard CPU fallback, so bytes match mono/CPU. Shares snap via
+largest-remainder (ties to lower index); empty shards are skipped.
 
 ## 5. Validation (`examples/unit_test_cuda`)
 
