@@ -80,6 +80,35 @@
       "binaryDir": "${sourceDir}/build_cpu_avx2_reldbg"
     },
     {
+      "name": "gcc_cpu_base",
+      "hidden": true,
+      "inherits": "cpu-avx2-base",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "Q:/w64devkit/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "Q:/w64devkit/bin/g++.exe",
+        "CMAKE_MAKE_PROGRAM": "Q:/w64devkit/w64devkit/bin/ninja.exe",
+        "GGML_AVXVNNI": "ON",
+        "GGML_AVXVNNIINT8": "ON",
+        "GGML_AVX_NE_CONVERT": "ON",
+        "GGML_AVX_IFMA": "ON",
+        "GGML_CMPCCXADD": "ON",
+        "GGML_OPENMP": "ON",
+        "GGML_CCACHE": "OFF",
+        "GGML_IQK_FA_ALL_QUANTS": "ON",
+        "GGML_SCHED_MAX_COPIES": "1",
+        "GGML_MAX_CONTEXTS": "2048",
+        "GGML_THREADPOOL": "ON"
+      }
+    },
+    {
+      "name": "gcc_cpu_release",
+      "inherits": [
+        "gcc_cpu_base",
+        "release"
+      ],
+      "binaryDir": "${sourceDir}/build_gcc_cpu_release"
+    },
+    {
       "name": "cuda-debug",
       "inherits": [
         "cuda-base",
@@ -123,6 +152,11 @@
     {
       "name": "cpu-avx2-reldbg",
       "configurePreset": "cpu-avx2-reldbg",
+      "inherits": "parallel-build"
+    },
+    {
+      "name": "gcc_cpu_release",
+      "configurePreset": "gcc_cpu_release",
       "inherits": "parallel-build"
     },
     {
