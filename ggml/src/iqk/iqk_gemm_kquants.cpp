@@ -3119,6 +3119,74 @@ extern "C" void iqk_test_convert_iq4_xs_r8(int n, const void * vx, size_t bx, vo
     iqk_convert_iq4_xs_r8_q8_k_r16(n, vx, bx, vy, nrc_x);
 }
 
+// From IKL PR 2533 (POC: use SIMD transpose when repacking). Register-resident
+// variant of convert_to_q8_k_r8: rescales into qx[] (instead of scattering via
+// block[] like the iqk_common.h overload) so the caller can stage rows and
+// finish with a batched iqk_transpose_8x8. Overload resolves by arity (3 args).
+template <int nr = 8>
+static inline float convert_to_q8_k_r8(float d0, __m256i * qx, const int16_t * scales) {
+    auto max_i16 = _mm256_setzero_si256();
+    __m256i qs[16];
+    for (int ib32 = 0; ib32 < 8; ++ib32) {
+        qs[2*ib32+0] = _mm256_cvtepi8_epi16(_mm256_castsi256_si128(qx[ib32]));
+        qs[2*ib32+1] = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(qx[ib32], 1));
+        qs[2*ib32+0] = _mm256_mullo_epi16(qs[2*ib32+0], _mm256_set1_epi16(scales[2*ib32+0]));
+        qs[2*ib32+1] = _mm256_mullo_epi16(qs[2*ib32+1], _mm256_set1_epi16(scales[2*ib32+1]));
+        max_i16 = _mm256_max_epi16(max_i16, _mm256_sign_epi16(qs[2*ib32+0], qs[2*ib32+0]));
+        max_i16 = _mm256_max_epi16(max_i16, _mm256_sign_epi16(qs[2*ib32+1], qs[2*ib32+1]));
+    }
+    auto max_q32 = _mm256_cvtepi16_epi32(_mm_max_epi16(_mm256_castsi256_si128(max_i16), _mm256_extracti128_si256(max_i16, 1)));
+    auto imax4 = _mm_max_epi32(_mm256_castsi256_si128(max_q32), _mm256_extracti128_si256(max_q32, 1));
+    bool needs_scaling = true;
+    float dnew = hmax_float_4(_mm_cvtepi32_ps(imax4)) * d0;
+    if (dnew < 1.f) {
+        dnew = 1.f; needs_scaling = false;
+    }
+    auto scale = _mm256_set1_ps(std::abs(dnew) > 1e-9f ? 1/dnew : 0.f);
+    for (int ib32 = 0; ib32 < 8; ++ib32) {
+        if (needs_scaling) {
+            auto i0 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(qs[2*ib32+0]));
+            auto i1 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(qs[2*ib32+0], 1));
+            auto i2 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(qs[2*ib32+1]));
+            auto i3 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(qs[2*ib32+1], 1));
+            i0 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i0)), _MM_ROUND_NEAREST));
+            i1 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i1)), _MM_ROUND_NEAREST));
+            i2 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i2)), _MM_ROUND_NEAREST));
+            i3 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i3)), _MM_ROUND_NEAREST));
+            i0 = _mm256_packs_epi32(i0, i1);
+            i2 = _mm256_packs_epi32(i2, i3);
+            i0 = _mm256_packs_epi16(i0, i2);
+            i0 = _mm256_permutevar8x32_epi32(i0, _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7));
+            qx[ib32] = i0;
+        } else {
+            // 0, 1, 2, 3, 4, 5, 6, 7, 8, 16, 17, 18, 19, 20, 21, 22, 23, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31
+            auto i0 = _mm256_packs_epi16(qs[2*ib32+0], qs[2*ib32+1]);
+            auto i0_l = _mm256_castsi256_si128(i0);
+            auto i0_h = _mm256_extracti128_si256(i0, 1);
+            qx[ib32] = MM256_SET_M128I(_mm_unpackhi_epi64(i0_l, i0_h), _mm_unpacklo_epi64(i0_l, i0_h));
+        }
+    }
+    return dnew;
+}
+
+static inline void iqk_transpose_8x8(__m256i * m) {
+    for (int k = 0; k < 8; k += 4) {
+        auto t0 = _mm256_unpacklo_epi32(m[k+0], m[k+1]);
+        auto t1 = _mm256_unpacklo_epi32(m[k+2], m[k+3]);
+        auto t2 = _mm256_unpackhi_epi32(m[k+0], m[k+1]);
+        auto t3 = _mm256_unpackhi_epi32(m[k+2], m[k+3]);
+        m[k+0] = _mm256_unpacklo_epi64(t0, t1);
+        m[k+1] = _mm256_unpackhi_epi64(t0, t1);
+        m[k+2] = _mm256_unpacklo_epi64(t2, t3);
+        m[k+3] = _mm256_unpackhi_epi64(t2, t3);
+    }
+    for (int k = 0; k < 4; ++k) {
+        auto t = MM256_SET_M128I(_mm256_extracti128_si256(m[k+4], 1), _mm256_extracti128_si256(m[k], 1));
+        m[k+0] = MM256_SET_M128I(_mm256_castsi256_si128(m[k+4]), _mm256_castsi256_si128(m[k]));
+        m[k+4] = t;
+    }
+}
+
 void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
 
 #ifdef HAVE_FANCY_SIMD
@@ -3141,8 +3209,9 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
     auto values = MM256_SET1_M128I(values128);
 
     int16_t  ls[16];
+    float    dnew[k_nr];
+    uint8_t  block[256*k_nr];
     __m256i  xv[8];
-    Q8KRowRepacker<k_nr, 32> rp;
 
     for (int ix = 0; ix < nrc_x; ix += k_nr) {
         for (int k = 0; k < k_nr; ++k) x8[k] = (const block_iq4_xs *)((const char *)vx + (ix + k)*bx);
@@ -3155,9 +3224,38 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                     xv[ib32] = _mm256_and_si256(MM256_SRLI128_M128I(bits, 4), _mm256_set1_epi8(0xf));
                     xv[ib32] = _mm256_shuffle_epi8(values, xv[ib32]);
                 }
-                rp.row(k, d, 1.f/127, xv, ls, y[i].d, y[i].qs);
+                dnew[k] = d * convert_to_q8_k_r8<k_nr>(1.f/127, xv, ls);
+                for (int ib32 = 0; ib32 < 8; ++ib32) _mm256_storeu_si256((__m256i *)block + 8*k + ib32, xv[ib32]);
             }
-            rp.flush(y[i].d, y[i].qs);
+#ifdef HAVE_FANCY_SIMD
+            _mm512_storeu_ps(y[i].d, _mm512_loadu_ps(dnew));
+#else
+            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_loadu_ps(dnew), _MM_ROUND_NEAREST));
+#endif
+            for (int ib32 = 0; ib32 < 8; ++ib32) {
+                for (int k = 0; k < 8; ++k) {
+                    xv[k] = _mm256_loadu_si256((const __m256i *)block + 8*k + ib32);
+#ifdef HAVE_FANCY_SIMD
+                    xv[k] = _mm256_xor_si256(xv[k], _mm256_set1_epi8(-128));
+#endif
+                }
+                iqk_transpose_8x8(xv);
+                for (int k = 0; k < 8; ++k) {
+                    _mm256_storeu_si256((__m256i *)y[i].qs + k_nr*ib32 + (k_nr/8)*k + 0, xv[k]);
+                }
+                if constexpr (k_nr == 16) {
+                    for (int k = 0; k < 8; ++k) {
+                        xv[k] = _mm256_loadu_si256((const __m256i *)block + 8*(k+8) + ib32);
+#ifdef HAVE_FANCY_SIMD
+                        xv[k] = _mm256_xor_si256(xv[k], _mm256_set1_epi8(-128));
+#endif
+                    }
+                    iqk_transpose_8x8(xv);
+                    for (int k = 0; k < 8; ++k) {
+                        _mm256_storeu_si256((__m256i *)y[i].qs + k_nr*ib32 + (k_nr/8)*k + 1, xv[k]);
+                    }
+                }
+            }
         }
         y += nb;
     }
