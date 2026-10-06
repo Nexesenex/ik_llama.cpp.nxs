@@ -13,6 +13,7 @@
 #include "ggml-common.h"
 #include "iqk_quantize.h"
 #include "iqk_config.h"
+#include "iqk_common.h"
 
 #include "iqk_gemm_ktquants.h"
 
@@ -8613,7 +8614,6 @@ static void repack_q8_KV(int nrows, int n_per_row, const char * cx, char * cy, [
         }
         for (int ib = 0; ib < n_per_row/16; ++ib) {
 #ifdef __AVX2__
-#define MM256_SET_M128I(a, b) _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
             auto m0 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[4]+ib), _mm_loadu_si128((const __m128i *)x8[0]+ib));
             auto m1 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[5]+ib), _mm_loadu_si128((const __m128i *)x8[1]+ib));
             auto m2 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[6]+ib), _mm_loadu_si128((const __m128i *)x8[2]+ib));
