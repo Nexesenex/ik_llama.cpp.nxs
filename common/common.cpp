@@ -3360,6 +3360,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-rtr16p" || arg == "--run-time-repack-16-path") {
+        params.repack_tensors = true;
+        params.use_mmap = false;
         iqk_set_r16_path(true);
         return true;
     }
@@ -4656,7 +4658,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",       "-nmm,   --no-mmap",               "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
     options.push_back({ "*",           "-rtr,   --run-time-repack",      "repack tensors if interleaved variant is available"});
-    options.push_back({ "*",           "-rtr16p, --run-time-repack-16-path", "enable Q8_K_R16 path on VNNI256 (30% faster IQ4_XS)"});
+    options.push_back({ "*",           "-rtr16p, --run-time-repack-16-path", "repack tensors + Q8_K_R16 fast path on VNNI256 (preferred over -rtr)"});
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "       --moe-cache-mib N",       "Total GPU cache budget in MiB for CPU-resident MoE experts, split across GPUs (default: 0, disabled)"});
