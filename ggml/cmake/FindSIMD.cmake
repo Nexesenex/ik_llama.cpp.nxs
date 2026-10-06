@@ -64,6 +64,19 @@ set(AVX512BF16_CODE "
     }
 ")
 
+set(AVXVNNI_CODE "
+    #include <immintrin.h>
+    int main()
+    {
+        __m256i acc = _mm256_setzero_si256();
+        __m256i u   = _mm256_set1_epi8(1);
+        __m256i s   = _mm256_set1_epi8(1);
+        acc = _mm256_dpbusd_avx_epi32(acc, u, s);
+        __m128i lo = _mm_add_epi32(_mm256_castsi256_si128(acc), _mm256_extractf128_si256(acc, 1));
+        return _mm_cvtsi128_si32(lo) == 8 ? 0 : 1;
+    }
+")
+
 set(AVX2_CODE "
     #include <immintrin.h>
     int main()
@@ -162,4 +175,28 @@ if (GGML_AVX512)
     check_avx512_extension("AVX512VNNI" GGML_AVX512_VNNI)
     check_avx512_extension("AVX512VBMI" GGML_AVX512_VBMI)
     check_avx512_extension("AVX512BF16" GGML_AVX512_BF16)
+endif()
+
+# AVX-VNNI is VEX-encoded 256-bit VNNI (Alder Lake / Raptor Lake / Meteor Lake).
+# Probed under /arch:AVX2. A probe that does not build says nothing about the
+# CPU: clang-cl gates this intrinsic behind -mavxvnni, so there the option is
+# left as it was, mirroring check_avx512_extension above.
+macro(check_avxvnni_extension type option)
+    set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
+    set(CMAKE_REQUIRED_FLAGS "/arch:AVX2")
+    check_c_source_compiles("${${type}_CODE}" HAS_${type}_BUILD)
+    set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
+
+    if (HAS_${type}_BUILD)
+        check_sse("${type}" " ;/arch:AVX2")
+        if (NOT ${${type}_FOUND})
+            set(${option} OFF)
+        else()
+            set(${option} ON)
+        endif()
+    endif()
+endmacro()
+
+if (GGML_AVX2)
+    check_avxvnni_extension("AVXVNNI" GGML_AVXVNNI)
 endif()
