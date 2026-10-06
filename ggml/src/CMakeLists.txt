@@ -1263,7 +1263,16 @@ add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:${ARCH_FLAGS}>")
 add_compile_options("$<$<COMPILE_LANGUAGE:C>:${ARCH_FLAGS}>")
 
 if (GGML_CUDA)
-    list(APPEND CUDA_CXX_FLAGS ${ARCH_FLAGS})
+    # NVCC forwards these flags to the host compiler, which on Windows is MSVC
+    # cl: it rejects GCC/Clang -m* options with D9002 (and the matching
+    # __AVX*__ macros are only defined for C/CXX, never CUDA, so .cu host code
+    # takes the fallback paths regardless). Strip them to silence hundreds of
+    # per-TU warnings; keep /arch:* which cl understands.
+    set(CUDA_ARCH_FLAGS ${ARCH_FLAGS})
+    if (WIN32 AND CUDA_ARCH_FLAGS)
+        list(FILTER CUDA_ARCH_FLAGS EXCLUDE REGEX "^-m")
+    endif()
+    list(APPEND CUDA_CXX_FLAGS ${CUDA_ARCH_FLAGS})
     list(JOIN   CUDA_CXX_FLAGS " " CUDA_CXX_FLAGS_JOINED)  # pass host compiler flags as a single argument
 
     if (NOT CUDA_CXX_FLAGS_JOINED STREQUAL "")
