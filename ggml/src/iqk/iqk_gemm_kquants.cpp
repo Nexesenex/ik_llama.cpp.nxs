@@ -3530,7 +3530,7 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                         xv[ib32] = _mm256_and_si256(MM256_SRLI128_M128I(bits, 4), _mm256_set1_epi8(0xf));
                         xv[ib32] = _mm256_shuffle_epi8(values, xv[ib32]);
                     }
-                    dnew[k] = d * convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
+                    dnew[k] = d * ::convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
                 }
 #if defined(HAVE_FANCY_SIMD)
                 _mm512_storeu_ps(y[i].d, _mm512_loadu_ps(dnew));
