@@ -200,19 +200,23 @@ static ggml_cuda_device_info ggml_cuda_init() {
     ggml_cuda_device_info info = {};
 
 #if defined(_WIN32) && !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA)
-    // NXS: on Windows the CUDA driver defaults to FASTEST_FIRST (TCC > WDDM),
-    // while Linux/nvidia-smi use PCIe bus order. Keep CUDA_DEVICE_ORDER editable:
-    // if the user set it (FASTEST_FIRST or PCI_BUS_ID) we respect it, otherwise
-    // we default to PCI_BUS_ID so CUDA0 is the first PCIe device (logical order).
-    // Must run before the first CUDA call so the runtime enumerates in PCIe order.
+    // On Windows the driver defaults to FASTEST_FIRST; default to PCI_BUS_ID
+    // instead so CUDA0 is the first PCIe device. Must run before the first CUDA call.
     const char * cuda_order_env = getenv("CUDA_DEVICE_ORDER");
     if (cuda_order_env == nullptr) {
         _putenv("CUDA_DEVICE_ORDER=PCI_BUS_ID");
-        GGML_CUDA_LOG_INFO("%s: CUDA_DEVICE_ORDER unset, defaulting to PCI_BUS_ID (logical PCIe order, CUDA0 is first PCIe device)\n", __func__);
+        GGML_CUDA_LOG_INFO("%s: CUDA_DEVICE_ORDER unset (driver default FASTEST_FIRST), forcing PCI_BUS_ID (logical PCIe order, CUDA0 is first PCIe device)\n", __func__);
     } else {
         GGML_CUDA_LOG_INFO("%s: CUDA_DEVICE_ORDER=%s (user override kept)\n", __func__, cuda_order_env);
     }
 #endif
+
+    const char * cuda_visible_env = getenv("CUDA_VISIBLE_DEVICES");
+    if (cuda_visible_env != nullptr && cuda_visible_env[0] != '\0') {
+        GGML_CUDA_LOG_INFO("%s: CUDA_VISIBLE_DEVICES=%s (visible set filters the enumeration below)\n", __func__, cuda_visible_env);
+    } else {
+        GGML_CUDA_LOG_INFO("%s: CUDA_VISIBLE_DEVICES unset (all devices visible)\n", __func__);
+    }
 
     cudaError_t err = cudaGetDeviceCount(&info.device_count);
     if (err != cudaSuccess) {
@@ -257,7 +261,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
             (void) cudaGetLastError();
         }
 #endif
-        GGML_CUDA_LOG_INFO("  Device %d (PCI %s): %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n", id, pci_bus_id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
+        GGML_CUDA_LOG_INFO("  CUDA ordinal device %d (PCI %s): %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n", id, pci_bus_id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
                 prop.totalGlobalMem/(1024*1024));
 
         info.default_tensor_split[id] = total_vram;
