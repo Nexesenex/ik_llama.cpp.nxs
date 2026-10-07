@@ -225,6 +225,36 @@ export const cleanCurrentUrl = (removeQueryParams: string[]) => {
   window.history.replaceState({}, '', url.toString());
 };
 
+/**
+ * Format a message timestamp (ms since 1970, from Date.now())
+ * as "YYYY/MM/DD HH:MM:SS" in local time.
+ * Returns 'Invalid date' if the timestamp cannot be parsed.
+ */
+export const formatTimestampToDate = (timestamp: number): string => {
+  const d = new Date(timestamp);
+  if (isNaN(d.getTime())) return 'Invalid date';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  return `${yyyy}/${mm}/${dd} ${hh}:${mi}:${ss}`;
+};
+
+/**
+ * Format a message timestamp (ms since 1970, from Date.now())
+ * as seconds with comma decimals, e.g. "1791227362,990 s".
+ * Returns 'Invalid timestamp' if the timestamp is not finite.
+ */
+export const formatTimestampSince1970 = (timestamp: number): string => {
+  if (timestamp == null || !isFinite(timestamp)) return 'Invalid timestamp';
+  const s = Math.floor(timestamp / 1000);
+  const ms = timestamp - s * 1000;
+  return `${s},${String(ms).padStart(3, '0')} s`;
+};
+
 export const getServerProps = async (
   baseUrl: string,
   apiKey?: string
