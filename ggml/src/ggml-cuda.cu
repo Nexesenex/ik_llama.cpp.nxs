@@ -202,6 +202,21 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
     ggml_cuda_device_info info = {};
 
+#if defined(_WIN32) && !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA)
+    // NXS: on Windows the CUDA driver defaults to FASTEST_FIRST (TCC > WDDM),
+    // while Linux/nvidia-smi use PCIe bus order. Keep CUDA_DEVICE_ORDER editable:
+    // if the user set it (FASTEST_FIRST or PCI_BUS_ID) we respect it, otherwise
+    // we default to PCI_BUS_ID so CUDA0 is the first PCIe device (logical order).
+    // Must run before the first CUDA call so the runtime enumerates in PCIe order.
+    const char * cuda_order_env = getenv("CUDA_DEVICE_ORDER");
+    if (cuda_order_env == nullptr) {
+        _putenv("CUDA_DEVICE_ORDER=PCI_BUS_ID");
+        GGML_CUDA_LOG_INFO("%s: CUDA_DEVICE_ORDER unset, defaulting to PCI_BUS_ID (logical PCIe order, CUDA0 is first PCIe device)\n", __func__);
+    } else {
+        GGML_CUDA_LOG_INFO("%s: CUDA_DEVICE_ORDER=%s (user override kept)\n", __func__, cuda_order_env);
+    }
+#endif
+
     cudaError_t err = cudaGetDeviceCount(&info.device_count);
     if (err != cudaSuccess) {
         GGML_CUDA_LOG_ERROR("%s: failed to initialize " GGML_CUDA_NAME ": %s\n", __func__, cudaGetErrorString(err));
@@ -238,7 +253,14 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
         cudaDeviceProp prop;
         CUDA_CHECK(cudaGetDeviceProperties(&prop, id));
-        GGML_CUDA_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n", id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
+        char pci_bus_id[16] = "?";
+#if !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA)
+        if (cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), id) != cudaSuccess) {
+            snprintf(pci_bus_id, sizeof(pci_bus_id), "?");
+            (void) cudaGetLastError();
+        }
+#endif
+        GGML_CUDA_LOG_INFO("  Device %d (PCI %s): %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n", id, pci_bus_id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
                 prop.totalGlobalMem/(1024*1024));
 
         info.default_tensor_split[id] = total_vram;
