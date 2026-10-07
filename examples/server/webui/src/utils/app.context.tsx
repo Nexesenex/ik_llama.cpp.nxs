@@ -190,6 +190,16 @@ export const AppContextProvider = ({
       throw new Error('Current messages are not found');
     }
 
+    // current model from the server, so the assistant swipe stores the model that actually generates it
+    let generationModelName = currConversation.model_name ?? '';
+    await getServerProps(BASE_URL, config.apiKey)
+      .then((props) => {
+        if (props.model_name) {
+          generationModelName = props.model_name;
+        }
+      })
+      .catch(() => {});
+
     const pendingId = Date.now() + Timer.timercount + 1;
 	Timer.timercount=Timer.timercount+2;
    let pendingMsg: Message | PendingMessage;
@@ -207,6 +217,7 @@ export const AppContextProvider = ({
       pendingMsg = {
         ...existingAsstMsg,
         content: existingAsstMsg.content || '',
+        model_name: existingAsstMsg.model_name || generationModelName,
       };
       setPending(convId, pendingMsg as PendingMessage);
     } else {
@@ -219,7 +230,7 @@ export const AppContextProvider = ({
         content: null,
         parent: leafNodeId,
         children: [],
-        model_name: '',
+        model_name: generationModelName,
       };
       setPending(convId, pendingMsg as PendingMessage);
     }
