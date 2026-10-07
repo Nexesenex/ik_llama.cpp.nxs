@@ -9602,13 +9602,29 @@ struct llama_model * llama_model_load_from_file(
         params.n_gpu_layers = 0;
         LLAMA_LOG_INFO("CPU: using device CPU\n");
     } else {
-        for (auto i : model->devices) {
+        // params.main_gpu is a local index into model->devices; translate to raw id for the marker.
+        const int main_gpu_raw = (params.main_gpu >= 0 && params.main_gpu < (int)model->devices.size())
+            ? model->devices[params.main_gpu]
+            : -1;
+        for (size_t pos = 0; pos < model->devices.size(); ++pos) {
+            const int i = model->devices[pos];
             ggml_backend_buffer_type_t buft = llama_default_buffer_type_offload(*model, i);
             const char* name = ggml_backend_buft_name(buft);
-            const char* description = name;
             size_t description_size = llama_get_device_memory(*model, i);
+#ifdef GGML_USE_CUDA
+            char cuda_name[16];
+            snprintf(cuda_name, sizeof(cuda_name), "%s%d", GGML_CUDA_NAME, i);
+            if (strcmp(name, cuda_name) == 0) {
+                const bool is_main = (i == main_gpu_raw);
+                LLAMA_LOG_INFO("%s: mapped to logical %zu - %zu MiB free%s\n",
+                    name, pos,
+                    description_size / 1024 / 1024,
+                    is_main ? " (-mg device)" : "");
+                continue;
+            }
+#endif
             LLAMA_LOG_INFO("%s: using device %s - %zu MiB free\n",
-                name, description,
+                name, name,
                 description_size / 1024 / 1024);
         }
     }
