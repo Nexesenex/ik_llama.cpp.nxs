@@ -1,7 +1,7 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { Message, PendingMessage } from '../utils/types';
-import { classNames } from '../utils/misc';
+import { classNames, formatTimestampToDate, formatTimestampSince1970 } from '../utils/misc';
 import MarkdownDisplay, { CopyButton } from './MarkdownDisplay';
 import { ChevronLeftIcon, ChevronRightIcon,  ArrowPathIcon, PencilSquareIcon } from '@heroicons/react/24/outline';
 import ChatInputExtraContextItem from './ChatInputExtraContextItem';
@@ -58,6 +58,25 @@ export default function ChatMessage({
   );
   const nextSibling = siblingLeafNodeIds[siblingCurrIdx + 1];
   const prevSibling = siblingLeafNodeIds[siblingCurrIdx - 1];
+  // swipe jump target by tens/hundreds/thousands, clamped to first/last sibling
+  const jumpTargetIdx = (delta: number) =>
+    Math.min(siblingLeafNodeIds.length - 1, Math.max(0, siblingCurrIdx + delta));
+  // timestamp of this message (ms since 1970, from Date.now()), shown as YYYY/MM/DD HH:MM:SS
+  const formattedTimestamp = useMemo(
+    () =>
+      msg.timestamp != null
+        ? formatTimestampToDate(msg.timestamp)
+        : 'Invalid date',
+    [msg.timestamp]
+  );
+  // same timestamp as seconds with comma decimals, e.g. "1791227362,990 s"
+  const since1970 = useMemo(
+    () =>
+      msg.timestamp != null
+        ? formatTimestampSince1970(msg.timestamp)
+        : 'Invalid timestamp',
+    [msg.timestamp]
+  );
   // for reasoning model, we split the message into content and thought
   // TODO: implement this as remark/rehype plugin in the future
   const { content, thought, isThinking }: SplitMessage = useMemo(() => {
@@ -88,8 +107,8 @@ export default function ChatMessage({
   }, [msg]);
 
   if (!viewingChat) return null;
-  //const model_name = (timings?.model_name ??'')!== '' ? timings?.model_name: viewingChat.conv.model_name;
-  const model_name = viewingChat.conv.model_name;
+  // model of this swipe if stored, else the conversation model (old rows)
+  const model_name = msg.model_name || viewingChat.conv.model_name;
   return (
     <div className="group" 
       id={id}       
@@ -204,18 +223,33 @@ export default function ChatMessage({
                   >
                     <div className="font-bold text-xs">                    
                       {timings.n_ctx>0 && (       
-                        <div className="flex justify-between items-center">
-                          <span className="whitespace-nowrap">
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="whitespace-nowrap text-left">
                             Token: {timings.predicted_per_second.toFixed(1)} t/s | Prompt: {timings.prompt_per_second.toFixed(1)} t/s
                           </span>
-                          <span className="hidden lg:block pl-[200px] whitespace-nowrap">
+                          {/* msg.timestamp comes from the DB (Dexie messages table / exported JSON); one value per message/swipe */}
+                          <span
+                            className="flex-1 text-center whitespace-nowrap overflow-hidden text-ellipsis"
+                            title={`Since 1970: ${since1970}`}
+                          >
+                            {since1970} | {formattedTimestamp}
+                          </span>
+                          <span className="hidden lg:block pl-[200px] whitespace-nowrap text-right">
                             Ctx: {timings.predicted_n+timings.prompt_n} / {timings.n_past} / {timings.n_ctx}
                           </span>
                         </div>
                       )}
                       {(timings.n_ctx==null || timings.n_ctx <=0) && (
-                      <div>
-                        Token: {timings.predicted_per_second.toFixed(1)} t/s | Prompt: {timings.prompt_per_second.toFixed(1)} t/s
+                      <div className="flex justify-between items-center gap-2">
+                        <span className="whitespace-nowrap text-left">
+                          Token: {timings.predicted_per_second.toFixed(1)} t/s | Prompt: {timings.prompt_per_second.toFixed(1)} t/s
+                        </span>
+                        <span
+                          className="flex-1 text-center whitespace-nowrap overflow-hidden text-ellipsis"
+                          title={`Since 1970: ${since1970}`}
+                        >
+                          {since1970} | {formattedTimestamp}
+                        </span>
                       </div>
                       )}
                     </div>
@@ -236,6 +270,10 @@ export default function ChatMessage({
                     <b>Context</b>
                     <br />- n_ctx: {timings.n_ctx}
                     <br />- n_past: {timings.n_past}
+                    <br />
+                    <b>Timestamp</b>
+                    <br />- Since 1970 : {since1970}
+                    <br />- Date: {formattedTimestamp}
                     <br />
                     </p>
                   </div>
@@ -264,6 +302,31 @@ export default function ChatMessage({
         >
           {siblingLeafNodeIds && siblingLeafNodeIds.length > 1 && (
             <div className="flex gap-1 items-center opacity-60 text-sm">
+              {/* jump back by thousands/hundreds/tens when many swipes */}
+              {siblingLeafNodeIds.length > 10 &&
+                (
+                  [
+                    [-1000, '<<<<'],
+                    [-100, '<<<'],
+                    [-10, '<<'],
+                  ] as [number, string][]
+                ).map(([delta, label]) => {
+                  const target = jumpTargetIdx(delta);
+                  const canMove = target !== siblingCurrIdx;
+                  return (
+                    <button
+                      key={delta}
+                      className={classNames({
+                        'btn btn-sm btn-ghost px-1 text-xs font-bold': true,
+                        'opacity-20': !canMove,
+                      })}
+                      onClick={() => canMove && onChangeSibling(siblingLeafNodeIds[target])}
+                      title={`Back ${Math.abs(delta)} swipes`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
               <button
                 className={classNames({
                   'btn btn-sm btn-ghost p-1': true,
@@ -285,6 +348,31 @@ export default function ChatMessage({
               >
                 <ChevronRightIcon className="h-4 w-4" />
               </button>
+              {/* jump forward by tens/hundreds/thousands when many swipes */}
+              {siblingLeafNodeIds.length > 10 &&
+                (
+                  [
+                    [10, '>>'],
+                    [100, '>>>'],
+                    [1000, '>>>>'],
+                  ] as [number, string][]
+                ).map(([delta, label]) => {
+                  const target = jumpTargetIdx(delta);
+                  const canMove = target !== siblingCurrIdx;
+                  return (
+                    <button
+                      key={delta}
+                      className={classNames({
+                        'btn btn-sm btn-ghost px-1 text-xs font-bold': true,
+                        'opacity-20': !canMove,
+                      })}
+                      onClick={() => canMove && onChangeSibling(siblingLeafNodeIds[target])}
+                      title={`Forward ${delta} swipes`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
             </div>
           )}
           {/* user message */}
@@ -328,6 +416,15 @@ export default function ChatMessage({
             className="badge border-none outline-none btn-mini show-on-hover mr-2"
             content={msg.content}
           />
+          {/* timestamp of this message/sibling, visible for any swipe */}
+          {msg.timestamp != null && (
+            <span
+              className="text-xs opacity-60"
+              title={`Since 1970: ${since1970}`}
+            >
+              {formattedTimestamp} ({since1970})
+            </span>
+          )}
         </div>
       )}
     </div>

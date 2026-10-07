@@ -242,6 +242,20 @@ export default function ChatScreen() {
         ]
       : [];
 
+  // model of the latest swipe in the currently viewed branch (each swipe stores
+  // its own model_name); falls back to the conversation model for old rows
+  const displayedModelName = useMemo(() => {
+    if (!viewingChat) return '';
+    const branchMsgs = messages.map((m) => m.msg);
+    if (pendingMsg && !messages.some((m) => m.msg.id === pendingMsg.id)) {
+      branchMsgs.push(pendingMsg);
+    }
+    for (let i = branchMsgs.length - 1; i >= 0; i--) {
+      if (branchMsgs[i].model_name) return branchMsgs[i].model_name;
+    }
+    return viewingChat.conv.model_name;
+  }, [messages, pendingMsg, viewingChat]);
+
   return (
     <div
       className={classNames({
@@ -258,7 +272,7 @@ export default function ChatScreen() {
         })}
       >
 	  <div className="flex items-center justify-center">
-		{viewingChat?.conv.model_name}
+		{displayedModelName}
 	  </div>
         {/* chat messages */}
         <div id="messages-list" className="grow" ref={msgListRef}>
