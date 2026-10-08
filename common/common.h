@@ -379,6 +379,24 @@ struct gpt_params {
     int         ggml_moe_prefetch_debug = 0;  // GGML_MOE_PREFETCH_DEBUG
     std::vector<std::string> ggml_env;        // generic repeatable passthrough: "VAR=VAL" (any GGML_*)
 
+    // GGML CUDA-backend env controls (same CLI pattern as CPU above).
+    // Applied via common_apply_ggml_cuda_env() BEFORE backend init / model
+    // load: device order must land before the first CUDA call, and several
+    // vars are read once into statics.
+    // Value vars: empty = untouched. Presence flags: 0 = untouched,
+    // >0 = set VAR=1, <0 = force-remove VAR from the process env
+    // (--no- always removes, regardless of the var's polarity).
+    std::string cuda_device_order   = ""; // FASTEST_FIRST | PCI_BUS_ID (ggml defaults to PCI_BUS_ID on Windows)
+    std::string cuda_visible_devices = ""; // e.g. "0,1" (CUDA_VISIBLE_DEVICES, read by the CUDA runtime at init)
+    std::string cuda_pinned_cap_gib = ""; // int GiB WDDM pinned-memory cap (GGML_CUDA_PINNED_CAP_GIB)
+    std::string cuda_host_chunk_gib = ""; // int GiB host weight-buffer chunking (GGML_CUDA_HOST_CHUNK_GIB)
+    int         cuda_enable_unified_memory = 0; // GGML_CUDA_ENABLE_UNIFIED_MEMORY
+    int         cuda_no_pinned             = 0; // GGML_CUDA_NO_PINNED
+    int         cuda_no_pinned_weights     = 0; // GGML_CUDA_NO_PINNED_WEIGHTS (mmap weights, pinned staging)
+    int         cuda_host_malloc_thp       = 0; // GGML_CUDA_HOST_MALLOC_THP (Linux hugepages)
+    int         cuda_disable_graphs        = 0; // GGML_CUDA_DISABLE_GRAPHS
+    int         cuda_register_host         = 0; // GGML_CUDA_REGISTER_HOST
+
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
@@ -720,6 +738,12 @@ std::string common_openmp_runtime_info(void);
 void common_apply_ggml_cpu_env(const gpt_params & params);
 // Snapshot of the GGML CPU-relevant env for logging/bench tables.
 std::string common_ggml_cpu_env_snapshot(void);
+// Apply CLI-requested GGML CUDA-backend env vars BEFORE backend init / model
+// load (device order must precede the first CUDA call; several vars are
+// consumed once into statics). Empty/unset fields leave the env untouched.
+void common_apply_ggml_cuda_env(const gpt_params & params);
+// Snapshot of the GGML CUDA-relevant env for logging/bench tables.
+std::string common_ggml_cuda_env_snapshot(void);
 void gpt_params_handle_model_default(gpt_params & params);
 
 bool gpt_params_parse_ex   (int argc, char ** argv, gpt_params & params);

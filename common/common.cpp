@@ -595,6 +595,47 @@ void common_apply_ggml_cpu_env(const gpt_params & params) {
     }
 }
 
+std::string common_ggml_cuda_env_snapshot(void) {
+    std::ostringstream os;
+    os << "CUDA_DEVICE_ORDER="             << common_omp_env_get("CUDA_DEVICE_ORDER")             << " "
+       << "CUDA_VISIBLE_DEVICES="          << common_omp_env_get("CUDA_VISIBLE_DEVICES")          << " "
+       << "GGML_CUDA_ENABLE_UNIFIED_MEMORY=" << common_omp_env_get("GGML_CUDA_ENABLE_UNIFIED_MEMORY") << " "
+       << "GGML_CUDA_NO_PINNED="           << common_omp_env_get("GGML_CUDA_NO_PINNED")           << " "
+       << "GGML_CUDA_NO_PINNED_WEIGHTS="   << common_omp_env_get("GGML_CUDA_NO_PINNED_WEIGHTS")   << " "
+       << "GGML_CUDA_HOST_MALLOC_THP="     << common_omp_env_get("GGML_CUDA_HOST_MALLOC_THP")     << " "
+       << "GGML_CUDA_PINNED_CAP_GIB="      << common_omp_env_get("GGML_CUDA_PINNED_CAP_GIB")      << " "
+       << "GGML_CUDA_HOST_CHUNK_GIB="      << common_omp_env_get("GGML_CUDA_HOST_CHUNK_GIB")      << " "
+       << "GGML_CUDA_DISABLE_GRAPHS="      << common_omp_env_get("GGML_CUDA_DISABLE_GRAPHS")      << " "
+       << "GGML_CUDA_REGISTER_HOST="       << common_omp_env_get("GGML_CUDA_REGISTER_HOST");
+    return os.str();
+}
+
+void common_apply_ggml_cuda_env(const gpt_params & params) {
+    // Value vars first, presence flags, no generic list here: the shared
+    // --ggml-env passthrough (CPU commit) already covers any GGML_* var and
+    // is applied inside common_apply_ggml_cpu_env(); callers must invoke the
+    // CPU applier before this one so generic entries do not clobber typed
+    // CUDA values. Must run BEFORE backend init / model load.
+    common_set_process_env_var("CUDA_DEVICE_ORDER",        params.cuda_device_order);
+    common_set_process_env_var("CUDA_VISIBLE_DEVICES",       params.cuda_visible_devices);
+    common_set_process_env_var("GGML_CUDA_PINNED_CAP_GIB", params.cuda_pinned_cap_gib);
+    common_set_process_env_var("GGML_CUDA_HOST_CHUNK_GIB", params.cuda_host_chunk_gib);
+    common_set_process_env_flag("GGML_CUDA_ENABLE_UNIFIED_MEMORY", params.cuda_enable_unified_memory);
+    common_set_process_env_flag("GGML_CUDA_NO_PINNED",             params.cuda_no_pinned);
+    common_set_process_env_flag("GGML_CUDA_NO_PINNED_WEIGHTS",     params.cuda_no_pinned_weights);
+    common_set_process_env_flag("GGML_CUDA_HOST_MALLOC_THP",       params.cuda_host_malloc_thp);
+    common_set_process_env_flag("GGML_CUDA_DISABLE_GRAPHS",        params.cuda_disable_graphs);
+    common_set_process_env_flag("GGML_CUDA_REGISTER_HOST",         params.cuda_register_host);
+    if (!params.cuda_device_order.empty() || !params.cuda_visible_devices.empty() ||
+        !params.cuda_pinned_cap_gib.empty() || !params.cuda_host_chunk_gib.empty() ||
+        params.cuda_enable_unified_memory != 0 ||
+        params.cuda_no_pinned != 0 || params.cuda_no_pinned_weights != 0 ||
+        params.cuda_host_malloc_thp != 0 || params.cuda_disable_graphs != 0 ||
+        params.cuda_register_host != 0) {
+        LOG_INF("%s: GGML CUDA env applied: %s\n", __func__, common_ggml_cuda_env_snapshot().c_str());
+    }
+}
+
 //
 // CPU utils
 //
@@ -1473,6 +1514,18 @@ void gpt_params_parse_from_env(gpt_params & params) {
             }
         }
     }
+    // GGML CUDA-backend controls for bench automation (CLI flags win over these env defaults)
+    // Presence flags: >0 set VAR=1, <0 force-remove VAR, 0 untouched.
+    get_env("LLAMA_ARG_CUDA_DEVICE_ORDER",            params.cuda_device_order);
+    get_env("LLAMA_ARG_CUDA_VISIBLE_DEVICES",         params.cuda_visible_devices);
+    get_env("LLAMA_ARG_CUDA_PINNED_CAP_GIB",          params.cuda_pinned_cap_gib);
+    get_env("LLAMA_ARG_CUDA_HOST_CHUNK_GIB",          params.cuda_host_chunk_gib);
+    get_env("LLAMA_ARG_CUDA_ENABLE_UNIFIED_MEMORY",   params.cuda_enable_unified_memory);
+    get_env("LLAMA_ARG_CUDA_NO_PINNED",               params.cuda_no_pinned);
+    get_env("LLAMA_ARG_CUDA_NO_PINNED_WEIGHTS",       params.cuda_no_pinned_weights);
+    get_env("LLAMA_ARG_CUDA_HOST_MALLOC_THP",         params.cuda_host_malloc_thp);
+    get_env("LLAMA_ARG_CUDA_DISABLE_GRAPHS",          params.cuda_disable_graphs);
+    get_env("LLAMA_ARG_CUDA_REGISTER_HOST",           params.cuda_register_host);
 
 }
 
@@ -1928,6 +1981,76 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--ggml-env" || arg == "--ggml") {
         CHECK_ARG
         params.ggml_env.emplace_back(argv[i]);
+        return true;
+    }
+    // GGML CUDA-backend env controls (typed CUDA flags win over --ggml-env
+    // entries for the same var; --no- always removes the var from the env).
+    if (arg == "--cuda-device-order") {
+        CHECK_ARG
+        params.cuda_device_order = argv[i];
+        return true;
+    }
+    if (arg == "--cuda-visible-devices") {
+        CHECK_ARG
+        params.cuda_visible_devices = argv[i];
+        return true;
+    }
+    if (arg == "--cuda-pinned-cap-gib") {
+        CHECK_ARG
+        params.cuda_pinned_cap_gib = argv[i];
+        return true;
+    }
+    if (arg == "--cuda-host-chunk-gib") {
+        CHECK_ARG
+        params.cuda_host_chunk_gib = argv[i];
+        return true;
+    }
+    if (arg == "--cuda-enable-unified-memory") {
+        params.cuda_enable_unified_memory = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-enable-unified-memory") {
+        params.cuda_enable_unified_memory = -1;
+        return true;
+    }
+    if (arg == "--cuda-no-pinned") {
+        params.cuda_no_pinned = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-no-pinned") {
+        params.cuda_no_pinned = -1;
+        return true;
+    }
+    if (arg == "--cuda-no-pinned-weights") {
+        params.cuda_no_pinned_weights = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-no-pinned-weights") {
+        params.cuda_no_pinned_weights = -1;
+        return true;
+    }
+    if (arg == "--cuda-host-malloc-thp") {
+        params.cuda_host_malloc_thp = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-host-malloc-thp") {
+        params.cuda_host_malloc_thp = -1;
+        return true;
+    }
+    if (arg == "--cuda-disable-graphs") {
+        params.cuda_disable_graphs = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-disable-graphs") {
+        params.cuda_disable_graphs = -1;
+        return true;
+    }
+    if (arg == "--cuda-register-host") {
+        params.cuda_register_host = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-register-host") {
+        params.cuda_register_host = -1;
         return true;
     }
     if (arg == "-p" || arg == "--prompt") {
@@ -3929,6 +4052,16 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --ggml-moe-prefetch-debug", "set GGML_MOE_PREFETCH_DEBUG=1 (--no-ggml-moe-prefetch-debug removes it)" });
     options.push_back({ "*",           "       --ggml-hybrid 0|1",        "GGML_HYBRID: 0 disables hybrid P/E-core detection (e.g. with Process Lasso)" });
     options.push_back({ "*",           "       --ggml-env VAR=VAL",       "generic GGML_* passthrough, repeatable, applied last (e.g. --ggml-env GGML_HYBRID=0)" });
+    options.push_back({ "*",           "       --cuda-device-order VAL",  "CUDA_DEVICE_ORDER: FASTEST_FIRST | PCI_BUS_ID (ggml defaults to PCI_BUS_ID on Windows)" });
+    options.push_back({ "*",           "       --cuda-visible-devices LIST", "CUDA_VISIBLE_DEVICES: e.g. 0,1 (which GPUs the CUDA runtime enumerates)" });
+    options.push_back({ "*",           "       --cuda-pinned-cap-gib N",  "GGML_CUDA_PINNED_CAP_GIB: WDDM pinned-memory cap in GiB (requests beyond fall back to pageable)" });
+    options.push_back({ "*",           "       --cuda-host-chunk-gib N",  "GGML_CUDA_HOST_CHUNK_GIB: split host weight buffers into N-GiB pinnable pieces" });
+    options.push_back({ "*",           "       --cuda-enable-unified-memory", "set GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 (cudaMallocManaged; --no-... removes it)" });
+    options.push_back({ "*",           "       --cuda-no-pinned",         "set GGML_CUDA_NO_PINNED=1 (disable pinned host memory; --no-cuda-no-pinned removes it)" });
+    options.push_back({ "*",           "       --cuda-no-pinned-weights", "set GGML_CUDA_NO_PINNED_WEIGHTS=1 (mmap weights, keep staging pinned; --no-... removes it)" });
+    options.push_back({ "*",           "       --cuda-host-malloc-thp",   "set GGML_CUDA_HOST_MALLOC_THP=1 (Linux hugepages for pinned allocs; --no-... removes it)" });
+    options.push_back({ "*",           "       --cuda-disable-graphs",    "set GGML_CUDA_DISABLE_GRAPHS=1 (disable CUDA graphs; --no-... removes it)" });
+    options.push_back({ "*",           "       --cuda-register-host",     "set GGML_CUDA_REGISTER_HOST=1 (cudaHostRegister path; --no-... removes it)" });
     options.push_back({ "speculative", "-td,   --threads-draft N",      "number of threads to use during generation (default: same as --threads)" });
     options.push_back({ "speculative", "-tbd,  --threads-batch-draft N",
                                                                         "number of threads to use during batch and prompt processing (default: same as --threads-draft)" });
@@ -4423,6 +4556,7 @@ std::string gpt_params_get_system_info(const gpt_params & params) {
     os << " | OMP: " << common_omp_env_snapshot();
     os << " | OMP runtime: " << common_openmp_runtime_info();
     os << " | GGML CPU: " << common_ggml_cpu_env_snapshot();
+    os << " | GGML CUDA: " << common_ggml_cuda_env_snapshot();
 
     return os.str();
 }
@@ -5082,6 +5216,8 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     // CLI-managed GGML CPU env must land before backend init / model load
     // (several vars are consumed once into statics)
     common_apply_ggml_cpu_env(params);
+    // CLI-managed GGML CUDA env: device order must precede the first CUDA call
+    common_apply_ggml_cuda_env(params);
     ggml_set_batch_thread_threshold(params.ggml_batch_thread_thresh.c_str());
     if (!params.hf_repo.empty() && !params.hf_file.empty()) {
         model = llama_load_model_from_hf(params.hf_repo.c_str(), params.hf_file.c_str(), params.model.c_str(), params.hf_token.c_str(), mparams);
