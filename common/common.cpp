@@ -4035,7 +4035,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "multi-modality", "-tm,   --threads-mtmd N",    "number of threads to use during multimodal image processing (default: same as --threads-batch)" });
     options.push_back({ "*",           "-gbtt, --ggml-batch-thread-threshold EXPR",
                                                                         "OpenMP barrier threshold: \">N\", \"<N\", \">=N\", \"<=N\", \"==N\" (default: %s)", params.ggml_batch_thread_thresh.c_str() });
-    options.push_back({ "*",           "       --omp-wait-policy VAL",    "OMP_WAIT_POLICY: ACTIVE | PASSIVE (empty = untouched, biggest TG/PP barrier knob)" });
+    options.push_back({ "*",           "       --omp-wait-policy VAL",    "OMP_WAIT_POLICY: ACTIVE | PASSIVE (default: PASSIVE, biggest TG/PP barrier knob)" });
     options.push_back({ "*",           "       --omp-proc-bind VAL",      "OMP_PROC_BIND: false | true | master | close | spread (empty = untouched)" });
     options.push_back({ "*",           "       --omp-places VAL",         "OMP_PLACES: e.g. cores | threads | sockets (empty = untouched)" });
     options.push_back({ "*",           "       --omp-dynamic VAL",        "OMP_DYNAMIC: TRUE | FALSE (empty = untouched)" });
@@ -4043,7 +4043,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --omp-thread-limit N",     "OMP_THREAD_LIMIT (empty = untouched)" });
     options.push_back({ "*",           "       --omp-max-active-levels N", "OMP_MAX_ACTIVE_LEVELS, e.g. 1 (ggml uses no nesting; caps nested parallel regions from libs)" });
     options.push_back({ "*",           "       --omp-stacksize VAL",      "OMP_STACKSIZE: e.g. 8M (empty = untouched)" });
-    options.push_back({ "*",           "       --omp-blocktime MS",       "KMP_BLOCKTIME in ms, spin-before-sleep for libomp/libiomp (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-blocktime MS",       "KMP_BLOCKTIME in ms, spin-before-sleep for libomp/libiomp (default: 200, unset behaves like 0 and tanks TG)" });
     options.push_back({ "*",           "       --omp-affinity VAL",       "KMP_AFFINITY string, e.g. granularity=fine,compact,1,0 (empty = untouched)" });
     options.push_back({ "*",           "       --omp VAR=VAL",            "generic OMP/KMP/GOMP passthrough, repeatable, applied last (e.g. --omp KMP_BLOCKTIME=0)" });
     options.push_back({ "*",           "       --omp-display-env",        "set OMP_DISPLAY_ENV/AFFINITY=TRUE for runtime diagnostics" });
