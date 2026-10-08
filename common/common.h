@@ -364,6 +364,7 @@ struct gpt_params {
     std::string omp_dynamic      = ""; // TRUE | FALSE (OMP_DYNAMIC)
     std::string omp_schedule     = ""; // e.g. static | dynamic,64 | guided | auto (OMP_SCHEDULE)
     std::string omp_thread_limit = ""; // e.g. 20 (OMP_THREAD_LIMIT)
+    std::string omp_max_active_levels = ""; // e.g. 1 (OMP_MAX_ACTIVE_LEVELS; ggml uses no nesting, 1 guards nested libs)
     std::string omp_stacksize    = ""; // e.g. 8M (OMP_STACKSIZE)
     std::string omp_blocktime    = ""; // ms to spin before sleeping, libomp/libiomp (KMP_BLOCKTIME)
     std::string omp_affinity     = ""; // libomp/libiomp affinity string (KMP_AFFINITY)
