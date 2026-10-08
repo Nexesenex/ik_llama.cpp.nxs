@@ -348,6 +348,23 @@ struct gpt_params {
     std::string ggml_batch_thread_thresh = ">=32";  // IK's switch: use OpenMP barrier for TG, custom barrier for PP
 #endif
 
+    // OMP runtime controls (empty = leave process env untouched).
+    // Applied via common_apply_omp_env() BEFORE the first OpenMP parallel
+    // region (i.e. before llama_backend_init / model load / ggml compute),
+    // so bench scripts can sweep OMP options without relaunching manually.
+    // NOTE: OMP_NUM_THREADS is deliberately NOT managed here: ggml uses
+    // `#pragma omp parallel num_threads(n_threads)`, so -t/--threads wins.
+    std::string omp_wait_policy  = ""; // ACTIVE | PASSIVE  (OMP_WAIT_POLICY)
+    std::string omp_proc_bind    = ""; // false|true|master|close|spread (OMP_PROC_BIND)
+    std::string omp_places       = ""; // e.g. cores | threads | sockets (OMP_PLACES)
+    std::string omp_dynamic      = ""; // TRUE | FALSE (OMP_DYNAMIC)
+    std::string omp_schedule     = ""; // e.g. static | dynamic,64 | guided | auto (OMP_SCHEDULE)
+    std::string omp_thread_limit = ""; // e.g. 20 (OMP_THREAD_LIMIT)
+    std::string omp_stacksize    = ""; // e.g. 8M (OMP_STACKSIZE)
+    std::string omp_blocktime    = ""; // ms to spin before sleeping, libomp/libiomp (KMP_BLOCKTIME)
+    std::string omp_affinity     = ""; // libomp/libiomp affinity string (KMP_AFFINITY)
+    std::vector<std::string> omp_env;  // generic repeatable passthrough: "VAR=VAL" (OMP_*/KMP_*/GOMP_*)
+    bool        omp_display_env  = false; // OMP_DISPLAY_ENV=TRUE + OMP_DISPLAY_AFFINITY=TRUE
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
@@ -673,6 +690,12 @@ void free_command_line(int argc, char** argv);
 
 void gpt_params_handle_hf_token(gpt_params & params);
 void gpt_params_parse_from_env(gpt_params & params);
+// Apply CLI-requested OMP/KMP/GOMP env vars BEFORE the first OpenMP parallel
+// region. Safe to call repeatedly; empty fields leave the env untouched.
+// Typed fields are applied first, then omp_env[] in order (generic wins).
+void common_apply_omp_env(const gpt_params & params);
+// Snapshot of the OMP-relevant env for logging/bench tables (VAR=value or VAR=<unset>).
+std::string common_omp_env_snapshot(void);
 void gpt_params_handle_model_default(gpt_params & params);
 
 bool gpt_params_parse_ex   (int argc, char ** argv, gpt_params & params);

@@ -389,6 +389,94 @@ get_env(std::string name, T & target) {
 }
 
 //
+// OMP env utils (CLI-managed OpenMP controls for bench automation)
+//
+static void common_set_omp_env_var(const char * name, const std::string & value) {
+    if (value.empty()) {
+        return;
+    }
+#if defined(_WIN32)
+    // _putenv updates the CRT env seen by getenv/OpenMP runtime; mirror to the
+    // OS env as well so child processes and dump scripts observe the same value.
+    std::string entry = std::string(name) + "=" + value;
+    _putenv(entry.c_str());
+    SetEnvironmentVariableA(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+static std::string common_omp_env_get(const char * name) {
+    const char * v = std::getenv(name);
+    return v ? std::string(v) : std::string("<unset>");
+}
+
+std::string common_omp_env_snapshot(void) {
+    std::ostringstream os;
+    os << "OMP_WAIT_POLICY="    << common_omp_env_get("OMP_WAIT_POLICY")    << " "
+       << "OMP_PROC_BIND="      << common_omp_env_get("OMP_PROC_BIND")      << " "
+       << "OMP_PLACES="         << common_omp_env_get("OMP_PLACES")         << " "
+       << "OMP_DYNAMIC="        << common_omp_env_get("OMP_DYNAMIC")        << " "
+       << "OMP_SCHEDULE="       << common_omp_env_get("OMP_SCHEDULE")       << " "
+       << "OMP_THREAD_LIMIT="   << common_omp_env_get("OMP_THREAD_LIMIT")   << " "
+       << "OMP_STACKSIZE="      << common_omp_env_get("OMP_STACKSIZE")      << " "
+       << "KMP_BLOCKTIME="      << common_omp_env_get("KMP_BLOCKTIME")      << " "
+       << "KMP_AFFINITY="       << common_omp_env_get("KMP_AFFINITY")        << " "
+       << "GOMP_CPU_AFFINITY="  << common_omp_env_get("GOMP_CPU_AFFINITY");
+    return os.str();
+}
+
+void common_apply_omp_env(const gpt_params & params) {
+    // Typed flags first, generic --omp VAR=VAL last (generic wins on conflict).
+    // Must run BEFORE the first OpenMP parallel region; the OpenMP runtime
+    // reads these vars lazily at first parallel entry, so applying right after
+    // arg parse (before llama_backend_init / model load) is sufficient.
+    // NOTE: ggml pins thread count via `num_threads(n_threads)`, so -t wins
+    // over any OMP_NUM_THREADS passed via --omp (warn below instead of failing).
+    common_set_omp_env_var("OMP_WAIT_POLICY",  params.omp_wait_policy);
+    common_set_omp_env_var("OMP_PROC_BIND",    params.omp_proc_bind);
+    common_set_omp_env_var("OMP_PLACES",       params.omp_places);
+    common_set_omp_env_var("OMP_DYNAMIC",      params.omp_dynamic);
+    common_set_omp_env_var("OMP_SCHEDULE",     params.omp_schedule);
+    common_set_omp_env_var("OMP_THREAD_LIMIT", params.omp_thread_limit);
+    common_set_omp_env_var("OMP_STACKSIZE",    params.omp_stacksize);
+    common_set_omp_env_var("KMP_BLOCKTIME",    params.omp_blocktime);
+    common_set_omp_env_var("KMP_AFFINITY",     params.omp_affinity);
+    if (params.omp_display_env) {
+        common_set_omp_env_var("OMP_DISPLAY_ENV",     "TRUE");
+        common_set_omp_env_var("OMP_DISPLAY_AFFINITY", "TRUE");
+    }
+    for (const auto & kv : params.omp_env) {
+        const size_t eq = kv.find('=');
+        if (eq == std::string::npos || eq == 0 || eq + 1 >= kv.size()) {
+            LOG_WRN("%s: ignoring malformed --omp entry '%s' (expected VAR=VAL)\n", __func__, kv.c_str());
+            continue;
+        }
+        const std::string name  = kv.substr(0, eq);
+        const std::string value = kv.substr(eq + 1);
+        if (name == "OMP_NUM_THREADS") {
+            LOG_WRN("%s: OMP_NUM_THREADS=%s will be overridden by -t/--threads (%d): ggml uses num_threads(n_threads)\n",
+                    __func__, value.c_str(), params.n_threads);
+        }
+#if defined(_WIN32)
+        std::string entry = name + "=" + value;
+        _putenv(entry.c_str());
+        SetEnvironmentVariableA(name.c_str(), value.c_str());
+#else
+        setenv(name.c_str(), value.c_str(), 1);
+#endif
+    }
+    if (!params.omp_wait_policy.empty()  || !params.omp_proc_bind.empty() ||
+        !params.omp_places.empty()       || !params.omp_dynamic.empty()   ||
+        !params.omp_schedule.empty()     || !params.omp_thread_limit.empty() ||
+        !params.omp_stacksize.empty()    || !params.omp_blocktime.empty() ||
+        !params.omp_affinity.empty()     || !params.omp_env.empty() ||
+        params.omp_display_env) {
+        LOG_INF("%s: OMP env applied: %s\n", __func__, common_omp_env_snapshot().c_str());
+    }
+}
+
+//
 // CPU utils
 //
 
@@ -1222,6 +1310,30 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
     get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
     get_env("LLAMA_ARG_V_CACHE_HADAMARD", params.v_cache_hadamard);
+    // OMP controls for bench automation (CLI flags win over these env defaults)
+    get_env("LLAMA_ARG_OMP_WAIT_POLICY",  params.omp_wait_policy);
+    get_env("LLAMA_ARG_OMP_PROC_BIND",    params.omp_proc_bind);
+    get_env("LLAMA_ARG_OMP_PLACES",       params.omp_places);
+    get_env("LLAMA_ARG_OMP_DYNAMIC",      params.omp_dynamic);
+    get_env("LLAMA_ARG_OMP_SCHEDULE",     params.omp_schedule);
+    get_env("LLAMA_ARG_OMP_THREAD_LIMIT", params.omp_thread_limit);
+    get_env("LLAMA_ARG_OMP_STACKSIZE",    params.omp_stacksize);
+    get_env("LLAMA_ARG_OMP_BLOCKTIME",    params.omp_blocktime);
+    get_env("LLAMA_ARG_OMP_AFFINITY",     params.omp_affinity);
+    {
+        // ';'-separated VAR=VAL list (';' chosen because KMP_AFFINITY values contain commas)
+        std::string omp_env_list;
+        get_env("LLAMA_ARG_OMP_ENV", omp_env_list);
+        if (!omp_env_list.empty()) {
+            std::istringstream ss(omp_env_list);
+            std::string tok;
+            while (std::getline(ss, tok, ';')) {
+                if (!tok.empty()) {
+                    params.omp_env.push_back(tok);
+                }
+            }
+        }
+    }
 
 }
 
@@ -1579,6 +1691,66 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "-gbtt" || arg == "--ggml-batch-thread-threshold") {
         CHECK_ARG
         params.ggml_batch_thread_thresh = argv[i];
+        return true;
+    }
+    // OMP runtime controls (applied via common_apply_omp_env() before first compute).
+    // NOTE: ggml pins threads via num_threads(n_threads), so -t wins over OMP_NUM_THREADS.
+    if (arg == "--omp-wait-policy") {
+        CHECK_ARG
+        params.omp_wait_policy = argv[i];
+        return true;
+    }
+    if (arg == "--omp-proc-bind") {
+        CHECK_ARG
+        params.omp_proc_bind = argv[i];
+        return true;
+    }
+    if (arg == "--omp-places") {
+        CHECK_ARG
+        params.omp_places = argv[i];
+        return true;
+    }
+    if (arg == "--omp-dynamic") {
+        CHECK_ARG
+        params.omp_dynamic = argv[i];
+        return true;
+    }
+    if (arg == "--omp-schedule") {
+        CHECK_ARG
+        params.omp_schedule = argv[i];
+        return true;
+    }
+    if (arg == "--omp-thread-limit") {
+        CHECK_ARG
+        params.omp_thread_limit = argv[i];
+        return true;
+    }
+    if (arg == "--omp-stacksize") {
+        CHECK_ARG
+        params.omp_stacksize = argv[i];
+        return true;
+    }
+    if (arg == "--omp-blocktime") {
+        CHECK_ARG
+        params.omp_blocktime = argv[i];
+        return true;
+    }
+    if (arg == "--omp-affinity") {
+        CHECK_ARG
+        params.omp_affinity = argv[i];
+        return true;
+    }
+    if (arg == "--omp" || arg == "--omp-env") {
+        CHECK_ARG
+        params.omp_env.emplace_back(argv[i]);
+        return true;
+    }
+    if (arg == "--omp-display-env") {
+        params.omp_display_env = true;
+        return true;
+    }
+    if (arg == "--no-omp-display-env") {
+        params.omp_display_env = false;
         return true;
     }
     if (arg == "-p" || arg == "--prompt") {
@@ -3563,6 +3735,17 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "multi-modality", "-tm,   --threads-mtmd N",    "number of threads to use during multimodal image processing (default: same as --threads-batch)" });
     options.push_back({ "*",           "-gbtt, --ggml-batch-thread-threshold EXPR",
                                                                         "OpenMP barrier threshold: \">N\", \"<N\", \">=N\", \"<=N\", \"==N\" (default: %s)", params.ggml_batch_thread_thresh.c_str() });
+    options.push_back({ "*",           "       --omp-wait-policy VAL",    "OMP_WAIT_POLICY: ACTIVE | PASSIVE (empty = untouched, biggest TG/PP barrier knob)" });
+    options.push_back({ "*",           "       --omp-proc-bind VAL",      "OMP_PROC_BIND: false | true | master | close | spread (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-places VAL",         "OMP_PLACES: e.g. cores | threads | sockets (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-dynamic VAL",        "OMP_DYNAMIC: TRUE | FALSE (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-schedule VAL",       "OMP_SCHEDULE: e.g. static | dynamic,64 | guided | auto (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-thread-limit N",     "OMP_THREAD_LIMIT (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-stacksize VAL",      "OMP_STACKSIZE: e.g. 8M (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-blocktime MS",       "KMP_BLOCKTIME in ms, spin-before-sleep for libomp/libiomp (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-affinity VAL",       "KMP_AFFINITY string, e.g. granularity=fine,compact,1,0 (empty = untouched)" });
+    options.push_back({ "*",           "       --omp VAR=VAL",            "generic OMP/KMP/GOMP passthrough, repeatable, applied last (e.g. --omp KMP_BLOCKTIME=0)" });
+    options.push_back({ "*",           "       --omp-display-env",        "set OMP_DISPLAY_ENV/AFFINITY=TRUE for runtime diagnostics" });
     options.push_back({ "speculative", "-td,   --threads-draft N",      "number of threads to use during generation (default: same as --threads)" });
     options.push_back({ "speculative", "-tbd,  --threads-batch-draft N",
                                                                         "number of threads to use during batch and prompt processing (default: same as --threads-draft)" });
@@ -4054,6 +4237,7 @@ std::string gpt_params_get_system_info(const gpt_params & params) {
 #else
     os << " / " << std::thread::hardware_concurrency() << " | " << llama_print_system_info();
 #endif
+    os << " | OMP: " << common_omp_env_snapshot();
 
     return os.str();
 }
@@ -4708,6 +4892,8 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
 
     llama_model * model = nullptr;
 
+    // CLI-managed OMP env must land before the first OpenMP parallel region
+    common_apply_omp_env(params);
     ggml_set_batch_thread_threshold(params.ggml_batch_thread_thresh.c_str());
     if (!params.hf_repo.empty() && !params.hf_file.empty()) {
         model = llama_load_model_from_hf(params.hf_repo.c_str(), params.hf_file.c_str(), params.model.c_str(), params.hf_token.c_str(), mparams);
