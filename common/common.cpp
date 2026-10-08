@@ -426,6 +426,65 @@ std::string common_omp_env_snapshot(void) {
     return os.str();
 }
 
+std::string common_openmp_runtime_info(void) {
+#if defined(_WIN32)
+    // Probe the OpenMP runtime actually loaded by this process, in order:
+    // upstream LLVM layout, VS-bundled LLVM naming, Intel classic, MSVC, MinGW.
+    // GetModuleHandleA only queries (never loads), so this is safe to call
+    // at startup logging time: ggml links the runtime, hence it is already
+    // resident once the process starts.
+    struct omp_module_candidate {
+        const char * module;
+        const char * variant; // LLVM (libomp) vs MSVC (vcomp) vs GCC (libgomp)
+    };
+    static const omp_module_candidate candidates[] = {
+        { "libomp.dll",           "LLVM"       },
+        { "libomp140.x86_64.dll", "LLVM"       },
+        { "libiomp5md.dll",       "LLVM-Intel" },
+        { "vcomp140.dll",         "MSVC"       },
+        { "vcomp140d.dll",        "MSVC-debug" },
+        { "libgomp-1.dll",        "GCC"        },
+    };
+    for (const auto & cand : candidates) {
+        HMODULE h = GetModuleHandleA(cand.module);
+        if (!h) {
+            continue;
+        }
+        char path[MAX_PATH];
+        const DWORD n = GetModuleFileNameA(h, path, sizeof(path));
+        const char * probe = n ? path : cand.module;
+        std::string filever = "<no-version-info>";
+        DWORD handle = 0;
+        const DWORD sz = GetFileVersionInfoSizeA(probe, &handle);
+        if (sz) {
+            std::vector<BYTE> buf(sz);
+            if (GetFileVersionInfoA(probe, handle, sz, buf.data())) {
+                VS_FIXEDFILEINFO * fi = nullptr;
+                UINT len = 0;
+                if (VerQueryValueA(buf.data(), "\\", (void **) &fi, &len) && fi) {
+                    char vb[64];
+                    snprintf(vb, sizeof(vb), "%u.%u.%u.%u",
+                        (unsigned) HIWORD(fi->dwFileVersionMS), (unsigned) LOWORD(fi->dwFileVersionMS),
+                        (unsigned) HIWORD(fi->dwFileVersionLS), (unsigned) LOWORD(fi->dwFileVersionLS));
+                    filever = vb;
+                }
+            }
+        }
+        std::ostringstream os;
+        os << cand.variant << " OpenMP " << filever << " [" << (n ? path : cand.module) << "]";
+        return os.str();
+    }
+    return "no OpenMP runtime loaded (OpenMP off or static no-op)";
+#else
+    // Non-Windows: no module probe implemented; report the compile-time spec.
+#ifdef _OPENMP
+    return "OpenMP spec " + std::to_string(_OPENMP) + " (runtime probe: Windows-only)";
+#else
+    return "no OpenMP runtime loaded (OpenMP off or static no-op)";
+#endif
+#endif
+}
+
 void common_apply_omp_env(const gpt_params & params) {
     // Typed flags first, generic --omp VAR=VAL last (generic wins on conflict).
     // Must run BEFORE the first OpenMP parallel region; the OpenMP runtime
@@ -4238,6 +4297,7 @@ std::string gpt_params_get_system_info(const gpt_params & params) {
     os << " / " << std::thread::hardware_concurrency() << " | " << llama_print_system_info();
 #endif
     os << " | OMP: " << common_omp_env_snapshot();
+    os << " | OMP runtime: " << common_openmp_runtime_info();
 
     return os.str();
 }
