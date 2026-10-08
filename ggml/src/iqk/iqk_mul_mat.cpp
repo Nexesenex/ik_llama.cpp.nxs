@@ -735,17 +735,24 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
 
         auto& f = thread_local_work_buffer();
 
+        bool convert_ok = true;
         split_units_and_columns(Nx/num_rows, num_rows, Ny, std::max(1, k_x_step/num_rows), true, ith, nth,
                 [&](int ix, int nrc_x, int first_y, int last_y) {
+            if (!convert_ok) return;
             if (f.size() < row_size_qx*nrc_x) f.resize(row_size_qx*nrc_x);
             if (!iqk_convert_repack(typeA, ne00, (const char *)A + ix*strideA, strideA, f.data(), ne00, nrc_x)) {
-                GGML_ABORT("Fatal error");
+                // Converter unavailable for this type on this build (e.g. R16 converters
+                // guarded out without HAVE_FANCY_SIMD by 128f1b79c13): fall through to the
+                // direct kernel below instead of aborting. Partially written rows are
+                // recomputed by the direct path.
+                convert_ok = false;
+                return;
             }
             DataInfo info{C + ix, (const char *)B, (size_t)stride_C, row_size_qy, first_y, 1, nullptr, 0};
             mm.mul_mat_NxM(ne00, f.data(), row_size_qx, info, nrc_x, last_y);
         });
 
-        return true;
+        if (convert_ok) return true;
 
     }
 
@@ -924,18 +931,22 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
 
         auto& f = thread_local_work_buffer();
 
+        bool convert_ok = true;
         for (int ix = 0; ix < nrc_x; ix += k_x_step) {
             auto this_info = info;
             this_info.s += ix;
             int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
             if (f.size() < row_size_qx*this_nrc_x) f.resize(row_size_qx*this_nrc_x);
             if (!iqk_convert_repack(typeA, ne00, (const char *)A + (first_x + ix)*strideA, strideA, f.data(), ne00, this_nrc_x)) {
-                GGML_ABORT("Fatal error");
+                // Converter unavailable for this type on this build: fall through to the
+                // direct kernel below instead of aborting (see 15e602764d4).
+                convert_ok = false;
+                break;
             }
             mm.mul_mat_NxM(ne00, f.data(), row_size_qx, this_info, this_nrc_x, Ny);
         }
 
-        return true;
+        if (convert_ok) return true;
 
     }
 
@@ -984,16 +995,26 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
 
             auto& f = thread_local_work_buffer();
 
+            bool convert_ok = true;
             split_units_and_columns(Nx/num_rows, num_rows, Ny, std::max(1, k_x_step/num_rows), !row_mapping, ith, nth,
                     [&](int ix, int nrc_x, int first_y, int last_y) {
+                if (!convert_ok) return;
                 if (f.size() < 2*row_size_qx*nrc_x) f.resize(2*row_size_qx*nrc_x);
                 auto Xu = f.data();
                 auto Xg = f.data() + row_size_qx*nrc_x;
                 if (!iqk_convert_repack(typeA, ne00, (const char *)Aup   + ix*strideA, strideA, Xu, ne00, nrc_x)) {
-                    GGML_ABORT("Fatal error");
+                    // Converter unavailable for this type on this build: fall through to the
+                    // direct kernel below instead of aborting (see 15e602764d4). The scratch
+                    // buffers Xu/Xg are unused by the direct path, so partial writes are harmless.
+                    convert_ok = false;
+                    return;
                 }
                 if (!iqk_convert_repack(typeA, ne00, (const char *)Agate + ix*strideA, strideA, Xg, ne00, nrc_x)) {
-                    GGML_ABORT("Fatal error");
+                    // Converter unavailable for this type on this build: fall through to the
+                    // direct kernel below instead of aborting (see 15e602764d4). The scratch
+                    // buffers Xu/Xg are unused by the direct path, so partial writes are harmless.
+                    convert_ok = false;
+                    return;
                 }
                 auto up_b   = up_b_c   ? (const float *)up_b_c + ix : nullptr;
                 auto gate_b = gate_b_c ? (const float *)gate_b_c + ix : nullptr;
@@ -1001,7 +1022,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
                 mm.mul_mat_up_gate_NxM(ne00, Xu, Xg, row_size_qx, up_b, gate_b, info, nrc_x, last_y, unary_op, limit, situ_beta, situ_beta_linear);
             });
 
-            return true;
+            if (convert_ok) return true;
         }
 
     }
