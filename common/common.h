@@ -358,6 +358,12 @@ struct gpt_params {
     // so bench scripts can sweep OMP options without relaunching manually.
     // NOTE: OMP_NUM_THREADS is deliberately NOT managed here: ggml uses
     // `#pragma omp parallel num_threads(n_threads)`, so -t/--threads wins.
+    // Bench-measured defaults (Arrow Lake 265K / libomp 23.1.3): PASSIVE +
+    // KMP_BLOCKTIME=200. An unset BLOCKTIME behaves like ~0 in libomp 23
+    // (threads sleep immediately, TG collapses ~2x), so the default is set
+    // explicitly. Override per-run via the typed flags; pass an empty value
+    // (e.g. --omp-wait-policy "") to leave a var truly untouched.
+    std::string omp_wait_policy  = "PASSIVE"; // ACTIVE | PASSIVE  (OMP_WAIT_POLICY)
     std::string omp_wait_policy  = ""; // ACTIVE | PASSIVE  (OMP_WAIT_POLICY)
     std::string omp_proc_bind    = ""; // false|true|master|close|spread (OMP_PROC_BIND)
     std::string omp_places       = ""; // e.g. cores | threads | sockets (OMP_PLACES)
@@ -366,7 +372,7 @@ struct gpt_params {
     std::string omp_thread_limit = ""; // e.g. 20 (OMP_THREAD_LIMIT)
     std::string omp_max_active_levels = ""; // e.g. 1 (OMP_MAX_ACTIVE_LEVELS; ggml uses no nesting, 1 guards nested libs)
     std::string omp_stacksize    = ""; // e.g. 8M (OMP_STACKSIZE)
-    std::string omp_blocktime    = ""; // ms to spin before sleeping, libomp/libiomp (KMP_BLOCKTIME)
+    std::string omp_blocktime    = "200"; // ms to spin before sleeping, libomp/libiomp (KMP_BLOCKTIME)
     std::string omp_affinity     = ""; // libomp/libiomp affinity string (KMP_AFFINITY)
     std::vector<std::string> omp_env;  // generic repeatable passthrough: "VAR=VAL" (OMP_*/KMP_*/GOMP_*)
     bool        omp_display_env  = false; // OMP_DISPLAY_ENV=TRUE + OMP_DISPLAY_AFFINITY=TRUE
