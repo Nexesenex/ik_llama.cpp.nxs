@@ -371,6 +371,60 @@ struct gpt_params {
     std::string ggml_batch_thread_thresh = ">=32";  // IK's switch: use OpenMP barrier for TG, custom barrier for PP
 #endif
 
+    // OMP runtime controls (empty = leave process env untouched).
+    // Applied via common_apply_omp_env() BEFORE the first OpenMP parallel
+    // region (i.e. before llama_backend_init / model load / ggml compute),
+    // so bench scripts can sweep OMP options without relaunching manually.
+    // NOTE: OMP_NUM_THREADS is deliberately NOT managed here: ggml uses
+    // `#pragma omp parallel num_threads(n_threads)`, so -t/--threads wins.
+    // Bench-measured defaults (Arrow Lake 265K / libomp 23.1.3): PASSIVE +
+    // KMP_BLOCKTIME=200. An unset BLOCKTIME behaves like ~0 in libomp 23
+    // (threads sleep immediately, TG collapses ~2x), so the default is set
+    // explicitly. Override per-run via the typed flags; pass an empty value
+    // (e.g. --omp-wait-policy "") to leave a var truly untouched.
+    std::string omp_wait_policy  = "PASSIVE"; // ACTIVE | PASSIVE  (OMP_WAIT_POLICY)
+    std::string omp_proc_bind    = ""; // false|true|master|close|spread (OMP_PROC_BIND)
+    std::string omp_places       = ""; // e.g. cores | threads | sockets (OMP_PLACES)
+    std::string omp_dynamic      = ""; // TRUE | FALSE (OMP_DYNAMIC)
+    std::string omp_schedule     = ""; // e.g. static | dynamic,64 | guided | auto (OMP_SCHEDULE)
+    std::string omp_thread_limit = ""; // e.g. 20 (OMP_THREAD_LIMIT)
+    std::string omp_max_active_levels = ""; // e.g. 1 (OMP_MAX_ACTIVE_LEVELS; ggml uses no nesting, 1 guards nested libs)
+    std::string omp_stacksize    = ""; // e.g. 8M (OMP_STACKSIZE)
+    std::string omp_blocktime    = "200"; // ms to spin before sleeping, libomp/libiomp (KMP_BLOCKTIME)
+    std::string omp_affinity     = ""; // libomp/libiomp affinity string (KMP_AFFINITY)
+    std::vector<std::string> omp_env;  // generic repeatable passthrough: "VAR=VAL" (OMP_*/KMP_*/GOMP_*)
+    bool        omp_display_env  = false; // OMP_DISPLAY_ENV=TRUE + OMP_DISPLAY_AFFINITY=TRUE
+
+    // GGML CPU-backend env controls (same CLI pattern as OMP above).
+    // Applied via common_apply_ggml_cpu_env() BEFORE backend init / model
+    // load: several vars are read once into statics, so startup application
+    // is required (mid-process changes have no effect).
+    // Value vars: empty = untouched. Presence flags: 0 = untouched,
+    // >0 = set VAR=1, <0 = force-remove VAR from the process env.
+    std::string ggml_moe_prefetch_ahead = ""; // int, splits prefetched ahead (ggml default 3)
+    std::string ggml_hybrid             = ""; // "0" disables hybrid P/E-core detection (e.g. Process Lasso)
+    int         ggml_sched_debug        = 0;  // GGML_SCHED_DEBUG
+    int         ggml_moe_prefetch_debug = 0;  // GGML_MOE_PREFETCH_DEBUG
+    std::vector<std::string> ggml_env;        // generic repeatable passthrough: "VAR=VAL" (any GGML_*)
+
+    // GGML CUDA-backend env controls (same CLI pattern as CPU above).
+    // Applied via common_apply_ggml_cuda_env() BEFORE backend init / model
+    // load: device order must land before the first CUDA call, and several
+    // vars are read once into statics.
+    // Value vars: empty = untouched. Presence flags: 0 = untouched,
+    // >0 = set VAR=1, <0 = force-remove VAR from the process env
+    // (--no- always removes, regardless of the var's polarity).
+    std::string cuda_device_order   = ""; // FASTEST_FIRST | PCI_BUS_ID (ggml defaults to PCI_BUS_ID on Windows)
+    std::string cuda_visible_devices = ""; // e.g. "0,1" (CUDA_VISIBLE_DEVICES, read by the CUDA runtime at init)
+    std::string cuda_pinned_cap_gib = ""; // int GiB WDDM pinned-memory cap (GGML_CUDA_PINNED_CAP_GIB)
+    std::string cuda_host_chunk_gib = ""; // int GiB host weight-buffer chunking (GGML_CUDA_HOST_CHUNK_GIB)
+    int         cuda_enable_unified_memory = 0; // GGML_CUDA_ENABLE_UNIFIED_MEMORY
+    int         cuda_no_pinned             = 0; // GGML_CUDA_NO_PINNED
+    int         cuda_no_pinned_weights     = 0; // GGML_CUDA_NO_PINNED_WEIGHTS (mmap weights, pinned staging)
+    int         cuda_host_malloc_thp       = 0; // GGML_CUDA_HOST_MALLOC_THP (Linux hugepages)
+    int         cuda_disable_graphs        = 0; // GGML_CUDA_DISABLE_GRAPHS
+    int         cuda_register_host         = 0; // GGML_CUDA_REGISTER_HOST
+
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
@@ -698,6 +752,28 @@ void free_command_line(int argc, char** argv);
 
 void gpt_params_handle_hf_token(gpt_params & params);
 void gpt_params_parse_from_env(gpt_params & params);
+// Apply CLI-requested OMP/KMP/GOMP env vars BEFORE the first OpenMP parallel
+// region. Safe to call repeatedly; empty fields leave the env untouched.
+// Typed fields are applied first, then omp_env[] in order (generic wins).
+void common_apply_omp_env(const gpt_params & params);
+// Snapshot of the OMP-relevant env for logging/bench tables (VAR=value or VAR=<unset>).
+std::string common_omp_env_snapshot(void);
+// Identify the OpenMP runtime actually loaded by this process (variant + file
+// version + module path), e.g. "LLVM OpenMP 23.1.3 [C:\LLVM\bin\libomp.dll]".
+// Returns a fallback string when no runtime module is found (OpenMP off).
+std::string common_openmp_runtime_info(void);
+// Apply CLI-requested GGML CPU-backend env vars BEFORE backend init / model
+// load (several are consumed once into statics). Empty/unset fields leave
+// the env untouched.
+void common_apply_ggml_cpu_env(const gpt_params & params);
+// Snapshot of the GGML CPU-relevant env for logging/bench tables.
+std::string common_ggml_cpu_env_snapshot(void);
+// Apply CLI-requested GGML CUDA-backend env vars BEFORE backend init / model
+// load (device order must precede the first CUDA call; several vars are
+// consumed once into statics). Empty/unset fields leave the env untouched.
+void common_apply_ggml_cuda_env(const gpt_params & params);
+// Snapshot of the GGML CUDA-relevant env for logging/bench tables.
+std::string common_ggml_cuda_env_snapshot(void);
 void gpt_params_handle_model_default(gpt_params & params);
 
 bool gpt_params_parse_ex   (int argc, char ** argv, gpt_params & params);
