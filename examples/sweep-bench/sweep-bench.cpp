@@ -115,6 +115,11 @@ int main(int argc, char ** argv) {
 
     common_params_minilog(params);
 
+    // CLI-managed OMP env: must land BEFORE the first OpenMP parallel region
+    // (llama_backend_init / model load / ggml compute) so bench scripts can
+    // sweep OMP_WAIT_POLICY / KMP_BLOCKTIME / PROC_BIND etc. per invocation.
+    common_apply_omp_env(params);
+
     // init LLM
 
     llama_backend_init();
@@ -238,6 +243,7 @@ int main(int argc, char ** argv) {
     if (!params.sweep_bench_output_jsonl) {
         LOG_TEE("\n");
         LOG_TEE("%s: n_kv_max = %d, n_batch = %d, n_ubatch = %d, flash_attn = %d, n_gpu_layers = %d, n_threads = %u, n_threads_batch = %u\n", __func__, n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch);
+        LOG_TEE("%s: OMP: %s\n", __func__, common_omp_env_snapshot().c_str());
         LOG_TEE("\n");
         if (params.sweep_memory) {
             LOG_TEE("|%6s | %6s | %6s | %8s | %8s | %8s | %8s | %10s | %10s |\n", "PP", "TG", "N_KV", "T_PP s", "S_PP t/s", "T_TG s", "S_TG t/s", "RSS HWM", "VRAM delta");
@@ -418,20 +424,25 @@ int main(int argc, char ** argv) {
         }
 
         if(params.sweep_bench_output_jsonl) {
+            const std::string omp_json = common_omp_env_snapshot();
             if (params.sweep_memory) {
                 const std::string rss_json  = format_mib(rss_hwm_mib, 3, "null");
                 const std::string vram_json = format_mib(vram_delta_mib, 3, "null");
                 LOG_TEE(
                     "{\"n_kv_max\": %d, \"n_batch\": %d, \"n_ubatch\": %d, \"flash_attn\": %d, \"n_gpu_layers\": %d, \"n_threads\": %u, \"n_threads_batch\": %u, "
+                    "\"omp\": \"%s\", "
                     "\"pp\": %d, \"tg\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f, \"rss_hwm_mib\": %s, \"vram_delta_mib\": %s }\n",
                     n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch,
+                    omp_json.c_str(),
                     pp, tg, n_kv, t_pp, speed_pp, t_tg, speed_tg, rss_json.c_str(), vram_json.c_str()
                 );
             } else {
                 LOG_TEE(
                     "{\"n_kv_max\": %d, \"n_batch\": %d, \"n_ubatch\": %d, \"flash_attn\": %d, \"n_gpu_layers\": %d, \"n_threads\": %u, \"n_threads_batch\": %u, "
+                    "\"omp\": \"%s\", "
                     "\"pp\": %d, \"tg\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f }\n",
                     n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch,
+                    omp_json.c_str(),
                     pp, tg, n_kv, t_pp, speed_pp, t_tg, speed_tg
                 );
             }
