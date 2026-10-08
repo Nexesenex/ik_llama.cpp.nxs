@@ -540,6 +540,7 @@ int main(int argc, char ** argv) {
     LOG_INFO("Rel", {
         {"date",            LLAMA_BUILD_DATE},
         {"compiler",        LLAMA_COMPILER},
+        {"libomp",          common_openmp_runtime_info()},
     });
 
     LOG_INFO("system info", {

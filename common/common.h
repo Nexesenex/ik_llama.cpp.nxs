@@ -701,6 +701,10 @@ void gpt_params_parse_from_env(gpt_params & params);
 void common_apply_omp_env(const gpt_params & params);
 // Snapshot of the OMP-relevant env for logging/bench tables (VAR=value or VAR=<unset>).
 std::string common_omp_env_snapshot(void);
+// Identify the OpenMP runtime actually loaded by this process (variant + file
+// version + module path), e.g. "LLVM OpenMP 23.1.3 [C:\LLVM\bin\libomp.dll]".
+// Returns a fallback string when no runtime module is found (OpenMP off).
+std::string common_openmp_runtime_info(void);
 void gpt_params_handle_model_default(gpt_params & params);
 
 bool gpt_params_parse_ex   (int argc, char ** argv, gpt_params & params);
