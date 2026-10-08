@@ -391,6 +391,254 @@ get_env(std::string name, T & target) {
 }
 
 //
+// OMP env utils (CLI-managed OpenMP controls for bench automation)
+//
+static void common_set_process_env_var(const char * name, const std::string & value) {
+    if (value.empty()) {
+        return;
+    }
+#if defined(_WIN32)
+    // _putenv updates the CRT env seen by getenv/OpenMP runtime; mirror to the
+    // OS env as well so child processes and dump scripts observe the same value.
+    std::string entry = std::string(name) + "=" + value;
+    _putenv(entry.c_str());
+    SetEnvironmentVariableA(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+static void common_unset_process_env_var(const char * name) {
+#if defined(_WIN32)
+    _putenv((std::string(name) + "=").c_str()); // empty value removes the var
+    SetEnvironmentVariableA(name, nullptr);
+#else
+    unsetenv(name);
+#endif
+}
+
+// Tri-state presence flag: 0 = untouched, >0 = set VAR=1, <0 = remove VAR.
+static void common_set_process_env_flag(const char * name, int state) {
+    if (state > 0) {
+        common_set_process_env_var(name, "1");
+    } else if (state < 0) {
+        common_unset_process_env_var(name);
+    }
+}
+
+static std::string common_omp_env_get(const char * name) {
+    const char * v = std::getenv(name);
+    return v ? std::string(v) : std::string("<unset>");
+}
+
+std::string common_omp_env_snapshot(void) {
+    std::ostringstream os;
+    os << "OMP_WAIT_POLICY="    << common_omp_env_get("OMP_WAIT_POLICY")    << " "
+       << "OMP_PROC_BIND="      << common_omp_env_get("OMP_PROC_BIND")      << " "
+       << "OMP_PLACES="         << common_omp_env_get("OMP_PLACES")         << " "
+       << "OMP_DYNAMIC="        << common_omp_env_get("OMP_DYNAMIC")        << " "
+       << "OMP_SCHEDULE="       << common_omp_env_get("OMP_SCHEDULE")       << " "
+       << "OMP_THREAD_LIMIT="   << common_omp_env_get("OMP_THREAD_LIMIT")   << " "
+       << "OMP_MAX_ACTIVE_LEVELS=" << common_omp_env_get("OMP_MAX_ACTIVE_LEVELS") << " "
+       << "OMP_STACKSIZE="      << common_omp_env_get("OMP_STACKSIZE")      << " "
+       << "KMP_BLOCKTIME="      << common_omp_env_get("KMP_BLOCKTIME")      << " "
+       << "KMP_AFFINITY="       << common_omp_env_get("KMP_AFFINITY")        << " "
+       << "GOMP_CPU_AFFINITY="  << common_omp_env_get("GOMP_CPU_AFFINITY");
+    return os.str();
+}
+
+std::string common_openmp_runtime_info(void) {
+#if defined(_WIN32)
+    // Probe the OpenMP runtime actually loaded by this process, in order:
+    // upstream LLVM layout, VS-bundled LLVM naming, Intel classic, MSVC, MinGW.
+    // GetModuleHandleA only queries (never loads), so this is safe to call
+    // at startup logging time: ggml links the runtime, hence it is already
+    // resident once the process starts.
+    struct omp_module_candidate {
+        const char * module;
+        const char * variant; // LLVM (libomp) vs MSVC (vcomp) vs GCC (libgomp)
+    };
+    static const omp_module_candidate candidates[] = {
+        { "libomp.dll",           "LLVM"       },
+        { "libomp140.x86_64.dll", "LLVM"       },
+        { "libiomp5md.dll",       "LLVM-Intel" },
+        { "vcomp140.dll",         "MSVC"       },
+        { "vcomp140d.dll",        "MSVC-debug" },
+        { "libgomp-1.dll",        "GCC"        },
+    };
+    for (const auto & cand : candidates) {
+        HMODULE h = GetModuleHandleA(cand.module);
+        if (!h) {
+            continue;
+        }
+        char path[MAX_PATH];
+        const DWORD n = GetModuleFileNameA(h, path, sizeof(path));
+        const char * probe = n ? path : cand.module;
+        std::string filever = "<no-version-info>";
+        DWORD handle = 0;
+        const DWORD sz = GetFileVersionInfoSizeA(probe, &handle);
+        if (sz) {
+            std::vector<BYTE> buf(sz);
+            if (GetFileVersionInfoA(probe, handle, sz, buf.data())) {
+                VS_FIXEDFILEINFO * fi = nullptr;
+                UINT len = 0;
+                if (VerQueryValueA(buf.data(), "\\", (void **) &fi, &len) && fi) {
+                    char vb[64];
+                    snprintf(vb, sizeof(vb), "%u.%u.%u.%u",
+                        (unsigned) HIWORD(fi->dwFileVersionMS), (unsigned) LOWORD(fi->dwFileVersionMS),
+                        (unsigned) HIWORD(fi->dwFileVersionLS), (unsigned) LOWORD(fi->dwFileVersionLS));
+                    filever = vb;
+                }
+            }
+        }
+        std::ostringstream os;
+        os << cand.variant << " OpenMP " << filever << " [" << (n ? path : cand.module) << "]";
+        return os.str();
+    }
+    return "no OpenMP runtime loaded (OpenMP off or static no-op)";
+#else
+    // Non-Windows: no module probe implemented; report the compile-time spec.
+#ifdef _OPENMP
+    return "OpenMP spec " + std::to_string(_OPENMP) + " (runtime probe: Windows-only)";
+#else
+    return "no OpenMP runtime loaded (OpenMP off or static no-op)";
+#endif
+#endif
+}
+
+void common_apply_omp_env(const gpt_params & params) {
+    // Typed flags first, generic --omp VAR=VAL last (generic wins on conflict).
+    // Must run BEFORE the first OpenMP parallel region; the OpenMP runtime
+    // reads these vars lazily at first parallel entry, so applying right after
+    // arg parse (before llama_backend_init / model load) is sufficient.
+    // NOTE: ggml pins thread count via `num_threads(n_threads)`, so -t wins
+    // over any OMP_NUM_THREADS passed via --omp (warn below instead of failing).
+    common_set_process_env_var("OMP_WAIT_POLICY",  params.omp_wait_policy);
+    common_set_process_env_var("OMP_PROC_BIND",    params.omp_proc_bind);
+    common_set_process_env_var("OMP_PLACES",       params.omp_places);
+    common_set_process_env_var("OMP_DYNAMIC",      params.omp_dynamic);
+    common_set_process_env_var("OMP_SCHEDULE",     params.omp_schedule);
+    common_set_process_env_var("OMP_THREAD_LIMIT", params.omp_thread_limit);
+    common_set_process_env_var("OMP_MAX_ACTIVE_LEVELS", params.omp_max_active_levels);
+    common_set_process_env_var("OMP_STACKSIZE",    params.omp_stacksize);
+    common_set_process_env_var("KMP_BLOCKTIME",    params.omp_blocktime);
+    common_set_process_env_var("KMP_AFFINITY",     params.omp_affinity);
+    if (params.omp_display_env) {
+        common_set_process_env_var("OMP_DISPLAY_ENV",     "TRUE");
+        common_set_process_env_var("OMP_DISPLAY_AFFINITY", "TRUE");
+    }
+    for (const auto & kv : params.omp_env) {
+        const size_t eq = kv.find('=');
+        if (eq == std::string::npos || eq == 0 || eq + 1 >= kv.size()) {
+            LOG_WRN("%s: ignoring malformed --omp entry '%s' (expected VAR=VAL)\n", __func__, kv.c_str());
+            continue;
+        }
+        const std::string name  = kv.substr(0, eq);
+        const std::string value = kv.substr(eq + 1);
+        if (name == "OMP_NUM_THREADS") {
+            LOG_WRN("%s: OMP_NUM_THREADS=%s will be overridden by -t/--threads (%d): ggml uses num_threads(n_threads)\n",
+                    __func__, value.c_str(), params.n_threads);
+        }
+#if defined(_WIN32)
+        std::string entry = name + "=" + value;
+        _putenv(entry.c_str());
+        SetEnvironmentVariableA(name.c_str(), value.c_str());
+#else
+        setenv(name.c_str(), value.c_str(), 1);
+#endif
+    }
+    if (!params.omp_wait_policy.empty()  || !params.omp_proc_bind.empty() ||
+        !params.omp_places.empty()       || !params.omp_dynamic.empty()   ||
+        !params.omp_schedule.empty()     || !params.omp_thread_limit.empty() ||
+        !params.omp_max_active_levels.empty() ||
+        !params.omp_stacksize.empty()    || !params.omp_blocktime.empty() ||
+        !params.omp_affinity.empty()     || !params.omp_env.empty() ||
+        params.omp_display_env) {
+        LOG_INF("%s: OMP env applied: %s\n", __func__, common_omp_env_snapshot().c_str());
+    }
+}
+
+std::string common_ggml_cpu_env_snapshot(void) {
+    std::ostringstream os;
+    os << "GGML_SCHED_DEBUG="       << common_omp_env_get("GGML_SCHED_DEBUG")       << " "
+       << "GGML_MOE_PREFETCH_AHEAD=" << common_omp_env_get("GGML_MOE_PREFETCH_AHEAD") << " "
+       << "GGML_MOE_PREFETCH_DEBUG=" << common_omp_env_get("GGML_MOE_PREFETCH_DEBUG") << " "
+       << "GGML_HYBRID="            << common_omp_env_get("GGML_HYBRID");
+    return os.str();
+}
+
+void common_apply_ggml_cpu_env(const gpt_params & params) {
+    // Value vars first, presence flags, then generic --ggml-env[] in order
+    // (generic wins on conflict). Must run BEFORE backend init / model load:
+    // ggml reads several of these once into statics.
+    common_set_process_env_var("GGML_MOE_PREFETCH_AHEAD", params.ggml_moe_prefetch_ahead);
+    common_set_process_env_var("GGML_HYBRID",             params.ggml_hybrid);
+    common_set_process_env_flag("GGML_SCHED_DEBUG",       params.ggml_sched_debug);
+    common_set_process_env_flag("GGML_MOE_PREFETCH_DEBUG", params.ggml_moe_prefetch_debug);
+    for (const auto & kv : params.ggml_env) {
+        const size_t eq = kv.find('=');
+        if (eq == std::string::npos || eq == 0 || eq + 1 >= kv.size()) {
+            LOG_WRN("%s: ignoring malformed --ggml-env entry '%s' (expected VAR=VAL)\n", __func__, kv.c_str());
+            continue;
+        }
+        const std::string name  = kv.substr(0, eq);
+        const std::string value = kv.substr(eq + 1);
+#if defined(_WIN32)
+        _putenv((name + "=" + value).c_str());
+        SetEnvironmentVariableA(name.c_str(), value.c_str());
+#else
+        setenv(name.c_str(), value.c_str(), 1);
+#endif
+    }
+    if (!params.ggml_moe_prefetch_ahead.empty() || !params.ggml_hybrid.empty() ||
+        params.ggml_sched_debug != 0 || params.ggml_moe_prefetch_debug != 0 ||
+        !params.ggml_env.empty()) {
+        LOG_INF("%s: GGML CPU env applied: %s\n", __func__, common_ggml_cpu_env_snapshot().c_str());
+    }
+}
+
+std::string common_ggml_cuda_env_snapshot(void) {
+    std::ostringstream os;
+    os << "CUDA_DEVICE_ORDER="             << common_omp_env_get("CUDA_DEVICE_ORDER")             << " "
+       << "CUDA_VISIBLE_DEVICES="          << common_omp_env_get("CUDA_VISIBLE_DEVICES")          << " "
+       << "GGML_CUDA_ENABLE_UNIFIED_MEMORY=" << common_omp_env_get("GGML_CUDA_ENABLE_UNIFIED_MEMORY") << " "
+       << "GGML_CUDA_NO_PINNED="           << common_omp_env_get("GGML_CUDA_NO_PINNED")           << " "
+       << "GGML_CUDA_NO_PINNED_WEIGHTS="   << common_omp_env_get("GGML_CUDA_NO_PINNED_WEIGHTS")   << " "
+       << "GGML_CUDA_HOST_MALLOC_THP="     << common_omp_env_get("GGML_CUDA_HOST_MALLOC_THP")     << " "
+       << "GGML_CUDA_PINNED_CAP_GIB="      << common_omp_env_get("GGML_CUDA_PINNED_CAP_GIB")      << " "
+       << "GGML_CUDA_HOST_CHUNK_GIB="      << common_omp_env_get("GGML_CUDA_HOST_CHUNK_GIB")      << " "
+       << "GGML_CUDA_DISABLE_GRAPHS="      << common_omp_env_get("GGML_CUDA_DISABLE_GRAPHS")      << " "
+       << "GGML_CUDA_REGISTER_HOST="       << common_omp_env_get("GGML_CUDA_REGISTER_HOST");
+    return os.str();
+}
+
+void common_apply_ggml_cuda_env(const gpt_params & params) {
+    // Value vars first, presence flags, no generic list here: the shared
+    // --ggml-env passthrough (CPU commit) already covers any GGML_* var and
+    // is applied inside common_apply_ggml_cpu_env(); callers must invoke the
+    // CPU applier before this one so generic entries do not clobber typed
+    // CUDA values. Must run BEFORE backend init / model load.
+    common_set_process_env_var("CUDA_DEVICE_ORDER",        params.cuda_device_order);
+    common_set_process_env_var("CUDA_VISIBLE_DEVICES",       params.cuda_visible_devices);
+    common_set_process_env_var("GGML_CUDA_PINNED_CAP_GIB", params.cuda_pinned_cap_gib);
+    common_set_process_env_var("GGML_CUDA_HOST_CHUNK_GIB", params.cuda_host_chunk_gib);
+    common_set_process_env_flag("GGML_CUDA_ENABLE_UNIFIED_MEMORY", params.cuda_enable_unified_memory);
+    common_set_process_env_flag("GGML_CUDA_NO_PINNED",             params.cuda_no_pinned);
+    common_set_process_env_flag("GGML_CUDA_NO_PINNED_WEIGHTS",     params.cuda_no_pinned_weights);
+    common_set_process_env_flag("GGML_CUDA_HOST_MALLOC_THP",       params.cuda_host_malloc_thp);
+    common_set_process_env_flag("GGML_CUDA_DISABLE_GRAPHS",        params.cuda_disable_graphs);
+    common_set_process_env_flag("GGML_CUDA_REGISTER_HOST",         params.cuda_register_host);
+    if (!params.cuda_device_order.empty() || !params.cuda_visible_devices.empty() ||
+        !params.cuda_pinned_cap_gib.empty() || !params.cuda_host_chunk_gib.empty() ||
+        params.cuda_enable_unified_memory != 0 ||
+        params.cuda_no_pinned != 0 || params.cuda_no_pinned_weights != 0 ||
+        params.cuda_host_malloc_thp != 0 || params.cuda_disable_graphs != 0 ||
+        params.cuda_register_host != 0) {
+        LOG_INF("%s: GGML CUDA env applied: %s\n", __func__, common_ggml_cuda_env_snapshot().c_str());
+    }
+}
+
+//
 // CPU utils
 //
 
@@ -1299,6 +1547,62 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
     get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
     get_env("LLAMA_ARG_V_CACHE_HADAMARD", params.v_cache_hadamard);
+    // OMP controls for bench automation (CLI flags win over these env defaults)
+    get_env("LLAMA_ARG_OMP_WAIT_POLICY",  params.omp_wait_policy);
+    get_env("LLAMA_ARG_OMP_PROC_BIND",    params.omp_proc_bind);
+    get_env("LLAMA_ARG_OMP_PLACES",       params.omp_places);
+    get_env("LLAMA_ARG_OMP_DYNAMIC",      params.omp_dynamic);
+    get_env("LLAMA_ARG_OMP_SCHEDULE",     params.omp_schedule);
+    get_env("LLAMA_ARG_OMP_THREAD_LIMIT", params.omp_thread_limit);
+    get_env("LLAMA_ARG_OMP_MAX_ACTIVE_LEVELS", params.omp_max_active_levels);
+    get_env("LLAMA_ARG_OMP_STACKSIZE",    params.omp_stacksize);
+    get_env("LLAMA_ARG_OMP_BLOCKTIME",    params.omp_blocktime);
+    get_env("LLAMA_ARG_OMP_AFFINITY",     params.omp_affinity);
+    {
+        // ';'-separated VAR=VAL list (';' chosen because KMP_AFFINITY values contain commas)
+        std::string omp_env_list;
+        get_env("LLAMA_ARG_OMP_ENV", omp_env_list);
+        if (!omp_env_list.empty()) {
+            std::istringstream ss(omp_env_list);
+            std::string tok;
+            while (std::getline(ss, tok, ';')) {
+                if (!tok.empty()) {
+                    params.omp_env.push_back(tok);
+                }
+            }
+        }
+    }
+    // GGML CPU-backend controls for bench automation (CLI flags win over these env defaults)
+    get_env("LLAMA_ARG_GGML_MOE_PREFETCH_AHEAD", params.ggml_moe_prefetch_ahead);
+    get_env("LLAMA_ARG_GGML_HYBRID",             params.ggml_hybrid);
+    get_env("LLAMA_ARG_GGML_SCHED_DEBUG",        params.ggml_sched_debug);
+    get_env("LLAMA_ARG_GGML_MOE_PREFETCH_DEBUG", params.ggml_moe_prefetch_debug);
+    {
+        // ';'-separated VAR=VAL list
+        std::string ggml_env_list;
+        get_env("LLAMA_ARG_GGML_ENV", ggml_env_list);
+        if (!ggml_env_list.empty()) {
+            std::istringstream ss(ggml_env_list);
+            std::string tok;
+            while (std::getline(ss, tok, ';')) {
+                if (!tok.empty()) {
+                    params.ggml_env.push_back(tok);
+                }
+            }
+        }
+    }
+    // GGML CUDA-backend controls for bench automation (CLI flags win over these env defaults)
+    // Presence flags: >0 set VAR=1, <0 force-remove VAR, 0 untouched.
+    get_env("LLAMA_ARG_CUDA_DEVICE_ORDER",            params.cuda_device_order);
+    get_env("LLAMA_ARG_CUDA_VISIBLE_DEVICES",         params.cuda_visible_devices);
+    get_env("LLAMA_ARG_CUDA_PINNED_CAP_GIB",          params.cuda_pinned_cap_gib);
+    get_env("LLAMA_ARG_CUDA_HOST_CHUNK_GIB",          params.cuda_host_chunk_gib);
+    get_env("LLAMA_ARG_CUDA_ENABLE_UNIFIED_MEMORY",   params.cuda_enable_unified_memory);
+    get_env("LLAMA_ARG_CUDA_NO_PINNED",               params.cuda_no_pinned);
+    get_env("LLAMA_ARG_CUDA_NO_PINNED_WEIGHTS",       params.cuda_no_pinned_weights);
+    get_env("LLAMA_ARG_CUDA_HOST_MALLOC_THP",         params.cuda_host_malloc_thp);
+    get_env("LLAMA_ARG_CUDA_DISABLE_GRAPHS",          params.cuda_disable_graphs);
+    get_env("LLAMA_ARG_CUDA_REGISTER_HOST",           params.cuda_register_host);
 
 }
 
@@ -1656,6 +1960,174 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "-gbtt" || arg == "--ggml-batch-thread-threshold") {
         CHECK_ARG
         params.ggml_batch_thread_thresh = argv[i];
+        return true;
+    }
+    // OMP runtime controls (applied via common_apply_omp_env() before first compute).
+    // NOTE: ggml pins threads via num_threads(n_threads), so -t wins over OMP_NUM_THREADS.
+    if (arg == "--omp-wait-policy") {
+        CHECK_ARG
+        params.omp_wait_policy = argv[i];
+        return true;
+    }
+    if (arg == "--omp-proc-bind") {
+        CHECK_ARG
+        params.omp_proc_bind = argv[i];
+        return true;
+    }
+    if (arg == "--omp-places") {
+        CHECK_ARG
+        params.omp_places = argv[i];
+        return true;
+    }
+    if (arg == "--omp-dynamic") {
+        CHECK_ARG
+        params.omp_dynamic = argv[i];
+        return true;
+    }
+    if (arg == "--omp-schedule") {
+        CHECK_ARG
+        params.omp_schedule = argv[i];
+        return true;
+    }
+    if (arg == "--omp-thread-limit") {
+        CHECK_ARG
+        params.omp_thread_limit = argv[i];
+        return true;
+    }
+    if (arg == "--omp-max-active-levels") {
+        CHECK_ARG
+        params.omp_max_active_levels = argv[i];
+        return true;
+    }
+    if (arg == "--omp-stacksize") {
+        CHECK_ARG
+        params.omp_stacksize = argv[i];
+        return true;
+    }
+    if (arg == "--omp-blocktime") {
+        CHECK_ARG
+        params.omp_blocktime = argv[i];
+        return true;
+    }
+    if (arg == "--omp-affinity") {
+        CHECK_ARG
+        params.omp_affinity = argv[i];
+        return true;
+    }
+    if (arg == "--omp" || arg == "--omp-env") {
+        CHECK_ARG
+        params.omp_env.emplace_back(argv[i]);
+        return true;
+    }
+    if (arg == "--omp-display-env") {
+        params.omp_display_env = true;
+        return true;
+    }
+    if (arg == "--no-omp-display-env") {
+        params.omp_display_env = false;
+        return true;
+    }
+    // GGML CPU-backend env controls (applied via common_apply_ggml_cpu_env()
+    // before backend init; --no- removes the var from the process env).
+    if (arg == "--ggml-sched-debug") {
+        params.ggml_sched_debug = 1;
+        return true;
+    }
+    if (arg == "--no-ggml-sched-debug") {
+        params.ggml_sched_debug = -1;
+        return true;
+    }
+    if (arg == "--ggml-moe-prefetch-ahead") {
+        CHECK_ARG
+        params.ggml_moe_prefetch_ahead = argv[i];
+        return true;
+    }
+    if (arg == "--ggml-moe-prefetch-debug") {
+        params.ggml_moe_prefetch_debug = 1;
+        return true;
+    }
+    if (arg == "--no-ggml-moe-prefetch-debug") {
+        params.ggml_moe_prefetch_debug = -1;
+        return true;
+    }
+    if (arg == "--ggml-hybrid") {
+        CHECK_ARG
+        params.ggml_hybrid = argv[i];
+        return true;
+    }
+    if (arg == "--ggml-env" || arg == "--ggml") {
+        CHECK_ARG
+        params.ggml_env.emplace_back(argv[i]);
+        return true;
+    }
+    // GGML CUDA-backend env controls (typed CUDA flags win over --ggml-env
+    // entries for the same var; --no- always removes the var from the env).
+    if (arg == "--cuda-device-order") {
+        CHECK_ARG
+        params.cuda_device_order = argv[i];
+        return true;
+    }
+    if (arg == "--cuda-visible-devices") {
+        CHECK_ARG
+        params.cuda_visible_devices = argv[i];
+        return true;
+    }
+    if (arg == "--cuda-pinned-cap-gib") {
+        CHECK_ARG
+        params.cuda_pinned_cap_gib = argv[i];
+        return true;
+    }
+    if (arg == "--cuda-host-chunk-gib") {
+        CHECK_ARG
+        params.cuda_host_chunk_gib = argv[i];
+        return true;
+    }
+    if (arg == "--cuda-enable-unified-memory") {
+        params.cuda_enable_unified_memory = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-enable-unified-memory") {
+        params.cuda_enable_unified_memory = -1;
+        return true;
+    }
+    if (arg == "--cuda-no-pinned") {
+        params.cuda_no_pinned = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-no-pinned") {
+        params.cuda_no_pinned = -1;
+        return true;
+    }
+    if (arg == "--cuda-no-pinned-weights") {
+        params.cuda_no_pinned_weights = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-no-pinned-weights") {
+        params.cuda_no_pinned_weights = -1;
+        return true;
+    }
+    if (arg == "--cuda-host-malloc-thp") {
+        params.cuda_host_malloc_thp = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-host-malloc-thp") {
+        params.cuda_host_malloc_thp = -1;
+        return true;
+    }
+    if (arg == "--cuda-disable-graphs") {
+        params.cuda_disable_graphs = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-disable-graphs") {
+        params.cuda_disable_graphs = -1;
+        return true;
+    }
+    if (arg == "--cuda-register-host") {
+        params.cuda_register_host = 1;
+        return true;
+    }
+    if (arg == "--no-cuda-register-host") {
+        params.cuda_register_host = -1;
         return true;
     }
     if (arg == "-p" || arg == "--prompt") {
@@ -3675,6 +4147,33 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "multi-modality", "-tm,   --threads-mtmd N",    "number of threads to use during multimodal image processing (default: same as --threads-batch)" });
     options.push_back({ "*",           "-gbtt, --ggml-batch-thread-threshold EXPR",
                                                                         "OpenMP barrier threshold: \">N\", \"<N\", \">=N\", \"<=N\", \"==N\" (default: %s)", params.ggml_batch_thread_thresh.c_str() });
+    options.push_back({ "*",           "       --omp-wait-policy VAL",    "OMP_WAIT_POLICY: ACTIVE | PASSIVE (default: PASSIVE, biggest TG/PP barrier knob)" });
+    options.push_back({ "*",           "       --omp-proc-bind VAL",      "OMP_PROC_BIND: false | true | master | close | spread (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-places VAL",         "OMP_PLACES: e.g. cores | threads | sockets (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-dynamic VAL",        "OMP_DYNAMIC: TRUE | FALSE (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-schedule VAL",       "OMP_SCHEDULE: e.g. static | dynamic,64 | guided | auto (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-thread-limit N",     "OMP_THREAD_LIMIT (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-max-active-levels N", "OMP_MAX_ACTIVE_LEVELS, e.g. 1 (ggml uses no nesting; caps nested parallel regions from libs)" });
+    options.push_back({ "*",           "       --omp-stacksize VAL",      "OMP_STACKSIZE: e.g. 8M (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-blocktime MS",       "KMP_BLOCKTIME in ms, spin-before-sleep for libomp/libiomp (default: 200, unset behaves like 0 and tanks TG)" });
+    options.push_back({ "*",           "       --omp-affinity VAL",       "KMP_AFFINITY string, e.g. granularity=fine,compact,1,0 (empty = untouched)" });
+    options.push_back({ "*",           "       --omp VAR=VAL",            "generic OMP/KMP/GOMP passthrough, repeatable, applied last (e.g. --omp KMP_BLOCKTIME=0)" });
+    options.push_back({ "*",           "       --omp-display-env",        "set OMP_DISPLAY_ENV/AFFINITY=TRUE for runtime diagnostics" });
+    options.push_back({ "*",           "       --ggml-sched-debug",       "set GGML_SCHED_DEBUG=1 (scheduler debug trace; --no-ggml-sched-debug removes it)" });
+    options.push_back({ "*",           "       --ggml-moe-prefetch-ahead N", "GGML_MOE_PREFETCH_AHEAD: splits prefetched ahead for MoE (ggml default 3)" });
+    options.push_back({ "*",           "       --ggml-moe-prefetch-debug", "set GGML_MOE_PREFETCH_DEBUG=1 (--no-ggml-moe-prefetch-debug removes it)" });
+    options.push_back({ "*",           "       --ggml-hybrid 0|1",        "GGML_HYBRID: 0 disables hybrid P/E-core detection (e.g. with Process Lasso)" });
+    options.push_back({ "*",           "       --ggml-env VAR=VAL",       "generic GGML_* passthrough, repeatable, applied last (e.g. --ggml-env GGML_HYBRID=0)" });
+    options.push_back({ "*",           "       --cuda-device-order VAL",  "CUDA_DEVICE_ORDER: FASTEST_FIRST | PCI_BUS_ID (ggml defaults to PCI_BUS_ID on Windows)" });
+    options.push_back({ "*",           "       --cuda-visible-devices LIST", "CUDA_VISIBLE_DEVICES: e.g. 0,1 (which GPUs the CUDA runtime enumerates)" });
+    options.push_back({ "*",           "       --cuda-pinned-cap-gib N",  "GGML_CUDA_PINNED_CAP_GIB: WDDM pinned-memory cap in GiB (requests beyond fall back to pageable)" });
+    options.push_back({ "*",           "       --cuda-host-chunk-gib N",  "GGML_CUDA_HOST_CHUNK_GIB: split host weight buffers into N-GiB pinnable pieces" });
+    options.push_back({ "*",           "       --cuda-enable-unified-memory", "set GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 (cudaMallocManaged; --no-... removes it)" });
+    options.push_back({ "*",           "       --cuda-no-pinned",         "set GGML_CUDA_NO_PINNED=1 (disable pinned host memory; --no-cuda-no-pinned removes it)" });
+    options.push_back({ "*",           "       --cuda-no-pinned-weights", "set GGML_CUDA_NO_PINNED_WEIGHTS=1 (mmap weights, keep staging pinned; --no-... removes it)" });
+    options.push_back({ "*",           "       --cuda-host-malloc-thp",   "set GGML_CUDA_HOST_MALLOC_THP=1 (Linux hugepages for pinned allocs; --no-... removes it)" });
+    options.push_back({ "*",           "       --cuda-disable-graphs",    "set GGML_CUDA_DISABLE_GRAPHS=1 (disable CUDA graphs; --no-... removes it)" });
+    options.push_back({ "*",           "       --cuda-register-host",     "set GGML_CUDA_REGISTER_HOST=1 (cudaHostRegister path; --no-... removes it)" });
     options.push_back({ "speculative", "-td,   --threads-draft N",      "number of threads to use during generation (default: same as --threads)" });
     options.push_back({ "speculative", "-tbd,  --threads-batch-draft N",
                                                                         "number of threads to use during batch and prompt processing (default: same as --threads-draft)" });
@@ -4171,6 +4670,10 @@ std::string gpt_params_get_system_info(const gpt_params & params) {
 #else
     os << " / " << std::thread::hardware_concurrency() << " | " << llama_print_system_info();
 #endif
+    os << " | OMP: " << common_omp_env_snapshot();
+    os << " | OMP runtime: " << common_openmp_runtime_info();
+    os << " | GGML CPU: " << common_ggml_cpu_env_snapshot();
+    os << " | GGML CUDA: " << common_ggml_cuda_env_snapshot();
 
     return os.str();
 }
@@ -4825,6 +5328,13 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
 
     llama_model * model = nullptr;
 
+    // CLI-managed OMP env must land before the first OpenMP parallel region
+    common_apply_omp_env(params);
+    // CLI-managed GGML CPU env must land before backend init / model load
+    // (several vars are consumed once into statics)
+    common_apply_ggml_cpu_env(params);
+    // CLI-managed GGML CUDA env: device order must precede the first CUDA call
+    common_apply_ggml_cuda_env(params);
     ggml_set_batch_thread_threshold(params.ggml_batch_thread_thresh.c_str());
     if (!params.hf_repo.empty() && !params.hf_file.empty()) {
         model = llama_load_model_from_hf(params.hf_repo.c_str(), params.hf_file.c_str(), params.model.c_str(), params.hf_token.c_str(), mparams);
