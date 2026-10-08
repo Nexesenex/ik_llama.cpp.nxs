@@ -437,6 +437,7 @@ std::string common_omp_env_snapshot(void) {
        << "OMP_DYNAMIC="        << common_omp_env_get("OMP_DYNAMIC")        << " "
        << "OMP_SCHEDULE="       << common_omp_env_get("OMP_SCHEDULE")       << " "
        << "OMP_THREAD_LIMIT="   << common_omp_env_get("OMP_THREAD_LIMIT")   << " "
+       << "OMP_MAX_ACTIVE_LEVELS=" << common_omp_env_get("OMP_MAX_ACTIVE_LEVELS") << " "
        << "OMP_STACKSIZE="      << common_omp_env_get("OMP_STACKSIZE")      << " "
        << "KMP_BLOCKTIME="      << common_omp_env_get("KMP_BLOCKTIME")      << " "
        << "KMP_AFFINITY="       << common_omp_env_get("KMP_AFFINITY")        << " "
@@ -516,6 +517,7 @@ void common_apply_omp_env(const gpt_params & params) {
     common_set_process_env_var("OMP_DYNAMIC",      params.omp_dynamic);
     common_set_process_env_var("OMP_SCHEDULE",     params.omp_schedule);
     common_set_process_env_var("OMP_THREAD_LIMIT", params.omp_thread_limit);
+    common_set_process_env_var("OMP_MAX_ACTIVE_LEVELS", params.omp_max_active_levels);
     common_set_process_env_var("OMP_STACKSIZE",    params.omp_stacksize);
     common_set_process_env_var("KMP_BLOCKTIME",    params.omp_blocktime);
     common_set_process_env_var("KMP_AFFINITY",     params.omp_affinity);
@@ -546,6 +548,7 @@ void common_apply_omp_env(const gpt_params & params) {
     if (!params.omp_wait_policy.empty()  || !params.omp_proc_bind.empty() ||
         !params.omp_places.empty()       || !params.omp_dynamic.empty()   ||
         !params.omp_schedule.empty()     || !params.omp_thread_limit.empty() ||
+        !params.omp_max_active_levels.empty() ||
         !params.omp_stacksize.empty()    || !params.omp_blocktime.empty() ||
         !params.omp_affinity.empty()     || !params.omp_env.empty() ||
         params.omp_display_env) {
@@ -1433,6 +1436,7 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_OMP_DYNAMIC",      params.omp_dynamic);
     get_env("LLAMA_ARG_OMP_SCHEDULE",     params.omp_schedule);
     get_env("LLAMA_ARG_OMP_THREAD_LIMIT", params.omp_thread_limit);
+    get_env("LLAMA_ARG_OMP_MAX_ACTIVE_LEVELS", params.omp_max_active_levels);
     get_env("LLAMA_ARG_OMP_STACKSIZE",    params.omp_stacksize);
     get_env("LLAMA_ARG_OMP_BLOCKTIME",    params.omp_blocktime);
     get_env("LLAMA_ARG_OMP_AFFINITY",     params.omp_affinity);
@@ -1858,6 +1862,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--omp-thread-limit") {
         CHECK_ARG
         params.omp_thread_limit = argv[i];
+        return true;
+    }
+    if (arg == "--omp-max-active-levels") {
+        CHECK_ARG
+        params.omp_max_active_levels = argv[i];
         return true;
     }
     if (arg == "--omp-stacksize") {
@@ -3909,6 +3918,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --omp-dynamic VAL",        "OMP_DYNAMIC: TRUE | FALSE (empty = untouched)" });
     options.push_back({ "*",           "       --omp-schedule VAL",       "OMP_SCHEDULE: e.g. static | dynamic,64 | guided | auto (empty = untouched)" });
     options.push_back({ "*",           "       --omp-thread-limit N",     "OMP_THREAD_LIMIT (empty = untouched)" });
+    options.push_back({ "*",           "       --omp-max-active-levels N", "OMP_MAX_ACTIVE_LEVELS, e.g. 1 (ggml uses no nesting; caps nested parallel regions from libs)" });
     options.push_back({ "*",           "       --omp-stacksize VAL",      "OMP_STACKSIZE: e.g. 8M (empty = untouched)" });
     options.push_back({ "*",           "       --omp-blocktime MS",       "KMP_BLOCKTIME in ms, spin-before-sleep for libomp/libiomp (empty = untouched)" });
     options.push_back({ "*",           "       --omp-affinity VAL",       "KMP_AFFINITY string, e.g. granularity=fine,compact,1,0 (empty = untouched)" });
