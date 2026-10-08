@@ -391,7 +391,7 @@ get_env(std::string name, T & target) {
 //
 // OMP env utils (CLI-managed OpenMP controls for bench automation)
 //
-static void common_set_omp_env_var(const char * name, const std::string & value) {
+static void common_set_process_env_var(const char * name, const std::string & value) {
     if (value.empty()) {
         return;
     }
@@ -404,6 +404,24 @@ static void common_set_omp_env_var(const char * name, const std::string & value)
 #else
     setenv(name, value.c_str(), 1);
 #endif
+}
+
+static void common_unset_process_env_var(const char * name) {
+#if defined(_WIN32)
+    _putenv((std::string(name) + "=").c_str()); // empty value removes the var
+    SetEnvironmentVariableA(name, nullptr);
+#else
+    unsetenv(name);
+#endif
+}
+
+// Tri-state presence flag: 0 = untouched, >0 = set VAR=1, <0 = remove VAR.
+static void common_set_process_env_flag(const char * name, int state) {
+    if (state > 0) {
+        common_set_process_env_var(name, "1");
+    } else if (state < 0) {
+        common_unset_process_env_var(name);
+    }
 }
 
 static std::string common_omp_env_get(const char * name) {
@@ -492,18 +510,18 @@ void common_apply_omp_env(const gpt_params & params) {
     // arg parse (before llama_backend_init / model load) is sufficient.
     // NOTE: ggml pins thread count via `num_threads(n_threads)`, so -t wins
     // over any OMP_NUM_THREADS passed via --omp (warn below instead of failing).
-    common_set_omp_env_var("OMP_WAIT_POLICY",  params.omp_wait_policy);
-    common_set_omp_env_var("OMP_PROC_BIND",    params.omp_proc_bind);
-    common_set_omp_env_var("OMP_PLACES",       params.omp_places);
-    common_set_omp_env_var("OMP_DYNAMIC",      params.omp_dynamic);
-    common_set_omp_env_var("OMP_SCHEDULE",     params.omp_schedule);
-    common_set_omp_env_var("OMP_THREAD_LIMIT", params.omp_thread_limit);
-    common_set_omp_env_var("OMP_STACKSIZE",    params.omp_stacksize);
-    common_set_omp_env_var("KMP_BLOCKTIME",    params.omp_blocktime);
-    common_set_omp_env_var("KMP_AFFINITY",     params.omp_affinity);
+    common_set_process_env_var("OMP_WAIT_POLICY",  params.omp_wait_policy);
+    common_set_process_env_var("OMP_PROC_BIND",    params.omp_proc_bind);
+    common_set_process_env_var("OMP_PLACES",       params.omp_places);
+    common_set_process_env_var("OMP_DYNAMIC",      params.omp_dynamic);
+    common_set_process_env_var("OMP_SCHEDULE",     params.omp_schedule);
+    common_set_process_env_var("OMP_THREAD_LIMIT", params.omp_thread_limit);
+    common_set_process_env_var("OMP_STACKSIZE",    params.omp_stacksize);
+    common_set_process_env_var("KMP_BLOCKTIME",    params.omp_blocktime);
+    common_set_process_env_var("KMP_AFFINITY",     params.omp_affinity);
     if (params.omp_display_env) {
-        common_set_omp_env_var("OMP_DISPLAY_ENV",     "TRUE");
-        common_set_omp_env_var("OMP_DISPLAY_AFFINITY", "TRUE");
+        common_set_process_env_var("OMP_DISPLAY_ENV",     "TRUE");
+        common_set_process_env_var("OMP_DISPLAY_AFFINITY", "TRUE");
     }
     for (const auto & kv : params.omp_env) {
         const size_t eq = kv.find('=');
@@ -532,6 +550,45 @@ void common_apply_omp_env(const gpt_params & params) {
         !params.omp_affinity.empty()     || !params.omp_env.empty() ||
         params.omp_display_env) {
         LOG_INF("%s: OMP env applied: %s\n", __func__, common_omp_env_snapshot().c_str());
+    }
+}
+
+std::string common_ggml_cpu_env_snapshot(void) {
+    std::ostringstream os;
+    os << "GGML_SCHED_DEBUG="       << common_omp_env_get("GGML_SCHED_DEBUG")       << " "
+       << "GGML_MOE_PREFETCH_AHEAD=" << common_omp_env_get("GGML_MOE_PREFETCH_AHEAD") << " "
+       << "GGML_MOE_PREFETCH_DEBUG=" << common_omp_env_get("GGML_MOE_PREFETCH_DEBUG") << " "
+       << "GGML_HYBRID="            << common_omp_env_get("GGML_HYBRID");
+    return os.str();
+}
+
+void common_apply_ggml_cpu_env(const gpt_params & params) {
+    // Value vars first, presence flags, then generic --ggml-env[] in order
+    // (generic wins on conflict). Must run BEFORE backend init / model load:
+    // ggml reads several of these once into statics.
+    common_set_process_env_var("GGML_MOE_PREFETCH_AHEAD", params.ggml_moe_prefetch_ahead);
+    common_set_process_env_var("GGML_HYBRID",             params.ggml_hybrid);
+    common_set_process_env_flag("GGML_SCHED_DEBUG",       params.ggml_sched_debug);
+    common_set_process_env_flag("GGML_MOE_PREFETCH_DEBUG", params.ggml_moe_prefetch_debug);
+    for (const auto & kv : params.ggml_env) {
+        const size_t eq = kv.find('=');
+        if (eq == std::string::npos || eq == 0 || eq + 1 >= kv.size()) {
+            LOG_WRN("%s: ignoring malformed --ggml-env entry '%s' (expected VAR=VAL)\n", __func__, kv.c_str());
+            continue;
+        }
+        const std::string name  = kv.substr(0, eq);
+        const std::string value = kv.substr(eq + 1);
+#if defined(_WIN32)
+        _putenv((name + "=" + value).c_str());
+        SetEnvironmentVariableA(name.c_str(), value.c_str());
+#else
+        setenv(name.c_str(), value.c_str(), 1);
+#endif
+    }
+    if (!params.ggml_moe_prefetch_ahead.empty() || !params.ggml_hybrid.empty() ||
+        params.ggml_sched_debug != 0 || params.ggml_moe_prefetch_debug != 0 ||
+        !params.ggml_env.empty()) {
+        LOG_INF("%s: GGML CPU env applied: %s\n", __func__, common_ggml_cpu_env_snapshot().c_str());
     }
 }
 
@@ -1393,6 +1450,25 @@ void gpt_params_parse_from_env(gpt_params & params) {
             }
         }
     }
+    // GGML CPU-backend controls for bench automation (CLI flags win over these env defaults)
+    get_env("LLAMA_ARG_GGML_MOE_PREFETCH_AHEAD", params.ggml_moe_prefetch_ahead);
+    get_env("LLAMA_ARG_GGML_HYBRID",             params.ggml_hybrid);
+    get_env("LLAMA_ARG_GGML_SCHED_DEBUG",        params.ggml_sched_debug);
+    get_env("LLAMA_ARG_GGML_MOE_PREFETCH_DEBUG", params.ggml_moe_prefetch_debug);
+    {
+        // ';'-separated VAR=VAL list
+        std::string ggml_env_list;
+        get_env("LLAMA_ARG_GGML_ENV", ggml_env_list);
+        if (!ggml_env_list.empty()) {
+            std::istringstream ss(ggml_env_list);
+            std::string tok;
+            while (std::getline(ss, tok, ';')) {
+                if (!tok.empty()) {
+                    params.ggml_env.push_back(tok);
+                }
+            }
+        }
+    }
 
 }
 
@@ -1810,6 +1886,39 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--no-omp-display-env") {
         params.omp_display_env = false;
+        return true;
+    }
+    // GGML CPU-backend env controls (applied via common_apply_ggml_cpu_env()
+    // before backend init; --no- removes the var from the process env).
+    if (arg == "--ggml-sched-debug") {
+        params.ggml_sched_debug = 1;
+        return true;
+    }
+    if (arg == "--no-ggml-sched-debug") {
+        params.ggml_sched_debug = -1;
+        return true;
+    }
+    if (arg == "--ggml-moe-prefetch-ahead") {
+        CHECK_ARG
+        params.ggml_moe_prefetch_ahead = argv[i];
+        return true;
+    }
+    if (arg == "--ggml-moe-prefetch-debug") {
+        params.ggml_moe_prefetch_debug = 1;
+        return true;
+    }
+    if (arg == "--no-ggml-moe-prefetch-debug") {
+        params.ggml_moe_prefetch_debug = -1;
+        return true;
+    }
+    if (arg == "--ggml-hybrid") {
+        CHECK_ARG
+        params.ggml_hybrid = argv[i];
+        return true;
+    }
+    if (arg == "--ggml-env" || arg == "--ggml") {
+        CHECK_ARG
+        params.ggml_env.emplace_back(argv[i]);
         return true;
     }
     if (arg == "-p" || arg == "--prompt") {
@@ -3805,6 +3914,11 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --omp-affinity VAL",       "KMP_AFFINITY string, e.g. granularity=fine,compact,1,0 (empty = untouched)" });
     options.push_back({ "*",           "       --omp VAR=VAL",            "generic OMP/KMP/GOMP passthrough, repeatable, applied last (e.g. --omp KMP_BLOCKTIME=0)" });
     options.push_back({ "*",           "       --omp-display-env",        "set OMP_DISPLAY_ENV/AFFINITY=TRUE for runtime diagnostics" });
+    options.push_back({ "*",           "       --ggml-sched-debug",       "set GGML_SCHED_DEBUG=1 (scheduler debug trace; --no-ggml-sched-debug removes it)" });
+    options.push_back({ "*",           "       --ggml-moe-prefetch-ahead N", "GGML_MOE_PREFETCH_AHEAD: splits prefetched ahead for MoE (ggml default 3)" });
+    options.push_back({ "*",           "       --ggml-moe-prefetch-debug", "set GGML_MOE_PREFETCH_DEBUG=1 (--no-ggml-moe-prefetch-debug removes it)" });
+    options.push_back({ "*",           "       --ggml-hybrid 0|1",        "GGML_HYBRID: 0 disables hybrid P/E-core detection (e.g. with Process Lasso)" });
+    options.push_back({ "*",           "       --ggml-env VAR=VAL",       "generic GGML_* passthrough, repeatable, applied last (e.g. --ggml-env GGML_HYBRID=0)" });
     options.push_back({ "speculative", "-td,   --threads-draft N",      "number of threads to use during generation (default: same as --threads)" });
     options.push_back({ "speculative", "-tbd,  --threads-batch-draft N",
                                                                         "number of threads to use during batch and prompt processing (default: same as --threads-draft)" });
@@ -4298,6 +4412,7 @@ std::string gpt_params_get_system_info(const gpt_params & params) {
 #endif
     os << " | OMP: " << common_omp_env_snapshot();
     os << " | OMP runtime: " << common_openmp_runtime_info();
+    os << " | GGML CPU: " << common_ggml_cpu_env_snapshot();
 
     return os.str();
 }
@@ -4954,6 +5069,9 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
 
     // CLI-managed OMP env must land before the first OpenMP parallel region
     common_apply_omp_env(params);
+    // CLI-managed GGML CPU env must land before backend init / model load
+    // (several vars are consumed once into statics)
+    common_apply_ggml_cpu_env(params);
     ggml_set_batch_thread_threshold(params.ggml_batch_thread_thresh.c_str());
     if (!params.hf_repo.empty() && !params.hf_file.empty()) {
         model = llama_load_model_from_hf(params.hf_repo.c_str(), params.hf_file.c_str(), params.model.c_str(), params.hf_token.c_str(), mparams);

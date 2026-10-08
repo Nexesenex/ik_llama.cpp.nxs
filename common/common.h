@@ -365,6 +365,19 @@ struct gpt_params {
     std::string omp_affinity     = ""; // libomp/libiomp affinity string (KMP_AFFINITY)
     std::vector<std::string> omp_env;  // generic repeatable passthrough: "VAR=VAL" (OMP_*/KMP_*/GOMP_*)
     bool        omp_display_env  = false; // OMP_DISPLAY_ENV=TRUE + OMP_DISPLAY_AFFINITY=TRUE
+
+    // GGML CPU-backend env controls (same CLI pattern as OMP above).
+    // Applied via common_apply_ggml_cpu_env() BEFORE backend init / model
+    // load: several vars are read once into statics, so startup application
+    // is required (mid-process changes have no effect).
+    // Value vars: empty = untouched. Presence flags: 0 = untouched,
+    // >0 = set VAR=1, <0 = force-remove VAR from the process env.
+    std::string ggml_moe_prefetch_ahead = ""; // int, splits prefetched ahead (ggml default 3)
+    std::string ggml_hybrid             = ""; // "0" disables hybrid P/E-core detection (e.g. Process Lasso)
+    int         ggml_sched_debug        = 0;  // GGML_SCHED_DEBUG
+    int         ggml_moe_prefetch_debug = 0;  // GGML_MOE_PREFETCH_DEBUG
+    std::vector<std::string> ggml_env;        // generic repeatable passthrough: "VAR=VAL" (any GGML_*)
+
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
@@ -700,6 +713,12 @@ std::string common_omp_env_snapshot(void);
 // version + module path), e.g. "LLVM OpenMP 23.1.3 [C:\LLVM\bin\libomp.dll]".
 // Returns a fallback string when no runtime module is found (OpenMP off).
 std::string common_openmp_runtime_info(void);
+// Apply CLI-requested GGML CPU-backend env vars BEFORE backend init / model
+// load (several are consumed once into statics). Empty/unset fields leave
+// the env untouched.
+void common_apply_ggml_cpu_env(const gpt_params & params);
+// Snapshot of the GGML CPU-relevant env for logging/bench tables.
+std::string common_ggml_cpu_env_snapshot(void);
 void gpt_params_handle_model_default(gpt_params & params);
 
 bool gpt_params_parse_ex   (int argc, char ** argv, gpt_params & params);
