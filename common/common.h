@@ -364,7 +364,6 @@ struct gpt_params {
     // explicitly. Override per-run via the typed flags; pass an empty value
     // (e.g. --omp-wait-policy "") to leave a var truly untouched.
     std::string omp_wait_policy  = "PASSIVE"; // ACTIVE | PASSIVE  (OMP_WAIT_POLICY)
-    std::string omp_wait_policy  = ""; // ACTIVE | PASSIVE  (OMP_WAIT_POLICY)
     std::string omp_proc_bind    = ""; // false|true|master|close|spread (OMP_PROC_BIND)
     std::string omp_places       = ""; // e.g. cores | threads | sockets (OMP_PLACES)
     std::string omp_dynamic      = ""; // TRUE | FALSE (OMP_DYNAMIC)
