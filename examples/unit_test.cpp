@@ -90,9 +90,13 @@ extern "C" void iqk_test_repack_iq4_nl(int nrows, int n_per_row, const block_iq4
 extern "C" void iqk_test_repack_q8_0(int nrows, int n_per_row, const block_q8_0 * x, block_q8_0_r8 * y);
 extern "C" void iqk_test_repack_iq4_xs(int nrows, int n_per_row, const block_iq4_xs * x, block_iq4_xs_r8 * y);
 
-// g_iqk_r16_path is extern'd in iqk_common.h but defined in iqk_mul_mat.cpp
-// which is NOT linked into this standalone test.  Provide our own definition.
+// g_iqk_r16_path is extern'd in iqk_common.h and defined in iqk_mul_mat.cpp,
+// which IS linked into this test (see examples/unit_test/CMakeLists.txt).
+// Provide our own definition only when the lib does not (IQK_IMPLEMENT off),
+// so there is exactly one definition in every config (no duplicate symbol).
+#if !defined(IQK_IMPLEMENT)
 bool g_iqk_r16_path = false;
+#endif
 
 static int  g_seed = 12345;
 static int  g_failures = 0;

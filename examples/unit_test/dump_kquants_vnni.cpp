@@ -26,10 +26,13 @@
 #include "iqk/iqk_common.h"
 #include "iqk/iqk_gemm_kquants.h"
 
-// g_iqk_r16_path is extern'd in iqk_common.h but defined in iqk_mul_mat.cpp
-// which is NOT linked into these standalone tools. Provide our own definition
-// (same pattern as examples/unit_test.cpp).
+// g_iqk_r16_path is extern'd in iqk_common.h and defined in iqk_mul_mat.cpp,
+// which IS linked into this tool (see examples/unit_test/CMakeLists.txt).
+// Provide our own definition only when the lib does not (IQK_IMPLEMENT off),
+// so there is exactly one definition in every config (no duplicate symbol).
+#if !defined(IQK_IMPLEMENT)
 bool g_iqk_r16_path = false;
+#endif
 
 // init_unit_test_fp16_table() is provided by fp16_table.cpp (populates
 // ggml_table_f32_f16). Declared here; do not redefine.
