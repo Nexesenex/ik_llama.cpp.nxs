@@ -75,6 +75,14 @@
     #define ggml_mm256_dpbusd_epi32 _mm256_dpbusd_avx_epi32
     #define ggml_mm256_dpwssd_epi32 _mm256_dpwssd_avx_epi32
     #define ggml_mm_dpbusd_epi32    _mm_dpbusd_avx_epi32
+#elif defined(_MSC_VER)
+    // No VNNI ISA macros on MSVC (plain-AVX2 build without -D__AVXVNNI__):
+    // MSVC declares the VEX _avx forms unconditionally, so map the wrapper
+    // there instead of leaving it undefined (C3861). Other compilers have no
+    // dpbusd available without VNNI target flags.
+    #define ggml_mm256_dpbusd_epi32 _mm256_dpbusd_avx_epi32
+    #define ggml_mm256_dpwssd_epi32 _mm256_dpwssd_avx_epi32
+    #define ggml_mm_dpbusd_epi32    _mm_dpbusd_avx_epi32
 #endif
 #endif
 
