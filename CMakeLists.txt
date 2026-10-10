@@ -186,16 +186,23 @@ if (GGML_LTO)
         # lld-link fails on bitcode version skew no matter the flags: configure
         # clang-cl build dirs from the matching VS Native Tools prompt.
         message(STATUS "GGML_LTO: /GL + /LTCG (clang-cl MSVC-style LTCG)")
-        add_compile_options(/GL)
-        add_link_options(/LTCG)
+        # NOTE: /GL and /LTCG are MSVC slash-style flags. nvcc only parses
+        # dash-style options, so a bare /GL on a .cu compile line is mistaken
+        # for a second input file and dies with "nvcc fatal: A single input
+        # file is required for a non-link phase when an outputfile is
+        # specified" (every ggml-cuda TU fails identically). Scope /GL to
+        # C/CXX compiles and /LTCG to non-CUDA links; the dash-style -O3
+        # -fomit-frame-pointer above are fine (known to nvcc / forwarded).
+        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/GL>)
+        add_link_options($<$<NOT:$<LINK_LANGUAGE:CUDA>>:/LTCG>)
         # The ggml lib predates this point: stamp it explicitly (targets added
         # later inherit both directory defaults above).
         if (TARGET ggml)
             if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
                 target_compile_options(ggml PRIVATE -O3 -fomit-frame-pointer)
             endif()
-            target_compile_options(ggml PRIVATE /GL)
-            target_link_options(ggml PRIVATE /LTCG)
+            target_compile_options(ggml PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:/GL>)
+            target_link_options(ggml PRIVATE $<$<NOT:$<LINK_LANGUAGE:CUDA>>:/LTCG>)
         endif()
     else()
         cmake_policy(SET CMP0069 NEW)
