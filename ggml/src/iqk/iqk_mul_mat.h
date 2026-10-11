@@ -9,9 +9,13 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "iqk_config.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+IQK_API void iqk_set_r16_path(bool enable);
+IQK_API bool iqk_get_r16_path(void);
 
 IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
