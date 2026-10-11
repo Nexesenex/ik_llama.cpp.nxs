@@ -106,10 +106,6 @@ void iqk_test_repack_iq2_bn(int nrows, int n_per_row, const char * x, char * y);
 // structurally and the suite isolates the AVX2 tail + outer indexing.
 void dequantize_row_iq1_bn(const block_iq1_bn * x, float * y, int64_t k);
 
-// g_iqk_r16_path is extern'd in iqk_common.h but defined in iqk_mul_mat.cpp
-// which is NOT linked into this standalone test.  Provide our own definition.
-bool g_iqk_r16_path = false;
-
 static int  g_seed = 12345;
 static int  g_failures = 0;
 static bool g_strict = false;   // when true, no ±1 qs tolerance in test_path / kv-sweep

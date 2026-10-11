@@ -35,6 +35,10 @@
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 
+bool g_iqk_r16_path = false;
+extern "C" IQK_API void iqk_set_r16_path(bool enable) { g_iqk_r16_path = enable; }
+extern "C" IQK_API bool iqk_get_r16_path(void) { return g_iqk_r16_path; }
+
 // clang-format off
 
 // This matrix - vector and matrix - matrix multiplication implementation
@@ -295,9 +299,12 @@ struct MulMat {
     static bool prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny);
     static inline ggml_type is_dequant_better(ggml_type type, int nrc_y) {
 #ifdef __AVX2__
-#ifdef HAVE_VNNI256
+#if defined(HAVE_FANCY_SIMD)
         auto q8_k_type = GGML_TYPE_Q8_K_R16;
         constexpr int k_min_nrc_y = 16;
+#elif defined(HAVE_VNNI256)
+        auto q8_k_type = g_iqk_r16_path ? GGML_TYPE_Q8_K_R16 : GGML_TYPE_Q8_K_R8;
+        constexpr int k_min_nrc_y = 16; // careful, meant initially to HAVE_FANCY_SIMD
 #else
         auto q8_k_type = GGML_TYPE_Q8_K_R8;
         constexpr int k_min_nrc_y = 32;
