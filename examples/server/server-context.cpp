@@ -1366,8 +1366,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.sparams.dry_penalty_last_n = llama_n_ctx(ctx);
 
     }
-    if (slot.sparams.dry_base < 1.0f)
-    {
+    if (slot.sparams.dry_base < 1.0f) {
         slot.sparams.dry_base = default_sparams.dry_base;
     }
 
@@ -1941,8 +1940,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     }
 
     {
-        try
-        {
+        try {
             if (slot.ctx_sampling != nullptr) {
                 common_sampler_free(slot.ctx_sampling);
             }
@@ -3606,8 +3604,7 @@ void server_context::context_shift_prompt(llama_context* ctx, server_slot& slot,
     slot.n_prompt_tokens = slot.prompt_tokens.size();
 }
 
-void server_context::release_slots()
-{
+void server_context::release_slots() {
     for (auto& slot : slots) {
         if (slot.command == SLOT_COMMAND_RELEASE) {
             slot.state = SLOT_STATE_IDLE;
@@ -3816,8 +3813,7 @@ void server_context::add_sampled_tokens() {
 static bool verify_restored_checkpoint(
     const server_prompt_checkpoint & ckpt,
     server_slot & slot,
-    const char * label)
-{
+    const char * label) {
     const llama_pos check_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
     if (check_pos != ckpt.pos_max) {
         SLT_ERR(slot, "%srestore position mismatch: cache pos_max=%d != checkpoint pos_max=%d — state corrupted\n",
@@ -4270,8 +4266,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                 slot.n_past_prompt = 0;
                             }
 
-                            if ((slot.n_past + size_threshold < slot.cache_tokens.size()))
-                            {
+                            if ((slot.n_past + size_threshold < slot.cache_tokens.size())) {
                                 int32_t back = 4;
                                 if (prefix.second >= back && prefix.first >= back) {
                                     print_tokens(slot.prompt_tokens, slot.cache_tokens, prefix.second - back, prefix.first - back, 30);
@@ -4325,8 +4320,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
 
                 // keep only the common part
                 // remove the non-common part from the cache
-                if (slot.n_past < 0)
-                {
+                if (slot.n_past < 0) {
                     slot.n_past = 0;
                 }
                 slot.cache_tokens.keep_first(slot.n_past);
