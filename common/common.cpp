@@ -1763,8 +1763,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             params.sparams.dry_sequence_breakers.clear();
         }
         else {
-            for (size_t i = 0; i < value.size(); i++)
-            {
+            for (size_t i = 0; i < value.size(); i++) {
                 params.sparams.dry_sequence_breakers.emplace_back(std::string{}+value[i]);
             }
         }
