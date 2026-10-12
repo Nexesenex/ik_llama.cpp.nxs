@@ -220,19 +220,16 @@ void common_log_set_timestamps(struct common_log* log, bool timestamps);   // wh
 
 // Utility for synchronizing log configuration state
 //  since std::optional was introduced only in c++17
-enum LogTriState
-{
+enum LogTriState {
     LogTriStateSame,
     LogTriStateFalse,
     LogTriStateTrue
 };
 
 // Utility to obtain "pid" like unique process id and use it when creating log files.
-inline std::string log_get_pid()
-{
+inline std::string log_get_pid() {
    static std::string pid;
-   if (pid.empty())
-   {
+   if (pid.empty()) {
        // std::this_thread::get_id() is the most portable way of obtaining a "process id"
        //  it's not the same as "pid" but is unique enough to solve multiple instances
        //  trying to write to the same log.
@@ -251,20 +248,17 @@ inline std::string log_get_pid()
 #define log_filename_generator(log_file_basename, log_file_extension) log_filename_generator_impl(LogTriStateSame, log_file_basename, log_file_extension)
 
 // INTERNAL, DO NOT USE
-inline std::string log_filename_generator_impl(LogTriState multilog, const std::string & log_file_basename, const std::string & log_file_extension)
-{
+inline std::string log_filename_generator_impl(LogTriState multilog, const std::string & log_file_basename, const std::string & log_file_extension) {
     static bool _multilog = false;
 
-    if (multilog != LogTriStateSame)
-    {
+    if (multilog != LogTriStateSame) {
         _multilog = multilog == LogTriStateTrue;
     }
 
     std::stringstream buf;
 
     buf << log_file_basename;
-    if (_multilog)
-    {
+    if (_multilog) {
         buf << ".";
         buf << log_get_pid();
     }
@@ -457,8 +451,7 @@ inline bool log_target_changed(bool mark_changed = false) {
 }
 
 // INTERNAL, DO NOT USE
-inline FILE *log_handler1_impl(bool change = false, LogTriState append = LogTriStateSame, LogTriState disable = LogTriStateSame, const std::string & filename = LOG_DEFAULT_FILE_NAME, FILE *target = nullptr)
-{
+inline FILE *log_handler1_impl(bool change = false, LogTriState append = LogTriStateSame, LogTriState disable = LogTriStateSame, const std::string & filename = LOG_DEFAULT_FILE_NAME, FILE *target = nullptr) {
     static bool _initialized = false;
     static bool _append = false;
     static bool _disabled = filename.empty() && target == nullptr;
@@ -466,48 +459,39 @@ inline FILE *log_handler1_impl(bool change = false, LogTriState append = LogTriS
     static FILE *log_current_target{target};
     static FILE *logfile = nullptr;
 
-    if (change)
-    {
-        if (append != LogTriStateSame)
-        {
+    if (change) {
+        if (append != LogTriStateSame) {
             _append = append == LogTriStateTrue;
             return logfile;
         }
 
-        if (disable == LogTriStateTrue)
-        {
+        if (disable == LogTriStateTrue) {
             // Disable primary target
             _disabled = true;
         }
         // If previously disabled, only enable, and keep previous target
-        else if (disable == LogTriStateFalse)
-        {
+        else if (disable == LogTriStateFalse) {
             _disabled = false;
         }
         // Otherwise, process the arguments
-        else if (log_current_filename != filename || log_current_target != target)
-        {
+        else if (log_current_filename != filename || log_current_target != target) {
             _initialized = false;
         }
     }
 
-    if (_disabled)
-    {
+    if (_disabled) {
         // Log is disabled
         return nullptr;
     }
 
-    if (_initialized)
-    {
+    if (_initialized) {
         // with fallback in case something went wrong
         return logfile ? logfile : stderr;
     }
 
     // do the (re)initialization
-    if (target != nullptr)
-    {
-        if (logfile != nullptr && logfile != stdout && logfile != stderr)
-        {
+    if (target != nullptr) {
+        if (logfile != nullptr && logfile != stdout && logfile != stderr) {
             fclose(logfile);
         }
 
@@ -516,10 +500,8 @@ inline FILE *log_handler1_impl(bool change = false, LogTriState append = LogTriS
 
         logfile = target;
     } else {
-        if (log_current_filename != filename)
-        {
-            if (logfile != nullptr && logfile != stdout && logfile != stderr)
-            {
+        if (log_current_filename != filename) {
+            if (logfile != nullptr && logfile != stdout && logfile != stderr) {
                 fclose(logfile);
             }
         }
@@ -527,8 +509,7 @@ inline FILE *log_handler1_impl(bool change = false, LogTriState append = LogTriS
         logfile = fopen(filename.c_str(), _append ? "a" : "w");
     }
 
-    if (!logfile)
-    {
+    if (!logfile) {
         //  Verify whether the file was opened, otherwise fallback to stderr
         logfile = stderr;
 
@@ -545,8 +526,7 @@ inline FILE *log_handler1_impl(bool change = false, LogTriState append = LogTriS
 }
 
 // INTERNAL, DO NOT USE
-inline FILE *log_handler2_impl(bool change = false, LogTriState append = LogTriStateSame, LogTriState disable = LogTriStateSame, FILE *target = nullptr, const std::string & filename = LOG_DEFAULT_FILE_NAME)
-{
+inline FILE *log_handler2_impl(bool change = false, LogTriState append = LogTriStateSame, LogTriState disable = LogTriStateSame, FILE *target = nullptr, const std::string & filename = LOG_DEFAULT_FILE_NAME) {
     return log_handler1_impl(change, append, disable, filename, target);
 }
 
@@ -556,8 +536,7 @@ inline FILE *log_handler2_impl(bool change = false, LogTriState append = LogTriS
 #define log_disable() log_disable_impl()
 
 // INTERNAL, DO NOT USE
-inline FILE *log_disable_impl()
-{
+inline FILE *log_disable_impl() {
     return log_handler1_impl(true, LogTriStateSame, LogTriStateTrue);
 }
 
@@ -565,8 +544,7 @@ inline FILE *log_disable_impl()
 #define log_enable() log_enable_impl()
 
 // INTERNAL, DO NOT USE
-inline FILE *log_enable_impl()
-{
+inline FILE *log_enable_impl() {
     return log_handler1_impl(true, LogTriStateSame, LogTriStateFalse);
 }
 
@@ -591,13 +569,11 @@ inline FILE *log_handler() { return log_handler1_impl(); }
 //  can ONLY be invoked BEFORE first log use.
 #define log_append(enable) log_append_impl(enable)
 // INTERNAL, DO NOT USE
-inline FILE *log_append_impl(bool enable)
-{
+inline FILE *log_append_impl(bool enable) {
     return log_handler1_impl(true, enable ? LogTriStateTrue : LogTriStateFalse, LogTriStateSame);
 }
 
-inline void log_test()
-{
+inline void log_test() {
     log_disable();
     LOG("01 Hello World to nobody, because logs are disabled!\n");
     log_enable();
@@ -637,34 +613,28 @@ inline void log_test()
 #endif
 }
 
-inline bool log_param_single_parse(const std::string & param)
-{
-    if ( param == "--log-test")
-    {
+inline bool log_param_single_parse(const std::string & param) {
+    if ( param == "--log-test") {
         log_test();
         return true;
     }
 
-    if ( param == "--log-disable")
-    {
+    if ( param == "--log-disable") {
         log_disable();
         return true;
     }
 
-    if ( param == "--log-enable")
-    {
+    if ( param == "--log-enable") {
         log_enable();
         return true;
     }
 
-    if (param == "--log-new")
-    {
+    if (param == "--log-new") {
         log_multilog(true);
         return true;
     }
 
-    if (param == "--log-append")
-    {
+    if (param == "--log-append") {
         log_append(true);
         return true;
     }
@@ -672,12 +642,9 @@ inline bool log_param_single_parse(const std::string & param)
     return false;
 }
 
-inline bool log_param_pair_parse(bool check_but_dont_parse, const std::string & param, const std::string & next = std::string())
-{
-    if ( param == "--log-file")
-    {
-        if (!check_but_dont_parse)
-        {
+inline bool log_param_pair_parse(bool check_but_dont_parse, const std::string & param, const std::string & next = std::string()) {
+    if ( param == "--log-file") {
+        if (!check_but_dont_parse) {
             log_set_target(log_filename_generator(next.empty() ? "unnamed" : next, "log"));
         }
 
@@ -687,8 +654,7 @@ inline bool log_param_pair_parse(bool check_but_dont_parse, const std::string & 
     return false;
 }
 
-inline void log_print_usage()
-{
+inline void log_print_usage() {
     printf("log options:\n");
     /* format
     printf("  -h, --help            show this help message and exit\n");*/
@@ -707,13 +673,10 @@ inline void log_print_usage()
 #define log_dump_cmdline(argc, argv) log_dump_cmdline_impl(argc, argv)
 
 // INTERNAL, DO NOT USE
-inline void log_dump_cmdline_impl(int argc, char **argv)
-{
+inline void log_dump_cmdline_impl(int argc, char **argv) {
     std::stringstream buf;
-    for (int i = 0; i < argc; ++i)
-    {
-        if (std::string(argv[i]).find(' ') != std::string::npos)
-        {
+    for (int i = 0; i < argc; ++i) {
+        if (std::string(argv[i]).find(' ') != std::string::npos) {
             buf << " \"" << argv[i] <<"\"";
         } else {
             buf << " " << argv[i];
@@ -724,25 +687,20 @@ inline void log_dump_cmdline_impl(int argc, char **argv)
 
 #define log_tostr(var) log_var_to_string_impl(var).c_str()
 
-inline std::string log_var_to_string_impl(bool var)
-{
+inline std::string log_var_to_string_impl(bool var) {
     return var ? "true" : "false";
 }
 
-inline std::string log_var_to_string_impl(std::string var)
-{
+inline std::string log_var_to_string_impl(std::string var) {
     return var;
 }
 
-inline std::string log_var_to_string_impl(const std::vector<int> & var)
-{
+inline std::string log_var_to_string_impl(const std::vector<int> & var) {
     std::stringstream buf;
     buf << "[ ";
     bool first = true;
-    for (auto e : var)
-    {
-        if (first)
-        {
+    for (auto e : var) {
+        if (first) {
             first = false;
         } else {
             buf << ", ";
@@ -755,14 +713,12 @@ inline std::string log_var_to_string_impl(const std::vector<int> & var)
 }
 
 template <typename C, typename T>
-inline std::string LOG_TOKENS_TOSTR_PRETTY(const C & ctx, const T & tokens)
-{
+inline std::string LOG_TOKENS_TOSTR_PRETTY(const C & ctx, const T & tokens) {
     std::stringstream buf;
     buf << "[ ";
 
     bool first = true;
-    for (const auto & token : tokens)
-    {
+    for (const auto & token : tokens) {
         if (!first) {
             buf << ", ";
         } else {
@@ -788,14 +744,12 @@ inline std::string LOG_TOKENS_TOSTR_PRETTY(const C & ctx, const T & tokens)
 }
 
 template <typename C, typename B>
-inline std::string LOG_BATCH_TOSTR_PRETTY(const C & ctx, const B & batch)
-{
+inline std::string LOG_BATCH_TOSTR_PRETTY(const C & ctx, const B & batch) {
     std::stringstream buf;
     buf << "[ ";
 
     bool first = true;
-    for (int i = 0; i < batch.n_tokens; ++i)
-    {
+    for (int i = 0; i < batch.n_tokens; ++i) {
         if (!first) {
             buf << ", ";
         } else {
