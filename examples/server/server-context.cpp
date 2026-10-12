@@ -3812,6 +3812,11 @@ void server_context::context_shift_prompt(llama_context* ctx, server_slot& slot,
     // discard matching tokens from cache and kv cache to avoid reprocessing the prompt
     if (n_discard_cache > 0) {
         discard_n_kv_and_cache_tokens(ctx, slot, n_kept, n_discard_cache);
+        // context shift invalidates all checkpoints because their KV positions
+        // no longer match the shifted cache; keeping them would cause cache
+        // corruption when restored (stale pos_max/pos_min referencing pre-shift layout)
+        clear_checkpoints_and_spill(slot.server_cached_prompt.checkpoints);
+        slot.checkpoint_pos = -1;
     }
     // discard extra tokens from prompts
     slot.n_kept_prompt = n_keep;
@@ -3903,6 +3908,11 @@ void server_context::context_shift() {
                     discard_n_kv_and_cache_tokens(ctx, slot, n_kept, n_discard_cache);
                     slot.n_past -= n_discard_cache;
                     slot.truncated = true;
+                    // context shift invalidates all checkpoints because their KV positions
+                    // no longer match the shifted cache; keeping them would cause cache
+                    // corruption when restored (stale pos_max/pos_min referencing pre-shift layout)
+                    clear_checkpoints_and_spill(slot.server_cached_prompt.checkpoints);
+                    slot.checkpoint_pos = -1;
                 }
 
             }
@@ -3917,6 +3927,15 @@ void server_context::add_sampled_tokens() {
             continue;
         }
         slot.spec_target_only = false;
+
+        // skip slots that are still loading a prompt - their sampled token is stale
+        // from a previous request and n_decoded hasn't been reset yet (done later
+        // in batch_pending_prompt when the full prompt fits in one batch, or after
+        // the first prompt batch is evaluated). Adding a stale token would corrupt
+        // cache_tokens by inserting a spurious token before the prompt prefill.
+        if (slot.command == SLOT_COMMAND_LOAD_PROMPT && slot.n_past_prompt < slot.n_prompt_tokens) {
+            continue;
+        }
 
         // generate draft tokens in speculative decoding mode
         // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
@@ -4674,6 +4693,7 @@ void server_context::b_p_p(const int32_t n_ubatch, const int32_t n_batch,  int32
                     slot.n_prompt_tokens_cache = 0;
                     slot.ga_i = 0;
                     clear_checkpoints_and_spill(slot.server_cached_prompt.checkpoints);
+                    slot.checkpoint_pos = -1;
                     // TODO: is the system prompt ever in the sampling context?
                     common_sampler_reset(slot.ctx_sampling);
                 }
