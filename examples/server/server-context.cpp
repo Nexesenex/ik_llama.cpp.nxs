@@ -3751,6 +3751,11 @@ void server_context::context_shift_prompt(llama_context* ctx, server_slot& slot,
     // discard matching tokens from cache and kv cache to avoid reprocessing the prompt
     if (n_discard_cache > 0) {
         discard_n_kv_and_cache_tokens(ctx, slot, n_kept, n_discard_cache);
+        // context shift invalidates all checkpoints because their KV positions
+        // no longer match the shifted cache; keeping them would cause cache
+        // corruption when restored (stale pos_max/pos_min referencing pre-shift layout)
+        clear_checkpoints_and_spill(slot.server_cached_prompt.checkpoints);
+        slot.checkpoint_pos = -1;
     }
     // discard extra tokens from prompts
     slot.n_kept_prompt = n_keep;
@@ -3842,6 +3847,11 @@ void server_context::context_shift() {
                     discard_n_kv_and_cache_tokens(ctx, slot, n_kept, n_discard_cache);
                     slot.n_past -= n_discard_cache;
                     slot.truncated = true;
+                    // context shift invalidates all checkpoints because their KV positions
+                    // no longer match the shifted cache; keeping them would cause cache
+                    // corruption when restored (stale pos_max/pos_min referencing pre-shift layout)
+                    clear_checkpoints_and_spill(slot.server_cached_prompt.checkpoints);
+                    slot.checkpoint_pos = -1;
                 }
 
             }
@@ -3856,6 +3866,15 @@ void server_context::add_sampled_tokens() {
             continue;
         }
         slot.spec_target_only = false;
+
+        // skip slots that are still loading a prompt - their sampled token is stale
+        // from a previous request and n_decoded hasn't been reset yet (done later
+        // in batch_pending_prompt when the full prompt fits in one batch, or after
+        // the first prompt batch is evaluated). Adding a stale token would corrupt
+        // cache_tokens by inserting a spurious token before the prompt prefill.
+        if (slot.command == SLOT_COMMAND_LOAD_PROMPT && slot.n_past_prompt < slot.n_prompt_tokens) {
+            continue;
+        }
 
         // generate draft tokens in speculative decoding mode
         // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
@@ -4043,7 +4062,22 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     if (cur.pos_max > pos_next) {
                         return false;
                     }
-                    return cur.pos_min < pos_min_thold || cur.pos_min == 0;
+                    if (!(cur.pos_min < pos_min_thold || cur.pos_min == 0)) {
+                        return false;
+                    }
+                    // checkpoint must land on a token boundary shared with the new prompt;
+                    // otherwise the fuzzy text matcher can return a prefix shorter than the
+                    // checkpoint position, causing n_past_prompt to lag behind n_past and
+                    // tokens to be re-decoded (duplicated in cache)
+                    {
+                        const llama_pos pos_c = std::min(pos_next, std::max(cur.pos_min + 1, cur.pos_max));
+                        const int32_t n_c = slot.cache_tokens.size_up_to_pos(pos_c);
+                        const auto pfx = slot.cache_tokens.get_common_prefix_first_n(ctx, slot.prompt_tokens, n_c);
+                        if ((int32_t)pfx.first != n_c) {
+                            return false;
+                        }
+                    }
+                    return true;
                 }
             );
 
@@ -4087,9 +4121,18 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     auto prefix = slot.cache_tokens.get_common_prefix_first_n(ctx, slot.prompt_tokens, slot.n_past);
                     slot.n_past_prompt = prefix.second;
 
-                    slot.checkpoint_pos = it->pos_max;
+                    // safety check: the fuzzy matcher should agree with the cache position
+                    if ((int32_t)prefix.first != slot.n_past) {
+                        SLT_ERR(slot, "checkpoint boundary mismatch: prefix.first=%d != n_past=%d (pos_next=%d), falling back to full reprocess\n",
+                            (int)prefix.first, slot.n_past, pos_next);
+                        do_reset = true;
+                    }
 
-                    SLT_WRN(slot, "restored ckpt took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
+                    if (!do_reset) {
+                        slot.checkpoint_pos = it->pos_max;
+
+                        SLT_WRN(slot, "restored ckpt took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
+                    }
                 }
             }
 
@@ -4584,6 +4627,7 @@ void server_context::b_p_p(const int32_t n_ubatch, const int32_t n_batch,  int32
                     slot.n_prompt_tokens_cache = 0;
                     slot.ga_i = 0;
                     clear_checkpoints_and_spill(slot.server_cached_prompt.checkpoints);
+                    slot.checkpoint_pos = -1;
                     // TODO: is the system prompt ever in the sampling context?
                     common_sampler_reset(slot.ctx_sampling);
                 }
