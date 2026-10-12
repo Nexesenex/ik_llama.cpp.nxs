@@ -58,8 +58,7 @@ void server_log(const char* level, const char* function, int line, const char* m
         }
         std::stringstream ss;
         ss << buf << " |";
-        for (const auto& el : log.items())
-        {
+        for (const auto& el : log.items()) {
             const std::string value = el.value().dump(-1, ' ', false, json::error_handler_t::replace);
             ss << " " << el.key() << "=" << value;
         }
@@ -640,8 +639,7 @@ json oaicompat_chat_params_parse(const json& body) {
 json oaicompat_chat_params_parse(
     json& body, /* openai api json semantics */
     const server_chat_params& opt,
-    std::vector<raw_buffer>& out_files)
-{
+    std::vector<raw_buffer>& out_files) {
     json llama_params;
 
     llama_params["__oaicompat"] = true;
