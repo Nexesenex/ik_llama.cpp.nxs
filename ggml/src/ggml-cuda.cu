@@ -1825,6 +1825,13 @@ static void ggml_cuda_op_mul_mat_cublas(
 
     const int64_t row_diff = row_high - row_low;
 
+    // Degenerate GEMM (e.g. stale row split replayed from a captured CUDA graph
+    // after a shape change at very large ctx / VRAM pressure, see IKL PR 2604):
+    // cublas would return INVALID_VALUE; an empty GEMM is a no-op.
+    if (row_diff <= 0 || src1_ncols <= 0 || ne10 <= 0) {
+        return;
+    }
+
     int id = ggml_cuda_get_device();
 
     // the main device has a larger memory buffer to hold the results from all GPUs
@@ -1968,12 +1975,19 @@ static void ggml_cuda_op_mul_mat_cublas(
         const float beta = 0.0f;
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
-        CUBLAS_CHECK(
-            cublasSgemm(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
+        {
+            cublasStatus_t stat = cublasSgemm(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                     row_diff, src1_ncols, ne10,
                     &alpha, src0_ddf_i,  ne00,
                             src1_ddf1_i, ne10,
-                    &beta,  dst_dd_i,    ldc));
+                    &beta,  dst_dd_i,    ldc);
+            if (stat != CUBLAS_STATUS_SUCCESS) {
+                GGML_CUDA_LOG_ERROR("%s: cublasSgemm failed (m=row_diff=%lld n=%lld k=%lld lda=%lld ldb=%lld ldc=%lld id=%d dst=%s status=%d)\n",
+                    __func__, (long long) row_diff, (long long) src1_ncols, (long long) ne10,
+                    (long long) ne00, (long long) ne10, (long long) ldc, id, dst->name, (int) stat);
+            }
+            CUBLAS_CHECK(stat);
+        }
     }
 
     GGML_UNUSED(dst);
