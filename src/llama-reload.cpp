@@ -81,8 +81,7 @@ static void log_split_state(const char * ctx, struct ggml_tensor * t) {
 static bool gguf_find_tensor_meta(const char * path, const char * target_name,
                                   size_t & out_offset, size_t & out_nbytes,
                                   ggml_type & out_type,
-                                  int64_t out_ne[GGML_MAX_DIMS])
-{
+                                  int64_t out_ne[GGML_MAX_DIMS]) {
     struct ggml_context * ctx = nullptr;
     struct gguf_init_params params = {
         /*.no_alloc = */ true,
@@ -122,8 +121,7 @@ static bool gguf_find_tensor_meta(const char * path, const char * target_name,
 // ------------------------------------------------------------------
 static size_t count_buffer_users(
         const std::vector<std::pair<std::string, struct ggml_tensor *>> & tensors_by_name,
-        ggml_backend_buffer_t buf)
-{
+        ggml_backend_buffer_t buf) {
     if (!buf) return 0;
     size_t n = 0;
     for (auto & p : tensors_by_name) {
@@ -299,8 +297,7 @@ static void reload_fp8_input_scale(ggml_tensor * tensor, const tensor_reload_sou
 }
 
 static void snapshot_tensor_source(struct ggml_tensor * tensor,
-                                   tensor_reload_source & src)
-{
+                                   tensor_reload_source & src) {
     if (!tensor || src.original_buffer != nullptr) return;
 
     src.original_buffer = tensor->buffer;
@@ -470,8 +467,7 @@ static void resync_moe_sibling_splits(
         llama_model & model,
         struct ggml_context * /*ctx_tmp*/,
         struct ggml_tensor * ref_tensor,
-        const char * ref_name)
-{
+        const char * ref_name) {
     std::string name_str(ref_name);
     std::string layer_prefix;
     std::vector<std::string> suffixes;
@@ -693,8 +689,7 @@ static bool reload_tensor_split_path(
         const std::vector<char> & host_buf,
         ggml_type curr_type,
         bool returning_to_original,
-        ggml_backend_buffer_t old_buf)
-{
+        ggml_backend_buffer_t old_buf) {
     (void)curr_type;
     const char * name = ggml_get_name(tensor);
 
@@ -758,8 +753,7 @@ static bool reload_tensor_non_split_path(
         const std::vector<char> & host_buf,
         ggml_type curr_type,
         bool returning_to_original,
-        ggml_backend_buffer_t old_buf)
-{
+        ggml_backend_buffer_t old_buf) {
     (void)curr_type;
 #ifndef NDEBUG
     const char * name = ggml_get_name(tensor);
@@ -824,8 +818,7 @@ static bool apply_tensor_type_change(
         llama_model & model,
         struct ggml_tensor * tensor,
         tensor_reload_source & src,
-        ggml_type curr_type)
-{
+        ggml_type curr_type) {
 #ifndef NDEBUG
     const char * name = ggml_get_name(tensor);
     (void)name;
