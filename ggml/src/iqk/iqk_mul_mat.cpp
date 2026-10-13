@@ -337,44 +337,28 @@ struct MulMat {
                 default: break;
             }
         }
-        // -rtr16p on non-FANCY builds: only IQ4_XS_R8 owns a VNNI R16
-        // converter (C5 iqk_convert_iq4_xs_r8_q8_k_r16_vnni). Every other
-        // repacked converter selects its R8/R16 target at COMPILE time and
-        // emits R8 here, while dispatch below would prepare R16 kernels
-        // and R16-sized work rows -> layout mismatch, OOB reads, NaN
-        // (254de80 re-enabled these dispatches without VNNI R16 emitters).
-        // Force direct for them; revisit if per-type VNNI R16 converters
-        // ever land. IQ4_XS_R8 deliberately excluded (C5 serves it).
-#if !defined(HAVE_FANCY_SIMD)
-        if (g_iqk_r16_path) {
-            switch (type) {
-                case GGML_TYPE_IQ2_XXS_R4:
-                case GGML_TYPE_IQ2_XS_R4:
-                case GGML_TYPE_IQ2_S_R4:
-                case GGML_TYPE_IQ3_XXS_R4:
-                case GGML_TYPE_IQ3_S_R4:
-                case GGML_TYPE_Q2_K_R4:
-                case GGML_TYPE_Q3_K_R4:
-                case GGML_TYPE_Q4_K_R4:
-                case GGML_TYPE_Q5_K_R4:
-                case GGML_TYPE_Q6_K_R4:
-                case GGML_TYPE_IQ2_K_R4:
-                case GGML_TYPE_IQ3_K_R4:
-                case GGML_TYPE_IQ4_KS_R4:
-                case GGML_TYPE_IQ4_K_R4:
-                case GGML_TYPE_IQ5_KS_R4:
-                case GGML_TYPE_IQ5_K_R4:
-                    return type;
-                default: break;
-            }
-        }
-#endif
+        // -rtr16p on non-FANCY builds (R16-12, supersedes R16-11): VNNI R16
+        // emitters exist only for IQ4_XS_R8 (R16-5 vnni converter) and IQ4_XS
+        // native (runtime R16 branch, proven by test_native_path). Every
+        // other converter selects its R8/R16 target at COMPILE time and
+        // emits R8 here, so dispatching them to R16 reads OOB -> NaN
+        // (r16p PPL stayed red under R16-11's force-direct: the still-R16
+        // iq5_k native path proved the mismatch is wider than R4). The
+        // q8_k_type one-liner below routes the proven pair to R16 and
+        // everything else to R8 (their converters' true target), keeping
+        // the convert win where it is correct. FANCY (AVX512) unchanged.
 #ifdef __AVX2__
 #if defined(HAVE_FANCY_SIMD)
         auto q8_k_type = GGML_TYPE_Q8_K_R16;
         constexpr int k_min_nrc_y = 16;
 #elif defined(HAVE_VNNI256)
-        auto q8_k_type = g_iqk_r16_path ? GGML_TYPE_Q8_K_R16 : GGML_TYPE_Q8_K_R8;
+        // R16-12: R16 if and only if a VNNI R16 emitter exists for this type
+        // (IQ4_XS_R8 via R16-5, IQ4_XS native via its runtime branch). All
+        // other converters emit R8 on VNNI regardless of r16p; sending them
+        // to R16 misreads the layout (r16p PPL NaN).
+        auto q8_k_type = (g_iqk_r16_path &&
+                (type == GGML_TYPE_IQ4_XS_R8 || type == GGML_TYPE_IQ4_XS))
+            ? GGML_TYPE_Q8_K_R16 : GGML_TYPE_Q8_K_R8;
         constexpr int k_min_nrc_y = 16; // careful, meant initially to HAVE_FANCY_SIMD
 #else
         auto q8_k_type = GGML_TYPE_Q8_K_R8;
