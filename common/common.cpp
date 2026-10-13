@@ -3449,6 +3449,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         iqk_set_r16_path(true);
         return true;
     }
+    if (arg == "-rtrd" || arg == "--run-time-repack-direct") {
+        params.repack_tensors = true;
+        params.use_mmap = false;
+        iqk_set_direct_repacked(true);
+        return true;
+    }
     if (arg == "-thp" || arg == "--transparent-huge-pages") {
         params.use_thp = true;
         return true;
@@ -4743,6 +4749,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     }
     options.push_back({ "*",           "-rtr,   --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "-rtr16p, --run-time-repack-16-path", "repack tensors + Q8_K_R16 fast path on VNNI256 (preferred over -rtr)"});
+    options.push_back({ "*",           "-rtrd,  --run-time-repack-direct", "repack tensors + direct repacked GEMM (no R4/R8->Q8 convert, restores cdd2c9f+02f6f91 behaviour)"});
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "       --moe-cache-mib N",       "Total GPU cache budget in MiB for CPU-resident MoE experts, split across GPUs (default: 0, disabled)"});
@@ -7372,6 +7379,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "no_mmap: %s # default: false\n", !params.use_mmap ? "true" : "false");
     fprintf(stream, "repack: %s # default: false\n", params.repack_tensors ? "true" : "false");
     fprintf(stream, "r16_path: %s # default: false\n", iqk_get_r16_path() ? "true" : "false");
+    fprintf(stream, "direct_repacked: %s # default: false\n", iqk_get_direct_repacked() ? "true" : "false");
     fprintf(stream, "use_thp: %s # default: false\n", params.use_thp ? "true" : "false");
     fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");
     fprintf(stream, "merge_qkv: %s # default: false\n", params.merge_qkv ? "true" : "false");
