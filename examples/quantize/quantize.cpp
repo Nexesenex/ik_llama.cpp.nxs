@@ -168,7 +168,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [-dev/--device] [-ts/--tensor-split] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--skip-missing-splits] [--override-kv] [--individual-tensors LIST] [--skip-first-shard] [--virtual-map PATH] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--prefetch [N]] [--cuda-quantize] [-dev/--device] [-ts/--tensor-split] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--skip-missing-splits] [--override-kv] [--individual-tensors LIST] [--skip-first-shard] [--virtual-map PATH] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -177,6 +177,7 @@ static void usage(const char * executable) {
     printf("  --ignore-imatrix-rules: ignore importance matrix rules when quantizing\n");
     printf("  --dry-run: show what would be quantized without actually writing the output file\n");
     printf("  --slab-size N: process tensors larger than N MiB of f32 in slabs of up to N MiB, or of one expert slice or row group if that is larger (default: 1024, 0 = never)\n");
+    printf("  --prefetch [N]: prefetch next N same-kind tensors in RAM while quantizing (dense ffn up/gate/down, exps up/gate/down, PLE/engram, output.weight); disabled by default, enabled with default 1 when flag is given without N\n");
     printf("  --cuda-quantize: quantize IQ4_KT, IQ3_KT, IQ2_KT, IQ1_KT, IQ3_KS, IQ4_KS, IQ4_KS_R4, IQ4_KS_R16, IQ5_KS, and IQ5_KS_R4 tensors on a CUDA device; other types use the CPU\n");
     printf("  -dev DEVICES, --device DEVICES: CUDA device(s) for --cuda-quantize (default CUDA0; 2+ devices = row-split, e.g. -dev CUDA0,CUDA1)\n");
     printf("  -ts SPLIT, --tensor-split SPLIT: row-split shares for 2+ GPUs (e.g. -ts 3,3,2; equal when absent; requires -dev/--device with 2+ CUDA devices)\n");
@@ -612,6 +613,44 @@ int main(int argc, char ** argv) {
                 }
             } else {
                 usage(argv[0]);
+            }
+        } else if (strncmp(argv[arg_idx], "--prefetch", 10) == 0) {
+            const char * opt = argv[arg_idx];
+            const char * eq = strchr(opt, '=');
+            if (eq) {
+                // --prefetch=N form
+                try {
+                    int n = std::stoi(eq + 1);
+                    if (n < 0) throw std::runtime_error("negative");
+                    params.prefetch = n;
+                }
+                catch (const std::exception & e) {
+                    fprintf(stderr, "%s: invalid prefetch count '%s' (%s)\n", __func__, eq + 1, e.what());
+                    return 1;
+                }
+            } else if (arg_idx + 1 < argc && argv[arg_idx + 1][0] != '-') {
+                // --prefetch N form (optional value; bare --prefetch defaults to 1)
+                const char * val = argv[arg_idx + 1];
+                bool is_num = val[0] != '\0';
+                for (const char * p = val; *p && is_num; ++p) {
+                    if (!isdigit((unsigned char) *p)) is_num = false;
+                }
+                if (is_num) {
+                    try {
+                        int n = std::stoi(val);
+                        if (n < 0) throw std::runtime_error("negative");
+                        params.prefetch = n;
+                    }
+                    catch (const std::exception & e) {
+                        fprintf(stderr, "%s: invalid prefetch count '%s' (%s)\n", __func__, val, e.what());
+                        return 1;
+                    }
+                    ++arg_idx;
+                } else {
+                    params.prefetch = 1;
+                }
+            } else {
+                params.prefetch = 1;
             }
         } else if (strcmp(argv[arg_idx], "--cuda-quantize") == 0) {
             params.cuda_quantize = true;
