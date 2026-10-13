@@ -50,6 +50,7 @@ extern "C" void iqk_test_repack_iq4_nl(int nrows, int n_per_row, const block_iq4
 extern "C" void iqk_test_repack_q6_0(int nrows, int n_per_row, const block_q6_0 * x, block_q6_0_r4 * y);
 extern "C" void iqk_test_repack_q8_0(int nrows, int n_per_row, const block_q8_0 * x, block_q8_0_r8 * y);
 extern "C" void iqk_test_repack_iq4_xs(int nrows, int n_per_row, const block_iq4_xs * x, block_iq4_xs_r8 * y);
+extern "C" void iqk_test_repack_iq4_xs_r16(int nrows, int n_per_row, const block_iq4_xs * x, block_iq4_xs_r16 * y);
 
 namespace bench {
 
@@ -320,6 +321,7 @@ static const RepackFam kRepacks[] = {
     { "q6_0", GGML_TYPE_Q6_0, GGML_TYPE_Q6_0_R4, 1024, 64 },
     { "q8_0", GGML_TYPE_Q8_0, GGML_TYPE_Q8_0_R8, 1024, 64 },
     { "iq4_xs", GGML_TYPE_IQ4_XS, GGML_TYPE_IQ4_XS_R8, 1024, 64 },
+    { "iq4_xs_r16", GGML_TYPE_IQ4_XS, GGML_TYPE_IQ4_XS_R16, 1024, 64 },
 };
 
 // Deterministic plan-line count mirroring run() iteration-for-iteration:
@@ -337,7 +339,8 @@ static int planned_lines(const Options & o) {
         const char * nm = ggml_type_name(t);
         std::string qname = (nm && nm[0] && strcmp(nm, "?")) ? nm : ("t" + std::to_string(ti));
         int64_t bs = ggml_blck_size(t);
-        int n = 1024 % bs == 0 ? 1024 : (2048 % bs == 0 ? 2048 : 0);
+        // 4096 fallback hosts 16-row repacks (IQ4_XS_R16 blck 16*QK_K).
+        int n = 1024 % bs == 0 ? 1024 : (2048 % bs == 0 ? 2048 : (4096 % bs == 0 ? 4096 : 0));
         if (!n) { ++total; continue; }
 #ifdef TEST_DISPATCH
         if (match_filter(o, "convert", qname)) total += 2;
@@ -448,7 +451,8 @@ int run(const Options & opt, std::vector<Result> & rows_out) {
         const char * nm = ggml_type_name(t);
         std::string label = (nm && nm[0] && strcmp(nm, "?")) ? nm : ("t" + std::to_string(ti));
         int64_t bs = ggml_blck_size(t);
-        int n = 1024 % bs == 0 ? 1024 : (2048 % bs == 0 ? 2048 : 0);
+        // Keep in sync with planned_lines() above (4096 hosts IQ4_XS_R16).
+        int n = 1024 % bs == 0 ? 1024 : (2048 % bs == 0 ? 2048 : (4096 % bs == 0 ? 4096 : 0));
         if (!n) { printf("  [SKIP] [%d/%d] bench n/a for %s\n", ++g_plan_done, g_plan_total, label.c_str()); continue; }
         Entry e; e.t = t; e.name = label; e.n = n;
         reg.push_back(e);
@@ -619,8 +623,11 @@ int run(const Options & opt, std::vector<Result> & rows_out) {
             else if (rps[i].st == GGML_TYPE_Q8_0) fn = [&]() {
                 iqk_test_repack_q8_0(rps[i].x, rps[i].n, (const block_q8_0 *)src.data(), (block_q8_0_r8 *)dst.data());
             };
-            else if (rps[i].st == GGML_TYPE_IQ4_XS) fn = [&]() {
+            else if (rps[i].st == GGML_TYPE_IQ4_XS && rps[i].dt == GGML_TYPE_IQ4_XS_R8) fn = [&]() {
                 iqk_test_repack_iq4_xs(rps[i].x, rps[i].n, (const block_iq4_xs *)src.data(), (block_iq4_xs_r8 *)dst.data());
+            };
+            else if (rps[i].st == GGML_TYPE_IQ4_XS && rps[i].dt == GGML_TYPE_IQ4_XS_R16) fn = [&]() {
+                iqk_test_repack_iq4_xs_r16(rps[i].x, rps[i].n, (const block_iq4_xs *)src.data(), (block_iq4_xs_r16 *)dst.data());
             };
             else if (rps[i].st == GGML_TYPE_Q6_0) fn = [&]() {
                 iqk_test_repack_q6_0(rps[i].x, rps[i].n, (const block_q6_0 *)src.data(), (block_q6_0_r4 *)dst.data());
@@ -634,7 +641,7 @@ int run(const Options & opt, std::vector<Result> & rows_out) {
             emit(r, 8.0, (long long)rps[i].n * rps[i].x, rows_out); ++n_stages;
         }
         if (did_repack) {
-            printf("  [INFO] repack: 7 families wired (no harness wrapper for the rest;\n");
+            printf("  [INFO] repack: 8 families wired (no harness wrapper for the rest;\n");
             printf("  [INFO] repack: quantize/dequantize rows not benched (mostly link stubs).\n");
         }
     }
