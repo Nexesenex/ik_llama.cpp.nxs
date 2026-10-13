@@ -106,6 +106,7 @@ std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
         { GGML_TYPE_IQ3_XXS_R4,  { GGML_TYPE_IQ3_XXS, 4} },
         { GGML_TYPE_IQ3_S_R4,    { GGML_TYPE_IQ3_S, 4} },
         { GGML_TYPE_IQ4_XS_R8,   { GGML_TYPE_IQ4_XS, 8} },
+        { GGML_TYPE_IQ4_XS_R16,  { GGML_TYPE_IQ4_XS, 16} },
         { GGML_TYPE_IQ4_NL_R4,   { GGML_TYPE_IQ4_NL, 4} },
         { GGML_TYPE_IQ1_S_R4,    { GGML_TYPE_IQ1_S, 4} },
         { GGML_TYPE_IQ1_M_R4,    { GGML_TYPE_IQ1_M, 4} },
@@ -265,6 +266,12 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             convert_incompatible_tensor = true;
         }
     }
+    if (new_type == GGML_TYPE_IQ4_XS_R16) {
+        if (nx % QK_K != 0 || ny % 16 != 0) {
+            LLAMA_LOG_WARN("\n\n%s : tensor %d x %d is not compatible with %s (needs cols %% 256 == 0 and rows %% 16 == 0)", __func__, nx, ny, ggml_type_name(new_type));
+            convert_incompatible_tensor = true;
+        }
+    }
     if (convert_incompatible_tensor) {
         switch (new_type) {
             case GGML_TYPE_IQ1_S:
@@ -303,6 +310,7 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_IQ3_KT:
             case GGML_TYPE_IQ4_KT:
             case GGML_TYPE_IQ4_XS: new_type = ny % 16 == 0 ? GGML_TYPE_IQ4_KS_R16 : GGML_TYPE_IQ4_NL; break;
+            case GGML_TYPE_IQ4_XS_R16: new_type = ny % 8 == 0 ? GGML_TYPE_IQ4_XS_R8 : GGML_TYPE_IQ4_NL; break;
             case GGML_TYPE_IQ4_K:
             case GGML_TYPE_IQ4_K_R4:
             case GGML_TYPE_Q4_K_R4:
