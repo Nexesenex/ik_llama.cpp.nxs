@@ -1275,6 +1275,94 @@ static void do_quantize_slabbed(int nthread, const ggml_tensor * tensor, ggml_ty
     }
 }
 
+// --prefetch N: RAM look-ahead for the quantization loop.
+// Groups follow the task spec: dense FFN (up/gate/down), MoE exps (up/gate/down,
+// merged gate_up, shared experts), PLE/engram embeddings, and final output.weight.
+// While tensor i is being quantized (CPU threads or CUDA kernels), the next N
+// tensors of the same kind are hinted into RAM via the mmap prefetch hook
+// (PrefetchVirtualMemory on Windows, MADV_WILLNEED on Linux), so the next
+// iteration does not stall on page faults. Works for both CPU and CUDA quant
+// because both share the same loader/mmap path.
+enum quant_prefetch_kind {
+    Q_PREFETCH_OTHER = 0,
+    Q_PREFETCH_FFN_DENSE,
+    Q_PREFETCH_FFN_EXPS,
+    Q_PREFETCH_EMBED,
+    Q_PREFETCH_OUTPUT,
+};
+
+static quant_prefetch_kind quant_prefetch_kind_of(const std::string & name) {
+    if (name == "output.weight" || name == "output_extra.weight") {
+        return Q_PREFETCH_OUTPUT;
+    }
+    // MoE experts must be tested before dense: "ffn_up_exps.weight" contains "ffn_up".
+    if (name.find("_exps.weight") != std::string::npos || name.find("_shexp.weight") != std::string::npos) {
+        return Q_PREFETCH_FFN_EXPS;
+    }
+    if (name.find("ffn_up.weight") != std::string::npos ||
+        name.find("ffn_gate.weight") != std::string::npos ||
+        name.find("ffn_down.weight") != std::string::npos) {
+        return Q_PREFETCH_FFN_DENSE;
+    }
+    if (name.find("per_layer_token_embd") != std::string::npos ||
+        name.find("engram") != std::string::npos ||
+        name.find("pos_embd") != std::string::npos ||
+        name.find("token_embd") != std::string::npos ||
+        name.find("token_types") != std::string::npos) {
+        return Q_PREFETCH_EMBED;
+    }
+    return Q_PREFETCH_OTHER;
+}
+
+static void quant_prefetch_ahead(const llama_model_loader & ml, int i_cur,
+        int n_prefetch, const std::unordered_set<std::string> & skip_names) {
+    if (n_prefetch <= 0) {
+        return;
+    }
+    if (!ml.use_mmap || ml.mappings.empty()) {
+        return;
+    }
+    if (i_cur < 0 || i_cur >= ml.n_tensors) {
+        return;
+    }
+    const auto * cur_w = ml.get_weight(i_cur);
+    if (!cur_w || !cur_w->tensor) {
+        return;
+    }
+    const quant_prefetch_kind cur_kind = quant_prefetch_kind_of(ggml_get_name(cur_w->tensor));
+    if (cur_kind == Q_PREFETCH_OTHER) {
+        return;
+    }
+    int prefetched = 0;
+    for (int j = i_cur + 1; j < ml.n_tensors && prefetched < n_prefetch; ++j) {
+        const auto * w = ml.get_weight(j);
+        if (!w || !w->tensor) {
+            continue;
+        }
+        const std::string fname = ggml_get_name(w->tensor);
+        if (quant_prefetch_kind_of(fname) != cur_kind) {
+            continue;
+        }
+        if (skip_names.find(fname) != skip_names.end()) {
+            continue;
+        }
+        auto it = ml.split_to_file_idx.find(w->idx);
+        if (it == ml.split_to_file_idx.end()) {
+            continue;
+        }
+        const size_t file_idx = it->second;
+        if (file_idx >= ml.mappings.size() || !ml.mappings[file_idx]) {
+            continue;
+        }
+        const size_t nbytes = ggml_nbytes(w->tensor);
+        if (nbytes == 0) {
+            continue;
+        }
+        ml.mappings[file_idx]->prefetch_fragment(w->offs, w->offs + nbytes);
+        ++prefetched;
+    }
+}
+
 static void llama_model_quantize_internal(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params, const size_t * tensor_ids) {
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
@@ -1624,6 +1712,11 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)model.hparams.n_layer;
 
+    if (params->prefetch > 0) {
+        LLAMA_LOG_INFO("%s: prefetching next %d same-kind tensor(s) in RAM (dense ffn / exps / PLE-engram / output)\n",
+                __func__, params->prefetch);
+    }
+
     // sanity checks
     //
     //  - qs.n_attention_wv == 0                         for Mamba           models
@@ -1813,6 +1906,12 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 tensor->data = read_data.data();
             }
             ml.load_data_for(tensor);
+        }
+
+        // --prefetch N: hint the next N same-kind tensors into RAM while this one
+        // quantizes (CPU threads or CUDA kernels share this loader path).
+        if (params->prefetch > 0) {
+            quant_prefetch_ahead(ml, i, params->prefetch, virtual_map_targets);
         }
 
         if (out_split_count > 1) {

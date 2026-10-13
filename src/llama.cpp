@@ -9395,6 +9395,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.partial_requant                =*/ false,
         /*.skip_missing_splits            =*/ false,
         /*.slab_size                      =*/ 1ull << 30,
+        /*.prefetch                       =*/ 0,
         /*.cuda_quantize                  =*/ false,
         /*.cuda_quantize_device             =*/ 0,
         /*.cuda_quantize_n_devices          =*/ 0,
