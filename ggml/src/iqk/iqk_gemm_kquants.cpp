@@ -2473,7 +2473,10 @@ void iqk_convert_q2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
 #if defined(HAVE_FANCY_SIMD)
         true
 #else
-        g_iqk_r16_path
+        // R16-12: VNNI R16 emission removed. R16-12 dispatch targets R8 for Q2_K
+        // (no proven VNNI R16 emitter); emitting R16 here while R8 kernels
+        // are prepared misreads the layout (r16p PPL NaN). FANCY untouched.
+        false
 #endif
     ) {
         constexpr int k_nr = 16;
@@ -3276,7 +3279,9 @@ void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
 #if defined(HAVE_FANCY_SIMD)
         true
 #else
-        g_iqk_r16_path
+        // R16-12: same as q2_k above (R16 dispatch removed for Q3_K, no proven
+        // VNNI R16 emitter; r16p PPL NaN).
+        false
 #endif
     ) {
         constexpr int k_nr = 16;
@@ -4014,23 +4019,7 @@ bool iqk_convert_kquants_q8X_r8(int type, int n, const void * vx, size_t bx, voi
             default: break;
         }
     }
-    // -rtr16p on non-FANCY builds: these R4 converters emit R8 (compile-time
-    // target) while dispatch prepares R16 -> mismatch/NaN (see is_dequant_better
-    // R11 gate). Report unavailable so the caller falls back to direct.
-    // IQ4_XS_R8 excluded: C5 serves true R16 on VNNI.
-#if !defined(HAVE_FANCY_SIMD)
-    if (g_iqk_r16_path) {
-        switch (ggml_type(type)) {
-            case GGML_TYPE_Q2_K_R4:
-            case GGML_TYPE_Q3_K_R4:
-            case GGML_TYPE_Q4_K_R4:
-            case GGML_TYPE_Q5_K_R4:
-            case GGML_TYPE_Q6_K_R4:
-                return false;
-            default: break;
-        }
-    }
-#endif
+
     switch (ggml_type(type)) {
         case GGML_TYPE_Q2_K: iqk_convert_q2_k_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q2_K_R4: iqk_convert_q2_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
