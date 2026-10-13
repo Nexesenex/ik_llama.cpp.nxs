@@ -10542,7 +10542,7 @@ const Repack * get_repack_info(ggml_type type) {
 #endif
     };
     auto it = k_map.find(type);
-    // R16 revival (C4): IQ4_XS -> IQ4_XS_R16 only on explicit opt-in via
+    // R16 revival (R16-4): IQ4_XS -> IQ4_XS_R16 only on explicit opt-in via
     // -rtr r16. Deliberately NOT keyed off g_iqk_r16_path (the Q8-side
     // -rtr16p flag) — that was the "badly wired" coupling in 1793a4b6d98
     // that repacked R16 whenever the R16 Q8 path was on.
