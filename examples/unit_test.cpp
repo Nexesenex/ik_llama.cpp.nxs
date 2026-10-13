@@ -693,10 +693,15 @@ static void test_dump_r16(int n) {
 // Original test_path (unchanged logic, trimmed trace)
 // ---------------------------------------------------------------------------
 static void test_path(bool r16, int nrc_x, int n) {
-#ifndef HAVE_FANCY_SIMD
+#if !defined(HAVE_FANCY_SIMD) && !defined(HAVE_VNNI256) && !defined(HAVE_VNNIINT8)
     // Without AVX-512 the converter emits Q8_K_R8 blocks, so an R16-layout
     // reference comparison is meaningless on this build.
     if (r16) { printf("  [SKIP] -r16p nrc_x=%-3d n=%-5d : requires HAVE_FANCY_SIMD\n", nrc_x, n); return; }
+#endif
+#if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+    // VNNI builds serve R16 via iqk_convert_iq4_xs_r8_q8_k_r16_vnni (C5),
+    // which needs 16-row groups.
+    if (r16 && nrc_x % 16 != 0) { printf("  [SKIP] -r16p nrc_x=%-3d n=%-5d : needs nrc_x%%16==0 on VNNI\n", nrc_x, n); return; }
 #endif
     const int nb = n / QK_K;
     const int nblk_x = (nrc_x / 8) * nb;
@@ -1898,6 +1903,80 @@ static void test_gemm_iq4_xs_r8_direct(int n, int nrc_x, int nrc_y) {
         std::vector<mmid_row_mapping> sub(4);
         for (int iy = 0; iy < 4; ++iy) { sub[iy].i1 = 2 * iy; sub[iy].i2 = 0; }
         run_case("sub-map", NE11, &sub, 4);
+    }
+}
+
+// R16 revival: direct IQ4_XS_R16 GEMM vs float reference (mirrors the R8
+// direct test above, plain case). Weights go native -> R16 repack via the
+// C2 hook, so this covers repack + C3 kernel in one shot. Needs nrc_x%16.
+static void test_gemm_iq4_xs_r16_direct(int n, int nrc_x, int nrc_y) {
+    GGML_ASSERT(n % QK_K == 0);
+    GGML_ASSERT(nrc_x % 16 == 0);
+    GGML_ASSERT(nrc_y >= 1 && nrc_y <= 8);
+    const int nb = n / QK_K;
+    const size_t bx_w = ggml_row_size(GGML_TYPE_IQ4_XS_R16, n);
+    const size_t bx_B = ggml_row_size(GGML_TYPE_Q8_K, n); // Q8_K32 shares block_q8_K
+
+    std::vector<block_iq4_xs> Xn((size_t)nrc_x * nb);
+    for (size_t i = 0; i < (size_t)nrc_x * nb; ++i) {
+        // random but valid native blocks (same fill as test_repack_integrity)
+        auto & b = Xn[i];
+        b.d = GGML_FP32_TO_FP16(0.5f + 0.001f * (float)(g_rng() % 1000));
+        b.scales_h = (uint16_t)(g_rng() & 0xffff);
+        for (int j = 0; j < QK_K / 64; ++j) b.scales_l[j] = (uint8_t)(g_rng() & 0xff);
+        for (int j = 0; j < QK_K / 2; ++j) b.qs[j] = (uint8_t)(g_rng() & 0xff);
+    }
+    std::vector<block_iq4_xs_r16> W((size_t)(nrc_x / 16) * nb);
+    iqk_test_repack_iq4_xs_r16(nrc_x, n, Xn.data(), W.data());
+
+    std::vector<float> Wf((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 16; ++g)
+        dequantize_row_iq4_xs_r16(&W[(size_t)g * nb], Wf.data() + (size_t)g * 16 * n, 16 * n);
+
+    const int NE11 = nrc_y;
+    std::vector<float> Bf((size_t)NE11 * n);
+    for (size_t j = 0; j < Bf.size(); ++j) Bf[j] = 0.05f * ((int)(g_rng() % 41) - 20);
+    std::vector<uint8_t> B((size_t)NE11 * bx_B);
+    for (int iy = 0; iy < NE11; ++iy)
+        quantize_row_q8_K32(Bf.data() + (size_t)iy * n, B.data() + (size_t)iy * bx_B, n);
+    std::vector<float> Bfq((size_t)NE11 * n, 0.f);
+    for (int iy = 0; iy < NE11; ++iy)
+        dequant_q8_K_row((const block_q8_K *)(B.data() + (size_t)iy * bx_B),
+                         Bfq.data() + (size_t)iy * n, n);
+
+    std::vector<float> C((size_t)NE11 * nrc_x, -1.f);
+    DataInfo info;
+    info.s   = C.data();
+    info.cy  = (const char *)B.data();
+    info.bs  = nrc_x;
+    info.by  = bx_B;
+    info.cur_y = 0;
+    info.ne11  = NE11;
+    info.row_mapping = nullptr;
+    iqk_test_gemm_iq4_xs_r16(n, W.data(), bx_w, info, nrc_x, nrc_y);
+
+    float max_err = 0.f, max_ref = 0.f;
+    size_t nbad = 0;
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        for (int r = 0; r < nrc_x; ++r) {
+            const float * wr = Wf.data() + (size_t)r * n;
+            const float * br = Bfq.data() + (size_t)iy * n;
+            double s = 0.0;
+            for (int k = 0; k < n; ++k) s += (double)wr[k] * (double)br[k];
+            float got = C[(size_t)iy * nrc_x + r];
+            float e = fabsf(got - (float)s);
+            if (fabsf((float)s) > max_ref) max_ref = fabsf((float)s);
+            if (e > max_err) max_err = e;
+            if (e > 1e-2f + 1e-4f * fabsf((float)s)) ++nbad;
+        }
+    }
+    if (nbad == 0)
+        printf("  [OK, tolerated] gemm-r16d plain        n=%-5d nrc_x=%-3d nrc_y=%d : max|err|=%.4g (scale %.4g)\n",
+               n, nrc_x, nrc_y, (double)max_err, (double)max_ref);
+    else {
+        printf("  [FAIL] gemm-r16d plain        n=%-5d nrc_x=%-3d nrc_y=%d : %zu bad (max|err|=%.4g scale %.4g)\n",
+               n, nrc_x, nrc_y, nbad, (double)max_err, (double)max_ref);
+        ++g_failures;
     }
 }
 
@@ -5187,6 +5266,20 @@ int main(int argc, char ** argv) {
             for (int nrc_x : nx_d8) {
                 for (int nrc_y : ny_d8) {
                     test_gemm_iq4_xs_r8_direct(n, nrc_x, nrc_y);
+                }
+            }
+        }
+    }
+
+    {
+        printf("\n--- Test: direct R16 GEMM vs float (R16 revival, Q8_K32 act) ---\n");
+        int ns_d16[] = {1024};
+        int nx_d16[] = {16, 64};
+        int ny_d16[] = {1, 8};
+        for (int n : ns_d16) {
+            for (int nrc_x : nx_d16) {
+                for (int nrc_y : ny_d16) {
+                    test_gemm_iq4_xs_r16_direct(n, nrc_x, nrc_y);
                 }
             }
         }
