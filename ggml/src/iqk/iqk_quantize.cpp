@@ -16,6 +16,7 @@
 #include "iqk_common.h"
 
 extern bool g_iqk_r16_path;
+extern bool g_iqk_repack_iq4_xs_r16;
 
 #include "iqk_gemm_ktquants.h"
 
@@ -10541,6 +10542,14 @@ const Repack * get_repack_info(ggml_type type) {
 #endif
     };
     auto it = k_map.find(type);
+    // R16 revival (C4): IQ4_XS -> IQ4_XS_R16 only on explicit opt-in via
+    // -rtr r16. Deliberately NOT keyed off g_iqk_r16_path (the Q8-side
+    // -rtr16p flag) — that was the "badly wired" coupling in 1793a4b6d98
+    // that repacked R16 whenever the R16 Q8 path was on.
+    if (it != k_map.end() && type == GGML_TYPE_IQ4_XS && g_iqk_repack_iq4_xs_r16) {
+        static const Repack r16rep{ GGML_TYPE_IQ4_XS_R16, 16, (Repack::repack_func)repack_iq4_xs_r16 };
+        return &r16rep;
+    }
     return it != k_map.end() ? &it->second : nullptr;
 }
 }
