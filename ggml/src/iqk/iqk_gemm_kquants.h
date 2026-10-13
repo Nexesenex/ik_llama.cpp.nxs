@@ -31,5 +31,9 @@ extern "C" void iqk_test_gemm_iq4_xs_r16(int n, const void * vx, size_t bx,
 extern "C" void iqk_test_gemm_q8_k_r16(int n, const void * vx, size_t bx,
                                        const DataInfo& info, int nrc_x, int nrc_y);
 #endif
+#if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+extern "C" void iqk_test_gemm_q8_k_r16_vnni(int n, const void * vx, size_t bx,
+                                       const DataInfo& info, int nrc_x, int nrc_y);
+#endif
 
 #endif
