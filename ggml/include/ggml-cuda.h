@@ -39,6 +39,12 @@ GGML_API GGML_CALL void ggml_backend_cuda_get_device_description(int device, cha
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total);
 GGML_API GGML_CALL bool ggml_backend_cuda_is_integrated(int device);
 
+// Local split index -> raw CUDA ordinal, set once from --device order.
+// Pass nullptr/0 to clear back to identity.
+GGML_API GGML_CALL void ggml_backend_cuda_set_device_map(const int * devices, int n_devices);
+// Translate a local split/backend position to the raw CUDA ordinal (identity if unmapped).
+GGML_API GGML_CALL int  ggml_backend_cuda_get_raw_device(int device);
+
 GGML_API GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_API GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 

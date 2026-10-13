@@ -852,6 +852,9 @@ GGML_CALL static void * ggml_backend_cuda_split_buffer_get_base(ggml_backend_buf
     GGML_UNUSED(buffer);
 }
 
+// Forward declaration: defined with the other device-map helpers near the backend API.
+static int ggml_cuda_split_raw_device(int local);
+
 GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]] ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     if (!tensor->extra) return;
     //printf("%s(%s, %p)\n", __func__, tensor->name, tensor->extra);
@@ -859,6 +862,8 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]
     GGML_ASSERT(extra->n_device <= ggml_backend_cuda_get_device_count());
     for (int i = 0; i < extra->n_device; ++i) {
         if (!extra->splits[i]) continue;
+        // Local split index -> raw ordinal so splits land on the right GPU.
+        const int dev = ggml_cuda_split_raw_device(i);
         auto split = extra->splits[i];
         auto ne0 = split->ne[0];
         auto size = ggml_nbytes(split);
@@ -869,9 +874,9 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]
             auto row_size = ggml_row_size(split->type, ne0);
             padded_size += padded_row_size - row_size;
         }
-        ggml_cuda_set_device(i);
+        ggml_cuda_set_device(dev);
         char * buf;
-        CUDA_CHECK(ggml_cuda_device_malloc((void**)&buf, padded_size, i));
+        CUDA_CHECK(ggml_cuda_device_malloc((void**)&buf, padded_size, dev));
         if (padded_size > size) {
             CUDA_CHECK(cudaMemset(buf + size, 0, padded_size - size));
         }
@@ -881,8 +886,8 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]
         //       i, (long)ne0, ggml_type_name(split->type), size, padded_size, (void*)buf);
         //fflush(stdout);
         split->data = buf;
-        auto ctx = new ggml_backend_cuda_buffer_context(i, buf);
-        auto buft = ggml_backend_cuda_buffer_type(i);
+        auto ctx = new ggml_backend_cuda_buffer_context(dev, buf);
+        auto buft = ggml_backend_cuda_buffer_type(dev);
         split->buffer = ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, padded_size);
         ggml_backend_buffer_set_usage(split->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     }
@@ -5593,6 +5598,28 @@ GGML_CALL bool ggml_backend_cuda_is_integrated(int device) {
         return false;
     }
     return ggml_cuda_info().devices[device].integrated;
+}
+// Local split index -> raw ordinal (see header). Process-wide, last setter wins.
+static std::vector<int> g_cuda_split_device_map;
+
+GGML_CALL void ggml_backend_cuda_set_device_map(const int * devices, int n_devices) {
+    g_cuda_split_device_map.clear();
+    if (devices != nullptr && n_devices > 0) {
+        g_cuda_split_device_map.assign(devices, devices + n_devices);
+    }
+}
+
+static int ggml_cuda_split_raw_device(int local) {
+    if (local >= 0 && local < (int) g_cuda_split_device_map.size()) {
+        const int raw = g_cuda_split_device_map[local];
+        if (raw >= 0 && raw < ggml_cuda_info().device_count) {
+            return raw;
+        }
+    }
+    return local;
+}
+GGML_CALL int ggml_backend_cuda_get_raw_device(int device) {
+    return ggml_cuda_split_raw_device(device);
 }
 
 GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {

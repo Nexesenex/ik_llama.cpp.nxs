@@ -9132,6 +9132,37 @@ struct llama_model * llama_model_load_from_file(
                 description_size / 1024 / 1024);
         }
     }
+#ifdef GGML_USE_CUDA
+    // Publish --device order for CUDA split alloc and REDUCE.
+    if (!model->devices.empty()) {
+        ggml_backend_cuda_set_device_map(model->devices.data(), (int) model->devices.size());
+    }
+#endif
+    // Non-CUDA tensor parallel still needs natural device order.
+    if ((params.split_mode == LLAMA_SPLIT_MODE_GRAPH || params.split_mode == LLAMA_SPLIT_MODE_ATTN) && model->devices.size() > 1) {
+        bool all_cuda = true;
+#ifdef GGML_USE_CUDA
+        for (auto d : model->devices) {
+            ggml_backend_buffer_type_t buft = llama_default_buffer_type_offload(*model, d);
+            const char* name = ggml_backend_buft_name(buft);
+            if (strncmp(name, GGML_CUDA_NAME, strlen(GGML_CUDA_NAME)) != 0) {
+                all_cuda = false;
+                break;
+            }
+        }
+#else
+        all_cuda = false;
+#endif
+        if (!all_cuda) {
+            for (size_t d = 0; d < model->devices.size(); ++d) {
+                if (model->devices[d] != (int) d) {
+                    LLAMA_LOG_ERROR("%s: --device order must be CUDA0,CUDA1,... for split-mode tensor parallel on non-CUDA backends (got devices[%zu]=%d); use natural order or -sm layer\n",
+                        __func__, d, model->devices[d]);
+                    throw std::runtime_error("--device reordering is not supported with split-mode tensor parallel on non-CUDA backends");
+                }
+            }
+        }
+    }
     int status = llama_model_load(path_model, *model, params);
     GGML_ASSERT(status <= 0);
     if (status < 0) {
@@ -9677,8 +9708,21 @@ struct llama_context * llama_init_from_model(
             }
             ggml_backend_add_from_device(ctx, backend);
 
+        } else if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN) {
+            // REDUCE expects src[j] on backend j: init backends in --device order.
+            auto params = cparams.cuda_params;
+            for (size_t b = 0; b < model->devices.size(); ++b) {
+                const int device = model->devices[b];
+                ggml_backend_t backend = ggml_backend_cuda_init(device, params, ctx);
+                if (backend == nullptr) {
+                    LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, device);
+                    llama_free(ctx);
+                    return nullptr;
+                }
+                ggml_backend_add_from_device(ctx, backend);
+            }
         } else {
-            // LLAMA_SPLIT_MODE_LAYER and LLAMA_SPLIT_MODE_GRAPH require a backend for each GPU
+            // LLAMA_SPLIT_MODE_LAYER requires a backend for each GPU (legacy raw-order init)
             auto params = cparams.cuda_params;
             std::string new_params;
             if (false && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
