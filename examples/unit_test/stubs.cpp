@@ -197,6 +197,7 @@ struct QTraitsInit {
         stub_traits[GGML_TYPE_MXFP4_R8]      = { sizeof(block_mxfp4_r8), 8 * QK_MXFP4, 0, "mxfp4_r8" };
         stub_traits[GGML_TYPE_IQ4_XS]        = { sizeof(block_iq4_xs), QK_K,    0, "iq4_xs" };
         stub_traits[GGML_TYPE_IQ4_XS_R8]     = { sizeof(block_iq4_xs_r8), 8 * QK_K, 0, "iq4_xs_r8" };
+        stub_traits[GGML_TYPE_IQ4_XS_R16]    = { sizeof(block_iq4_xs_r16), 16 * QK_K, 0, "iq4_xs_r16" };
         stub_traits[GGML_TYPE_Q8_K]          = { 2*sizeof(float) + QK_K + (QK_K/16)*sizeof(int16_t), QK_K, 0, "q8_K" };
         stub_traits[GGML_TYPE_Q8_K_R8]       = { sizeof(block_q8_k_r8)/8, QK_K, 0, "q8_k_r8" };
         stub_traits[GGML_TYPE_Q8_K_R16]      = { sizeof(block_q8_k_r16)/16, QK_K, 0, "q8_k_r16" };
@@ -424,6 +425,7 @@ struct FudgeTableInit {
         fudge_factors[GGML_TYPE_IQ6_K]      = 1.0f;
         fudge_factors[GGML_TYPE_IQ4_NL_R4]  = 1.0f;
         fudge_factors[GGML_TYPE_IQ4_XS_R8]  = 1.0f;
+        fudge_factors[GGML_TYPE_IQ4_XS_R16] = 1.0f;
         fudge_factors[GGML_TYPE_Q4_0_R8]    = 1.0f;
         fudge_factors[GGML_TYPE_Q8_0_R8]    = 1.0f;
         fudge_factors[GGML_TYPE_Q5_0_R4]    = 1.0f;
