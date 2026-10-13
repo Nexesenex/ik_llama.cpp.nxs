@@ -337,6 +337,38 @@ struct MulMat {
                 default: break;
             }
         }
+        // -rtr16p on non-FANCY builds: only IQ4_XS_R8 owns a VNNI R16
+        // converter (C5 iqk_convert_iq4_xs_r8_q8_k_r16_vnni). Every other
+        // repacked converter selects its R8/R16 target at COMPILE time and
+        // emits R8 here, while dispatch below would prepare R16 kernels
+        // and R16-sized work rows -> layout mismatch, OOB reads, NaN
+        // (254de80 re-enabled these dispatches without VNNI R16 emitters).
+        // Force direct for them; revisit if per-type VNNI R16 converters
+        // ever land. IQ4_XS_R8 deliberately excluded (C5 serves it).
+#if !defined(HAVE_FANCY_SIMD)
+        if (g_iqk_r16_path) {
+            switch (type) {
+                case GGML_TYPE_IQ2_XXS_R4:
+                case GGML_TYPE_IQ2_XS_R4:
+                case GGML_TYPE_IQ2_S_R4:
+                case GGML_TYPE_IQ3_XXS_R4:
+                case GGML_TYPE_IQ3_S_R4:
+                case GGML_TYPE_Q2_K_R4:
+                case GGML_TYPE_Q3_K_R4:
+                case GGML_TYPE_Q4_K_R4:
+                case GGML_TYPE_Q5_K_R4:
+                case GGML_TYPE_Q6_K_R4:
+                case GGML_TYPE_IQ2_K_R4:
+                case GGML_TYPE_IQ3_K_R4:
+                case GGML_TYPE_IQ4_KS_R4:
+                case GGML_TYPE_IQ4_K_R4:
+                case GGML_TYPE_IQ5_KS_R4:
+                case GGML_TYPE_IQ5_K_R4:
+                    return type;
+                default: break;
+            }
+        }
+#endif
 #ifdef __AVX2__
 #if defined(HAVE_FANCY_SIMD)
         auto q8_k_type = GGML_TYPE_Q8_K_R16;
