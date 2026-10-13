@@ -4997,6 +4997,25 @@ static bool llm_load_tensors(
         }
         LLAMA_LOG_INFO("Memory required for model tensors + cache: %.f MiB\n", required_mem/(1024.*1024.));
         LLAMA_LOG_INFO("Memory available on all devices - compute: %.f MiB\n", available_mem/(1024.*1024.));
+        // NXS streaming discipline: with explicit -ts the auto-adjust above is skipped,
+        // so an impossible split used to burn the full load (host commit + 60s) and die
+        // late in compute alloc with a silent exit. Fail fast here with per-device
+        // numbers instead; NGL and pinning untouched, attention/output stay on CUDA.
+        if (required_mem > available_mem && has_tensor_split) {
+            LLAMA_LOG_ERROR("%s: explicit -ts split does not fit: required %.f MiB > available %.f MiB (after compute reserve)\n",
+                __func__, required_mem/(1024.*1024.), available_mem/(1024.*1024.));
+            float prev = 0.0f;
+            for (int id = 0; id < device_count; ++id) {
+                const float frac = model.splits[id] - prev;
+                prev = model.splits[id];
+                const double need = (double) frac * (double) required_mem + (double) max_compute;
+                const double have = (double) device_mem[id] + (double) max_compute;
+                LLAMA_LOG_ERROR("%s: device %d (raw %d): split share %.1f%% needs %.f MiB, have %.f MiB free\n",
+                    __func__, id, model.devices[id], (double) frac * 100.0,
+                    need/(1024.*1024.), have/(1024.*1024.));
+            }
+            throw std::runtime_error("explicit -ts split does not fit in VRAM (see per-device numbers above); rebalance -ts, lower -c/-ub, or use -sm layer");
+        }
         // Do not adjust the splits if the use has provided their own
         if (required_mem > available_mem && !tensor_split) {
             float sum = 0;
