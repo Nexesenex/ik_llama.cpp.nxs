@@ -320,6 +320,7 @@ static inline int num_rows([[maybe_unused]] ggml_type type) {
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_Q8_K_R16:
+        case GGML_TYPE_IQ4_XS_R16:
         case GGML_TYPE_BF16_R16: return 16;
         default: return 1;
     }
@@ -355,6 +356,7 @@ static inline int num_rows([[maybe_unused]] ggml_type type) {
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_Q8_K_R8: return 8;
         case GGML_TYPE_Q8_K_R16:
+        case GGML_TYPE_IQ4_XS_R16:
         case GGML_TYPE_BF16_R16: return 16;
         default: return 1;
     }
@@ -6848,6 +6850,140 @@ void dequantize_row_iq4_xs_r8(const block_iq4_xs_r8 * x, float * y, int64_t k) {
     }
 }
 
+//
+// ========================================= iq4_xs_r16
+//
+// 16-row repack of IQ4_XS for the R16 direct GEMM path (C1 block_iq4_xs_r16).
+// Layout is two R8-compatible halves: rows 0-7 in the low half (same byte
+// order as block_iq4_xs_r8), rows 8-15 in the high half. NOTE vs 1793a4b6d98:
+// the original indexed scales with i = 8*ib+k over k<16, which collides
+// (e.g. ib=0/k=8 vs ib=1/k=0) and corrupts lo/hi halves; use the R8
+// within-half index i = 8*ib+(k%8) plus an explicit half selector instead.
+//
+static void repack_iq4_xs_r16(int nrows, int n_per_row, const block_iq4_xs * x, block_iq4_xs_r16 * y, [[maybe_unused]] bool online) {
+    GGML_ASSERT(nrows%16 == 0);
+    GGML_ASSERT(n_per_row%QK_K == 0);
+    int nblock = n_per_row/QK_K;
+    const block_iq4_xs * x16[16];
+    for (int row = 0; row < nrows; row += 16) {
+        for (int k = 0; k < 16; ++k) x16[k] = x + nblock*k;
+        for (int ibl = 0; ibl < nblock; ++ibl) {
+#if defined(__x86_64__) || defined(_M_X64)
+            if (ibl + 1 < nblock) {
+                for (int k = 0; k < 16; ++k) _mm_prefetch((const char *)&x16[k][ibl+1], _MM_HINT_T0);
+            }
+#endif
+#ifdef __AVX2__
+            // Same as the memsets below but without a libc call per block.
+            _mm256_storeu_si256((__m256i *)(y[ibl].scales_l +  0), _mm256_setzero_si256());
+            _mm256_storeu_si256((__m256i *)(y[ibl].scales_l + 32), _mm256_setzero_si256());
+            _mm_storeu_si128((__m128i *)(y[ibl].scales_h +  0), _mm_setzero_si128());
+            _mm_storeu_si128((__m128i *)(y[ibl].scales_h + 16), _mm_setzero_si128());
+#else
+            std::memset(y[ibl].scales_l, 0, QK_K/4);
+            std::memset(y[ibl].scales_h, 0, QK_K/8);
+#endif
+            for (int k = 0; k < 16; ++k) {
+                const int half = k/8;
+                const int kh = k%8;
+                y[ibl].d[k] = x16[k][ibl].d;
+                for (int ib = 0; ib < QK_K/32; ++ib) {
+                    uint8_t sl = (x16[k][ibl].scales_l[ib/2] >> 4*(ib%2)) & 0xf;
+                    uint8_t sh = (x16[k][ibl].scales_h >> 2*ib) & 3;
+                    int i = 8*ib + kh;
+                    y[ibl].scales_l[32*half + i%32] |= (sl << 4*(i/32));
+                    y[ibl].scales_h[16*half + i%16] |= (sh << 2*(i/16));
+                    for (int ii = 0; ii < 4; ++ii) {
+                        y[ibl].qs[256*ib+128*half+4*kh+ii+ 0] = (x16[k][ibl].qs[16*ib+ii+0] & 0xf) | ((x16[k][ibl].qs[16*ib+ii+ 4] & 0xf) << 4);
+                        y[ibl].qs[256*ib+128*half+4*kh+ii+32] = (x16[k][ibl].qs[16*ib+ii+8] & 0xf) | ((x16[k][ibl].qs[16*ib+ii+12] & 0xf) << 4);
+                        y[ibl].qs[256*ib+128*half+4*kh+ii+64] = (x16[k][ibl].qs[16*ib+ii+0] >>  4) | ((x16[k][ibl].qs[16*ib+ii+ 4] >>  4) << 4);
+                        y[ibl].qs[256*ib+128*half+4*kh+ii+96] = (x16[k][ibl].qs[16*ib+ii+8] >>  4) | ((x16[k][ibl].qs[16*ib+ii+12] >>  4) << 4);
+                    }
+                }
+            }
+        }
+        x += 16*nblock;
+        y += nblock;
+    }
+}
+
+// Exported thin wrapper so external tests can drive the static repack
+// directly (mirrors iqk_test_repack_iq4_xs above).
+extern "C" void iqk_test_repack_iq4_xs_r16(int nrows, int n_per_row, const block_iq4_xs * x, block_iq4_xs_r16 * y) {
+    repack_iq4_xs_r16(nrows, n_per_row, x, y, false);
+}
+
+size_t quantize_iq4_xs_r16(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
+        [[maybe_unused]] const quantize_user_data * user_data) {
+    auto q_func = [] (const float * x, void * vy, int n_per_row, const float * imatrix,
+            [[maybe_unused]] const quantize_user_data * user_data) {
+        quantize_iq4_xs(x, (char *)vy, 1, n_per_row, imatrix, nullptr);
+    };
+    return quantize_repack<32, block_iq4_xs, block_iq4_xs_r16, 16>(GGML_TYPE_IQ4_XS, src, dst, nrows, n_per_row, imatrix, user_data,
+            q_func, repack_iq4_xs_r16);
+}
+
+void quantize_row_iq4_xs_r16_ref(const float * x, block_iq4_xs_r16 * y, int64_t k) {
+    quantize_iq4_xs_r16(x, (void *)y, 16, k/16, nullptr, nullptr);
+}
+
+void quantize_row_iq4_xs_r16(const float * x, void * y, int64_t k) {
+    quantize_iq4_xs_r16(x, y, 16, k/16, nullptr, nullptr);
+}
+
+void dequantize_row_iq4_xs_r16(const block_iq4_xs_r16 * x, float * y, int64_t k) {
+    auto n_per_row = k/16;
+    float * y16[16];
+    for (int kk = 0; kk < 16; ++kk) y16[kk] = y + n_per_row*kk;
+    int nblock = n_per_row/QK_K;
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        for (int kk = 0; kk < 16; ++kk) {
+            const int half = kk/8;
+            const int kh = kk%8;
+            const float d = GGML_FP16_TO_FP32(x[ibl].d[kk]);
+            for (int ib = 0; ib < QK_K/32; ++ib) {
+                int is = 8*ib + kh;
+                float dl = d * ((((x[ibl].scales_l[32*half + is%32] >> 4*(is/32)) & 0xf) | (((x[ibl].scales_h[16*half + is%16] >> 2*(is/16)) & 3) << 4)) - 32);
+#ifdef __AVX2__
+                auto v = r8_gather_lmajor_16(x[ibl].qs + 256*ib + 128*half, kh);
+                auto lut = _mm_loadu_si128((const __m128i *)iq4k_values);
+                auto m0f = _mm_set1_epi8(0xf);
+                auto lo16 = _mm_shuffle_epi8(lut, _mm_and_si128(v, m0f));
+                auto hi16 = _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(v, 4), m0f));
+                auto vd = _mm256_set1_ps(dl);
+                auto A = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(lo16));
+                auto B = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(lo16, 8)));
+                auto C = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(hi16));
+                auto D = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(hi16, 8)));
+                float * out = y16[kk] + QK_K*ibl + 32*ib;
+                _mm256_storeu_ps(out +  0, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_castps256_ps128(C), _mm256_castps256_ps128(A))));
+                _mm256_storeu_ps(out +  8, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_extractf128_ps(C, 1), _mm256_extractf128_ps(A, 1))));
+                _mm256_storeu_ps(out + 16, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_castps256_ps128(D), _mm256_castps256_ps128(B))));
+                _mm256_storeu_ps(out + 24, _mm256_mul_ps(vd, MM256_SET_M128(_mm256_extractf128_ps(D, 1), _mm256_extractf128_ps(B, 1))));
+#else
+                for (int l = 0; l < 4; ++l) for (int i = 0; i < 4; ++i) {
+                    y16[kk][QK_K*ibl+32*ib+8*l+i+0] = dl * iq4k_values[x[ibl].qs[256*ib+128*half+4*kh+i+32*l] & 0xf];
+                    y16[kk][QK_K*ibl+32*ib+8*l+i+4] = dl * iq4k_values[x[ibl].qs[256*ib+128*half+4*kh+i+32*l] >>  4];
+                }
+#endif
+            }
+        }
+    }
+}
+
+void vec_dot_iq4_xs_r16_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_XS_R16, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK4_NL == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
+
 void vec_dot_iq4_xs_r8_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_XS_R8, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
@@ -13013,6 +13149,7 @@ bool iqk_validate_tensor(const ggml_tensor * tensor) {
         case GGML_TYPE_IQ3_XXS_R4: return check_tensor_for_blocks_256_fp16_repacked<block_iq3_xxs_r4, 4>(tensor);
         case GGML_TYPE_IQ3_S_R4:   return check_tensor_for_blocks_256_fp16_repacked<block_iq3_s_r4, 4>(tensor);
         case GGML_TYPE_IQ4_XS_R8:  return check_tensor_for_blocks_256_fp16_repacked<block_iq4_xs_r8, 8>(tensor);
+        case GGML_TYPE_IQ4_XS_R16: return check_tensor_for_blocks_256_fp16_repacked<block_iq4_xs_r16, 16>(tensor);
         case GGML_TYPE_IQ2_BN:
         case GGML_TYPE_IQ4_KSS:
         case GGML_TYPE_IQ4_KS:
