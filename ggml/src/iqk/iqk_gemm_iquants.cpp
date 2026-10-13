@@ -3580,6 +3580,18 @@ bool iqk_set_kernels_iquants(int ne00, int typeA, int typeB, std::array<mul_mat_
 
 bool iqk_convert_iquants_q80_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     if (n%QK_K != 0 || nrc_x%8 != 0) return false;
+    // -rtrd: restore 02f6f91 behaviour at runtime (no R4 -> R16 conversion).
+    if (g_iqk_direct_repacked) {
+        switch (ggml_type(type)) {
+            case GGML_TYPE_IQ2_XXS_R4:
+            case GGML_TYPE_IQ2_XS_R4:
+            case GGML_TYPE_IQ2_S_R4:
+            case GGML_TYPE_IQ3_XXS_R4:
+            case GGML_TYPE_IQ3_S_R4:
+                return false;
+            default: break;
+        }
+    }
     switch (ggml_type(type)) {
         case GGML_TYPE_IQ2_XXS: iqk_convert_iq2_xxs_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ2_XXS_R4: iqk_convert_iq2_xxs_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
