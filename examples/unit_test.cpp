@@ -89,6 +89,7 @@ extern "C" void iqk_test_repack_mxfp4(int nrows, int n_per_row, const block_mxfp
 extern "C" void iqk_test_repack_iq4_nl(int nrows, int n_per_row, const block_iq4_nl * x, block_iq4_nl_r4 * y);
 extern "C" void iqk_test_repack_q8_0(int nrows, int n_per_row, const block_q8_0 * x, block_q8_0_r8 * y);
 extern "C" void iqk_test_repack_iq4_xs(int nrows, int n_per_row, const block_iq4_xs * x, block_iq4_xs_r8 * y);
+extern "C" void iqk_test_repack_iq4_xs_r16(int nrows, int n_per_row, const block_iq4_xs * x, block_iq4_xs_r16 * y);
 extern "C" void iqk_test_repack_iq3_xxs(int nrows, int n_per_row, const block_iq3_xxs * x, block_iq3_xxs_r4 * y);
 
 // R4 repack hooks added with the broadcast-fix coverage work. C++ linkage
