@@ -21,6 +21,7 @@
 
 extern bool g_iqk_r16_path;
 extern bool g_iqk_direct_repacked;
+extern bool g_iqk_repack_iq4_xs_r16;
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"

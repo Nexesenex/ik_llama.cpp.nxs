@@ -20,6 +20,9 @@ IQK_API bool iqk_get_r16_path(void);
 IQK_API void iqk_set_direct_repacked(bool enable);
 IQK_API bool iqk_get_direct_repacked(void);
 
+IQK_API void iqk_set_repack_iq4_xs_r16(bool enable);
+IQK_API bool iqk_get_repack_iq4_xs_r16(void);
+
 IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,

@@ -3296,6 +3296,18 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "-rtr" || arg == "--run-time-repack") {
         params.repack_tensors = true;
         params.use_mmap = false;
+        // Optional r16 value (revived 61bdcdb2847 form): -rtr r16 repacks
+        // IQ4_XS to IQ4_XS_R16 instead of R8. Bare -rtr keeps R8.
+        if (i + 1 < argc && argv[i + 1][0] != '-') {
+            std::string val = argv[i + 1];
+            if (val == "r16") {
+                ++i;
+                iqk_set_repack_iq4_xs_r16(true);
+            } else {
+                invalid_param = true;
+                return true;
+            }
+        }
         return true;
     }
     if (arg == "-rtr16p" || arg == "--run-time-repack-16-path") {
@@ -3308,6 +3320,16 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.repack_tensors = true;
         params.use_mmap = false;
         iqk_set_direct_repacked(true);
+        if (i + 1 < argc && argv[i + 1][0] != '-') {
+            std::string val = argv[i + 1];
+            if (val == "r16") {
+                ++i;
+                iqk_set_repack_iq4_xs_r16(true);
+            } else {
+                invalid_param = true;
+                return true;
+            }
+        }
         return true;
     }
     if (arg == "-thp" || arg == "--transparent-huge-pages") {
@@ -4462,7 +4484,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     if (llama_supports_mmap()) {
         options.push_back({ "*",       "-nmm,   --no-mmap",               "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
-    options.push_back({ "*",           "-rtr,   --run-time-repack",      "repack tensors if interleaved variant is available"});
+    options.push_back({ "*",           "-rtr,   --run-time-repack [r16]", "repack tensors if interleaved variant is available (optional r16: IQ4_XS->IQ4_XS_R16 instead of R8)"});
     options.push_back({ "*",           "-rtr16p, --run-time-repack-16-path", "repack tensors + Q8_K_R16 fast path on VNNI256 (preferred over -rtr)"});
     options.push_back({ "*",           "-rtrd,  --run-time-repack-direct", "repack tensors + direct repacked GEMM (no R4/R8->Q8 convert, restores cdd2c9f+02f6f91 behaviour)"});
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
@@ -6731,6 +6753,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "repack: %s # default: false\n", params.repack_tensors ? "true" : "false");
     fprintf(stream, "r16_path: %s # default: false\n", iqk_get_r16_path() ? "true" : "false");
     fprintf(stream, "direct_repacked: %s # default: false\n", iqk_get_direct_repacked() ? "true" : "false");
+    fprintf(stream, "repack_iq4_xs_r16: %s # default: false\n", iqk_get_repack_iq4_xs_r16() ? "true" : "false");
     fprintf(stream, "use_thp: %s # default: false\n", params.use_thp ? "true" : "false");
     fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");
     fprintf(stream, "merge_qkv: %s # default: false\n", params.merge_qkv ? "true" : "false");
