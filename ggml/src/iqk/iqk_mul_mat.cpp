@@ -43,6 +43,10 @@ bool g_iqk_direct_repacked = false;
 extern "C" IQK_API void iqk_set_direct_repacked(bool enable) { g_iqk_direct_repacked = enable; }
 extern "C" IQK_API bool iqk_get_direct_repacked(void) { return g_iqk_direct_repacked; }
 
+bool g_iqk_repack_iq4_xs_r16 = false;
+extern "C" IQK_API void iqk_set_repack_iq4_xs_r16(bool enable) { g_iqk_repack_iq4_xs_r16 = enable; }
+extern "C" IQK_API bool iqk_get_repack_iq4_xs_r16(void) { return g_iqk_repack_iq4_xs_r16; }
+
 // clang-format off
 
 // This matrix - vector and matrix - matrix multiplication implementation
