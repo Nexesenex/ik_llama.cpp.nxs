@@ -323,6 +323,7 @@ struct MulMat {
                 case GGML_TYPE_IQ3_XXS_R4:
                 case GGML_TYPE_IQ3_S_R4:
                 case GGML_TYPE_IQ4_XS_R8:
+                case GGML_TYPE_IQ4_XS_R16:
                 case GGML_TYPE_Q2_K_R4:
                 case GGML_TYPE_Q3_K_R4:
                 case GGML_TYPE_Q4_K_R4:
@@ -365,6 +366,7 @@ struct MulMat {
             case GGML_TYPE_IQ3_XXS_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ4_XS : return nrc_y >= k_min_nrc_y ? q8_k_type : type;
             case GGML_TYPE_IQ4_XS_R8: return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ4_XS_R16: return type;
             case GGML_TYPE_IQ3_S  : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ3_S_R4: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ1_S  : return nrc_y >= 32 ? q8_k_type : type;
@@ -514,6 +516,7 @@ struct MulMat {
             case GGML_TYPE_Q8_0_R16:
             case GGML_TYPE_Q8_K_R16:
             case GGML_TYPE_MXFP4_R8:
+            case GGML_TYPE_IQ4_XS_R16:
             case GGML_TYPE_IQ4_KS_R16:
             case GGML_TYPE_IQ5_KS_R16:
             case GGML_TYPE_IQ3_KS_R16:
@@ -556,6 +559,7 @@ struct MulMat {
             case GGML_TYPE_PQ2_0_R8: return 8;
             case GGML_TYPE_PTQ1_0_R8: return 8;
             case GGML_TYPE_Q8_K_R16:
+            case GGML_TYPE_IQ4_XS_R16:
             case GGML_TYPE_IQ4_KS_R16:
             case GGML_TYPE_IQ5_KS_R16:
             case GGML_TYPE_IQ3_KS_R16:
@@ -1134,6 +1138,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_Q5_K_R4:
         case GGML_TYPE_Q6_K_R4:
         case GGML_TYPE_IQ4_XS_R8:
+        case GGML_TYPE_IQ4_XS_R16:
         case GGML_TYPE_Q8_K_R8:
         case GGML_TYPE_Q8_KV:
         case GGML_TYPE_Q8_KV_R8:
@@ -1240,6 +1245,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_Q5_K_R4:
         case GGML_TYPE_Q6_K_R4:
         case GGML_TYPE_IQ4_XS_R8:
+        case GGML_TYPE_IQ4_XS_R16:
         case GGML_TYPE_Q8_K_R8:
         case GGML_TYPE_Q8_KV:
         case GGML_TYPE_Q8_KV_R8:
