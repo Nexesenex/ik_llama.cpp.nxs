@@ -3525,6 +3525,19 @@ void iqk_convert_iq6_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
 
 bool iqk_convert_iqk_quants_q80_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     if (n%QK_K != 0 || nrc_x%8 != 0) return false;
+    // -rtrd: restore 02f6f91 behaviour at runtime (no R4 -> R16 conversion).
+    if (g_iqk_direct_repacked) {
+        switch (ggml_type(type)) {
+            case GGML_TYPE_IQ2_K_R4:
+            case GGML_TYPE_IQ3_K_R4:
+            case GGML_TYPE_IQ4_KS_R4:
+            case GGML_TYPE_IQ4_K_R4:
+            case GGML_TYPE_IQ5_KS_R4:
+            case GGML_TYPE_IQ5_K_R4:
+                return false;
+            default: break;
+        }
+    }
     switch (ggml_type(type)) {
         case GGML_TYPE_IQ2_KS : iqk_convert_iq2_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ2_K  : iqk_convert_iq2_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;

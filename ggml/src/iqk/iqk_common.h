@@ -20,6 +20,7 @@
 #include <vector>
 
 extern bool g_iqk_r16_path;
+extern bool g_iqk_direct_repacked;
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"
