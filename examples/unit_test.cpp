@@ -285,10 +285,15 @@ static void fill_interleaved_fbuf(const block_iq4_xs_r8 * src, float * fbuf, int
 // Test 1: Delta integrity — every row must have a finite, non-zero delta
 // ---------------------------------------------------------------------------
 static void test_delta_integrity(bool r16, int nrc_x, int n) {
-#ifndef HAVE_FANCY_SIMD
+#if !defined(HAVE_FANCY_SIMD) && !defined(HAVE_VNNI256) && !defined(HAVE_VNNIINT8)
     // Without AVX-512 the converter emits Q8_K_R8 blocks, so an R16-layout
     // check would misread R8 payload bytes as deltas.
     if (r16) { printf("  [SKIP] R16 integrity nrc_x=%-3d n=%-5d : requires HAVE_FANCY_SIMD\n", nrc_x, n); return; }
+#endif
+#if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+    // VNNI builds serve R16 via iqk_convert_iq4_xs_r8_q8_k_r16_vnni (C5),
+    // which needs 16-row groups (same carve-out as test_path in R7).
+    if (r16 && nrc_x % 16 != 0) { printf("  [SKIP] R16 integrity nrc_x=%-3d n=%-5d : needs nrc_x%%16==0 on VNNI\n", nrc_x, n); return; }
 #endif
     const int nb = n / QK_K;
     const int nblk_x = (nrc_x / 8) * nb;
@@ -477,10 +482,14 @@ static void test_r16_fallback(int nrc_x, int n) {
 // converter and reference share the same bug).
 // ---------------------------------------------------------------------------
 static void test_roundtrip(bool r16, int nrc_x, int n) {
-#ifndef HAVE_FANCY_SIMD
+#if !defined(HAVE_FANCY_SIMD) && !defined(HAVE_VNNI256) && !defined(HAVE_VNNIINT8)
     // Without AVX-512 the converter emits Q8_K_R8 blocks; dequantizing them
     // as R16 is meaningless on this build.
     if (r16) { printf("  [SKIP] R16 roundtrip nrc_x=%-3d n=%-5d : requires HAVE_FANCY_SIMD\n", nrc_x, n); return; }
+#endif
+#if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+    // VNNI R16 converter (C5) needs 16-row groups (same as test_path in R7).
+    if (r16 && nrc_x % 16 != 0) { printf("  [SKIP] R16 roundtrip nrc_x=%-3d n=%-5d : needs nrc_x%%16==0 on VNNI\n", nrc_x, n); return; }
 #endif
     const int nb = n / QK_K;
     const int nblk_x = (nrc_x / 8) * nb;
@@ -532,8 +541,9 @@ static void test_group_boundaries(int n) {
     const int nb = n / QK_K;
     const size_t bx = ggml_row_size(GGML_TYPE_IQ4_XS_R8, n);
 
-    // Test R16 at every multiple of 16 up to 96 (FANCY layout only)
-#ifdef HAVE_FANCY_SIMD
+    // Test R16 at every multiple of 16 up to 96 (R16 converter output;
+    // VNNI builds serve it via the C5 vnni converter, all values %16==0)
+#if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
     for (int nrc_x : { 16, 32, 48, 64, 80, 96 }) {
         const int nblk_x = (nrc_x / 8) * nb;
         std::vector<block_iq4_xs_r8> src(nblk_x);
@@ -631,7 +641,7 @@ static void test_group_boundaries(int n) {
 // Reveals the exact byte-level transformation error (nibble drop / garbage lane).
 // ---------------------------------------------------------------------------
 static void test_dump_r16(int n) {
-#ifndef HAVE_FANCY_SIMD
+#if !defined(HAVE_FANCY_SIMD) && !defined(HAVE_VNNI256) && !defined(HAVE_VNNIINT8)
     (void)n;
     printf("\n--- Diagnostic dump: R16 (SKIP, requires HAVE_FANCY_SIMD) ---\n");
     return;
@@ -839,10 +849,15 @@ static void test_path(bool r16, int nrc_x, int n) {
 //       native IQ4_XS → Q8_K_R8 / Q8_K_R16, without prior repack to R8 format.
 // ---------------------------------------------------------------------------
 static void test_native_path(bool r16, int nrc_x, int n) {
-#ifndef HAVE_FANCY_SIMD
+#if !defined(HAVE_FANCY_SIMD) && !defined(HAVE_VNNI256) && !defined(HAVE_VNNIINT8)
     // Without AVX-512 the native converter emits Q8_K_R8 blocks, so an
     // R16-layout reference comparison is meaningless on this build.
     if (r16) { printf("  [SKIP] native-r16  nrc_x=%-3d n=%-5d : requires HAVE_FANCY_SIMD\n", nrc_x, n); return; }
+#endif
+#if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+    // Native R16 branch is runtime-gated on g_iqk_r16_path (not FANCY-only)
+    // but asserts nrc_x%16==0 (same carve-out as test_path in R7).
+    if (r16 && nrc_x % 16 != 0) { printf("  [SKIP] native-r16  nrc_x=%-3d n=%-5d : needs nrc_x%%16==0 on VNNI\n", nrc_x, n); return; }
 #endif
     const int nb = n / QK_K;
     const int nblk = nrc_x * nb;
