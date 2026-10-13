@@ -39,6 +39,10 @@ bool g_iqk_r16_path = false;
 extern "C" IQK_API void iqk_set_r16_path(bool enable) { g_iqk_r16_path = enable; }
 extern "C" IQK_API bool iqk_get_r16_path(void) { return g_iqk_r16_path; }
 
+bool g_iqk_direct_repacked = false;
+extern "C" IQK_API void iqk_set_direct_repacked(bool enable) { g_iqk_direct_repacked = enable; }
+extern "C" IQK_API bool iqk_get_direct_repacked(void) { return g_iqk_direct_repacked; }
+
 // clang-format off
 
 // This matrix - vector and matrix - matrix multiplication implementation
@@ -309,6 +313,36 @@ struct MulMat {
     }
     static bool prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny);
     static inline ggml_type is_dequant_better(ggml_type type, int nrc_y) {
+        // -rtrd: restore cdd2c9f behaviour at runtime (direct repacked GEMM,
+        // no R4/R8 -> Q8 conversion). Default false preserves 254de80 convert path.
+        if (g_iqk_direct_repacked) {
+            switch (type) {
+                case GGML_TYPE_IQ2_XXS_R4:
+                case GGML_TYPE_IQ2_XS_R4:
+                case GGML_TYPE_IQ2_S_R4:
+                case GGML_TYPE_IQ3_XXS_R4:
+                case GGML_TYPE_IQ3_S_R4:
+                case GGML_TYPE_IQ4_XS_R8:
+                case GGML_TYPE_Q2_K_R4:
+                case GGML_TYPE_Q3_K_R4:
+                case GGML_TYPE_Q4_K_R4:
+                case GGML_TYPE_Q5_K_R4:
+                case GGML_TYPE_Q6_K_R4:
+                case GGML_TYPE_IQ2_K_R4:
+                case GGML_TYPE_IQ3_K_R4:
+                case GGML_TYPE_IQ4_KS_R4:
+                case GGML_TYPE_IQ4_K_R4:
+                case GGML_TYPE_IQ5_KS_R4:
+                case GGML_TYPE_IQ5_K_R4:
+                case GGML_TYPE_IQ4_NL_R4:
+                case GGML_TYPE_Q5_0_R4:
+                case GGML_TYPE_Q6_0_R4:
+                case GGML_TYPE_Q4_0_R8:
+                case GGML_TYPE_MXFP4_R8:
+                    return type;
+                default: break;
+            }
+        }
 #ifdef __AVX2__
 #if defined(HAVE_FANCY_SIMD)
         auto q8_k_type = GGML_TYPE_Q8_K_R16;
