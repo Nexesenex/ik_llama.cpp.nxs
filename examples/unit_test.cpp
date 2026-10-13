@@ -1105,6 +1105,102 @@ static void test_repack_integrity(int n) {
     }
 }
 
+// R16 revival (R8 commit): repack integrity native IQ4_XS vs IQ4_XS_R16.
+// Mirrors test_repack_integrity above (same inline native reference), but
+// drives the PRODUCTION C2 hook (iqk_test_repack_iq4_xs_r16) instead of a
+// manual replication, then production dequantize_row_iq4_xs_r16. This is
+// the test that pins the C2 half-split scales fix: the July 1793a4b6d98
+// repack indexed scales with i = 8*ib+k over k<16 (collides, corrupts
+// halves) and would fail here while the R8 test stays green.
+static void test_repack_integrity_r16(int n) {
+    const int nb = n / QK_K;
+    const int nrows = 16; // one R16 group
+    const int nblk = nrows * nb;
+
+    // 1. Generate random native IQ4_XS data (same fill as R8 test)
+    std::vector<block_iq4_xs> native(nblk);
+    for (auto & blk : native) {
+        blk.d = GGML_FP32_TO_FP16((g_rng() % 1000) * 0.001f + 0.01f);
+        blk.scales_h = (uint16_t)(g_rng() & 0xffff);
+        for (auto & v : blk.scales_l) v = (uint8_t)(g_rng() & 0xff);
+        for (auto & v : blk.qs)      v = (uint8_t)(g_rng() & 0xff);
+    }
+
+    // 2. Dequantize native -> F1 (same inline reference as R8 test)
+    auto dequant_native_iq4_xs = [](const block_iq4_xs * x, float * y, int64_t k) {
+        int64_t nb = k / QK_K;
+        for (int i = 0; i < nb; ++i) {
+            float d = GGML_FP16_TO_FP32(x[i].d);
+            for (int ib = 0; ib < QK_K/32; ++ib) {
+                int ls = ((x[i].scales_l[ib/2] >> 4*(ib%2)) & 0xf) | (((x[i].scales_h >> 2*ib) & 3) << 4);
+                float dl = d * (ls - 32);
+                for (int j = 0; j < 16; ++j) {
+                    y[j+ 0] = dl * iq4k_values[x[i].qs[16*ib+j] & 0xf];
+                    y[j+16] = dl * iq4k_values[x[i].qs[16*ib+j] >>  4];
+                }
+                y += 32;
+            }
+        }
+    };
+    std::vector<float> f1((size_t)nrows * n);
+    for (int r = 0; r < nrows; ++r)
+        dequant_native_iq4_xs(&native[r * nb], &f1[(size_t)r * n], n);
+
+    // 3. Production repack native -> block_iq4_xs_r16 via the C2 hook
+    std::vector<block_iq4_xs_r16> repacked((size_t)nrows / 16 * nb);
+    iqk_test_repack_iq4_xs_r16(nrows, n, native.data(), repacked.data());
+
+    // 4. Dequantize repacked -> F2 (production dequantizer, one 16-row group)
+    std::vector<float> f2((size_t)nrows * n);
+    dequantize_row_iq4_xs_r16(repacked.data(), f2.data(), (int64_t)nrows * n);
+
+    // 5. Compare F1 vs F2 (must be bit-exact: repack only shuffles)
+    float max_err = 0.f, max_val = 0.f;
+    size_t first_bad = (size_t)-1;
+    for (size_t j = 0; j < (size_t)nrows * n; ++j) {
+        float e = std::fabs(f1[j] - f2[j]);
+        float a = std::fabs(f1[j]);
+        if (e > max_err) { max_err = e; first_bad = j; }
+        if (a > max_val) max_val = a;
+    }
+    if (max_err == 0.f)
+        printf("  [OK, exact] repack-r16-dequant n=%-5d : max|Δfloat|=%.2g  (identical)\n", n, (double)max_err);
+    else {
+        printf("  [FAIL] repack-r16-dequant n=%-5d : max|Δfloat|=%.2g  max_ref=%.2g\n", n, (double)max_err, (double)max_val);
+        int r0 = (int)(first_bad / n), c0 = (int)(first_bad % n);
+        printf("         first bad @ row=%d col=%d: f1=%.2f f2=%.2f\n", r0, c0, f1[first_bad], f2[first_bad]);
+        printf("         row0 f1[0..31]: "); for (int j = 0; j < 32 && j < n; ++j) printf(" %5.0f", (double)f1[j]); printf("\n");
+        printf("         row0 f2[0..31]: "); for (int j = 0; j < 32 && j < n; ++j) printf(" %5.0f", (double)f2[j]); printf("\n");
+        // lo/hi-half isolation: first bad row <8 => lo half, >=8 => hi half
+        printf("         half: %s (row %d %s 8)\n", r0 < 8 ? "LO" : "HI", r0, r0 < 8 ? "<" : ">=");
+        ++g_failures;
+    }
+
+    // 6+7. Quantize F1/F2 -> Q8_K_R16 (same byte-compare as R8 test)
+    const size_t r16_bytes = (size_t)(nrows / 16) * nb * sizeof(block_q8_k_r16);
+    std::vector<uint8_t> q1(r16_bytes + 1024);
+    g_iqk_r16_path = true;
+    quantize_q8_k_r16(f1.data(), q1.data(), nrows, n, nullptr, nullptr);
+    g_iqk_r16_path = false;
+
+    std::vector<uint8_t> q2(r16_bytes + 1024);
+    g_iqk_r16_path = true;
+    quantize_q8_k_r16(f2.data(), q2.data(), nrows, n, nullptr, nullptr);
+    g_iqk_r16_path = false;
+
+    // 8. Compare q1 vs q2 byte-for-byte
+    long mm = 0, first_mm = -1;
+    for (size_t o = 0; o < r16_bytes; ++o) {
+        if ((int)(int8_t)q1[o] != (int)(int8_t)q2[o]) { ++mm; if (first_mm < 0) first_mm = (long)o; }
+    }
+    if (mm == 0)
+        printf("  [OK, exact] repack-r16-q8k     n=%-5d : Q8_K_R16 byte-identical\n", n);
+    else {
+        printf("  [FAIL] repack-r16-q8k     n=%-5d : %ld mismatches first@%ld\n", n, mm, first_mm);
+        ++g_failures;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Test: KV-cache growth sweep.
 // Simulates a real session: a "prompt" of ctx/2 rows is converted first (single
@@ -5137,6 +5233,13 @@ int main(int argc, char ** argv) {
     printf("\n--- Test: Repack integrity (native IQ4_XS vs IQ4_XS_R8) ---\n");
     for (int n : ns) {
         test_repack_integrity(n);
+    }
+    }
+
+    {
+    printf("\n--- Test: Repack integrity R16 (native IQ4_XS vs IQ4_XS_R16, R8 commit) ---\n");
+    for (int n : ns) {
+        test_repack_integrity_r16(n);
     }
     }
 
