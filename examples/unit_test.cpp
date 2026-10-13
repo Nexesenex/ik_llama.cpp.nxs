@@ -2091,6 +2091,87 @@ static void test_gemm_iq4_xs_r16_direct(int n, int nrc_x, int nrc_y) {
     }
 }
 
+// r16p NaN hunt: VNNI mul_mat_q8_k_r16_q8_k vs float. A buffer built via
+// the PRODUCTION C5 path (R8 -> iqk_convert_iq4_xs_r8_q8_k_r16 with
+// g_iqk_r16_path, vnni converter), B via quantize_row_q8_K. Reference
+// dequantizes both sides to float. VNNI-only probe (FANCY has its own
+// hook + end-to-end test_gemm_r16).
+#if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+extern "C" void iqk_test_gemm_q8_k_r16_vnni(int n, const void * vx, size_t bx,
+                                       const DataInfo& info, int nrc_x, int nrc_y);
+static void test_gemm_q8_k_r16_vnni_direct(int n, int nrc_x, int nrc_y) {
+    GGML_ASSERT(n % QK_K == 0);
+    GGML_ASSERT(nrc_x % 16 == 0);
+    GGML_ASSERT(nrc_y >= 1 && nrc_y <= 8);
+    const int nb = n / QK_K;
+    const size_t bx_w8 = ggml_row_size(GGML_TYPE_IQ4_XS_R8, n);
+    const size_t bx_A = ggml_row_size(GGML_TYPE_Q8_K_R16, n);
+    const size_t bx_B = ggml_row_size(GGML_TYPE_Q8_K, n);
+
+    // A: random R8 -> production C5 converter -> Q8_K_R16 (r16p PP path)
+    std::vector<block_iq4_xs_r8> R8((size_t)(nrc_x / 8) * nb);
+    for (auto & b : R8) make_random_iq4_xs_r8(&b);
+    std::vector<uint8_t> A((size_t)(nrc_x / 16) * nb * sizeof(block_q8_k_r16) + 64);
+    bool saved_r16 = g_iqk_r16_path;
+    g_iqk_r16_path = true;
+    iqk_test_convert_iq4_xs_r8(n, R8.data(), bx_w8, A.data(), nrc_x);
+    g_iqk_r16_path = saved_r16;
+
+    // B: random activations, production quantizer
+    const int NE11 = nrc_y;
+    std::vector<float> Bf((size_t)NE11 * n);
+    for (size_t j = 0; j < Bf.size(); ++j) Bf[j] = 0.05f * ((int)(g_rng() % 41) - 20);
+    std::vector<uint8_t> B((size_t)NE11 * bx_B);
+    for (int iy = 0; iy < NE11; ++iy)
+        quantize_row_q8_K32(Bf.data() + (size_t)iy * n, B.data() + (size_t)iy * bx_B, n);
+    std::vector<float> Bfq((size_t)NE11 * n, 0.f);
+    for (int iy = 0; iy < NE11; ++iy)
+        dequant_q8_K_row((const block_q8_K *)(B.data() + (size_t)iy * bx_B),
+                         Bfq.data() + (size_t)iy * n, n);
+
+    // Float reference: dequant A groups + naive dot vs Bfq
+    std::vector<float> Af((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 16; ++g)
+        dequantize_row_q8_k_r16((const block_q8_k_r16 *)(A.data() + (size_t)g * nb * sizeof(block_q8_k_r16)),
+                                Af.data() + (size_t)g * 16 * n, 16 * n);
+
+    std::vector<float> C((size_t)NE11 * nrc_x, -1.f);
+    DataInfo info;
+    info.s   = C.data();
+    info.cy  = (const char *)B.data();
+    info.bs  = nrc_x;
+    info.by  = bx_B;
+    info.cur_y = 0;
+    info.ne11  = NE11;
+    info.row_mapping = nullptr;
+    iqk_test_gemm_q8_k_r16_vnni(n, A.data(), bx_A, info, nrc_x, nrc_y);
+
+    float max_err = 0.f, max_ref = 0.f;
+    size_t nbad = 0, first_bad = (size_t)-1;
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        for (int r = 0; r < nrc_x; ++r) {
+            const float * ar = Af.data() + (size_t)r * n;
+            const float * br = Bfq.data() + (size_t)iy * n;
+            double s = 0.0;
+            for (int k = 0; k < n; ++k) s += (double)ar[k] * (double)br[k];
+            float got = C[(size_t)iy * nrc_x + r];
+            float e = fabsf(got - (float)s);
+            if (!(e <= 1e-2f + 1e-4f * fabsf((float)s))) { if (nbad == 0) first_bad = (size_t)iy * nrc_x + r; ++nbad; }
+            if (e > max_err) max_err = e;
+            if (fabsf((float)s) > max_ref) max_ref = fabsf((float)s);
+        }
+    }
+    if (nbad == 0)
+        printf("  [OK, tolerated] gemm-q8r16vnni plain n=%-5d nrc_x=%-3d nrc_y=%d : max|err|=%.4g (scale %.4g)\n",
+               n, nrc_x, nrc_y, (double)max_err, (double)max_ref);
+    else {
+        printf("  [FAIL] gemm-q8r16vnni plain n=%-5d nrc_x=%-3d nrc_y=%d : %zu bad first@%zu (max|err|=%.4g scale %.4g)\n",
+               n, nrc_x, nrc_y, nbad, first_bad, (double)max_err, (double)max_ref);
+        ++g_failures;
+    }
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // Test: fused MoE up-gate (iqk_moe_fused_up_gate) vs float reference.
 // Single expert, identity row_mapping, no bias, SiLU, no clamp. Covers the
@@ -2234,6 +2315,108 @@ static void test_moe_fused_up_gate(int n, int nrc_x, int nrc_y, bool use_map = t
     }
 #endif
 }
+
+// r16p NaN hunt: fused up-gate with R16-converted weights. Mirrors
+// test_moe_fused_up_gate above but forces g_iqk_r16_path so the entry
+// takes the convert branch (R8->R16 via R16-5) and dots with the VNNI R16
+// kernels inside mul_mat_up_gate_NxM. Reference from the converted
+// weights (dequantize_row_q8_k_r16), same tolerance as the R8 test.
+#if defined(TEST_DISPATCH) && !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+static void test_moe_fused_up_gate_r16(int n, int nrc_x, int nrc_y) {
+    GGML_ASSERT(n % QK_K == 0);
+    GGML_ASSERT(nrc_x % 16 == 0);
+    const int nb = n / QK_K;
+    const size_t bx_w = ggml_row_size(GGML_TYPE_IQ4_XS_R8, n);
+    const size_t bx_B = ggml_row_size(GGML_TYPE_Q8_K, n);
+    const size_t bx_q16 = ggml_row_size(GGML_TYPE_Q8_K_R16, n);
+
+    std::vector<block_iq4_xs_r8> Wup((size_t)(nrc_x / 8) * nb);
+    std::vector<block_iq4_xs_r8> Wgate((size_t)(nrc_x / 8) * nb);
+    for (auto & b : Wup) make_random_iq4_xs_r8(&b);
+    for (auto & b : Wgate) make_random_iq4_xs_r8(&b);
+
+    bool saved_r16 = g_iqk_r16_path;
+    g_iqk_r16_path = true;
+    std::vector<uint8_t> Xu((size_t)nrc_x * bx_q16 + 1024, 0);
+    std::vector<uint8_t> Xg((size_t)nrc_x * bx_q16 + 1024, 0);
+    bool conv_ok = iqk_convert_repack_for_test(GGML_TYPE_IQ4_XS_R8, n, Wup.data(), bx_w, Xu.data(), 0, nrc_x) &&
+                   iqk_convert_repack_for_test(GGML_TYPE_IQ4_XS_R8, n, Wgate.data(), bx_w, Xg.data(), 0, nrc_x);
+    g_iqk_r16_path = saved_r16;
+    if (!conv_ok) {
+        printf("  [FAIL] moe-fused-r16 n=%-5d nrc_x=%-3d nrc_y=%d : pre-convert returned false\n",
+               n, nrc_x, nrc_y);
+        ++g_failures;
+        return;
+    }
+    // float copies from the CONVERTED (R16) weights, 16-row groups.
+    const size_t r16blk = sizeof(block_q8_k_r16);
+    std::vector<float> Wupf((size_t)nrc_x * n, 0.f), Wgatef((size_t)nrc_x * n, 0.f);
+    for (int g = 0; g < nrc_x / 16; ++g) {
+        dequantize_row_q8_k_r16((const block_q8_k_r16 *)(Xu.data() + (size_t)g * nb * r16blk),
+                                Wupf.data() + (size_t)g * 16 * n, 16 * n);
+        dequantize_row_q8_k_r16((const block_q8_k_r16 *)(Xg.data() + (size_t)g * nb * r16blk),
+                                Wgatef.data() + (size_t)g * 16 * n, 16 * n);
+    }
+
+    std::vector<float> Bf((size_t)nrc_y * n);
+    for (size_t j = 0; j < Bf.size(); ++j) Bf[j] = 0.05f * ((int)(g_rng() % 41) - 20);
+    std::vector<uint8_t> B((size_t)nrc_y * bx_B);
+    for (int iy = 0; iy < nrc_y; ++iy)
+        quantize_row_q8_K32(Bf.data() + (size_t)iy * n, B.data() + (size_t)iy * bx_B, n);
+    std::vector<float> Bfq((size_t)nrc_y * n, 0.f);
+    for (int iy = 0; iy < nrc_y; ++iy)
+        dequant_q8_K_row((const block_q8_K *)(B.data() + (size_t)iy * bx_B),
+                         Bfq.data() + (size_t)iy * n, n);
+
+    std::vector<mmid_row_mapping> map(nrc_y);
+    for (int iy = 0; iy < nrc_y; ++iy) { map[iy].i1 = iy; map[iy].i2 = 0; }
+
+    std::vector<float> C((size_t)nrc_y * nrc_x, g_cinit_plain ? -1.f : -1.0e30f);
+    const long nb1 = (long)nrc_x * (long)sizeof(float);
+    g_iqk_r16_path = true;
+    bool ok = iqk_moe_fused_up_gate(nrc_x, nrc_y, n, nrc_y, (int)GGML_UNARY_OP_SILU,
+            (int)GGML_TYPE_IQ4_XS_R8, Wup.data(), Wgate.data(), (long)bx_w,
+            (int)GGML_TYPE_Q8_K32, B.data(), (long)bx_B,
+            nullptr, nullptr, C.data(), nb1, 0, map.data(), 0.f, 0, 1);
+    g_iqk_r16_path = saved_r16;
+    if (!ok) {
+        printf("  [FAIL] moe-fused-r16 n=%-5d nrc_x=%-3d nrc_y=%d : fused call returned false\n",
+               n, nrc_x, nrc_y);
+        ++g_failures;
+        return;
+    }
+
+    size_t nbad = 0;
+    float max_err = 0.f, max_ref = 0.f;
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        for (int r = 0; r < nrc_x; ++r) {
+            double su = 0.0, sg = 0.0;
+            for (int k = 0; k < n; ++k) {
+                su += (double)Wupf[(size_t)r * n + k] * (double)Bfq[(size_t)iy * n + k];
+                sg += (double)Wgatef[(size_t)r * n + k] * (double)Bfq[(size_t)iy * n + k];
+            }
+            double g = sg / (1.0 + exp(-sg));
+            float ref = (float)(su * g);
+            float got = C[(size_t)iy * nrc_x + r];
+            float e = fabsf(got - ref);
+            if (fabsf(ref) > max_ref) max_ref = fabsf(ref);
+            if (e > max_err) max_err = e;
+            if (e > 2.0f + 8e-3f * fabsf(ref)) {
+                if (nbad < 12) printf("    bad[iy=%d,r=%d]: got %.6g ref %.6g\n", iy, r, (double)got, (double)ref);
+                ++nbad;
+            }
+        }
+    }
+    if (nbad == 0)
+        printf("  [OK, tolerated] moe-fused-r16 n=%-5d nrc_x=%-3d nrc_y=%d : max|err|=%.4g (scale %.4g)\n",
+               n, nrc_x, nrc_y, (double)max_err, (double)max_ref);
+    else {
+        printf("  [FAIL] moe-fused-r16 n=%-5d nrc_x=%-3d nrc_y=%d : %zu bad (max|err|=%.4g scale %.4g)\n",
+               n, nrc_x, nrc_y, nbad, (double)max_err, (double)max_ref);
+        ++g_failures;
+    }
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Test: fused MoE up-gate on PRE-CONVERTED Q8_K_R8 weights vs float.
@@ -5403,6 +5586,22 @@ int main(int argc, char ** argv) {
         }
     }
 
+#if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+    {
+        printf("\n--- Test: VNNI Q8_K_R16 GEMM vs float (r16p NaN hunt, C5-converted A) ---\n");
+        int ns_vn[] = {1024};
+        int nx_vn[] = {16, 64};
+        int ny_vn[] = {1, 8};
+        for (int n : ns_vn) {
+            for (int nrc_x : nx_vn) {
+                for (int nrc_y : ny_vn) {
+                    test_gemm_q8_k_r16_vnni_direct(n, nrc_x, nrc_y);
+                }
+            }
+        }
+    }
+#endif
+
     // preconv validation + fused cases live below (see test_moe_fused_up_gate_preconv)
     // Multiset check (sum/sumsq per row): distinguishes ORDER bugs (permuted
     // values, sums match) from VALUE bugs (sums differ). Restored: it is the
@@ -5697,6 +5896,10 @@ int main(int argc, char ** argv) {
         // only at the synthetic nrc_x=64 shape?
         test_moe_fused_up_gate(2048, 1792, 64);
         test_moe_fused_up_gate_preconv(2048, 1792, 64);
+#if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+        // r16p NaN hunt: fused entry with R16-converted weights (Ny>=32).
+        test_moe_fused_up_gate_r16(1024, 64, 64);
+#endif
         // Production-like pass (coherent small deltas): same converted shapes.
         // If the random-data failures above vanish here, the kernel is sensitive
         // to adversarial magnitudes, not structurally broken.
