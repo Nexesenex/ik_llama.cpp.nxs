@@ -3548,8 +3548,83 @@ void iqk_convert_q3_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy, 
 }
 
 // TODO: move this to iqk_gemm_iquants
+// TODO: move this to iqk_gemm_iquants
+#if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+// Runtime R16 target for the r8 source layout (see g_iqk_r16_path, -rtr16p).
+// Same source reading as iqk_convert_iq4_xs_r8_q8_k_r16 below, but 16-row
+// interleaved R16 target with folded sign xor, mirroring the R16 branch of
+// iqk_convert_iq4_xs_q8_k_r8. Needed because is_dequant_better returns
+// Q8_K_R16 for IQ4_XS_R8 when the r16 path is on (ported from 43c7ea225af,
+// with the f3e52a510ad float-d store fix folded in: R16 d is float[16]
+// since IKL PR 2518, so store dnew directly instead of half-packing).
+static void iqk_convert_iq4_xs_r8_q8_k_r16_vnni(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    constexpr int k_nr = 16;
+    using block_q8_k_r = block_q8_k_r16;
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%k_nr == 0);
+
+    const int nb = n/QK_K;
+
+    const block_iq4_xs_r8 * xg[k_nr/8];
+    block_q8_k_r * y = (block_q8_k_r *)vy;
+
+    auto values128 = _mm_loadu_si128((const __m128i *)iq4k_values);
+    auto values    = MM256_SET1_M128I(values128);
+    const auto m4  = _mm256_set1_epi8(0xf);
+    const auto dup = _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3);
+
+    int16_t  ls[16];
+    float    dnew[k_nr];
+    __m256i  xv[8];
+    uint32_t block[8];
+
+    for (int ix = 0; ix < nrc_x; ix += k_nr) {
+        for (int g = 0; g < k_nr/8; ++g) {
+            xg[g] = (const block_iq4_xs_r8 *)((const char *)vx + (ix + 8*g)*bx);
+        }
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < k_nr; ++k) {
+                const auto& src = xg[k/8][i];
+                const int kk = k & 7;
+                const float d = GGML_FP16_TO_FP32(src.d[kk]);
+                for (int ib = 0; ib < 8; ++ib) {
+                    const int is = 8*ib + kk;
+                    const uint8_t sl = (src.scales_l[is%32] >> 4*(is/32)) & 0xf;
+                    const uint8_t sh = (src.scales_h[is%16] >> 2*(is/16)) & 3;
+                    ls[2*ib+0] = ls[2*ib+1] = (sl | (sh << 4)) - 32;
+                    const uint8_t * q = src.qs + 128*ib + 4*kk;
+                    uint32_t w[4];
+                    std::memcpy(w+0, q +  0, 4);
+                    std::memcpy(w+1, q + 32, 4);
+                    std::memcpy(w+2, q + 64, 4);
+                    std::memcpy(w+3, q + 96, 4);
+                    auto v   = _mm256_permutevar8x32_epi32(
+                                   _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)w)), dup);
+                    auto lo  = _mm256_and_si256(v, m4);
+                    auto hi  = _mm256_and_si256(_mm256_srli_epi16(v, 4), m4);
+                    auto nib = _mm256_blend_epi32(lo, hi, 0xAA);
+                    xv[ib]   = _mm256_shuffle_epi8(values, nib);
+                }
+                dnew[k] = d * convert_to_q8_k_r8<k_nr, true>(k, 1.f/127, xv, ls, block, y[i].qs);
+            }
+            _mm256_storeu_ps(y[i].d + 0, _mm256_loadu_ps(dnew + 0));
+            _mm256_storeu_ps(y[i].d + 8, _mm256_loadu_ps(dnew + 8));
+            // Note: the R16 -128 xor is folded into convert_to_q8_k_r8<k_nr, true>,
+            // so no second pass over y[i].qs here (same as iqk_convert_iq4_xs_q8_k_r8).
+        }
+        y += nb;
+    }
+}
+#endif
+
 void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
 
+#if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+    if (g_iqk_r16_path) {
+        iqk_convert_iq4_xs_r8_q8_k_r16_vnni(n, vx, bx, vy, nrc_x);
+        return;
+    }
+#endif
 #ifdef HAVE_FANCY_SIMD
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
