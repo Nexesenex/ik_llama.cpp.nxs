@@ -2290,6 +2290,23 @@ extern "C" void iqk_test_gemm_q8_k_r16(int n, const void * vx, size_t bx,
     }
 }
 #endif
+#if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
+// Probe hook for the VNNI256 8-wide R16 GEMM above (r16p NaN hunt): drives
+// mul_mat_q8_k_r16_q8_k<nrc_y> directly so unit_test can compare vs float.
+extern "C" void iqk_test_gemm_q8_k_r16_vnni(int n, const void * vx, size_t bx,
+                                       const DataInfo& info, int nrc_x, int nrc_y) {
+    switch (nrc_y) {
+        case 1: mul_mat_q8_k_r16_q8_k<1>(n, vx, bx, info, nrc_x); break;
+        case 2: mul_mat_q8_k_r16_q8_k<2>(n, vx, bx, info, nrc_x); break;
+        case 3: mul_mat_q8_k_r16_q8_k<3>(n, vx, bx, info, nrc_x); break;
+        case 4: mul_mat_q8_k_r16_q8_k<4>(n, vx, bx, info, nrc_x); break;
+        case 5: mul_mat_q8_k_r16_q8_k<5>(n, vx, bx, info, nrc_x); break;
+        case 6: mul_mat_q8_k_r16_q8_k<6>(n, vx, bx, info, nrc_x); break;
+        case 7: mul_mat_q8_k_r16_q8_k<7>(n, vx, bx, info, nrc_x); break;
+        default: mul_mat_q8_k_r16_q8_k<8>(n, vx, bx, info, nrc_x); break;
+    }
+}
+#endif
 
 template <int nrc_y>
 static void mul_mat_q8_KV_q8_KV(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
@@ -3997,6 +4014,23 @@ bool iqk_convert_kquants_q8X_r8(int type, int n, const void * vx, size_t bx, voi
             default: break;
         }
     }
+    // -rtr16p on non-FANCY builds: these R4 converters emit R8 (compile-time
+    // target) while dispatch prepares R16 -> mismatch/NaN (see is_dequant_better
+    // R11 gate). Report unavailable so the caller falls back to direct.
+    // IQ4_XS_R8 excluded: C5 serves true R16 on VNNI.
+#if !defined(HAVE_FANCY_SIMD)
+    if (g_iqk_r16_path) {
+        switch (ggml_type(type)) {
+            case GGML_TYPE_Q2_K_R4:
+            case GGML_TYPE_Q3_K_R4:
+            case GGML_TYPE_Q4_K_R4:
+            case GGML_TYPE_Q5_K_R4:
+            case GGML_TYPE_Q6_K_R4:
+                return false;
+            default: break;
+        }
+    }
+#endif
     switch (ggml_type(type)) {
         case GGML_TYPE_Q2_K: iqk_convert_q2_k_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q2_K_R4: iqk_convert_q2_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;

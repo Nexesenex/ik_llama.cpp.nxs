@@ -3538,6 +3538,22 @@ bool iqk_convert_iqk_quants_q80_r8(int type, int n, const void * vx, size_t bx, 
             default: break;
         }
     }
+    // -rtr16p on non-FANCY builds: R4 converters emit R8, dispatch would
+    // prepare R16 -> mismatch/NaN (R11). Report unavailable -> direct.
+#if !defined(HAVE_FANCY_SIMD)
+    if (g_iqk_r16_path) {
+        switch (ggml_type(type)) {
+            case GGML_TYPE_IQ2_K_R4:
+            case GGML_TYPE_IQ3_K_R4:
+            case GGML_TYPE_IQ4_KS_R4:
+            case GGML_TYPE_IQ4_K_R4:
+            case GGML_TYPE_IQ5_KS_R4:
+            case GGML_TYPE_IQ5_K_R4:
+                return false;
+            default: break;
+        }
+    }
+#endif
     switch (ggml_type(type)) {
         case GGML_TYPE_IQ2_KS : iqk_convert_iq2_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ2_K  : iqk_convert_iq2_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
