@@ -291,8 +291,8 @@ static void test_delta_integrity(bool r16, int nrc_x, int n) {
     if (r16) { printf("  [SKIP] R16 integrity nrc_x=%-3d n=%-5d : requires HAVE_FANCY_SIMD\n", nrc_x, n); return; }
 #endif
 #if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
-    // VNNI builds serve R16 via iqk_convert_iq4_xs_r8_q8_k_r16_vnni (C5),
-    // which needs 16-row groups (same carve-out as test_path in R7).
+    // VNNI builds serve R16 via iqk_convert_iq4_xs_r8_q8_k_r16_vnni (R16-5),
+    // which needs 16-row groups (same carve-out as test_path in R16-7).
     if (r16 && nrc_x % 16 != 0) { printf("  [SKIP] R16 integrity nrc_x=%-3d n=%-5d : needs nrc_x%%16==0 on VNNI\n", nrc_x, n); return; }
 #endif
     const int nb = n / QK_K;
@@ -488,7 +488,7 @@ static void test_roundtrip(bool r16, int nrc_x, int n) {
     if (r16) { printf("  [SKIP] R16 roundtrip nrc_x=%-3d n=%-5d : requires HAVE_FANCY_SIMD\n", nrc_x, n); return; }
 #endif
 #if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
-    // VNNI R16 converter (C5) needs 16-row groups (same as test_path in R7).
+    // VNNI R16 converter (R16-5) needs 16-row groups (same as test_path in R16-7).
     if (r16 && nrc_x % 16 != 0) { printf("  [SKIP] R16 roundtrip nrc_x=%-3d n=%-5d : needs nrc_x%%16==0 on VNNI\n", nrc_x, n); return; }
 #endif
     const int nb = n / QK_K;
@@ -709,7 +709,7 @@ static void test_path(bool r16, int nrc_x, int n) {
     if (r16) { printf("  [SKIP] -r16p nrc_x=%-3d n=%-5d : requires HAVE_FANCY_SIMD\n", nrc_x, n); return; }
 #endif
 #if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
-    // VNNI builds serve R16 via iqk_convert_iq4_xs_r8_q8_k_r16_vnni (C5),
+    // VNNI builds serve R16 via iqk_convert_iq4_xs_r8_q8_k_r16_vnni (R16-5),
     // which needs 16-row groups.
     if (r16 && nrc_x % 16 != 0) { printf("  [SKIP] -r16p nrc_x=%-3d n=%-5d : needs nrc_x%%16==0 on VNNI\n", nrc_x, n); return; }
 #endif
@@ -856,7 +856,7 @@ static void test_native_path(bool r16, int nrc_x, int n) {
 #endif
 #if !defined(HAVE_FANCY_SIMD) && (defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8))
     // Native R16 branch is runtime-gated on g_iqk_r16_path (not FANCY-only)
-    // but asserts nrc_x%16==0 (same carve-out as test_path in R7).
+    // but asserts nrc_x%16==0 (same carve-out as test_path in R16-7).
     if (r16 && nrc_x % 16 != 0) { printf("  [SKIP] native-r16  nrc_x=%-3d n=%-5d : needs nrc_x%%16==0 on VNNI\n", nrc_x, n); return; }
 #endif
     const int nb = n / QK_K;
