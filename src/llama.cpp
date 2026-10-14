@@ -4947,7 +4947,10 @@ static bool llm_load_tensors(
         // numbers instead; NGL and pinning untouched, attention and output stay on CUDA.
         // Strict mode (-tss) is exempt: its values are exact layer counts, not byte
         // proportions, with their own count validation below.
-        if (required_mem > available_mem && has_tensor_split && !tensor_split_strict) {
+        // Overrides (-ot, -ncmoe) are exempt too: they dispatch tensors to host/CPU
+        // outside the VRAM split, so full-model bytes vs VRAM headroom misjudges them.
+        if (required_mem > available_mem && has_tensor_split && !tensor_split_strict &&
+            ml.tensor_buft_overrides == nullptr && ml.ncmoe == 0) {
             LLAMA_LOG_ERROR("%s: explicit -ts split does not fit: required %.f MiB > available %.f MiB (after compute reserve)\n",
                 __func__, required_mem/(1024.*1024.), available_mem/(1024.*1024.));
             float prev = 0.0f;
