@@ -915,8 +915,18 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]
             padded_size += padded_row_size - row_size;
         }
         ggml_cuda_set_device(dev);
-        char * buf;
-        CUDA_CHECK(ggml_cuda_device_malloc((void**)&buf, padded_size, dev));
+        char * buf = nullptr;
+        const cudaError_t malloc_err = ggml_cuda_device_malloc((void**)&buf, padded_size, dev);
+        if (malloc_err != cudaSuccess) {
+            size_t free_mem = 0, total_mem = 0;
+            cudaMemGetInfo(&free_mem, &total_mem);
+            cudaGetLastError();
+            GGML_CUDA_LOG_ERROR("%s: split alloc OOM: tensor %s split [%d]->CUDA%d type %s ne0 %lld size %.2f MiB padded %.2f MiB (padding %.2f MiB), device free %.2f MiB total %.2f MiB: %s\n",
+                __func__, tensor->name, i, dev, ggml_type_name(split->type), (long long) ne0,
+                size/1024.0/1024.0, padded_size/1024.0/1024.0, (padded_size-size)/1024.0/1024.0,
+                free_mem/1024.0/1024.0, total_mem/1024.0/1024.0, cudaGetErrorString(malloc_err));
+            CUDA_CHECK(malloc_err);
+        }
         if (padded_size > size) {
             CUDA_CHECK(cudaMemset(buf + size, 0, padded_size - size));
         }
