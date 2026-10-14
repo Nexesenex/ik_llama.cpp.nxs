@@ -1000,6 +1000,20 @@ static void mul_mat_qY_K_q8_2_X4_T(int n, const void * vx, size_t bx, const Data
     }
 }
 
+// Prefetch the whole next repacked block, not just its head.
+// The iq4 side is the bandwidth-bound stream in PP (block_iq4_xs_r8 = 1088 B
+// = 17 cache lines) and the old hint-only prefetch covered a single line, so
+// the block tail stalls on demand. Hint T1 (L2+L3): the block is consumed
+// once, so pull it past L1 without evicting the hot LUT / scale constants.
+// Mirrors fijam's prefetch_r4_block_ahead in the IQ2/IQ3 R4 kernels (PR 2676).
+// Hint-only, no numerical change.
+template <typename Block>
+static inline void prefetch_block_ahead(const Block * p) {
+    for (size_t l = 0; l < sizeof(Block)/64; ++l) {
+        _mm_prefetch((const char *)p + 64*l, _MM_HINT_T1);
+    }
+}
+
 template <int nrc_y>
 static void mul_mat_iq4_xs_r8_q8_k_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%8 == 0);
@@ -1027,7 +1041,7 @@ static void mul_mat_iq4_xs_r8_q8_k_avx2(int n, const void * vx, size_t bx, const
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             // Stream-bound over iq4 + q8: prefetch next block (hint-only, never faults).
             if (ibl + 1 < nbl) {
-                _mm_prefetch((const char *)&iq4[ibl+1], _MM_HINT_T0);
+                prefetch_block_ahead(&iq4[ibl+1]);
                 _mm_prefetch((const char *)q8.y[0][ibl+1].qs, _MM_HINT_T0);
             }
             auto d4 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[ibl].d));
@@ -1204,7 +1218,7 @@ static void mul_mat_iq4_xs_r16_q8_k_avx2(int n, const void * vx, size_t bx, cons
         const block_iq4_xs_r16 * iq4 = (const block_iq4_xs_r16 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) {
             if (ibl + 1 < nbl) {
-                _mm_prefetch((const char *)&iq4[ibl+1], _MM_HINT_T0);
+                prefetch_block_ahead(&iq4[ibl+1]);
                 _mm_prefetch((const char *)q8.y[0][ibl+1].qs, _MM_HINT_T0);
             }
             auto d4_lo = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[ibl].d));
