@@ -5091,8 +5091,10 @@ static bool llm_load_tensors(
         // NXS streaming discipline: with explicit -ts the auto-adjust above is skipped,
         // so an impossible split used to burn the full load (host commit + 60s) and die
         // late in compute alloc with a silent exit. Fail fast here with per-device
-        // numbers instead; NGL and pinning untouched, attention/output stay on CUDA.
-        if (required_mem > available_mem && has_tensor_split) {
+        // numbers instead; NGL and pinning untouched, attention and output stay on CUDA.
+        // Strict mode (-tss) is exempt: its values are exact layer counts, not byte
+        // proportions, with their own count validation below.
+        if (required_mem > available_mem && has_tensor_split && !tensor_split_strict) {
             LLAMA_LOG_ERROR("%s: explicit -ts split does not fit: required %.f MiB > available %.f MiB (after compute reserve)\n",
                 __func__, required_mem/(1024.*1024.), available_mem/(1024.*1024.));
             float prev = 0.0f;
