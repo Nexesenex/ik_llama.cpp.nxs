@@ -1,5 +1,8 @@
 #include "common.cuh"
 #include "ks-encoder.cuh"
+#include "qleg-encoder.cuh"
+#include "qk-encoder.cuh"
+#include "iq-encoder.cuh"
 #include "../iqk/iqk_quantize.h"
 
 #include <cstring>
@@ -767,7 +770,14 @@ GGML_CALL bool ggml_cuda_quantize_supported(enum ggml_type type) {
     // Mirrors the ggml_cuda_quantize dispatcher below; extend alongside it.
     const bool ks = type == GGML_TYPE_IQ3_KS || type == GGML_TYPE_IQ4_KS || type == GGML_TYPE_IQ5_KS || type == GGML_TYPE_IQ4_KS_R4 ||
         type == GGML_TYPE_IQ4_KS_R16 || type == GGML_TYPE_IQ5_KS_R4;
-    return type == GGML_TYPE_IQ4_KT || type == GGML_TYPE_IQ3_KT || ks;
+    const bool qleg = type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q5_0 ||
+        type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q5_1 || type == GGML_TYPE_Q4_1;
+    const bool qk = type == GGML_TYPE_Q6_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q4_K ||
+        type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q2_K;
+    const bool iq = type == GGML_TYPE_IQ1_S || type == GGML_TYPE_IQ1_M || type == GGML_TYPE_IQ2_XXS ||
+        type == GGML_TYPE_IQ2_XS || type == GGML_TYPE_IQ2_S || type == GGML_TYPE_IQ3_XXS ||
+        type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ4_XS || type == GGML_TYPE_IQ4_NL;
+    return type == GGML_TYPE_IQ4_KT || type == GGML_TYPE_IQ3_KT || ks || qleg || qk || iq;
 #endif
 }
 
@@ -775,7 +785,14 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
         const float * imatrix) {
     const bool ks = type == GGML_TYPE_IQ3_KS || type == GGML_TYPE_IQ4_KS || type == GGML_TYPE_IQ5_KS || type == GGML_TYPE_IQ4_KS_R4 ||
         type == GGML_TYPE_IQ4_KS_R16 || type == GGML_TYPE_IQ5_KS_R4;
-    if (type != GGML_TYPE_IQ4_KT && type != GGML_TYPE_IQ3_KT && type != GGML_TYPE_IQ2_KT && type != GGML_TYPE_IQ1_KT && !ks) {
+    const bool qleg = type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q5_0 ||
+        type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q5_1 || type == GGML_TYPE_Q4_1;
+    const bool qk = type == GGML_TYPE_Q6_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q4_K ||
+        type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q2_K;
+    const bool iq = type == GGML_TYPE_IQ1_S || type == GGML_TYPE_IQ1_M || type == GGML_TYPE_IQ2_XXS ||
+        type == GGML_TYPE_IQ2_XS || type == GGML_TYPE_IQ2_S || type == GGML_TYPE_IQ3_XXS ||
+        type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ4_XS || type == GGML_TYPE_IQ4_NL;
+    if (type != GGML_TYPE_IQ4_KT && type != GGML_TYPE_IQ3_KT && type != GGML_TYPE_IQ2_KT && type != GGML_TYPE_IQ1_KT && !ks && !qleg && !qk && !iq) {
         return 0;
     }
 #if defined(GGML_USE_HIPBLAS) || defined(GGML_USE_MUSA)
@@ -800,6 +817,15 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
     ggml_cuda_set_device(device);
     if (ks) {
         return ggml_cuda_quantize_ks(device, type, src, dst, nrows, n_per_row, nslice, imatrix);
+    }
+    if (qleg) {
+        return ggml_cuda_quantize_qleg(device, type, src, dst, nrows, n_per_row, nslice, imatrix);
+    }
+    if (qk) {
+        return ggml_cuda_quantize_qk(device, type, src, dst, nrows, n_per_row, nslice, imatrix);
+    }
+    if (iq) {
+        return ggml_cuda_quantize_iq(device, type, src, dst, nrows, n_per_row, nslice, imatrix);
     }
     const kt_codebook cb = kt_get_codebook(device, type);
 
