@@ -1335,7 +1335,7 @@ if (GGML_CUDA)
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:${CUDA_FLAGS}>")
     set_source_files_properties(ggml-cuda/kt-encoder.cu ggml-cuda/ks-encoder.cu PROPERTIES COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:-ftz=false>")
     # Bit-exact legacy GGUF quantizers need the same FTZ-off (match CPU GCC -O3)
-    set_source_files_properties(ggml-cuda/quantize_gguf.cu PROPERTIES COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:-ftz=false>")
+    set_source_files_properties(ggml-cuda/qleg-encoder.cu ggml-cuda/qk-encoder.cu ggml-cuda/iq-encoder.cu PROPERTIES COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:-ftz=false>")
 endif()
 
 if (MINGW)
