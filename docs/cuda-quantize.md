@@ -38,7 +38,7 @@ scales whose payload bytes are platform UB (x86 vs CUDA integer casts); the
 harness skips whole blocks whose `d` is non-finite on both sides. Real
 tensors never hit this (proven by e2e SHAs).
 
-## 3. Kernel design (`ggml/src/ggml-cuda/quantize_gguf.cu`)
+## 3. Kernel design (`ggml/src/ggml-cuda/qleg-encoder.cu`, `qk-encoder.cu`, `iq-encoder.cu`)
 
 - Plain: warp per 32-block, shuffle reductions, lane 0 stores scales.
 - OLS/imatrix/codebook: one thread per block (superblock for XS), shared
