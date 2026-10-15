@@ -2417,7 +2417,7 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
 // k-positions, just different columns). The -128.f bias uses the same global q8.y[].sum as
 // the AVX-512 path (it is a per-B-block correction independent of the A-column
 // subset), so results are bit-consistent with the 16-wide AVX-512 computation.
-template <int nrc_y>
+template <bool has_tail, int nrc_y>
 static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
@@ -2455,6 +2455,36 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
                 isum[iy] = _mm256_setzero_si256();
             }
         }
+        // Tail K block (n not a multiple of QK_K), symmetric to the AVX-512
+        // path above: same 16-k-granularity sub-block body, bounded to
+        // 2*nbtail iterations over the partial block at iq16[nbl].
+        if constexpr (has_tail) {
+        if (int nleft = n - nbl*QK_K; nleft > 0) {
+            int nbtail = nleft/32;
+            auto d4 = _mm256_loadu_ps(iq16[nbl].d + (hi ? 8 : 0));
+            for (int ib = 0; ib < 2*nbtail; ++ib) {
+                for (int j = 0; j < 4; ++j) {
+                    int m = 4*ib + j;
+                    qx[j] = _mm256_loadu_si256((const __m256i *)((const char *)iq16[nbl].qs + 64*m + (hi ? 32 : 0)));
+                }
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto y128 = _mm_loadu_si128((const __m128i *)q8.y[iy][nbl].qs + ib);
+                    auto y = MM256_SET1_M128I(y128);
+                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[0], _mm256_shuffle_epi32(y, 0x00));
+                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[1], _mm256_shuffle_epi32(y, 0x55));
+                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[2], _mm256_shuffle_epi32(y, 0xaa));
+                    isum[iy] = ggml_mm256_dpbusd_epi32(isum[iy], qx[3], _mm256_shuffle_epi32(y, 0xff));
+                }
+            }
+            auto m4 = _mm256_mul_ps(d4, _mm256_set1_ps(-128.f));
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto d4y = _mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, nbl)));
+                acc[iy] = _mm256_fmadd_ps(d4y, _mm256_cvtepi32_ps(isum[iy]), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(m4,  _mm256_set1_ps(q8.y[iy][nbl].sum), acc[iy]);
+                isum[iy] = _mm256_setzero_si256();
+            }
+        }
+        }
         for (int iy = 0; iy < nrc_y; ++iy) {
             info.store(ix, iy, acc[iy]);
             acc[iy] = _mm256_setzero_ps();
@@ -2470,11 +2500,21 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
 #ifdef HAVE_FANCY_SIMD
 extern "C" void iqk_test_gemm_q8_k_r16(int n, const void * vx, size_t bx,
                                        const DataInfo& info, int nrc_x, int nrc_y) {
+    const bool ht = (n % QK_K != 0);
+    if (!ht) {
     switch (nrc_y) {
-        case 32: mul_mat_q8_k_r16_q8_k<32>(n, vx, bx, info, nrc_x); break;
-        case 64: mul_mat_q8_k_r16_q8_k<64>(n, vx, bx, info, nrc_x); break;
-        case 128: mul_mat_q8_k_r16_q8_k<128>(n, vx, bx, info, nrc_x); break;
-        default: mul_mat_q8_k_r16_q8_k<8>(n, vx, bx, info, nrc_x); break;
+        case 32: mul_mat_q8_k_r16_q8_k<false, 32>(n, vx, bx, info, nrc_x); break;
+        case 64: mul_mat_q8_k_r16_q8_k<false, 64>(n, vx, bx, info, nrc_x); break;
+        case 128: mul_mat_q8_k_r16_q8_k<false, 128>(n, vx, bx, info, nrc_x); break;
+        default: mul_mat_q8_k_r16_q8_k<false, 8>(n, vx, bx, info, nrc_x); break;
+    }
+    } else {
+    switch (nrc_y) {
+        case 32: mul_mat_q8_k_r16_q8_k<true, 32>(n, vx, bx, info, nrc_x); break;
+        case 64: mul_mat_q8_k_r16_q8_k<true, 64>(n, vx, bx, info, nrc_x); break;
+        case 128: mul_mat_q8_k_r16_q8_k<true, 128>(n, vx, bx, info, nrc_x); break;
+        default: mul_mat_q8_k_r16_q8_k<true, 8>(n, vx, bx, info, nrc_x); break;
+    }
     }
 }
 #endif
@@ -2483,15 +2523,29 @@ extern "C" void iqk_test_gemm_q8_k_r16(int n, const void * vx, size_t bx,
 // mul_mat_q8_k_r16_q8_k<nrc_y> directly so unit_test can compare vs float.
 extern "C" void iqk_test_gemm_q8_k_r16_vnni(int n, const void * vx, size_t bx,
                                        const DataInfo& info, int nrc_x, int nrc_y) {
+    const bool ht = (n % QK_K != 0);
+    if (!ht) {
     switch (nrc_y) {
-        case 1: mul_mat_q8_k_r16_q8_k<1>(n, vx, bx, info, nrc_x); break;
-        case 2: mul_mat_q8_k_r16_q8_k<2>(n, vx, bx, info, nrc_x); break;
-        case 3: mul_mat_q8_k_r16_q8_k<3>(n, vx, bx, info, nrc_x); break;
-        case 4: mul_mat_q8_k_r16_q8_k<4>(n, vx, bx, info, nrc_x); break;
-        case 5: mul_mat_q8_k_r16_q8_k<5>(n, vx, bx, info, nrc_x); break;
-        case 6: mul_mat_q8_k_r16_q8_k<6>(n, vx, bx, info, nrc_x); break;
-        case 7: mul_mat_q8_k_r16_q8_k<7>(n, vx, bx, info, nrc_x); break;
-        default: mul_mat_q8_k_r16_q8_k<8>(n, vx, bx, info, nrc_x); break;
+        case 1: mul_mat_q8_k_r16_q8_k<false, 1>(n, vx, bx, info, nrc_x); break;
+        case 2: mul_mat_q8_k_r16_q8_k<false, 2>(n, vx, bx, info, nrc_x); break;
+        case 3: mul_mat_q8_k_r16_q8_k<false, 3>(n, vx, bx, info, nrc_x); break;
+        case 4: mul_mat_q8_k_r16_q8_k<false, 4>(n, vx, bx, info, nrc_x); break;
+        case 5: mul_mat_q8_k_r16_q8_k<false, 5>(n, vx, bx, info, nrc_x); break;
+        case 6: mul_mat_q8_k_r16_q8_k<false, 6>(n, vx, bx, info, nrc_x); break;
+        case 7: mul_mat_q8_k_r16_q8_k<false, 7>(n, vx, bx, info, nrc_x); break;
+        default: mul_mat_q8_k_r16_q8_k<false, 8>(n, vx, bx, info, nrc_x); break;
+    }
+    } else {
+    switch (nrc_y) {
+        case 1: mul_mat_q8_k_r16_q8_k<true, 1>(n, vx, bx, info, nrc_x); break;
+        case 2: mul_mat_q8_k_r16_q8_k<true, 2>(n, vx, bx, info, nrc_x); break;
+        case 3: mul_mat_q8_k_r16_q8_k<true, 3>(n, vx, bx, info, nrc_x); break;
+        case 4: mul_mat_q8_k_r16_q8_k<true, 4>(n, vx, bx, info, nrc_x); break;
+        case 5: mul_mat_q8_k_r16_q8_k<true, 5>(n, vx, bx, info, nrc_x); break;
+        case 6: mul_mat_q8_k_r16_q8_k<true, 6>(n, vx, bx, info, nrc_x); break;
+        case 7: mul_mat_q8_k_r16_q8_k<true, 7>(n, vx, bx, info, nrc_x); break;
+        default: mul_mat_q8_k_r16_q8_k<true, 8>(n, vx, bx, info, nrc_x); break;
+    }
     }
 }
 #endif
@@ -4166,10 +4220,11 @@ bool iqk_set_kernels_kquants([[maybe_unused]] int ne00, int typeA, int typeB, st
             }
 #else
             if (g_iqk_r16_path) {
-                // VNNI256 kernel is template <int nrc_y> (no has_tail specialization
-                // unlike the FANCY <bool has_tail, int nrc_y> kernel above), so no
-                // ne00 % QK_K split here.
-                IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_k_r16_q8_k, kernels)
+                if (ne00 % QK_K == 0) {
+                    IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_q8_k_r16_q8_k, false, kernels)
+                } else {
+                    IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_q8_k_r16_q8_k, true, kernels)
+                }
             }
 #endif
             break;
