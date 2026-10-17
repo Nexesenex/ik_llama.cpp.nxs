@@ -137,6 +137,114 @@ static __global__ void hadamard_quant(const char * src, char * dst, int ne0,
     y[2*tid + 1] = ys[2*tid + 1] * scale;
 }
 
+// loop-based variant for block sizes whose pair count exceeds the per-block thread limit
+// (e.g. the 4096 block size used by prism.hadamard folded models)
+template <int nh>
+static __global__ void hadamard_f32_loop(const char * src, char * dst, int ne0,
+        size_t nb01, size_t nb02, size_t nb03, size_t nb1, size_t nb2, size_t nb3) {
+
+    constexpr float ksqrt2 = 0.707106781f;
+    const int nc  = ne0/nh;
+    const int ii1 = blockIdx.x;
+    const int i1  = ii1 / nc;
+    const int ic  = ii1 % nc;
+    const int i2  = blockIdx.y;
+    const int i3  = blockIdx.z;
+
+    const float * x = (const float *)((const char *)src + i1*nb01 + i2*nb02 + i3*nb03) + ic*nh;
+          float * y = (      float *)((const char *)dst + i1*nb1  + i2*nb2  + i3*nb3)  + ic*nh;
+
+    __shared__ float ys[nh];
+    for (int i = threadIdx.x; i < nh/2; i += blockDim.x) {
+        ys[2*i+0] = x[2*i+0] + x[2*i+1];
+        ys[2*i+1] = x[2*i+0] - x[2*i+1];
+    }
+    float scale = ksqrt2;
+    for (int h = 2; h < nh; h <<= 1) {
+        __syncthreads();
+        for (int i = threadIdx.x; i < nh/2; i += blockDim.x) {
+            const int ii = i/h, jj = i%h;
+            const int j  = 2*h*ii + jj;
+            const float u = ys[j], v = ys[j+h];
+            ys[j+0] = u + v;
+            ys[j+h] = u - v;
+        }
+        scale *= ksqrt2;
+    }
+    __syncthreads();
+    for (int i = threadIdx.x; i < nh/2; i += blockDim.x) {
+        y[2*i+0] = ys[2*i+0] * scale;
+        y[2*i+1] = ys[2*i+1] * scale;
+    }
+}
+
+// fused prism.hadamard transform: y = H(x .* signs) in one pass (signs applied on the
+// flattened input, before the block butterflies)
+template <int nh>
+static __global__ void hadamard_signs_f32_loop(const char * src, char * dst, const float * __restrict__ signs, int64_t sne0, int ne0,
+        size_t nb01, size_t nb02, size_t nb03, size_t nb1, size_t nb2, size_t nb3) {
+
+    constexpr float ksqrt2 = 0.707106781f;
+    const int nc  = ne0/nh;
+    const int ii1 = blockIdx.x;
+    const int i1  = ii1 / nc;
+    const int ic  = ii1 % nc;
+    const int i2  = blockIdx.y;
+    const int i3  = blockIdx.z;
+
+    const float * x = (const float *)((const char *)src + i1*nb01 + i2*nb02 + i3*nb03) + ic*nh;
+          float * y = (      float *)((const char *)dst + i1*nb1  + i2*nb2  + i3*nb3)  + ic*nh;
+
+    const size_t base = ((size_t)i1 * ne0 + (size_t)ic * nh) % (size_t)sne0;
+
+    __shared__ float ys[nh];
+    for (int i = threadIdx.x; i < nh/2; i += blockDim.x) {
+        size_t ia = base + 2*i;
+        if (ia >= (size_t)sne0) ia -= sne0;
+        size_t ib = ia + 1;
+        if (ib >= (size_t)sne0) ib -= sne0;
+        const float a = x[2*i+0] * signs[ia];
+        const float b = x[2*i+1] * signs[ib];
+        ys[2*i+0] = a + b;
+        ys[2*i+1] = a - b;
+    }
+    float scale = ksqrt2;
+    for (int h = 2; h < nh; h <<= 1) {
+        __syncthreads();
+        for (int i = threadIdx.x; i < nh/2; i += blockDim.x) {
+            const int ii = i/h, jj = i%h;
+            const int j  = 2*h*ii + jj;
+            const float u = ys[j], v = ys[j+h];
+            ys[j+0] = u + v;
+            ys[j+h] = u - v;
+        }
+        scale *= ksqrt2;
+    }
+    __syncthreads();
+    for (int i = threadIdx.x; i < nh/2; i += blockDim.x) {
+        y[2*i+0] = ys[2*i+0] * scale;
+        y[2*i+1] = ys[2*i+1] * scale;
+    }
+}
+
+static void hadamard_signs_f32_cuda(int nh, const char * x, char * y, const float * signs, int64_t sne0,
+        int ne0, int ne1, int ne2, int ne3,
+        size_t nb01, size_t nb02, size_t nb03, size_t nb1, size_t nb2, size_t nb3, cudaStream_t stream) {
+    int nc = ne0/nh;
+    int nrows = nc*ne1;
+    dim3 num_blocks = dim3(nrows, ne2, ne3);
+    switch (nh) {
+        case   64: hadamard_signs_f32_loop<  64><<<num_blocks,  32, 0, stream>>>(x, y, signs, sne0, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
+        case  128: hadamard_signs_f32_loop< 128><<<num_blocks,  64, 0, stream>>>(x, y, signs, sne0, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
+        case  256: hadamard_signs_f32_loop< 256><<<num_blocks, 128, 0, stream>>>(x, y, signs, sne0, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
+        case  512: hadamard_signs_f32_loop< 512><<<num_blocks, 256, 0, stream>>>(x, y, signs, sne0, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
+        case 1024: hadamard_signs_f32_loop<1024><<<num_blocks, 256, 0, stream>>>(x, y, signs, sne0, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
+        case 2048: hadamard_signs_f32_loop<2048><<<num_blocks, 256, 0, stream>>>(x, y, signs, sne0, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
+        case 4096: hadamard_signs_f32_loop<4096><<<num_blocks, 256, 0, stream>>>(x, y, signs, sne0, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
+        default: GGML_ABORT("Unsupported Hadamard block size");
+    }
+}
+
 static void hadamard_f32_cuda(int nh, const char * x, char * y, int ne0, int ne1, int ne2, int ne3,
         size_t nb01, size_t nb02, size_t nb03, size_t nb1, size_t nb2, size_t nb3, cudaStream_t stream) {
     int nc = ne0/nh;
@@ -147,6 +255,9 @@ static void hadamard_f32_cuda(int nh, const char * x, char * y, int ne0, int ne1
         case 128: hadamard_f32<128><<<num_blocks,  64, 0, stream>>>(x, y, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
         case 256: hadamard_f32<256><<<num_blocks, 128, 0, stream>>>(x, y, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
         case 512: hadamard_f32<512><<<num_blocks, 256, 0, stream>>>(x, y, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
+        case 1024: hadamard_f32_loop<1024><<<num_blocks, 256, 0, stream>>>(x, y, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
+        case 2048: hadamard_f32_loop<2048><<<num_blocks, 256, 0, stream>>>(x, y, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
+        case 4096: hadamard_f32_loop<4096><<<num_blocks, 256, 0, stream>>>(x, y, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
         default: GGML_ABORT("Unsupported Hadamard block size");
     }
 }
@@ -189,6 +300,17 @@ void ggml_cuda_op_hadamard(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(nh > 1 && popcount(nh) == 1);
 
     cudaStream_t stream = ctx.stream();
+
+    if (dst->op == GGML_OP_HADAMARD_SIGNS) {
+        const ggml_tensor * signs = dst->src[1];
+        GGML_ASSERT(src->type == GGML_TYPE_F32);
+        GGML_ASSERT(signs->type == GGML_TYPE_F32 && signs->ne[0] % nh == 0);
+        hadamard_signs_f32_cuda(nh, (const char *)src->data, (char *)dst->data,
+                (const float *)signs->data, signs->ne[0],
+                src->ne[0], src->ne[1], src->ne[2], src->ne[3],
+                src->nb[1], src->nb[2], src->nb[3], dst->nb[1], dst->nb[2], dst->nb[3], stream);
+        return;
+    }
 
     if (src->type == GGML_TYPE_F32) {
         hadamard_f32_cuda(nh, (const char *)src->data, (char *)dst->data,

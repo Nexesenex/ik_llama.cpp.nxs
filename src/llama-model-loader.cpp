@@ -1667,12 +1667,6 @@ void llm_load_hadamard(llama_model_loader & ml, llama_model & model) {
         return;
     }
 
-    if (model.n_gpu_layers > 0) {
-        LLAMA_LOG_WARN("%s: Prism ternary Hadamard rotations are CPU-only; the requested GPU "
-                       "offload (n_gpu_layers=%d) is not supported for this model and may crash\n",
-                       __func__, model.n_gpu_layers);
-    }
-
     std::vector<int32_t> sign_widths;
     std::vector<int32_t> sign_values;
     ml.get_arr("prism.hadamard.sign_widths", sign_widths, false);
@@ -1705,6 +1699,18 @@ void llm_load_hadamard(llama_model_loader & ml, llama_model & model) {
 
     std::map<int64_t,  ggml_tensor *> sign_tensors;
 
+    // Allocate the sign tensors on the same backend as the folded weights (the GPU when the
+    // layers are offloaded); a host-resident sign tensor would pull the signs+Hadamard
+    // rotation ops to the CPU and force a CPU<->GPU round trip for every folded weight.
+    ggml_backend_buffer_type_t signs_buft = ggml_backend_cpu_buffer_type();
+    for (const auto & layer : model.layers) {
+        const ggml_tensor * w = layer.wqkv ? layer.wqkv : layer.wq;
+        if (w != nullptr && w->buffer != nullptr) {
+            signs_buft = ggml_backend_buffer_get_type(w->buffer);
+            break;
+        }
+    }
+
     const auto make_signs = [&](int64_t width) -> ggml_tensor * {
         const auto it = sign_tensors.find(width);
         if (it != sign_tensors.end()) {
@@ -1721,7 +1727,10 @@ void llm_load_hadamard(llama_model_loader & ml, llama_model & model) {
         }
         ggml_tensor * signs = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, width);
         ggml_set_name(signs, ("prism.hadamard.signs." + std::to_string(width)).c_str());
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, ggml_backend_cpu_buffer_type());
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, signs_buft);
+        if (buf == nullptr && signs_buft != ggml_backend_cpu_buffer_type()) {
+            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, ggml_backend_cpu_buffer_type());
+        }
         if (buf == nullptr) {
             ggml_free(ctx);
             return nullptr;

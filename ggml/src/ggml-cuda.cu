@@ -3758,6 +3758,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_argmax(ctx, dst);
             break;
         case GGML_OP_HADAMARD:
+        case GGML_OP_HADAMARD_SIGNS:
             ggml_cuda_op_hadamard(ctx, dst);
             break;
         case GGML_OP_REPEAT:
@@ -4960,6 +4961,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_F16:
                     case GGML_TYPE_BF16:
                     case GGML_TYPE_Q2_0:
+                    case GGML_TYPE_PQ2_0:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q5_0:
@@ -5108,7 +5110,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_ARGMAX:
             return true;
         case GGML_OP_HADAMARD: {
-            if (!(op->op_params[0] == 64 || op->op_params[0] == 128 || op->op_params[0] == 256 || op->op_params[0] == 512)) return false;
+            if (!(op->op_params[0] == 64 || op->op_params[0] == 128 || op->op_params[0] == 256 || op->op_params[0] == 512 ||
+                  op->op_params[0] == 1024 || op->op_params[0] == 2048 || op->op_params[0] == 4096)) return false;
             if (op->ne[0] % op->op_params[0] != 0) return false;
             if (op->type != GGML_TYPE_F32) return false;
             switch (op->src[0]->type) {
@@ -5125,6 +5128,16 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 default:
                     return false;
             }
+        }
+        case GGML_OP_HADAMARD_SIGNS: {
+            if (!(op->op_params[0] == 64 || op->op_params[0] == 128 || op->op_params[0] == 256 || op->op_params[0] == 512 ||
+                  op->op_params[0] == 1024 || op->op_params[0] == 2048 || op->op_params[0] == 4096)) return false;
+            if (op->ne[0] % op->op_params[0] != 0) return false;
+            if (op->type != GGML_TYPE_F32) return false;
+            if (op->src[0]->type != GGML_TYPE_F32) return false;
+            if (op->src[1]->type != GGML_TYPE_F32) return false;
+            if (op->src[1]->ne[0] % op->op_params[0] != 0) return false;
+            return true;
         }
         case GGML_OP_DUP:
         case GGML_OP_REPEAT:

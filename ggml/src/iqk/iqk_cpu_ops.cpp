@@ -568,6 +568,72 @@ void iqk_hadamard(struct ggml_tensor * dst, int ith, int nth) {
     }
 }
 
+void iqk_hadamard_signs(struct ggml_tensor * dst, int ith, int nth) {
+    auto src   = dst->src[0];
+    auto signs = dst->src[1];
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_are_same_shape(src, dst));
+    GGML_ASSERT(signs->type == GGML_TYPE_F32);
+    int nh = dst->op_params[0];
+    GGML_ASSERT(nh > 1 && popcount(uint32_t(nh)) == 1);
+    GGML_ASSERT(dst->ne[0] % nh == 0);
+    GGML_ASSERT(signs->ne[0] % nh == 0);
+
+    const size_t sna0 = (size_t)signs->ne[0];
+    const float * sp = (const float *)signs->data;
+
+    int nc = dst->ne[0]/nh;
+    int nr = ggml_nrows(dst) * nc;
+    int npt = (nr + nth - 1)/nth;
+    int first = npt*ith;
+    int last  = std::min(first + npt, nr);
+
+    if (src->type == GGML_TYPE_F32) {
+        for (int ir = first; ir < last; ++ir) {
+            int i3 = ir / (dst->ne[1] * dst->ne[2] * nc);
+            int i2 = (ir - i3*dst->ne[1] * dst->ne[2] * nc)/(dst->ne[1] * nc);
+            int i1 = (ir - i3*dst->ne[1] * dst->ne[2] * nc - i2*dst->ne[1]*nc)/nc;
+            int ic = (ir - i3*dst->ne[1] * dst->ne[2] * nc - i2*dst->ne[1]*nc - i1*nc);
+
+            auto x = (const float *)((const char *)src->data + i3*src->nb[3] + i2*src->nb[2] + i1*src->nb[1]) + ic*nh;
+            auto y = (      float *)((      char *)dst->data + i3*dst->nb[3] + i2*dst->nb[2] + i1*dst->nb[1]) + ic*nh;
+            const size_t base = ((size_t)i1 * dst->ne[0] + (size_t)ic * nh) % sna0;
+            for (int j = 0; j < nh; ++j) {
+                size_t si = base + j;
+                if (si >= sna0) si -= sna0;
+                y[j] = x[j] * sp[si];
+            }
+            fast_ht(nh, y);
+        }
+        return;
+    }
+
+    auto traits = ggml_internal_get_type_traits(src->type);
+    GGML_ASSERT(traits.to_float != nullptr);
+    const size_t blck_size = traits.blck_size;
+    const size_t type_size = traits.type_size;
+    GGML_ASSERT(blck_size > 0 && (nh % blck_size == 0 || blck_size % nh == 0));
+
+    for (int ir = first; ir < last; ++ir) {
+        int i3 = ir / (dst->ne[1] * dst->ne[2] * nc);
+        int i2 = (ir - i3*dst->ne[1] * dst->ne[2] * nc)/(dst->ne[1] * nc);
+        int i1 = (ir - i3*dst->ne[1] * dst->ne[2] * nc - i2*dst->ne[1]*nc)/nc;
+        int ic = (ir - i3*dst->ne[1] * dst->ne[2] * nc - i2*dst->ne[1]*nc - i1*nc);
+
+        const char * x_row  = (const char *)src->data + i3*src->nb[3] + i2*src->nb[2] + i1*src->nb[1];
+        const size_t offset = ((size_t)ic * nh / blck_size) * type_size;
+        float      * y      = (float *)((char *)dst->data + i3*dst->nb[3] + i2*dst->nb[2] + i1*dst->nb[1]) + ic*nh;
+        traits.to_float(x_row + offset, y, nh);
+        const size_t base = ((size_t)i1 * dst->ne[0] + (size_t)ic * nh) % sna0;
+        for (int j = 0; j < nh; ++j) {
+            size_t si = base + j;
+            if (si >= sna0) si -= sna0;
+            y[j] *= sp[si];
+        }
+        fast_ht(nh, y);
+    }
+}
+
 namespace {
 float iqk_exp_with_thresh_impl(int n, float * logits, float max, float min) {
     float sum = 0;

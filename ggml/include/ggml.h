@@ -639,6 +639,7 @@ extern "C" {
         GGML_OP_MOE_FUSED_UP_GATE,
         GGML_OP_MUL_MULTI_ADD,
         GGML_OP_HADAMARD,
+        GGML_OP_HADAMARD_SIGNS,
 
         GGML_OP_SCALE,
         GGML_OP_SET,
@@ -1158,6 +1159,15 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_hadamard(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
+            int                   n);
+
+    // Fused prism.hadamard activation transform: y = H(x .* signs), the elementwise signs
+    // applied on the flattened input before the per-block Hadamard. Source must be F32,
+    // signs is F32 with ne[0] a multiple of the block size; output is always F32.
+    GGML_API struct ggml_tensor * ggml_hadamard_signs(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * signs,
             int                   n);
 
     // dst = a

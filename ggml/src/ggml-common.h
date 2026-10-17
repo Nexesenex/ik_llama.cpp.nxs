@@ -582,6 +582,8 @@ static_assert(sizeof(block_q1_0_g128_r8) == QK1_0_G128_R8_ROWS*sizeof(ggml_half)
 
 // Prism ternary formats (PQ2_0 / PTQ1_0)
 #define QK_PQ2_0 128
+#define QI_PQ2_0 (QK_PQ2_0 / 32)
+#define QR_PQ2_0 1
 typedef struct {
     ggml_half d;                  // delta (scale)
     uint8_t   qs[QK_PQ2_0 / 4];   // 2 bits per weight

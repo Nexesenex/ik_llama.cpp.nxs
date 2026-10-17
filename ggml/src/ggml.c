@@ -4586,6 +4586,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "MOE_FUSED_UP_GATE",
     "MUL_MULTI_ADD",
     "HADAMARD",
+    "HADAMARD_SIGNS",
 
     "SCALE",
     "SET",
@@ -4676,7 +4677,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DS4_COMP",
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4806,7 +4807,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6669,6 +6670,38 @@ struct ggml_tensor * ggml_hadamard(
 
     result->op   = GGML_OP_HADAMARD;
     result->src[0] = a;
+
+    result->op_params[0] = n;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_hadamard_signs(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * signs,
+        int                   n) {
+
+    GGML_ASSERT(n > 1);                    // no point in Hadamard transforms with less than 2 elements
+    if (a->ne[0] % n != 0) {
+        fprintf(stderr, "%s: head size %ld is not a multiple of block size %d for tensor %s\n", __func__, a->ne[0], n, a->name);
+        GGML_ABORT("Fatal error");
+    }
+    if ((n & ~(n-1)) != n) {
+        fprintf(stderr, "%s: block size %d is not a power of 2 for tensor %s\n", __func__, n, a->name);
+        GGML_ABORT("Fatal error");
+    }
+    GGML_ASSERT(signs != NULL && signs->type == GGML_TYPE_F32);
+    if (signs->ne[0] % n != 0) {
+        fprintf(stderr, "%s: signs width %ld is not a multiple of block size %d for tensor %s\n", __func__, signs->ne[0], n, a->name);
+        GGML_ABORT("Fatal error");
+    }
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, a->ne);
+
+    result->op    = GGML_OP_HADAMARD_SIGNS;
+    result->src[0] = a;
+    result->src[1] = signs;
 
     result->op_params[0] = n;
 
@@ -26931,6 +26964,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 iqk_hadamard(tensor, params->ith, params->nth);
             } break;
+        case GGML_OP_HADAMARD_SIGNS:
+            {
+                iqk_hadamard_signs(tensor, params->ith, params->nth);
+            } break;
         case GGML_OP_ACC:
             {
                 ggml_compute_forward_acc(params, tensor);
@@ -29086,6 +29123,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MULTI_ADD:
         case GGML_OP_MUL_MULTI_ADD:
         case GGML_OP_HADAMARD:
+        case GGML_OP_HADAMARD_SIGNS:
         case GGML_OP_REPEAT:
         case GGML_OP_SUB:
             {

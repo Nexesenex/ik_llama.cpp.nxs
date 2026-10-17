@@ -32,6 +32,7 @@ void iqk_openai_experts(struct ggml_tensor * topk, struct ggml_tensor * softmax,
 void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth);
 
 void iqk_hadamard(struct ggml_tensor * dst, int ith, int nth);
+void iqk_hadamard_signs(struct ggml_tensor * dst, int ith, int nth);
 
 float iqk_exp_with_thresh(int n, float * logits, float max, float min);
 
