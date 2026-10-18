@@ -2045,11 +2045,26 @@ static void common_speculative_apply_draft_affinity(const gpt_params & parsed, c
         }
         LOG_INF("%s: draft CPU affinity: %s\n", __func__, cpus.c_str());
     }
-    const int n_dft_threads = parsed.n_threads > 0 ? parsed.n_threads : (int) params.cpu_affinity.size();
+    const int n_dft_threads = parsed.n_threads;
     if (!params.cpu_affinity.empty() && n_dft_threads > (int) params.cpu_affinity.size()) {
-        LOG_WRN("%s: draft uses %d threads on %zu pinned CPUs; consider -t %zu in --draft-params\n",
+        LOG_WRN("%s: draft runs %d threads on %zu pinned CPUs; consider -t %zu in --draft-params\n",
                 __func__, n_dft_threads, params.cpu_affinity.size(), params.cpu_affinity.size());
     }
+}
+
+// the draft inherits the target affinity when it has none of its own. Auto modes
+// (-ca/-caf/...) must be resolved here as well: params_base.cpu_affinity stays empty
+// until llama_init_from_gpt_params, i.e. after this point, so without this the draft
+// would silently float whenever the target was pinned through an auto mode.
+static const std::vector<int32_t> & speculative_draft_affinity(
+        const common_params_speculative & params,
+        const gpt_params                 & params_base,
+        std::vector<int32_t>             & scratch) {
+    if (params.cpu_affinity_configured) {
+        return params.cpu_affinity;
+    }
+    scratch = cpu_affinity_resolve_mode(params_base.cpu_affinity, params_base.cpu_affinity_mode);
+    return scratch;
 }
 
 bool common_speculative_load_draft_model(
@@ -2137,9 +2152,8 @@ bool common_speculative_load_draft_model(
     params.cparams_dft.offload_policy = params.offload_policy.empty() ? nullptr : (void *) &params.offload_policy;
     params.cparams_dft.moe_cache_async = false;
     // draft affinity; inherits the target one when not requested
-    const std::vector<int32_t> & cpu_affinity_dft = params.cpu_affinity_configured
-        ? params.cpu_affinity
-        : params_base.cpu_affinity;
+    std::vector<int32_t> cpu_affinity_dft_scratch;
+    const std::vector<int32_t> & cpu_affinity_dft = speculative_draft_affinity(params, params_base, cpu_affinity_dft_scratch);
     params.cparams_dft.cpu_affinity   = cpu_affinity_dft.empty() ? nullptr : cpu_affinity_dft.data();
     params.cparams_dft.n_cpu_affinity = (int32_t) cpu_affinity_dft.size();
     return true;
@@ -2191,9 +2205,8 @@ bool common_speculative_prepare_mtp_runtime(
         params.cparams_dft.offload_policy = params.offload_policy.empty() ? nullptr : (void *) &params.offload_policy;
         params.cparams_dft.moe_cache_async = false;
         // same draft affinity as the external draft path
-        const std::vector<int32_t> & cpu_affinity_dft = params.cpu_affinity_configured
-            ? params.cpu_affinity
-            : params_base.cpu_affinity;
+        std::vector<int32_t> cpu_affinity_dft_scratch;
+        const std::vector<int32_t> & cpu_affinity_dft = speculative_draft_affinity(params, params_base, cpu_affinity_dft_scratch);
         params.cparams_dft.cpu_affinity   = cpu_affinity_dft.empty() ? nullptr : cpu_affinity_dft.data();
         params.cparams_dft.n_cpu_affinity = (int32_t) cpu_affinity_dft.size();
     }

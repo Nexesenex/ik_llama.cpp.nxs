@@ -1157,7 +1157,11 @@ extern "C" {
 
     // pin CPU worker threads to the given logical CPUs; thread t -> cpus[t % n_cpus].
     // Linux via pthread_setaffinity_np, Windows via SetThreadGroupAffinity (group-aware).
-    // Flat ids follow OS enumeration order. Configure before compute, n_cpus == 0 disables pinning.
+    // Flat ids are 0-based indices into the OS core enumeration
+    // (Linux: /sys cpu order, Windows: GetLogicalProcessorInformationEx
+    // RelationProcessorCore order, group masks in bit order), NOT the Windows
+    // logical processor number (group*64 + bit): they only coincide up to 64 LPs.
+    // Configure before compute, n_cpus == 0 disables pinning.
     // Explicit list applies to both PP and TG phases.
     LLAMA_API void llama_set_cpu_affinity(struct llama_context * ctx, const int32_t * cpus, int n_cpus);
 

@@ -815,6 +815,12 @@ static std::vector<int32_t> cpu_affinity_filter(const std::vector<int32_t> & cpu
                     // bound by KAFFINITY width (<= DWORD_PTR width on Windows)
                     for (int bit = 0; bit < (int)(sizeof(KAFFINITY) * 8); ++bit) {
                         if (mask & ((KAFFINITY) 1 << bit)) {
+                            // ggml caps its topology table at GGML_MAX_CPU_AFFINITY, so
+                            // ids past it cannot be pinned: stop here so they are
+                            // reported as out of topology instead of silently unbound
+                            if ((int) flat_group.size() >= GGML_MAX_CPU_AFFINITY) {
+                                break;
+                            }
                             flat_group.push_back(grp);
                             flat_bit.push_back(bit);
                         }
@@ -878,7 +884,13 @@ std::vector<int32_t> cpu_affinity_resolve_mode(const std::vector<int32_t> & cpus
     if (mode != LLAMA_CPU_AFFINITY_FILL_ALL &&
         mode != LLAMA_CPU_AFFINITY_FILL_PP  &&
         mode != LLAMA_CPU_AFFINITY_FILL_TG) {
-        return cpu_affinity_resolve(cpus, mode != LLAMA_CPU_AFFINITY_DISABLED);
+        const std::vector<int32_t> out = cpu_affinity_resolve(cpus, mode != LLAMA_CPU_AFFINITY_DISABLED);
+        if (out.empty() && mode != LLAMA_CPU_AFFINITY_DISABLED && cpus.empty()) {
+            fprintf(stderr, "warning: auto CPU affinity found no usable CPUs "
+                            "(non-hybrid CPU, GGML_HYBRID=0, or start affinity excludes them), "
+                            "pinning disabled\n");
+        }
+        return out;
     }
     // explicit list wins over fill modes (unreachable via CLI last-wins, kept for API use)
     if (!cpus.empty()) {
@@ -890,6 +902,11 @@ std::vector<int32_t> cpu_affinity_resolve_mode(const std::vector<int32_t> & cpus
         if (std::find(out.begin(), out.end(), cpu) == out.end()) {
             out.push_back(cpu);
         }
+    }
+    if (out.empty()) {
+        fprintf(stderr, "warning: auto CPU affinity found no usable CPUs "
+                        "(non-hybrid CPU, GGML_HYBRID=0, or start affinity excludes them), "
+                        "pinning disabled\n");
     }
     return out;
 }
