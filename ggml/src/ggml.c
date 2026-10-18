@@ -29112,7 +29112,10 @@ static void set_cpu_thread_affinity(const struct ggml_cplan * cplan, int thread_
         return;
     }
 
-    ggml_linux_restore_slot(true);
+    if (ggml_linux_restore_slot(true) == NULL) {
+        // no virgin stored: pinning here would be irreversible, leave the thread unbound
+        return;
+    }
 
     if (thread_n == 0 && cplan->n_threads > cplan->n_cpu_affinity) {
         static bool warned = false;
@@ -29176,9 +29179,15 @@ static BOOL CALLBACK ggml_win_init_cpus(PINIT_ONCE once, PVOID param, PVOID * ct
     }
 
     int ncpu = 0;
+    bool truncated = false;
     SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX * ptr = buf;
     const char * end = (const char *) buf + len;
     while ((const char *) ptr < end) {
+        // Size is checked first, like common.cpp: an unusable record must not
+        // contribute flat ids, or the two enumerations would disagree
+        if (ptr->Size == 0) {
+            break; // corrupt, avoid infinite loop
+        }
         if (ptr->Relationship == RelationProcessorCore) {
             for (WORD g = 0; g < ptr->Processor.GroupCount; ++g) {
                 const KAFFINITY mask = (KAFFINITY) ptr->Processor.GroupMask[g].Mask;
@@ -29190,18 +29199,22 @@ static BOOL CALLBACK ggml_win_init_cpus(PINIT_ONCE once, PVOID param, PVOID * ct
                             g_win_cpus[ncpu].group = grp;
                             g_win_cpus[ncpu].mask  = (KAFFINITY) ((KAFFINITY) 1 << bit);
                             ++ncpu;
+                        } else {
+                            truncated = true;
                         }
                     }
                 }
             }
         }
-        if (ptr->Size == 0) {
-            break; // corrupt, avoid infinite loop
-        }
         ptr = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ((char *) ptr + ptr->Size);
     }
 
     free(buf);
+
+    if (truncated) {
+        fprintf(stderr, "warning: more than %d logical CPUs detected, only the first %d can be pinned\n",
+                GGML_MAX_CPU_AFFINITY, GGML_MAX_CPU_AFFINITY);
+    }
 
     g_win_ncpu    = ncpu;
     g_win_init_ok = ncpu > 0 ? TRUE : FALSE;
@@ -29226,32 +29239,51 @@ static bool ggml_win_get_group_affinity(int cpu, GROUP_AFFINITY * out) {
 // first pin; it matches for every thread (process affinity at creation).
 #define GGML_WIN_AFFINITY_MAX_THREADS 256
 static struct {
-    DWORD          tid;   // GetCurrentThreadId()
+    LONG           key;   // per-thread cookie, never reused (TIDs are recycled, this is not)
     GROUP_AFFINITY saved; // affinity before our first pin
     LONG           used;
 } g_win_aff_restore[GGML_WIN_AFFINITY_MAX_THREADS];
-static LONG g_win_aff_n = 0;
+static atomic_int g_win_aff_n    = 0;
+static atomic_int g_win_aff_keys = 0;
+
+// TID alone is not a usable key: Windows recycles thread ids, and the
+// non-OpenMP path creates/destroys n_threads-1 threads per graph compute, so a
+// fresh thread can match a dead worker's slot and inherit its mask. Hand out a
+// cookie per thread instead - thread-local, so it dies with the thread.
+static __declspec(thread) LONG g_win_aff_cookie = 0;
+
+static LONG ggml_win_affinity_key(void) {
+    if (g_win_aff_cookie == 0) {
+        g_win_aff_cookie = InterlockedIncrement(&g_win_aff_keys); // never returns 0
+    }
+    return g_win_aff_cookie;
+}
 
 static GROUP_AFFINITY * ggml_win_restore_slot(bool create) {
-    const DWORD tid = GetCurrentThreadId();
-    // only this thread ever queries its own tid, so the racy scan is safe;
-    // slot allocation itself is atomic
+    const LONG key = ggml_win_affinity_key();
+    // only this thread ever queries its own key, so the racy scan is safe;
+    // slot allocation itself is atomic. The loaded count is clamped rather than
+    // trusted: two threads can both pass the full check below, so g_win_aff_n may
+    // briefly exceed the table size, and the scan must never follow it past the
+    // end and hand back a pointer to unrelated memory.
     LONG found = -1;
-    for (LONG i = 0; i < g_win_aff_n; ++i) {
-        if (g_win_aff_restore[i].tid == tid) {
+    const LONG n_all   = atomic_load(&g_win_aff_n);
+    const LONG n_slots = n_all < GGML_WIN_AFFINITY_MAX_THREADS ? n_all : GGML_WIN_AFFINITY_MAX_THREADS;
+    for (LONG i = 0; i < n_slots; ++i) {
+        if (g_win_aff_restore[i].key == key) {
             found = i;
             break;
         }
     }
     if (found < 0) {
-        if (!create) {
-            return NULL;
+        if (!create || n_slots >= GGML_WIN_AFFINITY_MAX_THREADS) {
+            return NULL; // never pinned by us, or the table is full
         }
         found = InterlockedIncrement(&g_win_aff_n) - 1;
         if (found < 0 || found >= GGML_WIN_AFFINITY_MAX_THREADS) {
             return NULL;
         }
-        g_win_aff_restore[found].tid = tid;
+        g_win_aff_restore[found].key = key;
     } else if (g_win_aff_restore[found].used) {
         return &g_win_aff_restore[found].saved;
     } else if (!create) {
@@ -29264,8 +29296,11 @@ static GROUP_AFFINITY * ggml_win_restore_slot(bool create) {
     return &g_win_aff_restore[found].saved;
 }
 
-static void ggml_win_save_affinity_once(void) {
-    ggml_win_restore_slot(true);
+// returns false when no virgin affinity could be stored (table full or capture
+// failed); the caller must then leave the thread alone, otherwise it could be
+// pinned with no way to ever be unpinned again
+static bool ggml_win_save_affinity_once(void) {
+    return ggml_win_restore_slot(true) != NULL;
 }
 
 static void ggml_win_restore_affinity(void) {
@@ -29273,7 +29308,15 @@ static void ggml_win_restore_affinity(void) {
     if (saved == NULL) {
         return; // never pinned by us, nothing to restore
     }
-    SetThreadGroupAffinity(GetCurrentThread(), saved, NULL);
+    if (!SetThreadGroupAffinity(GetCurrentThread(), saved, NULL)) {
+        // once per thread: this runs on every unpinned graph compute
+        static __declspec(thread) bool warned = false;
+        if (!warned) {
+            warned = true;
+            fprintf(stderr, "warning: SetThreadGroupAffinity() restore failed: %lu\n",
+                    (unsigned long) GetLastError());
+        }
+    }
 }
 
 // pin worker `thread_n` to its assigned logical CPU (restores virgin affinity without)
@@ -29283,7 +29326,10 @@ static void set_cpu_thread_affinity(const struct ggml_cplan * cplan, int thread_
         return;
     }
 
-    ggml_win_save_affinity_once();
+    if (!ggml_win_save_affinity_once()) {
+        // no virgin stored: pinning here would be irreversible, leave the thread unbound
+        return;
+    }
 
     if (thread_n == 0 && cplan->n_threads > cplan->n_cpu_affinity) {
         static bool warned_stack = false;
@@ -29970,11 +30016,25 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 
 #if defined(__gnu_linux__)
     if (restore_affinity) {
-        pthread_setaffinity_np(pthread_self(), sizeof(saved_affinity), &saved_affinity);
+        const int rv = pthread_setaffinity_np(pthread_self(), sizeof(saved_affinity), &saved_affinity);
+        if (rv) {
+            // once per process: the restore runs on every pinned graph
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                fprintf(stderr, "warning: pthread_setaffinity_np() restore failed: %s\n", strerror(rv));
+            }
+        }
     }
 #elif defined(_WIN32)
     if (restore_affinity_win) {
-        SetThreadGroupAffinity(GetCurrentThread(), &saved_affinity_win, NULL);
+        if (!SetThreadGroupAffinity(GetCurrentThread(), &saved_affinity_win, NULL)) {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                fprintf(stderr, "warning: SetThreadGroupAffinity() restore failed: %lu\n", (unsigned long) GetLastError());
+            }
+        }
     }
 #endif
 
