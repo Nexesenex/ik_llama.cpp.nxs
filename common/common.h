@@ -45,6 +45,18 @@
 
 #define DEFAULT_MODEL_PATH "models/7B/ggml-model-f16.gguf"
 
+// Duty-cycle throttle (CLI, single-threaded).
+struct common_power_throttle {
+    int32_t percent = 100;
+    double  batch_avg_us = 0.0;
+    double  token_avg_us = 0.0;
+};
+
+void    common_power_throttle_init(common_power_throttle & throttle, int32_t percent);
+bool    common_power_throttle_enabled(const common_power_throttle * throttle);
+int64_t common_power_sleep_us(double work_us, int32_t percent);
+int     common_power_decode(llama_context * ctx, llama_batch batch, common_power_throttle * throttle);
+
 struct common_time_meas {
     common_time_meas(int64_t & t_acc, bool disable = false);
     ~common_time_meas();
@@ -330,6 +342,9 @@ struct gpt_params {
     std::vector<int32_t> cpu_affinity;       // logical CPU ids to pin worker threads to, resolved at parse (empty = no pinning)
     bool    cpu_affinity_configured = false; // a CPU affinity option was given (tells --no-cpu-affinity apart from unset in --draft-params)
     bool    cpu_affinity_auto       = false; // --cpu-affinity/-ca: pick physical P-cores at parse
+    int32_t cpu_power_cap         = 100;     // --cpu-power: N% of the hardware maximum
+    bool    cpu_power_set         = false;   // --cpu-power was given (100 = reset)
+    int32_t power_sleep           = 100;     // --power-sleep: duty cycle, 100 = off
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
