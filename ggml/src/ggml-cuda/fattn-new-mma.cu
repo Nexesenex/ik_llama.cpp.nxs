@@ -1926,7 +1926,7 @@ static void launch_fattn_new_mma(
     const int cc  = ggml_cuda_info().devices[id].cc;
     const int nsm_actual = ggml_cuda_info().devices[id].nsm;
     int nsm = 1; while (nsm*2 <= nsm_actual) nsm *= 2;
-    if (cc >= CC_ADA_LOVELACE && Q->ne[1] >= 512 && K->ne[2] == 1) nsm = nsm_actual;
+    if (cc >= CC_AMPERE && Q->ne[1] >= 256 && K->ne[2] == 1) nsm = nsm_actual;
 
     if (Q->ne[1] ==  1 && n_kv <= 4096 && nsm > 32) nsm /= 2;
     if (Q->ne[1] >= 32 && n_kv >= 4096) nsm *= 2;
