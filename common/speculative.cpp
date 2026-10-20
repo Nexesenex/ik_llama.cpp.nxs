@@ -2139,6 +2139,7 @@ bool common_speculative_load_draft_model(
     params.offload_policy = params_dft.offload_policy;
     params.cparams_dft.cuda_params    = params.cuda_params.empty()    ? nullptr : (void *) params.cuda_params.data();
     params.cparams_dft.offload_policy = params.offload_policy.empty() ? nullptr : (void *) &params.offload_policy;
+    params.cparams_dft.moe_cache_async = false;
     // draft affinity; inherits the target one when not requested
     const std::vector<int32_t> & cpu_affinity_dft = params.cpu_affinity_configured
         ? params.cpu_affinity
@@ -2192,6 +2193,7 @@ bool common_speculative_prepare_mtp_runtime(
         params.offload_policy = params_mtp.offload_policy;
         params.cparams_dft.cuda_params    = params.cuda_params.empty()    ? nullptr : (void *) params.cuda_params.data();
         params.cparams_dft.offload_policy = params.offload_policy.empty() ? nullptr : (void *) &params.offload_policy;
+        params.cparams_dft.moe_cache_async = false;
         // same draft affinity as the external draft path
         const std::vector<int32_t> & cpu_affinity_dft = params.cpu_affinity_configured
             ? params.cpu_affinity
