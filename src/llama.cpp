@@ -5979,7 +5979,6 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             params.mtp,
             params.fit,
             params.dry_run,
-            params.split_output_tensor,
             params.progress_callback,
             params.progress_callback_user_data
         )) {
