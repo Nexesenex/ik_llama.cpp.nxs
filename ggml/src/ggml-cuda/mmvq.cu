@@ -13,7 +13,8 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
         const char * src0_dd_u, const char * src0_dd_g, const char * src1_ddq_i, float * dst_dd_i, const char * ids_data,
         const void * bias_u, const void * bias_g,
         const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
-        const int64_t src1_padded_row_size, ggml_unary_op unary_op, float limit, float beta, float beta_linear, cudaStream_t stream) {
+        const int64_t src1_padded_row_size, ggml_unary_op unary_op, float limit, float beta, float beta_linear, cudaStream_t stream,
+        const char * activation_map_data = nullptr) {
 
     const int64_t row_diff = row_high - row_low;
 
@@ -29,7 +30,7 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
             ggml_cuda_op_mul_mat_vec_q_impl(ctx, type, ne00, ne0, ne2, nb02, nb12, nb2, ids_nb0, bias_nb1,
                     src0_dd_u, src0_dd_g, src1_ddq_i + i*src1_col_size, dst_dd_i + i*nrows_dst, ids_data, bias_u, bias_g,
                     row_low, row_high, std::min<int64_t>(src1_ncols - i, MMVQ_MAX_BATCH_SIZE), src1_padded_row_size,
-                    unary_op, limit, beta, beta_linear, stream);
+                    unary_op, limit, beta, beta_linear, stream, activation_map_data);
         }
         return;
     }
@@ -41,6 +42,7 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
                    /* vy       */ src1_ddq_i,
                    /* dst      */ dst_dd_i,
                    /* ids_data */ ids_data,
+                   /* activation_map_data */ activation_map_data,
                    /* ncols_x  */ int(ne00),
                    /* nrows_x  */ int(row_diff),
                    /* nrows_y  */ int(src1_padded_row_size),
@@ -180,6 +182,19 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
             break;
     }
 
+}
+
+void ggml_cuda_moe_cache_mmv(ggml_backend_cuda_context & ctx, ggml_type type,
+        const void * up, const void * gate, const void * activations_q8, const int32_t * slot_ids,
+        const int32_t * activation_map, float * output, int64_t k, int64_t m,
+        size_t expert_bytes, int32_t n_hits, int64_t padded_k,
+        ggml_unary_op unary_op, float limit, cudaStream_t stream) {
+    const int64_t q8_row_bytes = padded_k / QK8_1 * sizeof(block_q8_1);
+    ggml_cuda_op_mul_mat_vec_q_impl(ctx, type, k, m, n_hits,
+            (int64_t) expert_bytes, q8_row_bytes, m*sizeof(float), sizeof(int32_t), 0,
+            (const char *) up, (const char *) gate, (const char *) activations_q8, output,
+            (const char *) slot_ids, nullptr, nullptr, 0, m, 1, padded_k,
+            unary_op, limit, 0.0f, 0.0f, stream, (const char *) activation_map);
 }
 
 void ggml_cuda_op_mul_mat_vec_q_3D(
