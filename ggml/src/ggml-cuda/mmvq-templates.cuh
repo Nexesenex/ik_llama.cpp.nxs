@@ -12,7 +12,7 @@
 #include "mmvq-args.h"
 
 static constexpr __host__ __device__ int mmvq_rows_per_cuda_block(const ggml_type type, const int ncols_y, const int arch) {
-    const bool two_rows_n1 = (arch <= CC_PASCAL || arch == CC_TURING) && type != GGML_TYPE_Q3_K;
+    const bool two_rows_n1 = (arch <= CC_PASCAL || arch == CC_TURING || arch == CC_AMPERE) && type != GGML_TYPE_Q3_K;
     return ncols_y == 1 ? (two_rows_n1 ? 2 : 1) : ncols_y < 4 ? 1 : 2;
 }
 
