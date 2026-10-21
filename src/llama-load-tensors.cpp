@@ -5216,7 +5216,7 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     auto u_ctx = get_context_for_tensor(ctx_split, u_name);
     auto g_ctx = get_context_for_tensor(ctx_split, g_name);
 
-    if (u_ctx != g_ctx) {
+    if (u_ctx != g_ctx || (u_ctx == split_ctx && get_context_for_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i)) != split_ctx)) {
         LLAMA_LOG_INFO("%s: not merging because of context\n", __func__);
         return false;
     }
@@ -6489,6 +6489,17 @@ bool create_tensors_helper::create_tensors() {
                     layer, hparams, cur_splits, mem_used, ctx_split, il);
             }
 
+            // Leftovers of a partially overridden FFN go whole on the layer's device, outside mem_used.
+            auto to_layer_device = [&] (ggml_tensor * & t, llama_split_tensor & split_t) {
+                if (t && split_tensors.find(t) != split_tensors.end()) {
+                    std::vector<int> layer_only(cur_splits.size(), 0);
+                    layer_only[model.default_layer_device[il]] = 1;
+                    std::vector<size_t> mem_layer(mem_used.size(), 0);
+                    prepare_split_tensors(-1, ctx_split, t, split_t, layer_only, mem_layer);
+                    t = split_t.tensor_splits[model.default_layer_device[il]];
+                }
+            };
+
             if (layer.ffn_down && layer.ffn_up && layer.ffn_gate) {
                 bool use_split = split_tensors.find(layer.ffn_down) != split_tensors.end() &&
                                  split_tensors.find(layer.ffn_gate) != split_tensors.end() &&
@@ -6504,6 +6515,10 @@ bool create_tensors_helper::create_tensors() {
                     prepare_split_tensors(0, ctx_split, layer.ffn_down, layer.split_ffn_down, split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up,   layer.split_ffn_up,   split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_gate, layer.split_ffn_gate, split, mem_used);
+                } else {
+                    to_layer_device(layer.ffn_up,   layer.split_ffn_up);
+                    to_layer_device(layer.ffn_gate, layer.split_ffn_gate);
+                    to_layer_device(layer.ffn_down, layer.split_ffn_down);
                 }
             }
 
@@ -6547,6 +6562,15 @@ bool create_tensors_helper::create_tensors() {
                             prepare_split_tensors( 0, ctx_split, layer.ffn_gate_exps_b, layer.split_ffn_gate_exps_b, ffn_split, mem_used);
                         }
                     }
+                } else {
+                    to_layer_device(layer.ffn_up_exps,        layer.split_ffn_up_exps);
+                    to_layer_device(layer.ffn_gate_exps,      layer.split_ffn_gate_exps);
+                    to_layer_device(layer.ffn_down_exps,      layer.split_ffn_down_exps);
+                    to_layer_device(layer.ffn_up_gate_exps,   layer.split_ffn_up_gate_exps);
+                    to_layer_device(layer.ffn_up_exps_b,      layer.split_ffn_up_exps_b);
+                    to_layer_device(layer.ffn_gate_exps_b,    layer.split_ffn_gate_exps_b);
+                    to_layer_device(layer.ffn_down_exps_b,    layer.split_ffn_down_exps_b);
+                    to_layer_device(layer.ffn_up_gate_exps_b, layer.split_ffn_up_gate_exps_b);
                 }
             }
 
@@ -6595,6 +6619,11 @@ bool create_tensors_helper::create_tensors() {
                     if (layer.ffn_gate_inp_shexp) {
                         prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp_shexp, layer.split_ffn_gate_inp_shexp, split, mem_used);
                     }
+                } else {
+                    to_layer_device(layer.ffn_up_shexp,       layer.split_ffn_up_shexp);
+                    to_layer_device(layer.ffn_gate_shexp,     layer.split_ffn_gate_shexp);
+                    to_layer_device(layer.ffn_down_shexp,     layer.split_ffn_down_shexp);
+                    to_layer_device(layer.ffn_gate_inp_shexp, layer.split_ffn_gate_inp_shexp);
                 }
             }
 
