@@ -84,6 +84,7 @@ struct llama_cparams {
     enum ggml_type reduce_type;
     enum ggml_type graph_attn_precision;
     enum ggml_type idx_type_k = GGML_TYPE_F16;
+    enum ggml_type checkpoint_state_type = GGML_TYPE_F32; // storage type for the recurrent checkpoint state
     enum llama_pooling_type pooling_type;
     enum llama_mtp_op_type mtp_op_type;
 
