@@ -4283,6 +4283,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.ctx_checkpoints_interval_progressive = true;
         return true;
     }
+    if (arg == "-ctx-ckpt-type" || arg == "--ctx-checkpoints-type") {
+        CHECK_ARG
+        params.ctx_checkpoint_type = argv[i];
+        return true;
+    }
     if (arg == "-cram" || arg == "--cache-ram") {
         CHECK_ARG
         params.cache_ram_mib = std::stoi(argv[i]);
@@ -4545,6 +4550,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-ctx-ckpt-ig, --ctx-checkpoints-interval-gating", "Gate ALL checkpoint creation paths (PP-end, release, tolerance) through the interval check. Prevents checkpoint bursts from short follow-up tasks. (default: disabled)" });
     options.push_back({ "*",           "-ctx-ckpt-mi N, --ctx-checkpoints-minimal-interval N", "minimum pos_max gap between consecutive checkpoints. Skips creation if within N of the last one. (default: %d, 0 = disabled)", params.ctx_checkpoints_minimal_interval });
     options.push_back({ "*",           "-ctx-ckpt-ip, --ctx-checkpoints-interval-progressive",  "enable progressive checkpoint intervals. Requires --ctx-checkpoints N to be a multiple of eight. Intervals per eighth: 50%%, 75%%, 100%%, 100%%, 100%%, 100%%, 125%%, 150%%." });
+    options.push_back({ "*",           "-ctx-ckpt-type TYPE, --ctx-checkpoints-type TYPE", "storage type for the recurrent checkpoint state: f32, bf16, f16 or q8_0 (default: %s)", params.ctx_checkpoint_type.c_str() });
     options.push_back({ "*",           "-cram, --cache-ram N",          "set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)",params.cache_ram_mib });
     options.push_back({ "*",           "-crs,  --cache-ram-similarity N",           "minimum fraction of a cached entry that must match the new prompt for that entry to be reusable (default: %.2f).",params.cache_ram_similarity });
     options.push_back({ "*",           "-cram-n-min N, --cache-ram-n-min N",           "minimum number of the cached tokens that triggers prompt cache (default: %d).", params.cache_ram_n_min });
@@ -6113,6 +6119,22 @@ static ggml_type ggml_type_from_str(const std::string & s) {
     throw std::runtime_error("Invalid graph reduce type: " + s);
 }
 
+static ggml_type checkpoint_state_type_from_str(const std::string & s) {
+    if (s == "f32") {
+        return GGML_TYPE_F32;
+    }
+    if (s == "bf16") {
+        return GGML_TYPE_BF16;
+    }
+    if (s == "f16") {
+        return GGML_TYPE_F16;
+    }
+    if (s == "q8_0") {
+        return GGML_TYPE_Q8_0;
+    }
+    throw std::runtime_error("Invalid checkpoint state type: " + s);
+}
+
 struct llama_context_params common_context_params_to_llama(const gpt_params & params) {
     auto cparams = llama_context_default_params();
 
@@ -6183,6 +6205,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.idx_type_k = kv_cache_type_from_str(params.indexer_cache_type_k);
     cparams.type_reduce = ggml_type_from_str(params.reduce_type);
     cparams.type_graph_attn = ggml_type_from_str(params.graph_attn_precision);
+    cparams.checkpoint_state_type = checkpoint_state_type_from_str(params.ctx_checkpoint_type);
     if (!cparams.flash_attn && ggml_is_quantized(cparams.type_v)) {
         throw std::runtime_error("Quantized V cache cannot be used without flash attention");
     }

@@ -525,6 +525,7 @@ extern "C" {
         enum ggml_type type_k_last;
         enum ggml_type type_v_first;
         enum ggml_type type_v_last;
+        enum ggml_type checkpoint_state_type; // data type for the recurrent checkpoint state [EXPERIMENTAL]
         int32_t n_k_first;
         int32_t n_k_last;
         int32_t n_v_first;

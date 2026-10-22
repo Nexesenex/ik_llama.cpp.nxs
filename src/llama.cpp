@@ -9347,6 +9347,7 @@ struct llama_context_params llama_context_default_params() {
         /*.type_last_k                 =*/ GGML_TYPE_F16,
         /*.type_first_v                =*/ GGML_TYPE_F16,
         /*.type_last_v                 =*/ GGML_TYPE_F16,
+        /*.checkpoint_state_type       =*/ GGML_TYPE_F32,
         /*.n_first_k                   =*/ -1,
         /*.n_last_k                    =*/ -1,
         /*.n_first_v                   =*/ -1,
@@ -10092,6 +10093,7 @@ struct llama_context * llama_init_from_model(
         }
     }
     cparams.dsv4_legacy_state = params.dsv4_legacy_state;
+    cparams.checkpoint_state_type = params.checkpoint_state_type;
     cparams.dsa_top_k        = params.dsa_top_k;
 
     if (cparams.swa_compress != model->swa_compress) {
@@ -12559,12 +12561,61 @@ static inline uint32_t llama_kv_ring_rows(const struct llama_kv_cache & kv, uint
     return std::min(kv.ring_w, cell_count);
 }
 
+static bool checkpoint_state_type_is_supported(ggml_type type) {
+    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 ||
+           type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0;
+}
+
+// Storage type used for the recurrent checkpoint state. Quantized storage is only
+// applied to plain (non-split) state tensors: split/replicated caches assemble a
+// logical row from per-device slices, so they keep their raw layout.
+static ggml_type checkpoint_state_storage_type(const struct ggml_tensor * tensor, ggml_type requested) {
+    if (requested == GGML_TYPE_F32 || tensor == nullptr || tensor->extra != nullptr) {
+        return GGML_TYPE_F32;
+    }
+    if (!checkpoint_state_type_is_supported(requested)) {
+        return GGML_TYPE_F32;
+    }
+    const int64_t blck = ggml_blck_size(requested);
+    if (blck <= 0 || tensor->ne[0] % blck != 0) {
+        return GGML_TYPE_F32;
+    }
+    const ggml_type_traits_t traits = ggml_internal_get_type_traits(requested);
+    if (traits.to_float == nullptr || traits.from_float_ref == nullptr) {
+        return GGML_TYPE_F32;
+    }
+    return requested;
+}
+
+static void get_recurrent_state_row_f32(const struct ggml_tensor * tensor, size_t row, float * dst) {
+    const int64_t ne = tensor->ne[0];
+    ggml_backend_tensor_get(tensor, dst, row * (size_t) ne * sizeof(float), (size_t) ne * sizeof(float));
+}
+
 // TODO: replace all non-fatal assertions with returned errors or exceptions
 struct llama_data_write {
     virtual void write(const void * src, size_t size) = 0;
     virtual void write_tensor_data(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) = 0;
     virtual size_t get_size_written() = 0;
     virtual ~llama_data_write() = default;
+
+    virtual void write_state_row(const struct ggml_tensor * tensor, size_t row, ggml_type storage_type, int il) {
+        const int64_t ne = tensor->ne[0];
+        if (storage_type == GGML_TYPE_F32) {
+            write_tensor_data(tensor, row * (size_t) ne * sizeof(float), (size_t) ne * sizeof(float), il);
+            return;
+        }
+        if (state_row_f32.size() < (size_t) ne) {
+            state_row_f32.resize(ne);
+        }
+        get_recurrent_state_row_f32(tensor, row, state_row_f32.data());
+        const size_t row_size = ggml_row_size(storage_type, ne);
+        if (state_row_quant.size() < row_size) {
+            state_row_quant.resize(row_size);
+        }
+        ggml_quantize_chunk(storage_type, state_row_f32.data(), state_row_quant.data(), 0, 1, ne, nullptr, nullptr);
+        write(state_row_quant.data(), row_size);
+    }
 
     void write_string(const std::string & str) {
         uint32_t str_size = str.size();
@@ -12939,10 +12990,14 @@ struct llama_data_write {
             for (uint32_t il = 0; il < n_layer; ++il) {
                 const bool has_s_cache = il < kv_self.s_l.size() && kv_self.s_l[il] != nullptr;
 
-                const int32_t s_type_i = has_s_cache ? (int32_t) kv_self.s_l[il]->type : -1;
+                const ggml_type s_store_type = has_s_cache
+                    ? checkpoint_state_storage_type(kv_self.s_l[il], ctx->cparams.checkpoint_state_type)
+                    : GGML_TYPE_F32;
+                const int32_t s_type_i = has_s_cache ? (int32_t) s_store_type : -1;
                 write(&s_type_i, sizeof(s_type_i));
 
-                const uint64_t s_size_row = has_s_cache ? ggml_row_size(kv_self.s_l[il]->type, kv_self.s_l[il]->ne[0]) : 0;
+                const uint64_t s_raw_row = has_s_cache ? ggml_row_size(kv_self.s_l[il]->type, kv_self.s_l[il]->ne[0]) : 0;
+                const uint64_t s_size_row = has_s_cache ? ggml_row_size(s_store_type, kv_self.s_l[il]->ne[0]) : 0;
                 write(&s_size_row, sizeof(s_size_row));
 
                 uint32_t s_rows = 0;
@@ -12955,7 +13010,7 @@ struct llama_data_write {
                         llama_seq_id src_seq_id = kv_self.cells[seq_id].src;
                         if (llama_kv_qnext_seq_id_in_range(kv_self, src_seq_id)) {
                             s_rows = 1;
-                            s_offset = (size_t) src_seq_id * s_size_row;
+                            s_offset = (size_t) src_seq_id * s_raw_row;
                         }
                     }
                 }
@@ -12963,7 +13018,10 @@ struct llama_data_write {
                 write(&s_rows, sizeof(s_rows));
 
                 if (has_s_cache && s_rows > 0) {
-                    write_tensor_data(kv_self.s_l[il], s_offset, s_rows * s_size_row, il);
+                    const size_t src_row = s_raw_row ? s_offset / s_raw_row : 0;
+                    for (uint32_t r = 0; r < s_rows; ++r) {
+                        write_state_row(kv_self.s_l[il], src_row + r, s_store_type, il);
+                    }
                 }
             }
         }
@@ -13238,6 +13296,9 @@ struct llama_data_write {
         write_kv_cache_meta(kv_self, cell_ranges, seq_id);
         write_kv_cache_data(ctx, cell_ranges, seq_id, flags);
     }
+
+    std::vector<float>   state_row_f32;
+    std::vector<uint8_t> state_row_quant;
 };
 
 struct llama_data_read {
@@ -13906,18 +13967,16 @@ struct llama_data_read {
                         LLAMA_LOG_ERROR("%s: missing qwen3next state cache for layer %d\n", __func__, il);
                         return false;
                     }
-                } else {
-                    const int32_t s_type_i = (int32_t) kv_self.s_l[il]->type;
-                    if (s_type_i != s_type_i_ref) {
-                        LLAMA_LOG_ERROR("%s: mismatched qwen3next state type (%d != %d, layer %d)\n", __func__, s_type_i, s_type_i_ref, il);
-                        return false;
-                    }
+                } else if (!checkpoint_state_type_is_supported((ggml_type) s_type_i_ref)) {
+                    LLAMA_LOG_ERROR("%s: unsupported qwen3next state storage type %d (layer %d)\n", __func__, s_type_i_ref, il);
+                    return false;
                 }
 
                 uint64_t s_size_row_ref;
                 read_to(&s_size_row_ref, sizeof(s_size_row_ref));
 
-                const uint64_t s_size_row = has_s_cache ? ggml_row_size(kv_self.s_l[il]->type, kv_self.s_l[il]->ne[0]) : 0;
+                const uint64_t s_size_row = has_s_cache
+                    ? ggml_row_size((ggml_type) s_type_i_ref, kv_self.s_l[il]->ne[0]) : 0;
                 if (s_size_row != s_size_row_ref) {
                     LLAMA_LOG_ERROR("%s: mismatched qwen3next state row size (%zu != %zu, layer %d)\n",
                             __func__, (size_t) s_size_row, (size_t) s_size_row_ref, il);
@@ -13945,12 +14004,31 @@ struct llama_data_read {
                 }
 
                 if (s_rows > 0) {
-                    const size_t s_data_size = s_rows * s_size_row;
-                    const size_t s_dst_offset = (size_t) s_dst_row * s_size_row;
-                    if (kv_self.s_l[il]->extra) {
-                        read_kv_cache_data_split(ctx, kv_self.s_l[il], read(s_data_size), s_dst_row, s_size_row, s_rows, il);
+                    const ggml_type s_store_type = (ggml_type) s_type_i_ref;
+                    if (s_store_type == GGML_TYPE_F32) {
+                        const size_t s_data_size = s_rows * s_size_row;
+                        const size_t s_dst_offset = (size_t) s_dst_row * s_size_row;
+                        if (kv_self.s_l[il]->extra) {
+                            read_kv_cache_data_split(ctx, kv_self.s_l[il], read(s_data_size), s_dst_row, s_size_row, s_rows, il);
+                        } else {
+                            ggml_backend_tensor_set(kv_self.s_l[il], read(s_data_size), s_dst_offset, s_data_size);
+                        }
                     } else {
-                        ggml_backend_tensor_set(kv_self.s_l[il], read(s_data_size), s_dst_offset, s_data_size);
+                        const int64_t ne = kv_self.s_l[il]->ne[0];
+                        const ggml_type_traits_t traits = ggml_internal_get_type_traits(s_store_type);
+                        const uint8_t * src = read((size_t) s_rows * s_size_row);
+                        std::vector<float> f32((size_t) ne * s_rows);
+                        for (uint32_t r = 0; r < s_rows; ++r) {
+                            traits.to_float(src + (size_t) r * s_size_row, f32.data() + (size_t) r * ne, ne);
+                        }
+                        const size_t row_size_f32 = (size_t) ne * sizeof(float);
+                        if (kv_self.s_l[il]->extra) {
+                            read_kv_cache_data_split(ctx, kv_self.s_l[il],
+                                    reinterpret_cast<const uint8_t *>(f32.data()), s_dst_row, row_size_f32, s_rows, il);
+                        } else {
+                            ggml_backend_tensor_set(kv_self.s_l[il], f32.data(),
+                                    (size_t) s_dst_row * row_size_f32, (size_t) s_rows * row_size_f32);
+                        }
                     }
                 }
             }
@@ -14259,6 +14337,10 @@ struct llama_data_write_dummy : llama_data_write {
 
     void write_tensor_data(const struct ggml_tensor * /* tensor */, size_t /* offset */, size_t size, int /* il */) override {
         size_written += size;
+    }
+
+    void write_state_row(const struct ggml_tensor * tensor, size_t /* row */, ggml_type storage_type, int /* il */) override {
+        size_written += ggml_row_size(storage_type, tensor->ne[0]);
     }
 
     size_t get_size_written() override {
