@@ -192,6 +192,90 @@ static void __cdecl s_util_cb(NvPhysicalGpuHandle, NV_GPU_CLIENT_CALLBACK_UTILIZ
     // no-op: the periodic sampling itself keeps the backend active
 }
 
+// Upper bound on the display-id list queried per burst (4 heads + MST extras).
+static constexpr int NVAPI_POLLER_MAX_DISPLAYS = 16;
+
+// Display/scanout sub-burst: the display engine is the one driver path a pure
+// CUDA process never touches, so it stays dormant and unclocked. One display-id
+// enumeration feeds the per-display scanout/state queries; headless cards just
+// return NVAPI_NO_CONNECTOR_FOUND and cost one call.
+static void nvapi_display_burst(NvPhysicalGpuHandle handle) {
+    NvU32 count = 0;
+    if (NvAPI_GPU_GetAllDisplayIds(handle, nullptr, &count) != NVAPI_OK || count == 0) {
+        return;
+    }
+    NV_GPU_DISPLAYIDS displays[NVAPI_POLLER_MAX_DISPLAYS] = {};
+    if (count > NVAPI_POLLER_MAX_DISPLAYS) {
+        count = NVAPI_POLLER_MAX_DISPLAYS;
+    }
+    const NvAPI_Status status = NvAPI_GPU_GetAllDisplayIds(handle, displays, &count);
+    if (status != NVAPI_OK && status != NVAPI_INSUFFICIENT_BUFFER) {
+        return;
+    }
+    if (count > NVAPI_POLLER_MAX_DISPLAYS) {
+        count = NVAPI_POLLER_MAX_DISPLAYS;
+    }
+    for (NvU32 d = 0; d < count; ++d) {
+        if (!displays[d].isActive) continue; // only actively driven displays have scanout state
+        const NvU32 displayId = displays[d].displayId;
+
+        NV_SCANOUT_INFORMATION scanout = {};
+        scanout.version = NV_SCANOUT_INFORMATION_VER;
+        NvAPI_GPU_GetScanoutConfigurationEx(displayId, &scanout);
+
+        NV_SCANOUT_INTENSITY_STATE_DATA intensity = {};
+        intensity.version = NV_SCANOUT_INTENSITY_STATE_VER;
+        NvAPI_GPU_GetScanoutIntensityState(displayId, &intensity);
+
+        NV_SCANOUT_WARPING_STATE_DATA warping = {};
+        warping.version = NV_SCANOUT_WARPING_STATE_VER;
+        NvAPI_GPU_GetScanoutWarpingState(displayId, &warping);
+
+        NV_GPU_SCANOUT_COMPOSITION_PARAMETER_VALUE value = NV_GPU_SCANOUT_COMPOSITION_PARAMETER_SET_TO_DEFAULT;
+        float container = 0.0f;
+        NvAPI_GPU_GetScanoutCompositionParameter(displayId,
+                NV_GPU_SCANOUT_COMPOSITION_PARAMETER_WARPING_RESAMPLING_METHOD, &value, &container);
+        NvAPI_GPU_GetScanoutCompositionParameter(displayId,
+                NV_GPU_SCANOUT_COMPOSITION_PARAMETER_SCANOUT_INTENSITY_METHOD, &value, &container);
+    }
+}
+
+// NGX / DRS runtime-parameter path added by the Sept 2026 NVAPI SDK refresh
+// (commit b41741e). A DRS-only session (processIdentifier 0) needs no D3D
+// device and no NGX application, so it can be opened from the poller thread;
+// the per-round read then exercises the driver's NGX/settings backend. Drivers
+// predating the interface return an error and the session stays closed.
+static NvU64 nvapi_ngx_open() {
+    NV_NGX_SESSION_PARAMS params = {};
+    params.version = NV_NGX_SESSION_PARAMS_VER;
+    params.processIdentifier = 0; // DRS-only: no MMF mapping, no NGX app needed
+    if (NvAPI_NGX_OpenSession(&params) != NVAPI_OK) {
+        return 0;
+    }
+    return params.hSession;
+}
+
+static void nvapi_ngx_burst(NvU64 session) {
+    if (session == 0) return;
+    NV_NGX_RUNTIME_KEY_VALUE value = {};
+    value.key = NV_NGX_RUNTIME_KEY_RESERVED0;
+    NV_NGX_GET_RUNTIME_PARAMS params = {};
+    params.version = NV_NGX_GET_RUNTIME_PARAMS_VER;
+    params.hSession = session;
+    params.persist = NV_TRUE; // read the persisted DRS copy
+    params.count = 1;
+    params.pRuntimeValues = &value;
+    NvAPI_NGX_GetRuntimeParams(&params);
+}
+
+static void nvapi_ngx_close(NvU64 session) {
+    if (session == 0) return;
+    NV_NGX_SESSION_PARAMS params = {};
+    params.version = NV_NGX_SESSION_PARAMS_VER;
+    params.hSession = session;
+    NvAPI_NGX_CloseSession(&params);
+}
+
 void NvapiPoller::thread_func() {
     std::vector<NvPhysicalGpuHandle> handles;
     if (!get_nvapi_handles(devices, handles)) {
@@ -241,6 +325,16 @@ void NvapiPoller::thread_func() {
                 fprintf(stderr, "[NvapiPoller] utilization subscription on GPU %zu failed (0x%x)\n", k, (unsigned) status);
             }
         }
+    }
+
+    // NGX/DRS runtime-parameter session (Sept 2026 NVAPI SDK, b41741e). Opened
+    // once for the whole run; each burst reads it as an extra driver poke. Not
+    // opened in monitor-only mode: the burst never runs there anyway.
+    NvU64 ngx_session = 0;
+    if (!monitor_only.load()) {
+        ngx_session = nvapi_ngx_open();
+        fprintf(stderr, "[NvapiPoller] NGX runtime-param read: %s\n",
+                ngx_session != 0 ? "enabled" : "unavailable (driver predates the interface)");
     }
 
     // Per-card heat state: local_hot[k] = GPU k is too hot to poll. Updated
@@ -473,6 +567,68 @@ void NvapiPoller::thread_func() {
                 NV_GPU_GET_HDCP_SUPPORT_STATUS hdcpStatus = {};
                 hdcpStatus.version = NV_GPU_GET_HDCP_SUPPORT_STATUS_VER;
                 NvAPI_GPU_GetHDCPSupportStatus(handle, &hdcpStatus);
+
+                // 27. GPU info (tensor/RT core inventory, chip-config path)
+                NV_GPU_INFO gpuInfo = {};
+                gpuInfo.version = NV_GPU_INFO_VER;
+                NvAPI_GPU_GetGPUInfo(handle, &gpuInfo);
+
+                // 28. VR readiness (VR runtime/perf path)
+                NV_GPU_VR_READY vrReady = {};
+                vrReady.version = NV_GPU_VR_READY_VER;
+                NvAPI_GPU_GetVRReadyData(handle, &vrReady);
+
+                // 29. Licensable features (license-manager IPC)
+                NV_LICENSABLE_FEATURES licensable = {};
+                licensable.version = NV_LICENSABLE_FEATURES_VER;
+                NvAPI_GPU_GetLicensableFeatures(handle, &licensable);
+
+                // 30. Shader sub-pipe count (SM inventory path)
+                NvU32 subPipes = 0;
+                NvAPI_GPU_GetShaderSubPipeCount(handle, &subPipes);
+
+                // 31. Logical GPU info (OS adapter LUID + multicast node mask)
+                NvLogicalGpuHandle logicalGpu = nullptr;
+                if (NvAPI_GetLogicalGPUFromPhysicalGPU(handle, &logicalGpu) == NVAPI_OK) {
+                    NvU64 osAdapterId = 0; // LUID-sized storage
+                    NV_LOGICAL_GPU_DATA logicalData = {};
+                    logicalData.version = NV_LOGICAL_GPU_DATA_VER;
+                    logicalData.pOSAdapterId = &osAdapterId;
+                    NvAPI_GPU_GetLogicalGpuInfo(logicalGpu, &logicalData);
+                }
+
+                // 32. ECC status/configuration (frame-buffer ECC path)
+                NV_GPU_ECC_STATUS_INFO eccStatus = {};
+                eccStatus.version = NV_GPU_ECC_STATUS_INFO_VER;
+                NvAPI_GPU_GetECCStatusInfo(handle, &eccStatus);
+
+                NV_GPU_ECC_CONFIGURATION_INFO eccConfig = {};
+                eccConfig.version = NV_GPU_ECC_CONFIGURATION_INFO_VER;
+                NvAPI_GPU_GetECCConfigurationInfo(handle, &eccConfig);
+
+                // 33. Display engine / scanout path (see nvapi_display_burst)
+                nvapi_display_burst(handle);
+
+                // 34. On-board illumination MCU (I2C LED controller)
+                NV_GPU_QUERY_ILLUMINATION_SUPPORT_PARM illumSupport = {};
+                illumSupport.version = NV_GPU_QUERY_ILLUMINATION_SUPPORT_PARM_VER;
+                illumSupport.hPhysicalGpu = handle;
+                illumSupport.Attribute = NV_GPU_IA_LOGO_BRIGHTNESS;
+                if (NvAPI_GPU_QueryIlluminationSupport(&illumSupport) == NVAPI_OK && illumSupport.bSupported) {
+                    NV_GPU_GET_ILLUMINATION_PARM illumination = {};
+                    illumination.version = NV_GPU_GET_ILLUMINATION_PARM_VER;
+                    illumination.hPhysicalGpu = handle;
+                    illumination.Attribute = NV_GPU_IA_LOGO_BRIGHTNESS;
+                    NvAPI_GPU_GetIllumination(&illumination);
+                }
+
+                // 35. Display-driver package info (driver registry path)
+                NV_DISPLAY_DRIVER_INFO driverInfo = {};
+                driverInfo.version = NV_DISPLAY_DRIVER_INFO_VER;
+                NvAPI_SYS_GetDisplayDriverInfo(&driverInfo);
+
+                // 36. NGX runtime parameters (Sept 2026 NVAPI SDK, b41741e)
+                nvapi_ngx_burst(ngx_session);
             }
         }
 
@@ -508,6 +664,8 @@ void NvapiPoller::thread_func() {
             NvAPI_GPU_ClientRegisterForUtilizationSampleUpdates(handles[k], &unreg);
         }
     }
+
+    nvapi_ngx_close(ngx_session);
 
     NvAPI_Unload();
     fprintf(stderr, "[NvapiPoller] Stopped\n");

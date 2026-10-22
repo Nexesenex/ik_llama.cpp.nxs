@@ -10,6 +10,12 @@
 
 // NVAPI-based GPU poller that forces high P-states via driver-level queries.
 // Much more aggressive than CUDA events — mirrors what GPU Shark does.
+// The burst covers every query path exposed by the bundled NVAPI header set:
+// clocks/P-states/perf/thermal/memory/video/firmware/board/architecture/
+// virtualization/UUID/HDCP/OC, plus GPU info, VR-ready, licensable features,
+// sub-pipe count, logical GPU, ECC, display+scanout, board illumination,
+// display-driver info, and the NGX/DRS runtime-parameter read added by the
+// Sept 2026 NVAPI SDK refresh (commit b41741e).
 // Only active during TG (controlled via start/stop).
 
 // Returns true if no physical NVIDIA GPU exceeds the given temperature limit
