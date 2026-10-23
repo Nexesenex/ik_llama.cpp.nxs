@@ -1801,11 +1801,14 @@ static void * ggml_cuda_host_malloc(size_t size) {
 
     // Use _aligned_malloc + cudaHostRegister instead of cudaMallocHost to allow partial
     // pinning and to avoid WDDM per-process quota limits.
-    void * ptr = _aligned_malloc(size, 32);
-    if (ptr == nullptr) {
-        GGML_CUDA_LOG_WARN("%s: _aligned_malloc of %.2f MiB failed\n", __func__, size / 1024.0 / 1024.0);
-        return nullptr;
-    }
+
+    void * ptr = nullptr;
+
+    // void * ptr = _aligned_malloc(size, 32);
+    // if (ptr == nullptr) {
+        // GGML_CUDA_LOG_WARN("%s: _aligned_malloc of %.2f MiB failed\n", __func__, size / 1024.0 / 1024.0);
+        // return nullptr;
+    // }
 
     if (size > ggml_cuda_pinned_cap() - g_cuda_pinned_bytes) {
         static bool logged = false;
