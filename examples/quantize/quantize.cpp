@@ -168,7 +168,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable, int exit_code = 1) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--prefetch [N]] [--cuda-quantize] [-dev/--device DEVICES] [-ts/--tensor-split SPLIT] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--custom-q] [--repack] [--repack-pattern] [--symmetric-q40] [--slow-iq2ks] [--keep-split] [--partial-requant] [--individual-tensors LIST] [--skip-first-shard] [--skip-missing-splits] [--override-kv] [--virtual-map PATH] [--analytical-imatrix output_file] [--estimate-imatrix] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--prefetch [N]] [--cuda-quantize] [-dev/--device DEVICES] [-ts/--tensor-split SPLIT] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--custom-q] [--repack] [--repack-pattern] [--symmetric-q40] [--slow-iq2ks] [--keep-split] [--partial-requant] [--individual-tensors LIST] [--skip-first-shard] [--split-max-tensors N] [--skip-missing-splits] [--override-kv] [--virtual-map PATH] [--analytical-imatrix output_file] [--estimate-imatrix] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  -h, --help: print usage and exit\n");
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
@@ -211,6 +211,7 @@ static void usage(const char * executable, int exit_code = 1) {
     printf("  --estimate-imatrix: Use an estimated imatrix for quantization, possibly combining with the input imatrix (if specified)\n");
     printf("  --individual-tensors LIST: Comma-separated list of split IDs (integers >= 2). Requires --keep-split to be set. Example: --individual-tensors 2,5,1094 will produce tensor_ids = {1,4,1093}.\n\n");
     printf("  --skip-first-shard: Do not output the first shard (assumed to be metadata only and not containing tensors). Must be used in combination with --individual-tensors and --keep-split.\n\n");
+    printf("  --split-max-tensors N: quantize into output splits of at most N tensors each (works from a monolithic or already-split source). Combine with --skip-first-shard to keep shard 0 as an empty metadata-only placeholder.\n\n");
     printf("  --virtual-map PATH: Path to an existing fully quantized model used as the base tensor source. Tensors from --individual-tensors replace corresponding tensors in this reference model, then are requantized. Non-target tensors pass through from the reference model unchanged.\n\n");
     printf("  -okv KEY=TYPE:VALUE, --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n\n");
@@ -860,6 +861,22 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--skip-first-shard") == 0) {
             params.skip_first_shard = true;
+        } else if (strcmp(argv[arg_idx], "--split-max-tensors") == 0) {
+            if (arg_idx < argc-1) {
+                try {
+                    int v = std::stoi(argv[++arg_idx]);
+                    if (v < 1) {
+                        fprintf(stderr, "%s: invalid split-max-tensors value '%s' (must be >= 1)\n", __func__, argv[arg_idx]);
+                        usage(argv[0]);
+                    }
+                    params.split_max_tensors = v;
+                } catch (const std::exception & e) {
+                    fprintf(stderr, "%s: invalid split-max-tensors value '%s' (%s)\n", __func__, argv[arg_idx], e.what());
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
         } else if (strcmp(argv[arg_idx], "--virtual-map") == 0) {
             if (arg_idx < argc-1) {
                 params.virtual_map = argv[++arg_idx];
@@ -927,6 +944,13 @@ int main(int argc, char ** argv) {
     // unless --virtual-map is set (the reference model provides the tensor structure)
     if (individual_tensors_specified && !params.keep_split && !params.virtual_map) {
         fprintf(stderr, "%s: --individual-tensors requires --keep-split to be set\n", argv[0]);
+        usage(argv[0]);
+    }
+
+    // --split-max-tensors builds a fresh positional split from scratch, so it cannot be
+    // combined with --partial-requant (which expects the destination shard files to exist).
+    if (params.split_max_tensors > 0 && params.partial_requant) {
+        fprintf(stderr, "%s: --split-max-tensors cannot be combined with --partial-requant\n", argv[0]);
         usage(argv[0]);
     }
 
@@ -1044,7 +1068,7 @@ int main(int argc, char ** argv) {
 
         // export as [inp path]/ggml-model-[ftype]. Only add extension if there is no splitting
         fname_out = fpath + "ggml-model-" + ftype_str;
-        if (!params.keep_split) {
+        if (!params.keep_split && !params.split_max_tensors) {
             fname_out += suffix;
         }
         arg_idx++;
@@ -1053,7 +1077,7 @@ int main(int argc, char ** argv) {
         }
     } else {
         fname_out = argv[arg_idx];
-        if (params.keep_split && fname_out.find(suffix) != std::string::npos) {
+        if ((params.keep_split || params.split_max_tensors) && fname_out.find(suffix) != std::string::npos) {
             fname_out = fname_out.substr(0, fname_out.length() - suffix.length());
         }
         arg_idx++;
