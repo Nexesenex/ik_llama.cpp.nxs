@@ -209,7 +209,7 @@ static void usage(const char * executable) {
     printf("  --skip-missing-splits: tolerate split files missing in the source model (they are expected to already exist quantized in the destination). Output split files keep the original shard numbering\n");
     printf("  --individual-tensors LIST: Comma-separated list of split IDs (integers >= 2). Requires --keep-split to be set. Example: --individual-tensors 2,5,1094 will produce tensor_ids = {1,4,1093}.\n");
     printf("  --skip-first-shard: Do not output the first shard (assumed to be metadata only and not containing tensors). Must be used in combination with --individual-tensors and --keep-split.\n");
-    printf("  --split-max-tensors N: quantize into output splits of at most N tensors each (works from a monolithic or already-split source). Combine with --skip-first-shard to keep shard 0 as an empty metadata-only placeholder.\n");
+    printf("  --split-max-tensors N: quantize into output splits of at most N tensors each (works from a monolithic or already-split source). Combine with --skip-first-shard to keep shard 0 as an empty metadata-only placeholder. With N=1, combines with --partial-requant to (re)quantize only the shard files that do not already exist.\n");
     printf("  --virtual-map PATH: Path to an existing fully quantized model used as the base tensor source. Tensors from --individual-tensors replace corresponding tensors in this reference model, then are requantized. Non-target tensors pass through from the reference model unchanged.\n\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n\n");
@@ -928,10 +928,10 @@ int main(int argc, char ** argv) {
         usage(argv[0]);
     }
 
-    // --split-max-tensors builds a fresh positional split from scratch, so it cannot be
-    // combined with --partial-requant (which expects the destination shard files to exist).
-    if (params.split_max_tensors > 0 && params.partial_requant) {
-        fprintf(stderr, "%s: --split-max-tensors cannot be combined with --partial-requant\n", argv[0]);
+    // --partial-requant with --split-max-tensors is only supported for --split-max-tensors 1
+    // (one tensor per shard): each shard file is (re)quantized only if it does not already exist.
+    if (params.partial_requant && params.split_max_tensors > 1) {
+        fprintf(stderr, "%s: --partial-requant is only supported with --split-max-tensors 1\n", argv[0]);
         usage(argv[0]);
     }
 

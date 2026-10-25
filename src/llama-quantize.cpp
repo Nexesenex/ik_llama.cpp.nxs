@@ -1617,8 +1617,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     struct gguf_context * ctx_out = gguf_init_empty();
 
-    // Early exit if partial_requant is enabled and output file already exists
-    if (params->partial_requant && !params->keep_split) {
+    // Early exit if partial_requant is enabled and output file already exists.
+    // --split-max-tensors writes several shard files and does its own per-shard existence
+    // check in new_ofstream, so it bails per shard there instead of via this single-file test.
+    if (params->partial_requant && !params->keep_split && params->split_max_tensors <= 0) {
         std::ifstream test_file(fname_out);
         if (test_file) {
             LLAMA_LOG_INFO("%s: output file %s exists, skipping\n", __func__, fname_out.c_str());
