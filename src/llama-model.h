@@ -634,6 +634,7 @@ struct llama_model {
     float split_vram_free_factor = 0.0f; // factor for VRAM availability (neutral: 0.0, you can test: 0.75)
     float split_usage_penalty_factor = 0.0f; // factor for memory usage penalty (neutral: 0.0, you can test: 0.25)
     std::vector<float> split_vram_reserve_factor; // per-GPU VRAM reserve (<1: fraction reserved, >1: direct limit %)
+    int split_granularity = 16; // round-up ceiling for base-16 FFN/output TP split granularity (power of 2 recommended)
     int n_gpu_layers;
     int split_output_tensor = 0;  // 0=off, 1=split on all GPUs, N>1=split on top N GPUs by VRAM
     int split_output_tensor_subset = 0; // 0=off, 1=split the allowlist output logits subset on all output GPUs, N>1=top N output GPUs (requires split_output_tensor)

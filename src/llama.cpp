@@ -5878,6 +5878,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         model.hparams.vocab_only = params.vocab_only;
         model.split_output_tensor = params.split_output_tensor;
+        model.split_granularity = params.split_granularity;
         model.split_output_tensor_subset = params.split_output_tensor_subset;
         if (model.split_output_tensor_subset > 0 && model.split_output_tensor == 0) {
             LLAMA_LOG_WARN("%s: -sot-s requires -sot, disabling the output logits subset split\n", __func__);
@@ -9254,6 +9255,7 @@ struct llama_model_params llama_model_default_params() {
         /*.split_vram_free_factor      =*/ 0.0f,
         /*.split_usage_penalty_factor  =*/ 0.0f,
         /*.split_vram_reserve_factor   =*/ nullptr,
+        /*.split_granularity           =*/ 16,
         /*.ncmoe                       =*/ 0,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,

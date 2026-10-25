@@ -403,6 +403,7 @@ extern "C" {
         float split_vram_free_factor;
         float split_usage_penalty_factor;
         const float * split_vram_reserve_factor;
+        int32_t split_granularity; // round-up ceiling for base-16 FFN/output tensor-parallel split granularity (power of 2 recommended)
         int32_t ncmoe;
 
         enum ggml_type type_k;

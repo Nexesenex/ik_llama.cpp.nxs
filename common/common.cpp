@@ -3206,6 +3206,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.split_adjust_not_used = true;
         return true;
     }
+    else if (arg == "--split-granularity" || arg == "-sg") {
+        CHECK_ARG
+        params.split_granularity = std::max(1, std::stoi(argv[i]));
+        return true;
+    }
     if (arg == "-sm" || arg == "--split-mode") {
         CHECK_ARG
         std::string arg_next = argv[i];
@@ -4881,6 +4886,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "-svff, --split-vram-free-factor f", "factor for VRAM availability (neutral: 0.0, you can test: 0.75)", params.split_vram_free_factor });
         options.push_back({ "*",           "-supf, --split-usage-penalty-factor f", "factor for memory usage penalty (neutral: 0.0, you can test: 0.25)", params.split_usage_penalty_factor });
         options.push_back({ "*",           "-svrf, --split-vram-reserve-factor LIST", "per-GPU VRAM reserve factors, comma-separated (<1: fraction reserved, >1: direct limit %%%, default: 0 = 12.5%%/6.25%% auto)" });
+        options.push_back({ "*",           "-sg,   --split-granularity i", "round-up ceiling for base-16 FFN/output tensor-parallel split granularity (power of 2 recommended: 16=fine VRAM packing, 128=kernel efficiency) (default: %d)", params.split_granularity });
     }
 
     options.push_back({ "model" });
@@ -6028,6 +6034,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.split_vram_free_factor = params.split_vram_free_factor;
     mparams.split_usage_penalty_factor = params.split_usage_penalty_factor;
     mparams.split_vram_reserve_factor = params.split_vram_reserve_factor;
+    mparams.split_granularity = params.split_granularity;
     mparams.ncmoe           = params.ncmoe;
     mparams.fit             = params.fit;
     mparams.fit_margin      = params.fit_margin;
@@ -7441,6 +7448,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
         const std::vector<float> svrf_vector(params.split_vram_reserve_factor, params.split_vram_reserve_factor + llama_max_devices());
         yaml_dump_vector_float(stream, "split_vram_reserve_factor", svrf_vector);
     }
+    fprintf(stream, "split_granularity: %d # default: 32 (round-up ceiling for base-16 FFN/output TP split granularity, power of 2 recommended)\n", params.split_granularity);
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
     fprintf(stream, "fit: %d # default: false\n", params.fit);
     fprintf(stream, "fit_margin: %d # default: 0\n", params.fit_margin);
