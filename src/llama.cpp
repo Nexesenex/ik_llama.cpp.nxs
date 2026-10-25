@@ -9438,6 +9438,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.pure                           =*/ false,
         /*.keep_split                     =*/ false,
         /*.skip_first_shard               =*/ false,
+        /*.split_max_tensors              =*/ 0,
         /*.ignore_imatrix_rules           =*/ false,
         /*.only_repack                    =*/ false,
         /*.dry_run                        =*/ false,

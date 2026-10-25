@@ -606,6 +606,7 @@ extern "C" {
         bool pure;                           // quantize all tensors to the default type
         bool keep_split;                     // quantize to the same number of shards
         bool skip_first_shard;               // Do not output the first shard (assumed metadata only, not containing tensors)
+        int  split_max_tensors;              // --split-max-tensors: quantize into output splits of at most this many tensors each (0 = disabled); works from a monolithic or already-split source
         bool ignore_imatrix_rules;           // If set to true, the built-in rules for refusing to quantize into certain quants without imatrix are ignored
         bool only_repack;                    // Only repack tensors
         bool dry_run;                        //

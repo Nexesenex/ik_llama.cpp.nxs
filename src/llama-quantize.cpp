@@ -1745,13 +1745,37 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     uint16_t n_outputs = 1;
     // Assume split index is continuous
-    if (params->keep_split) {
+    if (params->split_max_tensors > 0) {
+        // --split-max-tensors: partition the loaded tensors positionally into output splits
+        // of at most split_max_tensors each. Works from a monolithic or already-split source
+        // (the running index runs in shard order, mirroring gguf-split). With
+        // --skip-first-shard, shard 0 is kept empty (metadata only) and every tensor is
+        // shifted up by one shard.
+        n_outputs = (uint16_t) std::max(1, (ml.n_tensors + params->split_max_tensors - 1) / params->split_max_tensors);
+        if (params->skip_first_shard) {
+            ++n_outputs;
+        }
+    } else if (params->keep_split) {
         for (int i = 0; i < ml.n_tensors; ++i) {
             n_outputs = std::max(uint16_t(ml.get_weight(i)->idx+1), n_outputs);
         }
     }
     std::vector<gguf_context*> ctx_outs(n_outputs, NULL);
     ctx_outs[0] = ctx_out;
+
+    // Map a loaded tensor (running index i, source shard src_idx) to its output split.
+    // --split-max-tensors wins when set (positional partition); otherwise --keep-split keeps
+    // the source shard index; otherwise everything lands in a single shard (index 0).
+    auto out_split_index = [&](int i, uint16_t src_idx) -> uint16_t {
+        if (params->split_max_tensors > 0) {
+            uint16_t s = (uint16_t) (i / params->split_max_tensors);
+            if (params->skip_first_shard) {
+                s = (uint16_t) (s + 1);
+            }
+            return s;
+        }
+        return params->keep_split ? src_idx : 0;
+    };
 
     ggml_tensor extra;
     ggml_tensor * output_meta = ml.get_tensor_meta("output.weight");
@@ -1793,7 +1817,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     // populate the original tensors so we get an initial meta data
     for (int i = 0; i < ml.n_tensors; ++i) {
         auto weight = ml.get_weight(i);
-        uint16_t i_split = params->keep_split ? weight->idx : 0;
+        uint16_t i_split = out_split_index(i, weight->idx);
         struct ggml_tensor * tensor = weight->tensor;
         if (ctx_outs[i_split] == NULL) {
             ctx_outs[i_split] = gguf_init_empty();
@@ -1807,7 +1831,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     // Set split info if needed
     // Use the original declared split count when part of the source splits are missing
     // or only a subset is loaded, so the output split files keep the original shard numbering
-    const uint16_t out_split_count = std::max<uint16_t>((uint16_t) ctx_outs.size(), ml.n_split_total);
+    const uint16_t out_split_count = params->split_max_tensors > 0
+        ? n_outputs
+        : std::max<uint16_t>((uint16_t) ctx_outs.size(), ml.n_split_total);
     if (out_split_count > 1) {
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
             if (ctx_outs[i] == NULL) continue;
@@ -1834,7 +1860,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         cur_split = index;
         GGML_ASSERT(ctx_outs[cur_split] && "Find uninitialized gguf_context");
         std::string fname = fname_out;
-        if (params->keep_split) {
+        if (params->keep_split || params->split_max_tensors > 0) {
             char split_path[PATH_MAX] = {0};
             llama_split_path(split_path, sizeof(split_path), fname_out.c_str(), cur_split, out_split_count);
             fname = std::string(split_path);
@@ -1854,7 +1880,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             return;
         }
 
-        if (params->skip_first_shard) {
+        // In --keep-split mode --skip-first-shard leaves the (metadata-only) source shard 0
+        // untouched, so we don't write it. In --split-max-tensors mode shard 0 is freshly
+        // created as an empty metadata-only placeholder and IS written, so don't skip here.
+        if (params->skip_first_shard && params->split_max_tensors <= 0) {
             if (cur_split == 0) {
                 LLAMA_LOG_INFO("%s: split file %s skipped because --skip-first-shard is enabled\n", __func__, fname.c_str());
                 return;
@@ -1883,9 +1912,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     for (int i = 0; i < ml.n_tensors; ++i) {
         auto weight = ml.get_weight(i);
         struct ggml_tensor * tensor = weight->tensor;
-        if (weight->idx != cur_split && params->keep_split) {
+        const uint16_t target_split = out_split_index(i, weight->idx);
+        if (target_split != cur_split) {
             close_ofstream();
-            new_ofstream(weight->idx);
+            new_ofstream(target_split);
         }
 
         if (params->partial_requant && split_skipped[cur_split]) {
