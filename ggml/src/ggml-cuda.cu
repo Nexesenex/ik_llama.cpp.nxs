@@ -238,7 +238,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].vmm = !!device_vmm;
 
         char pci_bus_id[16] = {0};
-        cudaDeviceGetPCIBusId(pci_bus_id, 16, cuda_id);
+        cudaDeviceGetPCIBusId(pci_bus_id, 16, id);
         cudaDeviceProp prop;
         CUDA_CHECK(cudaGetDeviceProperties(&prop, id));
         const char * attach = (prop.pciBusID < 0x80) ? "CPU" : "PCH";
