@@ -6676,6 +6676,10 @@ static void split_bailingmoe3_kda_tensors(const llama_hparams & hparams, llama_l
 bool create_tensors_helper::create_tensors() {
     const auto tn = LLM_TN(model.arch);
     bool use_mmap_buffer = true;
+    // Round-up ceiling for the base-16 FFN/output TP split granularity. Settable
+    // via -sg/--split-granularity; defaults to 16. Guarded to stay >= 1 so the
+    // power-of-2 descent below always terminates.
+    const int split_granularity_ceiling = model.split_granularity > 0 ? model.split_granularity : 16;
     if (ml.merge_qkv && (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
         LLAMA_LOG_WARN("\n========================================================\n");
         LLAMA_LOG_WARN("merge_qkv is not compatible with split mode 'tensor parallel'\n");
@@ -6909,6 +6913,7 @@ bool create_tensors_helper::create_tensors() {
         LLAMA_LOG_INFO("================================ max_gpu_per_split = %d\n", model.max_gpu_per_split);
         LLAMA_LOG_INFO("================================ split_adjust_step_frequency = %.2f\n", model.split_adjust_step_frequency);
         LLAMA_LOG_INFO("================================ split_tensor_split_factor = %.2f (neutral: 1.0, ventilation: 2.0)\n", model.split_tensor_split_factor);
+        LLAMA_LOG_INFO("================================ split_granularity = %d (round-up ceiling for base-16 FFN/output TP split granularity)\n", model.split_granularity);
         LLAMA_LOG_INFO("================================ split_vram_free_factor = %.2f (neutral: 0.0, ventilation: 0.6)\n", model.split_vram_free_factor);
         LLAMA_LOG_INFO("================================ split_usage_penalty_factor = %.2f (neutral: 0.0, ventilation: 1.0)\n", model.split_usage_penalty_factor);
         if (!model.split_vram_reserve_factor.empty()) {
@@ -7297,7 +7302,7 @@ bool create_tensors_helper::create_tensors() {
                     }
                     {
                         int nr = layer.ffn_down->ne[0];
-                        for (int64_t g = 32; g > ffn_granularity; g /= 2) {
+                        for (int64_t g = split_granularity_ceiling; g > ffn_granularity; g /= 2) {
                             if (nr % g == 0) {
                                 ffn_granularity = (int)g;
                                 break;
@@ -7331,7 +7336,7 @@ bool create_tensors_helper::create_tensors() {
                     }
                     {
                         int nr = layer.ffn_down_exps->ne[0];
-                        for (int64_t g = 32; g > ffn_granularity; g /= 2) {
+                        for (int64_t g = split_granularity_ceiling; g > ffn_granularity; g /= 2) {
                             if (nr % g == 0) {
                                 ffn_granularity = (int)g;
                                 break;
@@ -7409,7 +7414,7 @@ bool create_tensors_helper::create_tensors() {
                             }
                             {
                                 int nr = layer.ffn_down_shexp->ne[0];
-                                for (int64_t g = 32; g > ffn_granularity; g /= 2) {
+                                for (int64_t g = split_granularity_ceiling; g > ffn_granularity; g /= 2) {
                                     if (nr % g == 0) {
                                         ffn_granularity = (int)g;
                                         break;
@@ -7433,7 +7438,7 @@ bool create_tensors_helper::create_tensors() {
                             }
                             {
                                 int nr = layer.ffn_down_shexp->ne[0];
-                                for (int64_t g = 32; g > ffn_granularity; g /= 2) {
+                                for (int64_t g = split_granularity_ceiling; g > ffn_granularity; g /= 2) {
                                     if (nr % g == 0) {
                                         ffn_granularity = (int)g;
                                         break;
@@ -7592,7 +7597,7 @@ bool create_tensors_helper::create_tensors() {
                     int nr = model.output->ne[1];
                     int granularity = 16;
                     {
-                        for (int64_t g = 32; g > granularity; g /= 2) {
+                        for (int64_t g = split_granularity_ceiling; g > granularity; g /= 2) {
                             if (nr % g == 0) {
                                 granularity = (int)g;
                                 break;
