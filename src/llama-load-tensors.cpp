@@ -7255,7 +7255,7 @@ bool create_tensors_helper::create_tensors() {
 
         LLAMA_LOG_INFO("Estimated model buffer size per device:\n");
         for (int i = 0; i < int(mem_used.size()); ++i) {
-            LLAMA_LOG_INFO("    Device %d:  %8.2f MiB\n", i, mem_used[i]/1024./1024.);
+            LLAMA_LOG_INFO("    GPU%d:  %8.2f MiB\n", i, mem_used[i]/1024./1024.);
         }
     }
     return use_mmap_buffer;
