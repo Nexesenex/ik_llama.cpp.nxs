@@ -256,6 +256,15 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].nsm   = prop.multiProcessorCount;
         info.devices[id].smpb  = prop.sharedMemPerBlock;
         info.devices[id].integrated = prop.integrated;
+        // TCC devices run without the WDDM command-timeout watchdog, so the WDDM
+        // clock poller must skip them (no pin quota / no display power state to raise).
+#if CUDART_VERSION >= 12000
+        int kernel_exec_timeout = 1;
+        cudaDeviceGetAttribute(&kernel_exec_timeout, cudaDevAttrKernelExecTimeout, id);
+        info.devices[id].is_tcc = !kernel_exec_timeout;
+#else
+        info.devices[id].is_tcc = !prop.kernelExecTimeoutEnabled;
+#endif
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
         info.devices[id].cc = 100*prop.major + 10*prop.minor + CC_OFFSET_AMD;
@@ -5983,10 +5992,37 @@ GGML_CALL int ggml_backend_cuda_get_device_count() {
     return ggml_cuda_info().device_count;
 }
 
+// Devices are not reordered: the ggml device index is already the CUDA device
+// ordinal. The helper is kept for the poller/NVAPI API.
+GGML_CALL int ggml_backend_cuda_get_device_ordinal(int device) {
+    const auto & info = ggml_cuda_info();
+    if (device < 0 || device >= info.device_count) {
+        GGML_CUDA_LOG_WARN("%s: CUDA device index %d out of range (max %d)\n", __func__, device, info.device_count - 1);
+        return -1;
+    }
+    return device;
+}
+
+GGML_CALL bool ggml_backend_cuda_device_is_tcc(int device) {
+    const auto & info = ggml_cuda_info();
+    if (device < 0 || device >= info.device_count) {
+        GGML_CUDA_LOG_WARN("%s: CUDA device index %d out of range (max %d)\n", __func__, device, info.device_count - 1);
+        return false;
+    }
+    return info.devices[device].is_tcc;
+}
+
 GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size) {
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
     snprintf(description, description_size, "%s", prop.name);
+}
+
+GGML_CALL void ggml_backend_cuda_get_device_pci_bus_id(int device, char * pci_bus_id, size_t pci_bus_id_size) {
+    if (device < 0 || device >= ggml_cuda_info().device_count || pci_bus_id == nullptr || pci_bus_id_size == 0) {
+        return;
+    }
+    cudaDeviceGetPCIBusId(pci_bus_id, (int) pci_bus_id_size, device);
 }
 
 GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total) {

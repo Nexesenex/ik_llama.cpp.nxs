@@ -469,8 +469,7 @@ static void ggml_cuda_poller_warmup_fma_launch() {
                             || (w < GGML_CUDA_MAX_DEVICES && !ggml_cuda_poller_warmup_due[w]);
         w++;  // w = WDDM position of this device (TCC devices do not consume a slot)
         if (skip_this) continue;
-        int cuda_id = ggml_cuda_info().cuda_device_id[i];
-        if (cuda_id < 0) continue;
+        const int cuda_id = i;
         if (ggml_cuda_poller_compute_streams[i] == nullptr) {
             cudaSetDevice(cuda_id);
             cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
@@ -507,8 +506,7 @@ static void ggml_cuda_poller_warmup_mma_launch() {
                             || (w < GGML_CUDA_MAX_DEVICES && !ggml_cuda_poller_warmup_due[w]);
         w++;  // w = WDDM position of this device (TCC devices do not consume a slot)
         if (skip_this) continue;
-        int cuda_id = ggml_cuda_info().cuda_device_id[i];
-        if (cuda_id < 0) continue;
+        const int cuda_id = i;
         if (ggml_cuda_poller_compute_streams[i] == nullptr) {
             cudaSetDevice(cuda_id);
             cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
@@ -547,8 +545,7 @@ static void ggml_cuda_poller_warmup_mem_launch() {
                             || (w < GGML_CUDA_MAX_DEVICES && !ggml_cuda_poller_warmup_due[w]);
         w++;  // w = WDDM position of this device (TCC devices do not consume a slot)
         if (skip_this) continue;
-        int cuda_id = ggml_cuda_info().cuda_device_id[i];
-        if (cuda_id < 0) continue;
+        const int cuda_id = i;
         cudaSetDevice(cuda_id);
         if (ggml_cuda_poller_compute_streams[i] == nullptr) {
             cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
@@ -589,8 +586,7 @@ static void ggml_cuda_poller_activity_fma_ping_w(int w) {
             // skip: too-hot card (temp monitor), or explicitly disabled via --poller-activity-fma 0.
             if (ggml_cuda_poller_skip[w]) return;
             if (ggml_cuda_poller_activity_fma_override[w] && ggml_cuda_poller_activity_fma[w] == 0) return;
-            int cuda_id = info.cuda_device_id[i];
-            if (cuda_id < 0) return;
+            const int cuda_id = i;
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
                 cudaSetDevice(cuda_id);
                 cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
@@ -667,8 +663,7 @@ static void ggml_cuda_poller_activity_mma_ping_w(int w) {
             // skip: too-hot card (temp monitor), or explicitly disabled via --poller-activity-mma 0.
             if (ggml_cuda_poller_skip[w]) return;
             if (ggml_cuda_poller_activity_mma_override[w] && ggml_cuda_poller_activity_mma[w] == 0) return;
-            int cuda_id = info.cuda_device_id[i];
-            if (cuda_id < 0) return;
+            const int cuda_id = i;
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
                 cudaSetDevice(cuda_id);
                 cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
@@ -732,8 +727,7 @@ static void ggml_cuda_poller_activity_mem_ping_w(int w) {
             // skip: too-hot card (temp monitor), or explicitly disabled via --poller-activity-mem 0.
             if (ggml_cuda_poller_skip[w]) return;
             if (ggml_cuda_poller_activity_mem_override[w] && ggml_cuda_poller_activity_mem[w] == 0) return;
-            int cuda_id = info.cuda_device_id[i];
-            if (cuda_id < 0) return;
+            const int cuda_id = i;
             cudaSetDevice(cuda_id);
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
                 cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
@@ -793,8 +787,7 @@ GGML_CALL void ggml_backend_cuda_set_poller_warmup_fma(bool val) {
         int w = 0;
         for (int i = 0; i < info.device_count; ++i) {
             if (info.devices[i].is_tcc) continue;
-            int cuda_id = info.cuda_device_id[i];
-            if (cuda_id < 0) continue;
+            const int cuda_id = i;
             char name[128] = {0};
             cudaSetDevice(cuda_id);
             cudaDeviceProp prop;
@@ -910,12 +903,9 @@ static void ggml_cuda_poller_sync_thread_proc() {
             if (ms > 0 && ggml_cuda_poller_skip[w]) {
                 // too-hot card (fed by --poller-nvapi/--poller-warmup-fma): hold off this tick
             } else if (ms > 0 && (next_due[w] == std::chrono::steady_clock::time_point{} || now >= next_due[w])) {
-                int cuda_id = info.cuda_device_id[i];
-                if (cuda_id >= 0) {
-                    cudaSetDevice(cuda_id);
-                    ggml_cuda_poller_sync_tickle(i);
-                    next_due[w] = now + std::chrono::milliseconds(ms);
-                }
+                cudaSetDevice(i);
+                ggml_cuda_poller_sync_tickle(i);
+                next_due[w] = now + std::chrono::milliseconds(ms);
             }
             w++;
         }
@@ -976,8 +966,7 @@ static bool ggml_cuda_poller_ping_launch_w(int w, bool do_fma, bool do_mma, bool
     for (int i = 0; i < info.device_count; ++i) {
         if (info.devices[i].is_tcc) continue;
         if (ww == w) {
-            int cuda_id = info.cuda_device_id[i];
-            if (cuda_id < 0) return false;
+            const int cuda_id = i;
             // Per-half disable checks: FMA ping (--poller-ping-fma-amplitude 0), MMA ping
             // (--poller-ping-mma-amplitude 0), mem ping (--poller-ping-mem-amplitude 0). An
             // explicitly-disabled half is skipped; the other halves are unaffected.
@@ -1470,7 +1459,7 @@ GGML_CALL void ggml_backend_cuda_set_poller_activity_fma(const int * fmas, int n
             if (w < 0 || !ggml_cuda_poller_activity_fma_override[w] || ggml_cuda_poller_activity_fma[w] == 0) continue;
             std::lock_guard<std::mutex> lk(ggml_cuda_poller_launch_mtx);
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
-                cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
+                cudaSetDevice(i);
                 cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
             }
         }
@@ -1534,7 +1523,7 @@ GGML_CALL void ggml_backend_cuda_set_poller_activity_mma(const int * mmas, int n
             if (w < 0 || !ggml_cuda_poller_activity_mma_override[w] || ggml_cuda_poller_activity_mma[w] == 0) continue;
             std::lock_guard<std::mutex> lk(ggml_cuda_poller_launch_mtx);
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
-                cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
+                cudaSetDevice(i);
                 cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
             }
         }
@@ -1597,7 +1586,7 @@ GGML_CALL void ggml_backend_cuda_set_poller_activity_mem(const int * bursts, int
             const int w = ggml_cuda_wddm_pos(i);
             if (w < 0 || !ggml_cuda_poller_activity_mem_override[w] || ggml_cuda_poller_activity_mem[w] == 0) continue;
             std::lock_guard<std::mutex> lk(ggml_cuda_poller_launch_mtx);
-            cudaSetDevice(ggml_cuda_info().cuda_device_id[i]);
+            cudaSetDevice(i);
             if (ggml_cuda_poller_compute_streams[i] == nullptr) {
                 cudaStreamCreateWithFlags(&ggml_cuda_poller_compute_streams[i], cudaStreamNonBlocking);
             }

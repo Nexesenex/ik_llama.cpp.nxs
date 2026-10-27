@@ -895,6 +895,7 @@ struct ggml_cuda_device_info {
         size_t  vmm_granularity;    // granularity of virtual memory
         size_t  total_vram;
         bool    integrated;
+        bool    is_tcc;             // TCC driver mode (no WDDM pin quota)
     };
 
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
