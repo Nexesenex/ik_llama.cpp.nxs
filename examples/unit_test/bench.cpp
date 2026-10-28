@@ -546,7 +546,7 @@ int run(const Options & opt, std::vector<Result> & rows_out) {
                     else ok = iqk_moe_fused_up_gate(nrc_x, nrc_y, nn, nrc_y, (int)GGML_UNARY_OP_SILU,
                                                    (int)t, A.data(), A2.data(), (long)rA,
                                                    kBTypes[bi], B.data(), (long)rb, nullptr, nullptr, C.data(),
-                                                   (long)nrc_x * (long)sizeof(float), 0, map.data(), 0.f, 0, 1);
+                                                   (long)nrc_x * (long)sizeof(float), 0, map.data(), 0.f, 0.f, 0.f, 0, 1);
                     if (ok) { btype = kBTypes[bi]; rB = rb; break; }
                 }
                 if (btype < 0) {
@@ -569,7 +569,7 @@ int run(const Options & opt, std::vector<Result> & rows_out) {
                     iqk_moe_fused_up_gate(nrc_x, nrc_y, nn, nrc_y, (int)GGML_UNARY_OP_SILU,
                                           (int)t, A.data(), A2.data(), (long)rA,
                                           btype, B.data(), (long)rB, nullptr, nullptr, C.data(),
-                                          (long)nrc_x * (long)sizeof(float), 0, map.data(), 0.f, ith, nth);
+                                          (long)nrc_x * (long)sizeof(float), 0, map.data(), 0.f, 0.f, 0.f, ith, nth);
                 };
                 std::function<void()> fn = [&]() { run_mt(T, lock_cores, amask, have_mask, core); };
                 std::string path = "-";

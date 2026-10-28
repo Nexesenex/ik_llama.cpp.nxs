@@ -2258,7 +2258,7 @@ static void test_moe_fused_up_gate(int n, int nrc_x, int nrc_y, bool use_map = t
     bool ok = iqk_moe_fused_up_gate(nrc_x, nrc_y, n, nrc_y, (int)GGML_UNARY_OP_SILU,
             (int)GGML_TYPE_IQ4_XS_R8, Wup.data(), Wgate.data(), (long)bx_w,
             (int)GGML_TYPE_Q8_K32, B.data(), (long)bx_B,
-            nullptr, nullptr, C.data(), nb1, 0, use_map ? map.data() : nullptr, 0.f, 0, 1);
+            nullptr, nullptr, C.data(), nb1, 0, use_map ? map.data() : nullptr, 0.f, 0.f, 0.f, 0, 1);
     if (!ok) {
         printf("  [FAIL] moe-fused n=%-5d nrc_x=%-3d nrc_y=%d : fused call returned false\n",
                n, nrc_x, nrc_y);
@@ -2377,7 +2377,7 @@ static void test_moe_fused_up_gate_r16(int n, int nrc_x, int nrc_y) {
     bool ok = iqk_moe_fused_up_gate(nrc_x, nrc_y, n, nrc_y, (int)GGML_UNARY_OP_SILU,
             (int)GGML_TYPE_IQ4_XS_R8, Wup.data(), Wgate.data(), (long)bx_w,
             (int)GGML_TYPE_Q8_K32, B.data(), (long)bx_B,
-            nullptr, nullptr, C.data(), nb1, 0, map.data(), 0.f, 0, 1);
+            nullptr, nullptr, C.data(), nb1, 0, map.data(), 0.f, 0.f, 0.f, 0, 1);
     g_iqk_r16_path = saved_r16;
     if (!ok) {
         printf("  [FAIL] moe-fused-r16 n=%-5d nrc_x=%-3d nrc_y=%d : fused call returned false\n",
@@ -2534,7 +2534,7 @@ static void test_moe_fused_up_gate_preconv(int n, int nrc_x, int nrc_y) {
     bool ok = iqk_moe_fused_up_gate(nrc_x, nrc_y, n, nrc_y, (int)GGML_UNARY_OP_SILU,
             (int)GGML_TYPE_Q8_K_R8, Xu.data(), Xg.data(), (long)bx_q8,
             (int)GGML_TYPE_Q8_K32, B.data(), (long)bx_B,
-            nullptr, nullptr, C.data(), nb1, 0, map.data(), 0.f, 0, 1);
+            nullptr, nullptr, C.data(), nb1, 0, map.data(), 0.f, 0.f, 0.f, 0, 1);
     if (!ok) {
         printf("  [FAIL] moe-fused-preconv n=%-5d nrc_x=%-3d nrc_y=%d : fused call returned false\n",
                n, nrc_x, nrc_y);
