@@ -3,6 +3,8 @@
 #include "ggml-backend.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -26,6 +28,7 @@ public:
     ggml_tensor * get_experts(const ggml_tensor * tensor) const;
     bool copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst,
             ggml_cgraph * graph, ggml_backend_sched_copy_phase phase);
+    std::map<ggml_backend_buffer_type *, size_t> memory_breakdown() const;
 
     const ggml_moe_provider * provider() const;
     bool has_eligible_layers() const;
