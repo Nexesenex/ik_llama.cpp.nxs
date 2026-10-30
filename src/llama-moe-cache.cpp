@@ -166,6 +166,7 @@ struct llama_moe_cache::impl {
     uint32_t cpu_share_q16 = 0;
     double cpu_share = 0.0;
     bool token_geometry_maps = false;
+    int32_t requested_layers = 0;
     mutable size_t large_batch_skips = 0;
     mutable size_t incompatible_layer_skips = 0;
     bool periodic_enabled = false;
@@ -317,10 +318,10 @@ struct llama_moe_cache::impl {
     }
 
     impl(const llama_model & model, const std::vector<ggml_backend *> & backends,
-            const std::vector<ggml_backend_buffer_type *> & bufts, size_t size,
+            const std::vector<ggml_backend_buffer_type *> & bufts, size_t size, int32_t target_layers,
             enum llama_moe_cache_policy policy, float share)
             : n_expert_used(model.hparams.n_expert_used), n_expert(model.hparams.n_expert),
-              layers(model.layers.size()), requested_size(size), cpu_share(share) {
+              layers(model.layers.size()), requested_size(size), cpu_share(share), requested_layers(target_layers) {
         if (!llama_moe_cache_policy_detail::cpu_share_q16(share, cpu_share_q16)) {
             throw std::invalid_argument("MoE cache CPU share must be finite and in [0,1]");
         }
@@ -410,23 +411,58 @@ struct llama_moe_cache::impl {
 
         size_t host_layer_count = 0;
         std::vector<size_t> device_tensor_counts(devices.size(), 0);
-        for (group & g : groups) {
+        std::vector<size_t> layer_allocs(groups.size(), 0);
+        if (requested_layers > 0) {
+            std::vector<size_t> device_layer_counts(devices.size(), 0);
+            for (const group & g : groups) device_layer_counts[g.device] += g.layers.size();
+            std::vector<double> weights(groups.size(), 0.0);
+            std::vector<size_t> capacities(groups.size(), 0);
+            size_t total_layers = 0;
+            for (size_t ig = 0; ig < groups.size(); ++ig) {
+                const group & g = groups[ig];
+                const device & d = devices[g.device];
+                capacities[ig] = g.layers.size();
+                total_layers += capacities[ig];
+                const size_t device_layers = device_layer_counts[g.device];
+                weights[ig] = device_layers ?
+                        (d.split / split_sum) * ((double) g.layers.size() / device_layers) : 0.0;
+            }
+            if ((size_t) requested_layers > total_layers) {
+                LLAMA_LOG_WARN("%s: requested %d cache layers but only %zu host-resident layers are eligible\n",
+                        __func__, requested_layers, total_layers);
+            }
+            layer_allocs = llama_moe_cache_detail::layer_allocations(
+                    (size_t) requested_layers, weights, capacities);
+        }
+        for (size_t ig = 0; ig < groups.size(); ++ig) {
+            group & g = groups[ig];
             const device & d = devices[g.device];
             const size_t budget = (size_t) ((double) size * d.split / split_sum * g.host_bytes / d.host_bytes);
             const int32_t n_expert = (int32_t) g.ref[0]->ne[2];
             const int32_t max_slots = (int32_t) std::min<size_t>(INT32_MAX, g.layers.size() * (size_t) n_expert);
+            const int32_t layer_slots = (int32_t) std::min<size_t>((size_t) max_slots, layer_allocs[ig] * (size_t) n_expert);
             if (cpu_share_q16 != 0 && n_expert_used <= llama_moe_cache_policy_detail::state::max_zero_slots) {
                 g.zero_slots = n_expert_used;
-                while (g.n_slots < max_slots && alloc_size(g, g.n_slots + 1, g.zero_slots) <= budget) ++g.n_slots;
+                if (requested_layers > 0) {
+                    g.n_slots = layer_slots;
+                } else {
+                    while (g.n_slots < max_slots && alloc_size(g, g.n_slots + 1, g.zero_slots) <= budget) ++g.n_slots;
+                }
                 g.cpu_share_enabled = g.n_slots >= n_expert_used;
             }
             if (!g.cpu_share_enabled) {
                 g.zero_slots = 0;
-                g.n_slots = 0;
-                while (g.n_slots < max_slots && alloc_size(g, g.n_slots + 1, 0) <= budget) ++g.n_slots;
+                if (requested_layers > 0) {
+                    g.n_slots = layer_slots;
+                } else {
+                    g.n_slots = 0;
+                    while (g.n_slots < max_slots && alloc_size(g, g.n_slots + 1, 0) <= budget) ++g.n_slots;
+                }
             }
             if (g.n_slots < n_expert_used) {
-                LLAMA_LOG_WARN("%s: cache budget leaves %zu expert layers uncached because they cannot hold one token\n", __func__, g.layers.size());
+                if (requested_layers == 0) {
+                    LLAMA_LOG_WARN("%s: cache budget leaves %zu expert layers uncached because they cannot hold one token\n", __func__, g.layers.size());
+                }
                 g.n_slots = 0;
                 continue;
             }
@@ -1119,8 +1155,17 @@ struct llama_moe_cache::impl {
         };
         size_t actual_size = buf_host_size;
         for (const device & d : devices) actual_size += d.buffer_size;
-        LLAMA_LOG_INFO("llama_moe_cache: requested %.2f MiB, allocated %.2f MiB\n",
-                requested_size / 1048576.0, actual_size / 1048576.0);
+        if (requested_layers > 0) {
+            size_t allocated_layers = 0;
+            for (const group & g : groups) {
+                if (g.n_slots > 0) allocated_layers += (size_t) g.n_slots / (size_t) g.ref[0]->ne[2];
+            }
+            LLAMA_LOG_INFO("llama_moe_cache: requested %d layer(s), allocated %zu layer(s) using %.2f MiB\n",
+                    requested_layers, allocated_layers, actual_size / 1048576.0);
+        } else {
+            LLAMA_LOG_INFO("llama_moe_cache: requested %.2f MiB, allocated %.2f MiB\n",
+                    requested_size / 1048576.0, actual_size / 1048576.0);
+        }
         log("ubatch <= 8", stats_small);
         log("ubatch 9-32", stats_large);
         if (large_batch_skips || incompatible_layer_skips) {
@@ -1132,9 +1177,9 @@ struct llama_moe_cache::impl {
 
 llama_moe_cache::llama_moe_cache(const llama_model & model,
         const std::vector<ggml_backend *> & backends,
-        const std::vector<ggml_backend_buffer_type *> & bufts, size_t size,
+        const std::vector<ggml_backend_buffer_type *> & bufts, size_t size, int32_t layers,
         enum llama_moe_cache_policy policy, float cpu_share)
-        : pimpl(new impl(model, backends, bufts, size, policy, cpu_share)) {}
+        : pimpl(new impl(model, backends, bufts, size, layers, policy, cpu_share)) {}
 
 llama_moe_cache::~llama_moe_cache() = default;
 

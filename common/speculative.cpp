@@ -2027,6 +2027,7 @@ void common_speculative_reset_draft_offload_defaults(gpt_params & params) {
     params.tensor_buft_overrides.clear();
     params.offload_policy.clear();
     params.moe_cache_size = 0;
+    params.moe_cache_layers = 0;
     params.ngram_file.clear();
 }
 
@@ -2168,6 +2169,7 @@ bool common_speculative_load_draft_model(
     params.model_dft = loaded_model;
     params.cparams_dft = common_context_params_to_llama(params_dft);
     params.cparams_dft.moe_cache_size = 0;
+    params.cparams_dft.moe_cache_layers = 0;
     params.cparams_dft.moe_cache_async = false;
     params.cuda_params = params_dft.cuda_params;
     params.offload_policy = params_dft.offload_policy;
@@ -2232,6 +2234,7 @@ bool common_speculative_prepare_mtp_runtime(
         LOG_INF("%s: embedded MTP companion uses n_ctx=%d, n_batch=%d, n_ubatch=%d\n",
                 __func__, params.cparams_dft.n_ctx, params.cparams_dft.n_batch, params.cparams_dft.n_ubatch);
         params.cparams_dft.moe_cache_size = 0;
+        params.cparams_dft.moe_cache_layers = 0;
         params.cparams_dft.moe_cache_async = false;
         params.cuda_params = params_mtp.cuda_params;
         params.offload_policy = params_mtp.offload_policy;

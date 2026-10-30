@@ -139,6 +139,24 @@ static bool check_cpu_share_plan() {
     return true;
 }
 
+static bool check_layers(const char * name, size_t layers,
+        const std::vector<double> & weights, const std::vector<size_t> & capacities,
+        const std::vector<size_t> & expected) {
+    const auto actual = llama_moe_cache_detail::layer_allocations(layers, weights, capacities);
+    if (actual.size() != expected.size()) {
+        std::fprintf(stderr, "%s: layer allocation count mismatch\n", name);
+        return false;
+    }
+    for (size_t i = 0; i < actual.size(); ++i) {
+        if (actual[i] != expected[i]) {
+            std::fprintf(stderr, "%s: layer allocation %zu was %zu, expected %zu\n",
+                    name, i, actual[i], expected[i]);
+            return false;
+        }
+    }
+    return true;
+}
+
 int main() {
     bool ok = true;
     if (!check_cache_policy()) { std::fprintf(stderr, "cache policy regression failed\n"); ok = false; }
@@ -166,5 +184,13 @@ int main() {
     ok &= check("zero fallback", {0.0f, 0.0f}, {true, true}, {0.5, 0.5});
     ok &= check("ineligible device", {0.25f, 1.0f}, {false, true}, {0.0, 1.0});
     ok &= check("fallback with ineligible device", {0.0f, 0.0f}, {true, false}, {1.0, 0.0});
+
+    ok &= check_layers("layers equal", 4, {0.5, 0.5}, {8, 8}, {2, 2});
+    ok &= check_layers("layers asymmetric", 8, {0.25, 0.75}, {10, 10}, {2, 6});
+    ok &= check_layers("layers largest remainder", 3, {0.5, 0.5}, {10, 10}, {2, 1});
+    ok &= check_layers("layers spill past capacity", 5, {0.9, 0.1}, {1, 10}, {1, 4});
+    ok &= check_layers("layers capped by total", 100, {1.0, 1.0}, {3, 4}, {3, 4});
+    ok &= check_layers("layers skip zero weight", 3, {0.0, 1.0}, {5, 5}, {0, 3});
+    ok &= check_layers("layers equal fallback", 3, {0.0, 0.0}, {2, 2}, {2, 1});
     return ok ? 0 : 1;
 }

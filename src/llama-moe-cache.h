@@ -76,6 +76,7 @@ public:
             const std::vector<ggml_backend *> & backends,
             const std::vector<ggml_backend_buffer_type *> & bufts,
             size_t size,
+            int32_t layers,
             enum llama_moe_cache_policy policy,
             float cpu_share);
     ~llama_moe_cache();

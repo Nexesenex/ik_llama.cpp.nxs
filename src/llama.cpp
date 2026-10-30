@@ -9891,6 +9891,7 @@ struct llama_context_params llama_context_default_params() {
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.moe_cache_size              =*/ 0,
+        /*.moe_cache_layers            =*/ 0,
         /*.moe_cache_policy            =*/ LLAMA_MOE_CACHE_POLICY_LRU,
         /*.moe_cache_cpu_share         =*/ 0.0f,
         /*.idx_type_k                  =*/ GGML_TYPE_F16,
@@ -10464,8 +10465,8 @@ struct llama_context * llama_init_from_model(
         return nullptr;
     }
 
-    if (params.moe_cache_async && params.moe_cache_size == 0) {
-        LLAMA_LOG_ERROR("%s: --moe-cache-async requires a nonzero --moe-cache-mib budget\n", __func__);
+    if (params.moe_cache_layers < 0) {
+        LLAMA_LOG_ERROR("%s: MoE cache layer count cannot be negative\n", __func__);
         return nullptr;
     }
 #ifndef GGML_USE_CUDA
@@ -10475,7 +10476,19 @@ struct llama_context * llama_init_from_model(
     }
 #endif
 
-    if (params.moe_cache_size > 0) {
+    if (params.moe_cache_size > 0 && params.moe_cache_layers > 0) {
+        LLAMA_LOG_ERROR("%s: --moe-cache-mib and --moe-cache-layers are mutually exclusive\n", __func__);
+        return nullptr;
+    }
+
+    const bool moe_cache_requested = params.moe_cache_size > 0 || params.moe_cache_layers > 0;
+
+    if (params.moe_cache_async && !moe_cache_requested) {
+        LLAMA_LOG_ERROR("%s: --moe-cache-async requires a nonzero --moe-cache-mib budget or --moe-cache-layers\n", __func__);
+        return nullptr;
+    }
+
+    if (moe_cache_requested) {
         if (model->fit) {
             LLAMA_LOG_ERROR("%s: MoE cache cannot be combined with --fit because fit does not reserve context-time cache memory\n", __func__);
             return nullptr;
@@ -10717,6 +10730,7 @@ struct llama_context * llama_init_from_model(
     cparams.shark_callback_data = params.shark_callback_data;
     cparams.mtp              = params.mtp;
     cparams.moe_cache_size   = params.moe_cache_size;
+    cparams.moe_cache_layers = params.moe_cache_layers;
     cparams.moe_cache_policy = params.moe_cache_policy;
     cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
     cparams.moe_cache_async  = params.moe_cache_async;
@@ -11268,7 +11282,7 @@ struct llama_context * llama_init_from_model(
                 model->n_gpu_layers > (int)model->hparams.n_layer &&
                 model->split_mode == LLAMA_SPLIT_MODE_LAYER &&
                 params.offload_kqv && !model->has_tensor_overrides();
-            pipeline_parallel = pipeline_parallel && params.moe_cache_size == 0;
+            pipeline_parallel = pipeline_parallel && !moe_cache_requested;
 #ifndef GGML_USE_CUDA
             // pipeline parallelism requires support for async compute and events
             // currently this is only implemented in the CUDA backend
@@ -11299,10 +11313,10 @@ struct llama_context * llama_init_from_model(
                 }
             };
 
-            if (cparams.moe_cache_size > 0) {
+            if (cparams.moe_cache_size > 0 || cparams.moe_cache_layers > 0) {
                 try {
                     ctx->moe_cache = std::make_unique<llama_moe_cache>(*model, ctx->backends, backend_buft,
-                            cparams.moe_cache_size, cparams.moe_cache_policy, cparams.moe_cache_cpu_share);
+                            cparams.moe_cache_size, cparams.moe_cache_layers, cparams.moe_cache_policy, cparams.moe_cache_cpu_share);
                     install_moe_cache_execution();
                 } catch (const std::exception & e) {
                     LLAMA_LOG_ERROR("%s: failed to initialize MoE cache: %s\n", __func__, e.what());
