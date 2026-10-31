@@ -150,7 +150,8 @@ struct MulMat {
             if (info.cur_y == nrc_y) return;
         }
         int ny = funcs.size();
-        while (!funcs[ny-1] && ny > 0) --ny;
+        while (ny > 0 && !funcs[ny-1]) --ny;
+        if (ny == 0) return;
         int n_left = nrc_y - info.cur_y;
         int n_step = n_left/ny;
         if (n_step > 0) {
@@ -309,7 +310,8 @@ struct MulMat {
             if (info.cur_y == nrc_y) return;
         }
         int ny = funcs.size();
-        while (!funcs[ny-1] && ny > 0) --ny;
+        while (ny > 0 && !funcs[ny-1]) --ny;
+        if (ny == 0) return;
         int n_left = nrc_y - info.cur_y;
         int n_step = n_left/ny;
         if (n_step > 0) {
@@ -1316,6 +1318,12 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
 
     (void)Ny;
 
+    // A type may be routed here while the kernel itself is compiled out for
+    // this ISA (e.g. GGML_TYPE_Q8_K_R16 on a build without FANCY_SIMD/VNNI).
+    // iqk_set_kernels_* then reports success with an empty funcs array, which
+    // used to make mul_mat_NxM walk off the front of funcs and divide by zero.
+    // Only report success when at least one kernel was actually installed.
+    bool ok = [&]() -> bool {
     switch (typeA) {
         case GGML_TYPE_F8_E4M3_KS:
         case GGML_TYPE_F8_E4M3_B128:
@@ -1424,6 +1432,8 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
     }
 
     return false;
+    }();
+    return ok && (mm.func16 != nullptr || mm.funcs[0] != nullptr);
 }
 
 } // namespace
@@ -1435,6 +1445,9 @@ namespace {
 
 bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
 
+    // See the x86_64 overload: a routed type may have no kernel for this ISA,
+    // in which case iqk_set_kernels_* returns true with an empty funcs array.
+    bool ok = [&]() -> bool {
     switch (typeA) {
         case GGML_TYPE_F8_E4M3_KS:
         case GGML_TYPE_F8_E4M3_B128:
@@ -1538,6 +1551,9 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             return false;
     }
 
+    return false;
+    }();
+    return ok && (m.func16 != nullptr || m.funcs[0] != nullptr);
 }
 
 }

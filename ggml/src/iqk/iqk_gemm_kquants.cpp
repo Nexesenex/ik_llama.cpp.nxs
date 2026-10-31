@@ -4607,21 +4607,11 @@ bool iqk_set_kernels_kquants([[maybe_unused]] int ne00, int typeA, int typeB, st
             break;
 #if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
         case GGML_TYPE_Q8_K_R16:
-#if defined(HAVE_FANCY_SIMD)
             if (ne00 % QK_K == 0) {
                 IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_q8_k_r16_q8_k, false, kernels)
             } else {
                 IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_q8_k_r16_q8_k, true, kernels)
             }
-#else
-            if (g_iqk_r16_path) {
-                if (ne00 % QK_K == 0) {
-                    IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_q8_k_r16_q8_k, false, kernels)
-                } else {
-                    IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_q8_k_r16_q8_k, true, kernels)
-                }
-            }
-#endif
             break;
 #endif
         case GGML_TYPE_Q8_KV:
