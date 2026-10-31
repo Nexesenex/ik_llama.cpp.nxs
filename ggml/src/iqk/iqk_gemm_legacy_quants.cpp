@@ -2853,7 +2853,7 @@ void iqk_convert_iq5_ks_r16_q8_k_r8(int n, const void * vx, size_t bx, void * vy
 }
 
 #else
-template <typename Dequant, int nrc_y>
+template <typename Dequant, bool use_vnni, int nrc_y>
 static void mul_mat_iqX_ks_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x % 16 == 0);
     Q8<nrc_y, block_q8_2_x4> q8(info);
@@ -2863,6 +2863,16 @@ static void mul_mat_iqX_ks_r16_q8_2(int n, const void * vx, size_t bx, const Dat
     __m256i m1 = _mm256_set1_epi16(1);
     __m256  d4, scales, shifts;
     auto dot = [&m1, &qx] (const int8_t * y) {
+#ifdef HAVE_VNNI256
+        if constexpr (use_vnni) {
+            auto sumi = _mm256_setzero_si256();
+            for (int j = 0; j < 8; ++j) {
+                sumi = ggml_mm256_dpbusd_epi32(sumi, qx[j], _mm256_set1_epi32(*((const int32_t *)(y + 4*j))));
+            }
+            return sumi;
+        } else
+#endif
+        {
         auto s0 = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[0], qx[0]), _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(y +  0))), qx[0]));
         auto s1 = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[1], qx[1]), _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(y +  4))), qx[1]));
         auto sumi1 = _mm256_add_epi32(_mm256_madd_epi16(m1, s0), _mm256_madd_epi16(m1, s1));
@@ -2878,6 +2888,7 @@ static void mul_mat_iqX_ks_r16_q8_2(int n, const void * vx, size_t bx, const Dat
         sumi1 = _mm256_add_epi32(sumi1, sumi2);
         sumi3 = _mm256_add_epi32(sumi3, sumi4);
         return _mm256_add_epi32(sumi1, sumi3);
+        }
     };
     __m256 acc[nrc_y] = {};
     float d8[8*nrc_y];
@@ -2922,13 +2933,23 @@ static void mul_mat_iqX_ks_r16_q8_2(int n, const void * vx, size_t bx, const Dat
 
 struct DequantIQ4KS {
     using type = block_iq4_ks_r16;
+#ifdef HAVE_VNNI256
+    // vpdpbusd takes an unsigned A operand: bias the signed iq4k LUT by +128
+    // and compensate with -128*scales folded into the shift term below.
+    const __m256i table = _mm256_xor_si256(MM256_SET1_M128I(_mm_loadu_si128((const __m128i *)iq4k_values)), _mm256_set1_epi8(-128));
+#else
     const __m256i table = MM256_SET1_M128I(_mm_loadu_si128((const __m128i *)iq4k_values));
+#endif
     const __m256i m4    = _mm256_set1_epi8(0xf);
     inline void prepare_block(const type & b, int ip, const __m256 & d4, __m256 & scales, __m256 & shifts, __m256i * qx) {
         auto iscales = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(b.scales+8*ip)));
         auto ishifts = _mm256_slli_epi32(_mm256_and_si256(iscales, _mm256_set1_epi32(1)), 2);
         scales = _mm256_mul_ps(d4, _mm256_cvtepi32_ps(_mm256_add_epi32(_mm256_and_si256(iscales, _mm256_set1_epi32(254)), _mm256_set1_epi32(-127))));
+#ifdef HAVE_VNNI256
+        shifts = _mm256_mul_ps(scales, _mm256_cvtepi32_ps(_mm256_sub_epi32(ishifts, _mm256_set1_epi32(128))));
+#else
         shifts = _mm256_mul_ps(scales, _mm256_cvtepi32_ps(ishifts));
+#endif
         for (int j = 0; j < 4; ++j) {
             auto bits = _mm256_loadu_si256((const __m256i *)(b.qs + 64*j + 32*ip));
             qx[j+0] = _mm256_shuffle_epi8(table, _mm256_and_si256(bits, m4));
@@ -2972,12 +2993,16 @@ struct DequantIQ5KS {
 
 template <int nrc_y>
 static void mul_mat_iq4_ks_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    mul_mat_iqX_ks_r16_q8_2<DequantIQ4KS, nrc_y>(n, vx, bx, info, nrc_x);
+#ifdef HAVE_VNNI256
+    mul_mat_iqX_ks_r16_q8_2<DequantIQ4KS, true, nrc_y>(n, vx, bx, info, nrc_x);
+#else
+    mul_mat_iqX_ks_r16_q8_2<DequantIQ4KS, false, nrc_y>(n, vx, bx, info, nrc_x);
+#endif
 }
 
 template <int nrc_y>
 static void mul_mat_iq5_ks_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    mul_mat_iqX_ks_r16_q8_2<DequantIQ5KS, nrc_y>(n, vx, bx, info, nrc_x);
+    mul_mat_iqX_ks_r16_q8_2<DequantIQ5KS, false, nrc_y>(n, vx, bx, info, nrc_x);
 }
 #endif
 
