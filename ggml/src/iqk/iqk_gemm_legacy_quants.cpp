@@ -3937,6 +3937,153 @@ static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, co
 }
 #endif
 
+#ifdef HAVE_VNNI256
+// AVX2 + AVX-VNNI variant of the iq3_ks_r16 gemm. Mirrors the AVX-512
+// kernel's math (signed iq3nl LUT biased by +64 so vpdpbusd can consume it
+// as unsigned bytes, with the 64*sum(B) bias correction folded in) but on
+// 256-bit registers. Q8_0_X4 activations carry no precomputed sum term, so
+// the activation byte sum is computed explicitly per 32-column group.
+// The Q8_0_X4 / Q8_2_X4 activation split is preserved: this kernel is only
+// used on non-FANCY VNNI builds, where typeB == GGML_TYPE_Q8_0_X4.
+template <int nrc_y>
+static void mul_mat_iq3ks_r16_q8_0_x4_avx2_vnni(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x % 16 == 0);
+    GGML_ASSERT(n % 32 == 0);
+    Q8<nrc_y, block_q8_0_x4> q8(info);
+    const int nbl = n / 32;
+    const int nb4 = nbl / 4;
+
+    // iq3nl_values biased by +64: all entries become positive (1..115), safe
+    // for vpdpbusd's unsigned A operand. The +64*sum(B) bias is removed below.
+    const __m256i values_biased = _mm256_add_epi8(_mm256_set1_epi8(64),
+        MM256_SET1_M128I(_mm_loadu_si128((const __m128i *)iq3nl_values)));
+    const __m256i m3   = _mm256_set1_epi32(0x03030303);
+    const __m256i m4h  = _mm256_set1_epi32(0x04040404);
+    const __m256i one  = _mm256_set1_epi32(1);
+    const __m256i sixteen = _mm256_set1_epi32(16);
+    const __m256i ones16 = _mm256_set1_epi16(1);
+    const __m256i cnt_s0 = _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+    const __m256i cnt_s1 = _mm256_set_epi32(15, 14, 13, 12, 11, 10, 9, 8);
+    const __m256i cnt_p0 = _mm256_set_epi32(23, 22, 21, 20, 19, 18, 17, 16);
+    const __m256i cnt_p1 = _mm256_set_epi32(31, 30, 29, 28, 27, 26, 25, 24);
+    const __m256i pgmask = _mm256_set1_epi32(0x08080808);
+
+    float d8[4 * nrc_y];
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        const float * dptr = (const float *)((const char *)vx + ix * bx);
+        const block_iq3_ks_r16 * iq3 = (const block_iq3_ks_r16 *)(dptr + 16);
+        for (int half = 0; half < 2; ++half) {
+            __m256 acc[nrc_y];
+            for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm256_setzero_ps();
+            const float * dh = dptr + 8 * half;
+            for (int ib4 = 0; ib4 < nb4; ++ib4) {
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    _mm_storeu_ps(d8 + 4 * iy, _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)q8.y[iy][ib4].d)));
+                }
+                for (int k = 0; k < 4; ++k) {
+                    const int ib = 4 * ib4 + k;
+                    uint32_t extra = iq3[ib].extra;
+                    const __m128i sc = _mm_loadl_epi64((const __m128i *)iq3[ib].scales);
+                    const __m128i nib = half == 0 ? _mm_and_si128(sc, _mm_set1_epi8(0x0f))
+                                                  : _mm_and_si128(_mm_srli_epi16(sc, 4), _mm_set1_epi8(0x0f));
+                    const __m256i e = _mm256_set1_epi32((int)extra);
+                    const __m256i ul = _mm256_or_si256(_mm256_cvtepu8_epi32(nib),
+                        _mm256_slli_epi32(_mm256_and_si256(_mm256_srlv_epi32(e, half == 0 ? cnt_s0 : cnt_s1), one), 4));
+                    const __m256 dl = _mm256_mul_ps(_mm256_loadu_ps(dh),
+                        _mm256_cvtepi32_ps(_mm256_sub_epi32(ul, sixteen)));
+
+                    const __m256i qA = _mm256_loadu_si256((const __m256i *)(iq3[ib].qs + 32 * half));
+                    const __m256i qB = _mm256_loadu_si256((const __m256i *)(iq3[ib].qs + 32 * half + 64));
+                    const __m256i hA = _mm256_loadu_si256((const __m256i *)(iq3[ib].qh + 32 * half));
+                    const __m256i hA4 = _mm256_slli_epi32(hA, 2);
+                    const __m256i hB4 = _mm256_slli_epi32(_mm256_srli_epi32(hA, 4), 2);
+
+                    __m256i vA[4], vB[4];
+                    for (int p = 0; p < 4; ++p) {
+                        const __m256i iA = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi32(qA, 2 * p), m3),
+                            _mm256_and_si256(_mm256_slli_epi32(hA4, p), m4h));
+                        const __m256i iB = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi32(qB, 2 * p), m3),
+                            _mm256_and_si256(_mm256_slli_epi32(hB4, p), m4h));
+                        vA[p] = _mm256_shuffle_epi8(values_biased, iA);
+                        vB[p] = _mm256_shuffle_epi8(values_biased, iB);
+                    }
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        const int8_t * yqs = q8.y[iy][ib4].qs + 32 * k;
+                        const float yd = d8[4 * iy + k];
+                        // signed sum of the 32 activation bytes (for the +64 bias correction)
+                        __m128i ys_lo = _mm_loadu_si128((const __m128i *)yqs + 0);
+                        __m128i ys_hi = _mm_loadu_si128((const __m128i *)yqs + 16);
+                        const __m256i ps = _mm256_add_epi32(
+                            _mm256_madd_epi16(_mm256_cvtepi8_epi16(ys_lo), ones16),
+                            _mm256_madd_epi16(_mm256_cvtepi8_epi16(ys_hi), ones16));
+                        const int ysum = hsum_i32_8(ps);
+                        const __m256 corr = _mm256_set1_ps(-64.f * (float)ysum * yd);
+                        __m256i sum = _mm256_setzero_si256();
+                        for (int p = 0; p < 4; ++p) {
+                            const __m256i yS = _mm256_set1_epi32(*(const int32_t *)(yqs + 4 * p));
+                            const __m256i yT = _mm256_set1_epi32(*(const int32_t *)(yqs + 16 + 4 * p));
+                            sum = _mm256_add_epi32(sum, ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), vA[p], yS));
+                            sum = _mm256_add_epi32(sum, ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), vB[p], yT));
+                        }
+                        acc[iy] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(sum), _mm256_mul_ps(dl, _mm256_set1_ps(yd)), acc[iy]);
+                        acc[iy] = _mm256_fmadd_ps(corr, dl, acc[iy]);
+                    }
+                }
+            }
+            // tail: nbl % 4 != 0 (n % 128 != 0)
+            for (int ib = 4 * nb4; ib < nbl; ++ib) {
+                uint32_t extra = iq3[ib].extra;
+                const block_q8_0_x4 * y4 = (const block_q8_0_x4 *)q8.y[0] + ib / 4;
+                const int g = ib & 3;
+                const __m128i sc = _mm_loadl_epi64((const __m128i *)iq3[ib].scales);
+                const __m128i nib = half == 0 ? _mm_and_si128(sc, _mm_set1_epi8(0x0f))
+                                              : _mm_and_si128(_mm_srli_epi16(sc, 4), _mm_set1_epi8(0x0f));
+                const __m256i e = _mm256_set1_epi32((int)extra);
+                const __m256i ul = _mm256_or_si256(_mm256_cvtepu8_epi32(nib),
+                    _mm256_slli_epi32(_mm256_and_si256(_mm256_srlv_epi32(e, half == 0 ? cnt_s0 : cnt_s1), one), 4));
+                const __m256 dl = _mm256_mul_ps(_mm256_loadu_ps(dh),
+                    _mm256_cvtepi32_ps(_mm256_sub_epi32(ul, sixteen)));
+                const __m256i qA = _mm256_loadu_si256((const __m256i *)(iq3[ib].qs + 32 * half));
+                const __m256i qB = _mm256_loadu_si256((const __m256i *)(iq3[ib].qs + 32 * half + 64));
+                const __m256i hA = _mm256_loadu_si256((const __m256i *)(iq3[ib].qh + 32 * half));
+                const __m256i hA4 = _mm256_slli_epi32(hA, 2);
+                const __m256i hB4 = _mm256_slli_epi32(_mm256_srli_epi32(hA, 4), 2);
+                __m256i vA[4], vB[4];
+                for (int p = 0; p < 4; ++p) {
+                    const __m256i iA = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi32(qA, 2 * p), m3),
+                        _mm256_and_si256(_mm256_slli_epi32(hA4, p), m4h));
+                    const __m256i iB = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi32(qB, 2 * p), m3),
+                        _mm256_and_si256(_mm256_slli_epi32(hB4, p), m4h));
+                    vA[p] = _mm256_shuffle_epi8(values_biased, iA);
+                    vB[p] = _mm256_shuffle_epi8(values_biased, iB);
+                }
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    const int8_t * yqs = y4->qs + 32 * g;
+                    const float yd = GGML_FP16_TO_FP32(y4->d[g]);
+                    __m128i ys_lo = _mm_loadu_si128((const __m128i *)yqs + 0);
+                    __m128i ys_hi = _mm_loadu_si128((const __m128i *)yqs + 16);
+                    const __m256i ps = _mm256_add_epi32(
+                        _mm256_madd_epi16(_mm256_cvtepi8_epi16(ys_lo), ones16),
+                        _mm256_madd_epi16(_mm256_cvtepi8_epi16(ys_hi), ones16));
+                    const int ysum = hsum_i32_8(ps);
+                    const __m256 corr = _mm256_set1_ps(-64.f * (float)ysum * yd);
+                    __m256i sum = _mm256_setzero_si256();
+                    for (int p = 0; p < 4; ++p) {
+                        const __m256i yS = _mm256_set1_epi32(*(const int32_t *)(yqs + 4 * p));
+                        const __m256i yT = _mm256_set1_epi32(*(const int32_t *)(yqs + 16 + 4 * p));
+                        sum = _mm256_add_epi32(sum, ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), vA[p], yS));
+                        sum = _mm256_add_epi32(sum, ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), vB[p], yT));
+                    }
+                    acc[iy] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(sum), _mm256_mul_ps(dl, _mm256_set1_ps(yd)), acc[iy]);
+                    acc[iy] = _mm256_fmadd_ps(corr, dl, acc[iy]);
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) info.store(ix + 8 * half, iy, acc[iy]);
+        }
+    }
+}
+#endif
+
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
 static void mul_mat_iq3ks_r16_q8_2_x4_avx512(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
@@ -4039,11 +4186,13 @@ static void mul_mat_iq3ks_r16_q8_2_x4_avx512(int n, const void * vx, size_t bx, 
 }
 #endif
 
-// dispatcher: AVX512 when available, AVX2 next, portable scalar otherwise.
+// dispatcher: AVX512 when available, AVX2+VNNI next, AVX2 next, portable scalar otherwise.
 template <int nrc_y>
 static void mul_mat_iq3ks_r16_q8_0_x4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
 #ifdef HAVE_FANCY_SIMD
     mul_mat_iq3ks_r16_q8_2_x4_avx512<nrc_y>(n, vx, bx, info, nrc_x);
+#elif defined(HAVE_VNNI256)
+    mul_mat_iq3ks_r16_q8_0_x4_avx2_vnni<nrc_y>(n, vx, bx, info, nrc_x);
 #elif defined(__AVX2__)
     mul_mat_iq3ks_r16_q8_0_x4_avx2<nrc_y>(n, vx, bx, info, nrc_x);
 #else
