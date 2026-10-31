@@ -2576,6 +2576,54 @@ static void mul_mat_q8_0_r16_q8_2(int n, const void * vx, size_t bx, const DataI
     q8_0_r16_main<nrc_y>(nb, nb4, vx, bx, info, nrc_x, tab, yc, yn);
 }
 
+#if defined(HAVE_VNNI256) && !defined(HAVE_FANCY_SIMD)
+// AVX2 + AVX-VNNI kernel for GGML_TYPE_Q8_0_R16 weights (16 rows x QK8_0=32
+// columns, per-row float scale, quants stored biased by +128) times Q8_0
+// activations (single 32-column block, ggml_half scale + signed int8 quants).
+// Mirrors the AVX-512 q8_0_r16 gemm math: dpbusd accumulates (w+128)*a, and the
+// 128*sum(a) bias is removed with an explicit per-block activation byte sum
+// (Q8_0 activations carry no precomputed m term).
+template <int nrc_y>
+static void mul_mat_q8_0_r16_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x % 16 == 0);
+    GGML_ASSERT(n % QK8_0 == 0);
+    Q8<nrc_y, block_q8_0> q8(info);
+    const int nbl = n / QK8_0;
+    const __m256i ones16 = _mm256_set1_epi16(1);
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        const block_q8_0_r16 * xb = (const block_q8_0_r16 *)((const char *)vx + ix*bx);
+        float acc[16][nrc_y];
+        for (int k = 0; k < 16; ++k) {
+            for (int iy = 0; iy < nrc_y; ++iy) acc[k][iy] = 0.f;
+        }
+        for (int ibl = 0; ibl < nbl; ++ibl) {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                const __m256i qy = _mm256_loadu_si256((const __m256i *)q8.y[iy][ibl].qs);
+                // signed sum of the 32 activation bytes (for the +128 bias correction)
+                const __m128i lo = _mm256_castsi256_si128(qy);
+                const __m128i hi = _mm256_extracti128_si256(qy, 1);
+                const __m256i ps = _mm256_add_epi32(
+                    _mm256_madd_epi16(_mm256_cvtepi8_epi16(lo), ones16),
+                    _mm256_madd_epi16(_mm256_cvtepi8_epi16(hi), ones16));
+                const int ysum = hsum_i32_8(ps);
+                const float bd = GGML_FP16_TO_FP32(q8.y[iy][ibl].d);
+                const float bd128 = bd * 128.f * (float)ysum;
+                for (int k = 0; k < 16; ++k) {
+                    const __m256i qx = _mm256_loadu_si256((const __m256i *)(xb->qs + 32*k));
+                    const int s = hsum_i32_8(ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), qx, qy));
+                    acc[k][iy] += xb->d[k] * bd * (float)s - xb->d[k] * bd128;
+                }
+            }
+        }
+        for (int k = 0; k < 16; ++k) {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                info.store(ix + k, iy, acc[k][iy]);
+            }
+        }
+    }
+}
+#endif
+
 #else
 template <int nrc_y>
 static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
@@ -4533,9 +4581,14 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
         case GGML_TYPE_Q8_0_R8:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_0_r8_q8_2, kernels)
             break;
-#ifdef HAVE_FANCY_SIMD
+#if defined(HAVE_FANCY_SIMD)
         case GGML_TYPE_Q8_0_R16:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_0_r16_q8_2, kernels)
+            break;
+#elif defined(HAVE_VNNI256)
+        case GGML_TYPE_Q8_0_R16:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_0_r16_q8_0, kernels)
+            expected_typeB = GGML_TYPE_Q8_0;
             break;
 #endif
         case GGML_TYPE_IQ4_NL_R4:
