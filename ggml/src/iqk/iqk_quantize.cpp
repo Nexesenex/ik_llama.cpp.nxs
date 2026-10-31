@@ -15,7 +15,6 @@
 #include "iqk_config.h"
 #include "iqk_common.h"
 
-extern bool g_iqk_r16_path;
 extern bool g_iqk_repack_iq4_xs_r16;
 
 #include "iqk_gemm_ktquants.h"
@@ -9280,22 +9279,28 @@ static void repack_q16_k(int nrows, int n_per_row, const block_q8_K * x, block_q
                     for (int i = 0; i < 4; ++i) y[ibl].qs[64*ib + 4*k + i] = x16[k][ibl].qs[4*ib+i];
                 }
             }
-#if defined(HAVE_FANCY_SIMD) || defined(HAVE_VNNI256) || defined(HAVE_VNNIINT8)
+            // block_q8_k_r16 stores qs as unsigned bytes biased by +128. The
+            // R16 GEMM kernels consume them with vpdpbusd (unsigned A x signed
+            // B) and fold the -128*d*sum(B) correction in, and the reference
+            // dequantizer below always undoes the bias. This is a property of
+            // the packed format, not of a particular ISA or runtime path, so
+            // it must be applied unconditionally: previously the AVX2/VNNI
+            // branch only biased when g_iqk_r16_path was set, which produced
+            // blocks that dequantized 128*d too low for every other user.
 #if defined(HAVE_FANCY_SIMD)
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[ibl].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[ibl].qs + l, v);
             }
-#else
-            if (g_iqk_r16_path) {
-                for (int l = 0; l < 64; ++l) {
-                    auto v = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[ibl].qs + 2*l+0), _mm256_set1_epi8(-128));
-                    _mm256_storeu_si256((__m256i *)y[ibl].qs + 2*l+0, v);
-                    v = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[ibl].qs + 2*l+1), _mm256_set1_epi8(-128));
-                    _mm256_storeu_si256((__m256i *)y[ibl].qs + 2*l+1, v);
-                }
+#elif defined(__AVX2__)
+            for (int l = 0; l < 64; ++l) {
+                auto v = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[ibl].qs + 2*l+0), _mm256_set1_epi8(-128));
+                _mm256_storeu_si256((__m256i *)y[ibl].qs + 2*l+0, v);
+                v = _mm256_xor_si256(_mm256_loadu_si256((const __m256i *)y[ibl].qs + 2*l+1), _mm256_set1_epi8(-128));
+                _mm256_storeu_si256((__m256i *)y[ibl].qs + 2*l+1, v);
             }
-#endif
+#else
+            for (int j = 0; j < 16*QK_K; ++j) y[ibl].qs[j] ^= (int8_t)0x80;
 #endif
         }
         x += 16*nblock;
