@@ -2419,7 +2419,8 @@ ggml_type_traits_t ggml_internal_get_type_traits(enum ggml_type type) {
 }
 
 static inline int ggml_packed_rows(enum ggml_type type) {
-    return type == GGML_TYPE_BF16_R16 || type == GGML_TYPE_Q8_K_R16 || type == GGML_TYPE_IQ3_KS_R16 || type == GGML_TYPE_Q8_0_R16 || type == GGML_TYPE_IQ4_XS_R16 ? 16
+    return type == GGML_TYPE_BF16_R16 || type == GGML_TYPE_Q8_K_R16 || type == GGML_TYPE_IQ3_KS_R16 || type == GGML_TYPE_Q8_0_R16 || type == GGML_TYPE_IQ4_XS_R16 ||
+           type == GGML_TYPE_IQ4_KS_R16 ? 16
          : type == GGML_TYPE_Q8_K_R8 || type == GGML_TYPE_Q8_KV_R8 ||
            type == GGML_TYPE_Q8_0_R8 || type == GGML_TYPE_Q4_0_R8 ||
            type == GGML_TYPE_Q2_0_R8 ||
