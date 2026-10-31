@@ -2965,14 +2965,25 @@ struct DequantIQ5KS {
     const __m256i hmask1 = _mm256_set1_epi8(0x01);
     const __m256i hmask2 = _mm256_set1_epi8(0x10);
     DequantIQ5KS() {
-        table[0] = MM256_SET1_M128I(_mm_loadu_si128((const __m128i *)iq5nl_values+0));
-        table[1] = MM256_SET1_M128I(_mm_loadu_si128((const __m128i *)iq5nl_values+1));
+        for (int i = 0; i < 2; ++i) {
+            auto val = _mm_loadu_si128((const __m128i *)iq5nl_values + i);
+#ifdef HAVE_VNNI256
+            // vpdpbusd takes an unsigned A operand: bias both 16-entry LUT
+            // halves by +128 and compensate in the shift term below.
+            val = _mm_xor_si128(val, _mm_set1_epi8(-128));
+#endif
+            table[i] = MM256_SET1_M128I(val);
+        }
     }
     inline void prepare_block(const type & b, int ip, const __m256 & d4, __m256 & scales, __m256 & shifts, __m256i * qx) {
         auto iscales = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(b.scales+8*ip)));
         auto ishifts = _mm256_slli_epi32(_mm256_and_si256(iscales, _mm256_set1_epi32(1)), 1);
         scales = _mm256_mul_ps(d4, _mm256_cvtepi32_ps(_mm256_add_epi32(_mm256_and_si256(iscales, _mm256_set1_epi32(254)), _mm256_set1_epi32(-127))));
+#ifdef HAVE_VNNI256
+        shifts = _mm256_mul_ps(scales, _mm256_cvtepi32_ps(_mm256_sub_epi32(ishifts, _mm256_set1_epi32(128))));
+#else
         shifts = _mm256_mul_ps(scales, _mm256_cvtepi32_ps(ishifts));
+#endif
         auto hbits = _mm256_loadu_si256((const __m256i *)b.qh + ip);
         for (int j = 0; j < 4; ++j) {
             auto bits = _mm256_loadu_si256((const __m256i *)(b.qs + 64*j + 32*ip));
@@ -3002,7 +3013,11 @@ static void mul_mat_iq4_ks_r16_q8_2(int n, const void * vx, size_t bx, const Dat
 
 template <int nrc_y>
 static void mul_mat_iq5_ks_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+#ifdef HAVE_VNNI256
+    mul_mat_iqX_ks_r16_q8_2<DequantIQ5KS, true, nrc_y>(n, vx, bx, info, nrc_x);
+#else
     mul_mat_iqX_ks_r16_q8_2<DequantIQ5KS, false, nrc_y>(n, vx, bx, info, nrc_x);
+#endif
 }
 #endif
 
