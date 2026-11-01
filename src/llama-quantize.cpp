@@ -124,6 +124,7 @@ std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
         { GGML_TYPE_Q2_0_R8,     { GGML_TYPE_Q2_0, 8} },
         { GGML_TYPE_Q8_K_R8,     { GGML_TYPE_Q8_0, 8} },
         { GGML_TYPE_Q8_K_R16,    { GGML_TYPE_Q8_0, 16} },
+        { GGML_TYPE_Q8_0_R16,    { GGML_TYPE_Q8_0, 16} },
         { GGML_TYPE_BF16_R16,    { GGML_TYPE_BF16, 16} },
         { GGML_TYPE_IQ3_KS_R16,   { GGML_TYPE_IQ3_KT, 16} },
     };
@@ -256,6 +257,8 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny, bo
         new_type == GGML_TYPE_IQ2_K_R4|| new_type == GGML_TYPE_IQ5_K_R4|| new_type == GGML_TYPE_IQ4_KS_R4 ||
         new_type == GGML_TYPE_IQ3_XXS_R4 || new_type == GGML_TYPE_IQ2_XXS_R4 || new_type == GGML_TYPE_IQ2_XS_R4 ||
         new_type == GGML_TYPE_IQ2_S_R4|| new_type == GGML_TYPE_IQ3_S_R4|| new_type == GGML_TYPE_IQ3_KS ||
+        new_type == GGML_TYPE_IQ3_KS_R16 || new_type == GGML_TYPE_IQ4_KS || new_type == GGML_TYPE_IQ4_KS_R16 ||
+        new_type == GGML_TYPE_IQ5_KS || new_type == GGML_TYPE_IQ5_KS_R16 ||
         new_type == GGML_TYPE_IQ2_KT  || new_type == GGML_TYPE_IQ3_KT  || new_type == GGML_TYPE_IQ4_KT ||
         new_type == GGML_TYPE_IQ5_KS || new_type == GGML_TYPE_IQ5_KS_R4|| new_type == GGML_TYPE_IQ2_KL ||
         new_type == GGML_TYPE_IQ1_KT  || new_type == GGML_TYPE_IQ1_S_R4 ||
@@ -272,6 +275,24 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny, bo
         }
     }
     if (new_type == GGML_TYPE_IQ3_KS_R16) {
+        if (nx % 32 != 0 || ny % 16 != 0) {
+            LLAMA_LOG_WARN("\n\n%s : tensor %d x %d is not compatible with %s (needs cols %% 32 == 0 and rows %% 16 == 0)", __func__, nx, ny, ggml_type_name(new_type));
+            convert_incompatible_tensor = true;
+        }
+    }
+    if (new_type == GGML_TYPE_IQ3_KS_R16) {
+        if (nx % 32 != 0 || ny % 16 != 0) {
+            LLAMA_LOG_WARN("\n\n%s : tensor %d x %d is not compatible with %s (needs cols %% 32 == 0 and rows %% 16 == 0)", __func__, nx, ny, ggml_type_name(new_type));
+            convert_incompatible_tensor = true;
+        }
+    }
+    if (new_type == GGML_TYPE_IQ4_KS_R16 || new_type == GGML_TYPE_IQ5_KS_R16) {
+        if (nx % 32 != 0 || ny % 16 != 0) {
+            LLAMA_LOG_WARN("\n\n%s : tensor %d x %d is not compatible with %s (needs cols %% 32 == 0 and rows %% 16 == 0)", __func__, nx, ny, ggml_type_name(new_type));
+            convert_incompatible_tensor = true;
+        }
+    }
+    if (new_type == GGML_TYPE_Q8_0_R16) {
         if (nx % 32 != 0 || ny % 16 != 0) {
             LLAMA_LOG_WARN("\n\n%s : tensor %d x %d is not compatible with %s (needs cols %% 32 == 0 and rows %% 16 == 0)", __func__, nx, ny, ggml_type_name(new_type));
             convert_incompatible_tensor = true;
