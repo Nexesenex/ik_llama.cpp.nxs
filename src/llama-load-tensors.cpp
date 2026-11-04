@@ -4284,6 +4284,8 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
 
             // MoE branch
             use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
+            // Option A: reorder experts to contiguous expert-first memory at load/init
+            repack_layer_experts_contiguous(model.layers[i], i);
 
             // Shared expert branch
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_exp * n_expert_shared});
@@ -6398,6 +6400,79 @@ bool create_tensors_helper::create_std_ffn_exps(int64_t n_embd, const LLM_TN & t
     layer.ffn_down_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, flags);
 
     return merged;
+}
+
+static void repack_layer_experts_contiguous(llama_model_layer & layer, int il) {
+    // Option A: full-layer reorder at load/init.
+    // Reorder interleaved {dim0, dim1, n_expert} to {n_expert, dim0, dim1}
+    // so each expert occupies a contiguous memory block.
+    auto repack_3d = [](ggml_tensor * src, int ne0, int ne1, int ne2) -> ggml_tensor * {
+        int64_t nbytes = ggml_nbytes(src);
+        std::vector<char> src_buf(nbytes);
+        ggml_backend_tensor_get(src, src_buf.data(), 0, nbytes);
+
+        ggml_context * ctx = src->ctx;
+        ggml_tensor * dst = ggml_new_tensor_3d(ctx, src->type, ne2, ne0, ne1);
+        snprintf(dst->name, GGML_MAX_NAME, "%s.contiguous", src->name);
+        std::vector<char> dst_buf(nbytes);
+        memset(dst_buf.data(), 0, nbytes);
+
+        // Original strides (row-major): src offset = ((i0*ne1 + i1)*ne2 + i2)
+        // New strides: dst offset = ((i2*ne0 + i0)*ne1 + i1)
+        for (int i2 = 0; i2 < ne2; ++i2) {
+            for (int i0 = 0; i0 < ne0; ++i0) {
+                for (int i1 = 0; i1 < ne1; ++i1) {
+                    int64_t src_offset = ((i0 * ne1) + i1) * ne2 + i2;
+                    int64_t dst_offset = ((i2 * ne0) + i0) * ne1 + i1;
+                    size_t byte_offset = src_offset * ggml_blck_size(src->type);
+                    size_t dst_byte_offset = dst_offset * ggml_blck_size(src->type);
+                    int64_t blck_size = ggml_blck_size(src->type);
+                    std::memcpy(dst_buf.data() + dst_byte_offset,
+                                src_buf.data() + byte_offset,
+                                blck_size);
+                }
+            }
+        }
+        ggml_backend_tensor_set(dst, dst_buf.data(), 0, nbytes);
+        return dst;
+    };
+
+    if (layer.ffn_up_exps && layer.ffn_up_exps->extra == nullptr) {
+        ggml_tensor * orig = layer.ffn_up_exps;
+        int ne0 = (int)orig->ne[0];
+        int ne1 = (int)orig->ne[1];
+        int ne2 = (int)orig->ne[2];
+        ggml_tensor * contig = repack_3d(orig, ne0, ne1, ne2);
+        layer.ffn_up_exps_contig = contig;
+        LLAMA_LOG_INFO("Layer %d: repacked ffn_up_exps to contiguous expert-first layout [%d, %d, %d]\n", il, (int)contig->ne[0], (int)contig->ne[1], (int)contig->ne[2]);
+    }
+    if (layer.ffn_gate_exps && layer.ffn_gate_exps->extra == nullptr) {
+        ggml_tensor * orig = layer.ffn_gate_exps;
+        int ne0 = (int)orig->ne[0];
+        int ne1 = (int)orig->ne[1];
+        int ne2 = (int)orig->ne[2];
+        ggml_tensor * contig = repack_3d(orig, ne0, ne1, ne2);
+        layer.ffn_gate_exps_contig = contig;
+        LLAMA_LOG_INFO("Layer %d: repacked ffn_gate_exps to contiguous expert-first layout [%d, %d, %d]\n", il, (int)contig->ne[0], (int)contig->ne[1], (int)contig->ne[2]);
+    }
+    if (layer.ffn_down_exps && layer.ffn_down_exps->extra == nullptr) {
+        ggml_tensor * orig = layer.ffn_down_exps;
+        int ne0 = (int)orig->ne[0];
+        int ne1 = (int)orig->ne[1];
+        int ne2 = (int)orig->ne[2];
+        ggml_tensor * contig = repack_3d(orig, ne0, ne1, ne2);
+        layer.ffn_down_exps_contig = contig;
+        LLAMA_LOG_INFO("Layer %d: repacked ffn_down_exps to contiguous expert-first layout [%d, %d, %d]\n", il, (int)contig->ne[0], (int)contig->ne[1], (int)contig->ne[2]);
+    }
+    if (layer.ffn_up_gate_exps && layer.ffn_up_gate_exps->extra == nullptr) {
+        ggml_tensor * orig = layer.ffn_up_gate_exps;
+        int ne0 = (int)orig->ne[0];
+        int ne1 = (int)orig->ne[1];
+        int ne2 = (int)orig->ne[2];
+        ggml_tensor * contig = repack_3d(orig, ne0, ne1, ne2);
+        layer.ffn_up_gate_exps_contig = contig;
+        LLAMA_LOG_INFO("Layer %d: repacked ffn_up_gate_exps to contiguous expert-first layout [%d, %d, %d]\n", il, (int)contig->ne[0], (int)contig->ne[1], (int)contig->ne[2]);
+    }
 }
 
 bool create_tensors_helper::create_std_ffn_exps_from_meta(const LLM_TN & tn, int i, int flags, ggml_context * ffn_ctx) {
