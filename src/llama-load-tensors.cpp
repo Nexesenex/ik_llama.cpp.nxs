@@ -7553,8 +7553,11 @@ bool create_tensors_helper::create_tensors() {
                     // model.split_tensor_split_factor, model.split_vram_free_factor, model.split_usage_penalty_factor);
                 prepare_split_tensors(-1, ctx_split, layer.attn_norm, layer.split_attn_norm, mirror, mem_used);
             }
-            if ((is_gemma4_model() || model.arch == LLM_ARCH_MUSE_GLIMMER) && layer.attn_post_norm) {
+            if ((is_gemma4_model() || model.arch == LLM_ARCH_MUSE_GLIMMER || model.arch == LLM_ARCH_RICURSIVE) && layer.attn_post_norm) {
                 prepare_split_tensors(-1, ctx_split, layer.attn_post_norm, layer.split_attn_post_norm, mirror, mem_used);
+            }
+            if (model.arch == LLM_ARCH_RICURSIVE && layer.attn_vres_lambda) {
+                prepare_split_tensors(-1, ctx_split, layer.attn_vres_lambda, layer.split_attn_vres_lambda, mirror, mem_used);
             }
             if (layer.rope_freqs) {
                 auto split = create_split(ggml_nrows(layer.rope_freqs), -1, cur_splits, mem_used, vram_free, vram_total, ggml_nbytes(layer.rope_freqs), model.split_vram_reserve_factor,

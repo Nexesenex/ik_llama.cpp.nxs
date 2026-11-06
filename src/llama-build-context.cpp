@@ -4334,6 +4334,16 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 }
                 cur = do_split_norm(ctx0, cur, the_attn_norm, lctx.model.hparams, cb, id, il_cb, is_norm);
                 auto input_normed = cur;
+                ggml_tensor * v_cur = nullptr;
+                if (v_res) {
+                    auto v_res_id = get_input_tensor_sm_graph(ctx0, v_res, id);
+                    auto lambda = model.layers[il].attn_vres_lambda->extra ?
+                        ((ggml_split_tensor_t *)model.layers[il].attn_vres_lambda->extra)->splits[id] :
+                        model.layers[il].attn_vres_lambda;
+                    auto blend = ggml_sigmoid(ctx0, lambda);
+                    v_cur = ggml_add(ctx0, v_res_id, ggml_mul(ctx0, ggml_sub(ctx0, cur, v_res_id), blend));
+                    cb(v_cur, "v_input", il_cb);
+                }
                 auto the_q_norm = model.layers[il].attn_q_norm ? model.layers[il].attn_q_norm->extra ?
                     ((ggml_split_tensor_t *)model.layers[il].attn_q_norm->extra)->splits[id] : model.layers[il].attn_q_norm : nullptr;
                 auto the_k_norm = model.layers[il].attn_k_norm ? model.layers[il].attn_k_norm->extra ?
@@ -4350,7 +4360,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                             split_wk, bk ? bk->splits[id] : nullptr,
                             split_wv, bv ? bv->splits[id] : nullptr,
                             nullptr, nullptr,
-                            the_q_norm, the_k_norm, f_attn_scale, il, add_graph_split);
+                            the_q_norm, the_k_norm, f_attn_scale, il, add_graph_split, v_cur);
                     Qcur = Q; Kcur = K; Vcur = V;
                     if (model.arch == LLM_ARCH_MIMO2 && std::abs(model.hparams.f_attn_v_scale - 1) > 1e-4f) {
                         Vcur = ggml_scale(ctx0, Vcur, model.hparams.f_attn_v_scale);

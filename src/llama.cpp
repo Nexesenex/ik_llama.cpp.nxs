@@ -4733,6 +4733,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_MELLUM,
         LLM_ARCH_LAGUNA,
         LLM_ARCH_MUSE_GLIMMER,
+        LLM_ARCH_RICURSIVE,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
