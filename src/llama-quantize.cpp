@@ -2492,7 +2492,10 @@ QuantizationDone:;
                 zeros(fout, GGML_PAD(data.size(), align) - data.size());
             }
             if (ml.use_mmap) {
-                ml.mappings.at(weight->idx)->unmap_fragment(weight->offs, weight->offs + ggml_nbytes(tensor));
+                auto it = ml.split_to_file_idx.find(weight->idx);
+                if (it != ml.split_to_file_idx.end() && it->second < ml.mappings.size() && ml.mappings[it->second]) {
+                    ml.mappings[it->second]->unmap_fragment(weight->offs, weight->offs + ggml_nbytes(tensor));
+                }
             }
         }
     }
