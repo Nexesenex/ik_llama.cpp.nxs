@@ -6016,7 +6016,13 @@ static bool llm_load_tensors(
                     if (!aliased) {
                         continue;
                     }
-                    host_ranges.push_back({ weight->idx, first, last });
+                    // r.idx is a file index, not the split number (they differ with
+                    // tensor_ids subsets or skipped splits), since it indexes ml.mappings.
+                    auto it = ml.split_to_file_idx.find(weight->idx);
+                    if (it == ml.split_to_file_idx.end() || it->second >= ml.mappings.size()) {
+                        continue;
+                    }
+                    host_ranges.push_back({ (uint32_t) it->second, first, last });
                 }
             }
             if (!host_ranges.empty()) {

@@ -958,7 +958,7 @@ void llama_model_loader::build_expert_tensor_index(const llama_hparams & hparams
 
         const size_t tensor_bytes = ggml_nbytes(weight.tensor);
         deferred_bytes += tensor_bytes;
-        expert_tensor_index.file_ranges.at(weight.idx).push_back({ weight.offs, weight.offs + tensor_bytes });
+        expert_tensor_index.file_ranges.at(split_to_file_idx.at(weight.idx)).push_back({ weight.offs, weight.offs + tensor_bytes });
     }
 
     for (auto & ranges : expert_tensor_index.file_ranges) {
@@ -1000,7 +1000,8 @@ void llama_model_loader::build_ple_tensor_index() {
     ple_tensor_index = {};
     ple_tensor_index.file_ranges.resize(files.size());
     auto index_range = [&](uint16_t idx, size_t offs, size_t nbytes) {
-        ple_tensor_index.file_ranges.at(idx).push_back({ offs, offs + nbytes });
+        // idx is the GGUF split number; file_ranges pairs with files[]/mappings[]
+        ple_tensor_index.file_ranges.at(split_to_file_idx.at(idx)).push_back({ offs, offs + nbytes });
         ple_tensor_index.deferred_bytes += nbytes;
     };
 
@@ -1465,7 +1466,9 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
             if (!weight) {
                 continue;
             }
-            if (weight->idx != idx) {
+            // weight->idx is the split number; idx is a file index
+            auto it = split_to_file_idx.find(weight->idx);
+            if (it == split_to_file_idx.end() || (int) it->second != idx) {
                 continue;
             }
             *first = std::min(*first, weight->offs);
@@ -1931,9 +1934,12 @@ bool llama_model_loader::load_all_data(
     auto load_tensor = [&](ggml_tensor * cur, int thread_idx) -> size_t {
         const auto * weight = get_weight(ggml_get_name(cur));
         GGML_ASSERT(weight != nullptr);
-        GGML_ASSERT(weight->idx < files.size());
+        // weight->idx is the split number; resolve the file index (they differ
+        // with tensor_ids subsets or skipped missing splits)
+        const size_t file_idx = split_to_file_idx.at(weight->idx);
+        GGML_ASSERT(file_idx < files.size());
         const size_t n_size = ggml_nbytes(cur);
-        const auto file = files.at(weight->idx)->clone();
+        const auto file = files.at(file_idx)->clone();
 
         if (!weight->f8_scale.empty() || !weight->nvfp4_scale.empty() || weight->mxfp4_repack) {
             load_nvfp4_tensor(cur, buffer_size, *weight, *file, read_bufs[thread_idx], model, load_mutex, check_tensors);
@@ -1960,7 +1966,7 @@ bool llama_model_loader::load_all_data(
             // not deferred under explicit --no-mmap; deferred tables stay aliased.
             if (defer_ple && !ple_tensor_index.empty() && lmlocks == nullptr &&
                     cur->buffer == nullptr && cur->view_src == nullptr && n_size > 0 &&
-                    !ple_range_overlaps(weight->idx, weight->offs, weight->offs + n_size) &&
+                    !ple_range_overlaps(file_idx, weight->offs, weight->offs + n_size) &&
                     (defer_copy_dense || (repack_tensors && (ggml_type) iqk_repacked_type(cur) != cur->type))) {
                 bool has_views = false;
                 for (auto * v = ggml_get_first_tensor(ctx); v != NULL; v = ggml_get_next_tensor(ctx, v)) {
@@ -1997,10 +2003,10 @@ bool llama_model_loader::load_all_data(
                 }
                 return n_size;
             }
-            const auto & mapping = mappings.at(weight->idx);
+            const auto & mapping = mappings.at(file_idx);
             ggml_backend_buffer_t buf_mmap = nullptr;
-            if (bufs_mmap.count(weight->idx)) {
-                buf_mmap = bufs_mmap.at(weight->idx);
+            if (bufs_mmap.count((uint32_t) file_idx)) {
+                buf_mmap = bufs_mmap.at((uint32_t) file_idx);
             }
             uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
 
@@ -2046,11 +2052,11 @@ bool llama_model_loader::load_all_data(
             if (buf_mmap && cur->data == nullptr) {
                 ggml_backend_tensor_alloc(buf_mmap, cur, data);
                 if (lmlocks) {
-                    const auto & lmlock = lmlocks->at(weight->idx);
+                    const auto & lmlock = lmlocks->at(file_idx);
                     lmlock->grow_to(weight->offs + n_size);
                 }
 
-                auto & mmap_used = mmaps_used[weight->idx];
+                auto & mmap_used = mmaps_used[file_idx];
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
