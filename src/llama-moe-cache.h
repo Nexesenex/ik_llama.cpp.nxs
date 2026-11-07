@@ -2,6 +2,7 @@
 
 #include "ggml-backend.h"
 #include "ggml-cuda-moe-ffn.h"
+#include "llama.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -67,7 +68,8 @@ public:
     llama_moe_cache(const llama_model & model,
             const std::vector<ggml_backend *> & backends,
             const std::vector<ggml_backend_buffer_type *> & bufts,
-            size_t size);
+            size_t size,
+            enum llama_moe_cache_policy policy);
     ~llama_moe_cache();
 
     ggml_backend * backend(int32_t il) const;

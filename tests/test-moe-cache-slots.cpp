@@ -14,14 +14,14 @@ struct fixture {
     std::vector<std::vector<int32_t>> maps;
 
     fixture(int32_t n_layers, int32_t n_group_layers, int32_t n_expert, int32_t n_slots) {
-        lru.init(n_layers, n_group_layers, n_expert, n_slots);
+        lru.init(n_layers, n_expert, n_slots, llama_moe_cache_policy_detail::kind::lru, n_group_layers);
         maps.assign(n_layers, std::vector<int32_t>((size_t) n_expert, -1));
         for (size_t il = 0; il < maps.size(); ++il) lru.slot_map[il] = maps[il].data();
     }
 
     bool plan(int32_t il, const std::vector<int32_t> & ids, std::vector<moe_cache_lru::fill> & fills,
             size_t & hits, size_t & evictions) {
-        return lru.plan(il, ids.data(), ids.size(), fills, hits, evictions);
+        return lru.plan(il, ids.data(), ids.size(), 1, fills, hits, evictions);
     }
 };
 
@@ -212,10 +212,10 @@ bool test_async_guard() {
     size_t hits = 0, evictions = 0;
     if (!f.plan(0, { 0 }, fills, hits, evictions)) return fail("async guard seed rejected");
     f.lru.freeze();
-    f.lru.state[0] = moe_cache_lru::slot_state::COPYING;
+    f.lru.slot_states[0] = moe_cache_lru::slot_state::COPYING;
     uint64_t generation = 0;
     if (f.lru.can_pin(0, 0) || f.lru.pin(0, 0, generation)) return fail("in-flight fill was pinned");
-    f.lru.state[0] = moe_cache_lru::slot_state::FREE;
+    f.lru.slot_states[0] = moe_cache_lru::slot_state::FREE;
     if (f.lru.can_pin(0, 0)) return fail("cancelled fill stayed pinnable");
     return true;
 }

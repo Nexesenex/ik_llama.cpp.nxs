@@ -4,6 +4,7 @@
 #include "llama-model.h"
 #include "llama-moe-cache-lru.h"
 #include "llama-moe-cache-share.h"
+#include "llama-moe-cache-policy.h"
 
 #include "ggml-cpp.h"
 
@@ -15,7 +16,7 @@
 
 namespace {
 
-using llama_moe_cache_detail::moe_cache_lru;
+using moe_cache_state = llama_moe_cache_policy_detail::state;
 
 static std::vector<ggml_tensor *> layer_experts(const llama_layer & layer) {
     if (layer.ffn_up_gate_exps) return { layer.ffn_up_gate_exps, layer.ffn_down_exps };
@@ -83,7 +84,7 @@ struct llama_moe_cache::impl {
         int32_t n_slots = 0;
         uint64_t generation = 0;
         bool frozen = false;
-        moe_cache_lru lru;
+        llama_moe_cache_policy_detail::state cache;
     };
     struct layer {
         int32_t group = -1;
@@ -108,7 +109,7 @@ struct llama_moe_cache::impl {
     std::unordered_map<const ggml_tensor *, binding> bindings;
     std::unordered_map<const ggml_tensor *, int32_t> layer_of;
     std::vector<int32_t> ids;
-    std::vector<moe_cache_lru::fill> fills;
+    std::vector<llama_moe_cache_policy_detail::state::fill> fills;
     ggml_context_ptr ctx_host;
     ggml_backend_buffer_ptr buf_host;
     size_t buf_host_size = 0;
@@ -148,7 +149,7 @@ struct llama_moe_cache::impl {
         snapshot.group = group_id;
         snapshot.device_group = g.device;
         snapshot.owner_backend = devices[g.device].backend;
-        snapshot.n_experts = g.lru.n_expert;
+        snapshot.n_experts = g.cache.n_expert;
         snapshot.n_slots = g.n_slots;
         snapshot.generation = g.generation;
         snapshot.host_up = l.host_up;
@@ -174,7 +175,7 @@ struct llama_moe_cache::impl {
         if (!g.frozen || g.device < 0 || (size_t) g.device >= devices.size() ||
                 snapshot.group != group_id || snapshot.device_group != g.device ||
                 snapshot.owner_backend != devices[g.device].backend ||
-                snapshot.n_experts != g.lru.n_expert || snapshot.n_slots != g.n_slots ||
+                snapshot.n_experts != g.cache.n_expert || snapshot.n_slots != g.n_slots ||
                 snapshot.generation != g.generation || snapshot.group_layers != g.layers ||
                 snapshot.layer < 0 || (size_t) snapshot.layer >= layers.size() ||
                 layers[snapshot.layer].group != group_id) return false;
@@ -200,8 +201,8 @@ struct llama_moe_cache::impl {
         const layer & l = layers[il];
         const size_t physical_parts = l.experts.size();
         if (part_capacity != physical_parts || physical_parts == 0 || g.banks.size() != physical_parts ||
-                l.group != group_id || g.device != device_id || expert < 0 || expert >= g.lru.n_expert ||
-                slot < 0 || slot >= g.lru.n_slots) return false;
+                l.group != group_id || g.device != device_id || expert < 0 || expert >= g.cache.n_expert ||
+                slot < 0 || slot >= g.cache.n_slots) return false;
 
         pending = {};
         pending.owner = owner;
@@ -260,7 +261,8 @@ struct llama_moe_cache::impl {
     }
 
     impl(const llama_model & model, const std::vector<ggml_backend *> & backends,
-            const std::vector<ggml_backend_buffer_type *> & bufts, size_t size)
+            const std::vector<ggml_backend_buffer_type *> & bufts, size_t size,
+            enum llama_moe_cache_policy policy)
             : n_expert_used(model.hparams.n_expert_used), layers(model.layers.size()), requested_size(size) {
         if (model.hparams.n_expert == 0 || n_expert_used <= 0) {
             throw std::runtime_error("MoE cache requires a MoE model");
@@ -353,7 +355,9 @@ struct llama_moe_cache::impl {
                 g.n_slots = 0;
                 continue;
             }
-            g.lru.init((int32_t) layers.size(), (int32_t) g.layers.size(), n_expert, g.n_slots);
+            g.cache.init((int32_t) layers.size(), n_expert, g.n_slots,
+                    policy == LLAMA_MOE_CACHE_POLICY_CLASSLRU ? llama_moe_cache_policy_detail::kind::classlru : llama_moe_cache_policy_detail::kind::lru,
+                    (int32_t) g.layers.size());
             device_tensor_counts[g.device] += g.ref.size();
             for (const int32_t il : g.layers) {
                 const auto & layer = model.layers[il];
@@ -450,7 +454,7 @@ struct llama_moe_cache::impl {
         if (!buf_host) throw std::runtime_error("failed to allocate MoE cache slot maps");
         ggml_backend_buffer_clear(buf_host.get(), 0xff);
         buf_host_size = ggml_backend_buffer_get_size(buf_host.get());
-        for (group & g : groups) for (int32_t il : g.layers) g.lru.slot_map[il] = (int32_t *) layers[il].slot_map->data;
+        for (group & g : groups) for (int32_t il : g.layers) g.cache.slot_map[il] = (int32_t *) layers[il].slot_map->data;
         for (device & d : devices) if (d.buffer) ggml_backend_buffer_set_usage(d.buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         if (buf_host) ggml_backend_buffer_set_usage(buf_host.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         for (size_t i = 0; i < devices.size(); ++i) {
@@ -463,6 +467,8 @@ struct llama_moe_cache::impl {
                         g.layers.size(), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]));
             }
         }
+        LLAMA_LOG_INFO("%s: active MoE cache policy: %s\n", __func__,
+                policy == LLAMA_MOE_CACHE_POLICY_CLASSLRU ? "classlru" : "lru");
     }
 
     ~impl() {
@@ -490,7 +496,8 @@ struct llama_moe_cache::impl {
             ++large_batch_skips;
             return nullptr;
         }
-        if (std::min<int64_t>(n_tokens*n_expert_used, l.slot_map->ne[1]) > g.n_slots) {
+        if (!llama_moe_cache_policy_detail::slot_map_eligible(n_tokens, n_expert_used,
+                l.slot_map->ne[1], g.n_slots, llama_moe_cache::max_batch_tokens)) {
             ++incompatible_layer_skips;
             return nullptr;
         }
@@ -528,12 +535,18 @@ struct llama_moe_cache::impl {
             }
         }
         GGML_ASSERT(ggml_is_contiguous(selected));
+        int64_t n_tokens = 1;
+        if (g.cache.policy == llama_moe_cache_policy_detail::kind::classlru &&
+                (!llama_moe_cache_policy_detail::recover_selected_tokens(selected, n_expert_used,
+                    g.cache.n_expert, n_tokens) || n_tokens > llama_moe_cache::max_batch_tokens)) {
+            GGML_ABORT("Unable to recover MoE cache token geometry for layer %d", il);
+        }
         ids.resize(ggml_nelements(selected));
         ggml_backend_tensor_get_async(backend, selected, ids.data(), 0, ggml_nbytes(selected));
         ggml_backend_synchronize(backend);
         size_t n_hit = 0;
         size_t n_eviction = 0;
-        if (!g.lru.plan(il, ids.data(), ids.size(), fills, n_hit, n_eviction)) GGML_ABORT("MoE cache slot count is smaller than the routed expert set");
+        if (!g.cache.plan(il, ids.data(), ids.size(), n_tokens, fills, n_hit, n_eviction)) GGML_ABORT("MoE cache slot count is smaller than the routed expert set");
         if (++g.generation == 0) ++g.generation;
         size_t bytes = 0;
         for (size_t ip = 0; ip < l.experts.size(); ++ip) {
@@ -584,7 +597,7 @@ struct llama_moe_cache::impl {
             auto it = bindings.find(l.experts[ip]);
             if (it == bindings.end() || !it->second.cached) return false;
         }
-        g.lru.freeze();
+        g.cache.freeze();
 
         if (++g.generation == 0) ++g.generation;
         g.frozen = true;
@@ -614,8 +627,8 @@ struct llama_moe_cache::impl {
         if (snapshot.group < 0 || (size_t) snapshot.group >= groups.size()) return false;
         group & g = groups[snapshot.group];
         if (!g.frozen || snapshot.generation != g.generation) return false;
-        for (int32_t s = 0; s < g.lru.n_slots; ++s) {
-            if (g.lru.pin_count[s] != 0 || g.lru.state[s] == moe_cache_lru::slot_state::COPYING) return false;
+        for (int32_t s = 0; s < g.cache.n_slots; ++s) {
+            if (g.cache.pin_count[s] != 0 || g.cache.slot_states[s] == moe_cache_state::slot_state::COPYING) return false;
         }
         g.frozen = false;
         if (++g.generation == 0) ++g.generation;
@@ -643,8 +656,9 @@ struct llama_moe_cache::impl {
 
 llama_moe_cache::llama_moe_cache(const llama_model & model,
         const std::vector<ggml_backend *> & backends,
-        const std::vector<ggml_backend_buffer_type *> & bufts, size_t size)
-        : pimpl(new impl(model, backends, bufts, size)) {}
+        const std::vector<ggml_backend_buffer_type *> & bufts, size_t size,
+        enum llama_moe_cache_policy policy)
+        : pimpl(new impl(model, backends, bufts, size, policy)) {}
 
 llama_moe_cache::~llama_moe_cache() = default;
 
@@ -696,17 +710,17 @@ bool llama_moe_cache::resolve_and_pin(int32_t device, int32_t group_id, int32_t 
     auto & g = pimpl->groups[group_id];
     auto & l = pimpl->layers[il];
     if (!g.frozen || g.generation != owner_generation || g.device != device ||
-            l.group != group_id || !g.lru.slot_map[il]) return false;
+            l.group != group_id || !g.cache.slot_map[il]) return false;
 
     int32_t n_pins = 0;
     for (int32_t i = 0; i < n_ids; ++i) {
         const int32_t expert = ids[i];
-        if (expert < 0 || expert >= g.lru.n_expert) return false;
-        const int32_t slot = g.lru.slot_map[il][expert];
-        if (slot < -1 || slot >= g.lru.n_slots) return false;
+        if (expert < 0 || expert >= g.cache.n_expert) return false;
+        const int32_t slot = g.cache.slot_map[il][expert];
+        if (slot < -1 || slot >= g.cache.n_slots) return false;
         result->draw_slots[i] = slot;
         if (slot < 0) continue;
-        if (!g.lru.can_pin(il, expert)) return false;
+        if (!g.cache.can_pin(il, expert)) return false;
         bool already_added = false;
         for (int32_t p = 0; p < n_pins; ++p) {
             already_added |= result->pins[p].slot == slot;
@@ -718,14 +732,28 @@ bool llama_moe_cache::resolve_and_pin(int32_t device, int32_t group_id, int32_t 
             token.group = group_id;
             token.layer = il;
             token.slot = slot;
-            token.key = il*g.lru.n_expert + expert;
+            token.key = il*g.cache.n_expert + expert;
             token.owner_generation = owner_generation;
         }
     }
 
+    // ClassLRU must see every routed key before pins start moving slots:
+    // pin() refreshes the recency of its class, and a missing key that reaches
+    // finish_fill() with a zero CRF would trip class_of()'s assertion.  The
+    // same key is counted once per cache access, matching plan_classlru().
+    if (g.cache.policy == llama_moe_cache_policy_detail::kind::classlru) {
+        for (int32_t i = 0; i < n_ids; ++i) {
+            bool already_seen = false;
+            for (int32_t j = 0; j < i; ++j) already_seen |= ids[j] == ids[i];
+            if (already_seen) continue;
+            g.cache.observe_route(il, ids[i], g.cache.slot_map[il][ids[i]]);
+        }
+        g.cache.advance_clock(il, n_ids / pimpl->n_expert_used);
+    }
+
     for (int32_t p = 0; p < n_pins; ++p) {
         auto & token = result->pins[p];
-        if (!g.lru.pin(token.layer, token.key % g.lru.n_expert, token.generation)) return false;
+        if (!g.cache.pin(token.layer, token.key % g.cache.n_expert, token.generation)) return false;
     }
     result->n_draws = n_ids;
     result->n_pins = n_pins;
@@ -743,15 +771,15 @@ bool llama_moe_cache::release_pins(const ggml_cuda_moe_ffn_pin_token * pins, int
         const auto & l = pimpl->layers[token.layer];
         if (!g.frozen || g.device != token.device || l.group != token.group ||
                 g.generation != token.owner_generation ||
-                token.key < 0 || token.key / g.lru.n_expert != token.layer ||
-                !g.lru.can_release(token.layer, token.key % g.lru.n_expert, token.slot,
+                token.key < 0 || token.key / g.cache.n_expert != token.layer ||
+                !g.cache.can_release(token.layer, token.key % g.cache.n_expert, token.slot,
                     token.generation)) return false;
         for (int32_t j = 0; j < i; ++j) {
             if (pins[j].owner == token.owner && pins[j].group == token.group &&
                     pins[j].slot == token.slot && pins[j].generation == token.generation) return false;
         }
     }
-    for (int32_t i = 0; i < n_pins; ++i) pimpl->groups[pins[i].group].lru.release(pins[i].slot);
+    for (int32_t i = 0; i < n_pins; ++i) pimpl->groups[pins[i].group].cache.release(pins[i].slot);
     return true;
 }
 
@@ -766,45 +794,48 @@ bool llama_moe_cache::reserve_fill(int32_t device, int32_t group_id, int32_t il,
     auto & l = pimpl->layers[il];
     const size_t physical_parts = l.experts.size();
     if (!g.frozen || g.generation != owner_generation || g.device != device ||
-            l.group != group_id || expert < 0 || expert >= g.lru.n_expert ||
-            !g.lru.slot_map[il] || physical_parts == 0 || part_capacity != physical_parts ||
-            g.banks.size() != l.experts.size() || g.lru.slot_map[il][expert] >= 0) return false;
+            l.group != group_id || expert < 0 || expert >= g.cache.n_expert ||
+            !g.cache.slot_map[il] || physical_parts == 0 || part_capacity != physical_parts ||
+            g.banks.size() != l.experts.size() || g.cache.slot_map[il][expert] >= 0) return false;
 
-    const int64_t key64 = int64_t(il) * g.lru.n_expert + expert;
+    const int64_t key64 = int64_t(il) * g.cache.n_expert + expert;
     if (key64 < 0 || key64 > std::numeric_limits<int32_t>::max()) return false;
     const int32_t key = (int32_t) key64;
-    for (int32_t s = 0; s < g.lru.n_slots; ++s) {
-        if (g.lru.state[s] == moe_cache_lru::slot_state::COPYING && g.lru.key_of[s] == key) return false;
+    for (int32_t s = 0; s < g.cache.n_slots; ++s) {
+        if (g.cache.slot_states[s] == moe_cache_state::slot_state::COPYING && g.cache.key_of[s] == key) return false;
     }
 
     int32_t slot = -1;
     bool has_free_slot = false;
     int32_t old_key = -1;
-    for (int32_t s = 0; s < g.lru.n_slots; ++s) {
-        if (g.lru.state[s] == moe_cache_lru::slot_state::FREE &&
-                g.lru.key_of[s] < 0 && g.lru.pin_count[s] == 0) { slot = s; has_free_slot = true; break; }
+    for (int32_t s = 0; s < g.cache.n_slots; ++s) {
+        if (g.cache.slot_states[s] == moe_cache_state::slot_state::FREE &&
+                g.cache.key_of[s] < 0 && g.cache.pin_count[s] == 0) { slot = s; has_free_slot = true; break; }
     }
 
     // Demand admission.  A first miss is admitted when the group can hold all
     // of its experts anyway, otherwise it must be observed twice before a free
     // slot is spent.  Replacing a resident expert requires eight observations,
     // which keeps one-off routes from thrashing the bank.
-    if (!g.lru.admit_miss(key, has_free_slot)) return false;
+    if (!g.cache.admit_miss(key, has_free_slot)) return false;
 
     if (slot < 0) {
-        for (int32_t s = g.lru.head; s >= 0; s = g.lru.next[s]) {
-            if (g.lru.state[s] != moe_cache_lru::slot_state::READY ||
-                    g.lru.key_of[s] < 0 || g.lru.pin_count[s] != 0) continue;
-            const int32_t resident_key = g.lru.key_of[s];
-            const int32_t resident_layer = resident_key / g.lru.n_expert;
-            const int32_t resident_expert = resident_key % g.lru.n_expert;
-            if (resident_layer < 0 || (size_t) resident_layer >= pimpl->layers.size() ||
-                    pimpl->layers[resident_layer].group != group_id ||
-                    !g.lru.slot_map[resident_layer] ||
-                    g.lru.slot_map[resident_layer][resident_expert] != s) return false;
-            slot = s;
-            old_key = resident_key;
-            break;
+        // The ClassLRU victim search skips pinned and in-flight slots; the plain
+        // LRU search starts at the eviction end of the list.  Routing selection
+        // is not consulted here because the executor pins every resident hit
+        // before it enqueues a fill.
+        slot = g.cache.eviction_candidate(il, false);
+        if (slot >= 0) {
+            const int32_t resident_key = g.cache.key_of[slot];
+            if (resident_key >= 0) {
+                const int32_t resident_layer = resident_key / g.cache.n_expert;
+                const int32_t resident_expert = resident_key % g.cache.n_expert;
+                if (resident_layer < 0 || (size_t) resident_layer >= pimpl->layers.size() ||
+                        pimpl->layers[resident_layer].group != group_id ||
+                        !g.cache.slot_map[resident_layer] ||
+                        g.cache.slot_map[resident_layer][resident_expert] != slot) return false;
+                old_key = resident_key;
+            }
         }
     }
     if (slot < 0) return false;
@@ -815,14 +846,14 @@ bool llama_moe_cache::reserve_fill(int32_t device, int32_t group_id, int32_t il,
 
     // Validate the full descriptor before removing its old owner or publishing COPYING.
     if (old_key >= 0) {
-        const int32_t old_layer = old_key / g.lru.n_expert;
-        const int32_t old_expert = old_key % g.lru.n_expert;
-        g.lru.slot_map[old_layer][old_expert] = -1;
+        const int32_t old_layer = old_key / g.cache.n_expert;
+        const int32_t old_expert = old_key % g.cache.n_expert;
+        g.cache.slot_map[old_layer][old_expert] = -1;
     }
-    pending.generation = g.lru.advance_generation(slot);
-    g.lru.key_of[slot] = key;
-    g.lru.state[slot] = moe_cache_lru::slot_state::COPYING;
-    g.lru.unlink(slot);
+    pending.generation = g.cache.advance_generation(slot);
+    g.cache.key_of[slot] = key;
+    g.cache.slot_states[slot] = moe_cache_state::slot_state::COPYING;
+    g.cache.unlink(slot);
     *job = pending;
     return true;
 }
@@ -835,22 +866,26 @@ bool llama_moe_cache::finish_fill(const ggml_cuda_moe_ffn_fill_job * job, bool c
     auto & g = pimpl->groups[job->group];
     auto & l = pimpl->layers[job->layer];
     if (!g.frozen || g.generation != job->owner_generation || g.device != job->device ||
-            l.group != job->group || job->slot < 0 || job->slot >= g.lru.n_slots ||
-            job->key < 0 || job->key / g.lru.n_expert != job->layer ||
-            !g.lru.slot_map[job->layer] || g.lru.state[job->slot] != moe_cache_lru::slot_state::COPYING ||
-            g.lru.key_of[job->slot] != job->key || g.lru.slot_generation[job->slot] != job->generation ||
-            g.lru.pin_count[job->slot] != 0 || g.lru.slot_map[job->layer][job->key % g.lru.n_expert] >= 0) return false;
+            l.group != job->group || job->slot < 0 || job->slot >= g.cache.n_slots ||
+            job->key < 0 || job->key / g.cache.n_expert != job->layer ||
+            !g.cache.slot_map[job->layer] || g.cache.slot_states[job->slot] != moe_cache_state::slot_state::COPYING ||
+            g.cache.key_of[job->slot] != job->key || g.cache.slot_generation[job->slot] != job->generation ||
+            g.cache.pin_count[job->slot] != 0 || g.cache.slot_map[job->layer][job->key % g.cache.n_expert] >= 0) return false;
 
     if (copied) {
-        g.lru.slot_map[job->layer][job->key % g.lru.n_expert] = job->slot;
-        g.lru.state[job->slot] = moe_cache_lru::slot_state::READY;
-        g.lru.link_tail(job->slot);
+        // The worker thread completed the copy outside state_mutex.  Refresh
+        // the frequency model before publishing the slot so ClassLRU always
+        // sees a defined class for the new key.
+        g.cache.observe_route(job->layer, job->key % g.cache.n_expert, -1);
+        g.cache.slot_map[job->layer][job->key % g.cache.n_expert] = job->slot;
+        g.cache.slot_states[job->slot] = moe_cache_state::slot_state::READY;
+        g.cache.link_tail(job->slot);
         // The key is resident now; a future eviction must earn its way back.
-        g.lru.reset_miss_demand(job->key);
+        g.cache.reset_miss_demand(job->key);
     } else {
-        g.lru.key_of[job->slot] = -1;
-        g.lru.state[job->slot] = moe_cache_lru::slot_state::FREE;
-        g.lru.link_tail(job->slot);
+        g.cache.key_of[job->slot] = -1;
+        g.cache.slot_states[job->slot] = moe_cache_state::slot_state::FREE;
+        g.cache.link_tail(job->slot);
     }
     return true;
 }
