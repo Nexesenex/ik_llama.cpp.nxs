@@ -1851,11 +1851,41 @@ llm_expert_gating_func_type   gating_op,
         auto & cache_ffn = *lctx.moe_cache_ffn;
         const auto * cache_ffn_layer = cache_ffn.find_layer(il);
         if (cache_ffn_layer) {
+            // Up/gate Hadamard rotations act on the routed activation and are
+            // folded in here, exactly like the stock fused up/gate path.  Both
+            // projections must use the same transform; a rotation on the down
+            // projection would have to run inside the executor and keeps the
+            // layer on the stock graph.
+            const auto * up_rotation = up_exps ? lctx.model.hadamard_rotation(up_exps) : nullptr;
+            const auto * gate_rotation = gate_exps ? lctx.model.hadamard_rotation(gate_exps) : nullptr;
+            const auto * down_rotation = down_exps ? lctx.model.hadamard_rotation(down_exps) : nullptr;
+            const bool up_gate_rotation_matches = (!up_rotation && !gate_rotation) ||
+                (up_rotation && gate_rotation && *up_rotation == *gate_rotation);
+            ggml_tensor * semantic_activation = cur;
+            if (up_gate_rotation_matches && up_rotation)
+                semantic_activation = llm_build_hadamard_rotate(ctx, semantic_activation, *up_rotation, false, true);
+
             ggml_moe_ffn_layout layout = cache_ffn_layer->layout;
             layout.n_experts = n_expert > 0 && n_expert <= INT32_MAX ? (int32_t) n_expert : 0;
             layout.n_experts_used = n_expert_used > 0 && n_expert_used <= INT32_MAX ? (int32_t) n_expert_used : 0;
             layout.up = up_exps; layout.gate = gate_exps; layout.down = down_exps;
-            layout.activation = cur; layout.selected_ids = selected_experts; layout.route_weights = weights;
+            layout.activation = semantic_activation; layout.selected_ids = selected_experts;
+            // The executor applies the route weights after the down projection,
+            // which is where the stock graph applies down_exps_s.  Folding the
+            // per-expert scale into a copy of the route weights is equivalent
+            // and independent of fused_mmad.
+            ggml_tensor * semantic_weights = weights;
+            if (down_exps_s && !weight_before_ffn) {
+                auto s = ggml_reshape_3d(ctx, down_exps_s, 1, n_expert, 1);
+                s = ggml_repeat_4d(ctx, s, 1, n_expert, n_tokens, 1);
+                s = ggml_get_rows(ctx, s, selected_experts);
+                auto w_reshaped = ggml_reshape_2d(ctx, semantic_weights, n_expert_used, n_tokens);
+                auto s_reshaped = ggml_reshape_2d(ctx, s, n_expert_used, n_tokens);
+                w_reshaped = ggml_mul(ctx, w_reshaped, s_reshaped);
+                semantic_weights = ggml_reshape_3d(ctx, w_reshaped, 1, n_expert_used, n_tokens);
+                cb(semantic_weights, "ffn_moe_weights_down_scaled", il);
+            }
+            layout.route_weights = semantic_weights;
             layout.n_tokens = n_tokens;
             // Bind the routed activation known by the model builder.  The
             // per-layer CPU miss graph and CUDA binding are created from this
@@ -1884,11 +1914,9 @@ llm_expert_gating_func_type   gating_op,
             if (type_op == LLM_FFN_SILU && std::isfinite(routed_limit) && routed_limit >= 0.0f)
                 layout.graph_flags |= GGML_MOE_FFN_GRAPH_SILU_LIMIT;
             if (ggml_moe_ffn_expert_execution_inputs_supported(up_exps_b, gate_exps_b,
-                    down_exps_b, up_gate_exps_b, down_exps_s))
+                    down_exps_b, up_gate_exps_b))
                 layout.graph_flags |= GGML_MOE_FFN_GRAPH_NO_EXPERT_EXECUTION_EXTRAS;
-            if ((!up_exps || !lctx.model.hadamard_rotation(up_exps)) &&
-                    (!gate_exps || !lctx.model.hadamard_rotation(gate_exps)) &&
-                    (!down_exps || !lctx.model.hadamard_rotation(down_exps)))
+            if (up_gate_rotation_matches && !down_rotation)
                 layout.graph_flags |= GGML_MOE_FFN_GRAPH_NO_HADAMARD;
             ggml_tensor * semantic = cache_ffn.build_node(ctx, lctx.sched, layout);
             if (semantic) {
