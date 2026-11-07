@@ -4966,6 +4966,20 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     // Disable CUDA graphs in presence of env var, old GPU, use-case which is changing too rapidly,
     // or previous graph capture failure.
     // Also disable for multi-gpu for now. TO DO investigate
+    //
+    // The hybrid MoE op is deliberately excluded from capture as well:
+    // - the hit path copies host-prepared slot ids and row descriptors to the
+    //   device and synchronizes with the fill worker, so the captured stream
+    //   does not contain everything the launch depends on;
+    // - fill admission and commit mutate executor state outside the captured
+    //   range; replaying a captured launch would reuse stale slot ids and skip
+    //   the fills that the next execution needs;
+    // - miss rows run through the per-layer CPU graph, whose host reads and
+    //   host-side results cannot be expressed in the captured stream.
+    // Capturing this op would need value-stable slot ids plus a captured
+    // multi-branch host/device execution, which is a different design rather
+    // than a port of PR 2716.  Keep the whole split uncaptured instead of
+    // capturing a launch that only happens to be correct for one cache state.
     bool use_cuda_graph = !split_has_moe_ffn && !disable_cuda_graphs_due_to_env && cuda_ctx->use_cuda_graph;
 
     ggml_cuda_graph * graph = nullptr;
