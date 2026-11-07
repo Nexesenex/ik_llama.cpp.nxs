@@ -1857,6 +1857,18 @@ llm_expert_gating_func_type   gating_op,
             layout.up = up_exps; layout.gate = gate_exps; layout.down = down_exps;
             layout.activation = cur; layout.selected_ids = selected_experts; layout.route_weights = weights;
             layout.n_tokens = n_tokens;
+            // Bind the routed activation known by the model builder.  The
+            // per-layer CPU miss graph and CUDA binding are created from this
+            // op on first use.  Unsupported variants fall back to the stock
+            // FFN graph inside build_node().
+            switch (type_op) {
+                case LLM_FFN_SILU:       layout.unary_op = GGML_UNARY_OP_SILU;       break;
+                case LLM_FFN_GELU:       layout.unary_op = GGML_UNARY_OP_GELU;       break;
+                case LLM_FFN_RELU:       layout.unary_op = GGML_UNARY_OP_RELU;       break;
+                case LLM_FFN_SWIGLU_OAI: layout.unary_op = GGML_UNARY_OP_SWIGLU_OAI; break;
+                default:                 layout.unary_op = GGML_UNARY_OP_COUNT;      break;
+            }
+            layout.limit = lctx.model.swiglu_limit(il, false);
             layout.graph_flags = 0;
             // Multi-token hybrid execution is only valid when the graph consumes every token output.
             if (n_tokens > 0 && n_tokens <= layout.token_capacity &&
