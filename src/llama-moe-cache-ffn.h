@@ -17,6 +17,8 @@ struct llama_moe_cache_ffn_state {
     struct layer_binding {
         llama_moe_cache_frozen_layer snapshot;
         ggml_backend * cuda_backend = nullptr;
+        ggml_backend * cpu_backend = nullptr;
+        int32_t cpu_resource_id = 0;
         ggml_backend_buffer * cpu_buffer = nullptr;
         ggml_context * cpu_ctx = nullptr;
         ggml_cgraph * cpu_graph = nullptr;
@@ -50,6 +52,8 @@ struct llama_moe_cache_ffn_state {
             int32_t token_capacity);
     void shutdown();
     const layer_binding * find_layer(int32_t il) const;
+    layer_binding * find_layer_mutable(int32_t il);
+    bool build_layer_cpu_graph(layer_binding & layer, ggml_unary_op unary_op, float limit);
     ggml_tensor * build_node(ggml_context * ctx, ggml_backend_sched_t sched,
             const ggml_moe_ffn_layout & layout);
 };

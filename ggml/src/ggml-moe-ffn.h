@@ -50,6 +50,14 @@ static inline bool ggml_moe_ffn_expert_execution_inputs_supported(
     return !up_bias && !gate_bias && !down_bias && !merged_up_gate_bias && !down_scale;
 }
 
+static inline bool ggml_moe_ffn_unary_supported(enum ggml_unary_op op) {
+    // These are the activations implemented by both the CPU fused up/gate
+    // graph and the CUDA hit kernels.  SITU and plain SWIGLU remain outside
+    // the semantic contract.
+    return op == GGML_UNARY_OP_SILU || op == GGML_UNARY_OP_RELU ||
+        op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_SWIGLU_OAI;
+}
+
 static inline bool ggml_moe_ffn_tensor_shape(const struct ggml_tensor * tensor,
         enum ggml_type type, int64_t ne0, int64_t ne1, int64_t ne2) {
     return tensor && tensor->type == type && tensor->ne[0] == ne0 && tensor->ne[1] == ne1 &&
@@ -158,7 +166,7 @@ static inline bool ggml_moe_ffn_layout_supported(const struct ggml_moe_ffn_layou
         GGML_MOE_FFN_LAYOUT_NO_EXTRA_WEIGHTS | GGML_MOE_FFN_LAYOUT_NO_HADAMARD |
         GGML_MOE_FFN_LAYOUT_HOST_RESIDENT;
     if (!l || l->n_experts <= 0 || l->n_experts_used < 1 || l->n_experts_used > l->n_experts ||
-            l->n_embd <= 0 || l->n_ff <= 0 || l->unary_op != GGML_UNARY_OP_SILU ||
+            l->n_embd <= 0 || l->n_ff <= 0 || !ggml_moe_ffn_unary_supported(l->unary_op) ||
             !isfinite(l->limit) || l->limit < 0.0f || (l->flags & required) != required ||
             !l->up || !l->gate || !l->down ||
             !ggml_moe_ffn_tensor_layout(l->down, l->down->type, l->n_ff, l->n_embd, l->n_experts)) return false;
@@ -198,9 +206,11 @@ static inline bool ggml_moe_ffn_graph_inputs_supported(const struct ggml_moe_ffn
 }
 
 static inline bool ggml_moe_ffn_graph_supported(const struct ggml_moe_ffn_layout * l) {
-    const uint32_t required = GGML_MOE_FFN_GRAPH_ALL_TOKEN_OUTPUTS | GGML_MOE_FFN_GRAPH_NO_LORA |
-        GGML_MOE_FFN_GRAPH_FINAL_ROUTE_WEIGHTS | GGML_MOE_FFN_GRAPH_SILU_LIMIT |
+    uint32_t required = GGML_MOE_FFN_GRAPH_ALL_TOKEN_OUTPUTS | GGML_MOE_FFN_GRAPH_NO_LORA |
+        GGML_MOE_FFN_GRAPH_FINAL_ROUTE_WEIGHTS |
         GGML_MOE_FFN_GRAPH_NO_EXPERT_EXECUTION_EXTRAS | GGML_MOE_FFN_GRAPH_NO_HADAMARD;
+    // Only SILU consumes the routed swiglu limit.
+    if (l && l->unary_op == GGML_UNARY_OP_SILU) required |= GGML_MOE_FFN_GRAPH_SILU_LIMIT;
     return l && (l->graph_flags & required) == required && ggml_moe_ffn_graph_inputs_supported(l);
 }
 
