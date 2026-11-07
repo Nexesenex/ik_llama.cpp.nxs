@@ -490,6 +490,94 @@ static bool ggml_cuda_moe_ffn_cpu_draws(const ggml_cuda_moe_ffn_binding & b,
     return success;
 }
 
+// F16 experts bypass the quantized MMV path, which always feeds a Q8_1
+// activation to the kernel.  The arithmetic below mirrors mul_mat_vec_q()'s
+// post-dot activation so F16 layers behave identically to quantized ones.
+static __device__ __forceinline__ float ggml_cuda_moe_ffn_activate(
+        float gate, float up, ggml_unary_op unary_op, float limit) {
+    // mmvq_args treats a non-positive limit as "unlimited"; mirror that here.
+    if (!(limit > 1e-6f)) limit = INFINITY;
+    if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
+        constexpr float alpha = 1.702f;
+        constexpr float swiglu_limit = 7.0f;
+        gate = fminf(gate, swiglu_limit);
+        up = fmaxf(fminf(up, swiglu_limit), -swiglu_limit);
+        return gate / (1.0f + expf(-gate * alpha)) * (1.0f + up);
+    }
+    switch (unary_op) {
+        case GGML_UNARY_OP_SILU:
+            gate = gate / (1.0f + expf(-gate));
+            gate = fminf(gate, limit);
+            return fmaxf(-limit, fminf(limit, up)) * gate;
+        case GGML_UNARY_OP_RELU:
+            return fmaxf(gate, 0.0f) * up;
+        case GGML_UNARY_OP_GELU: {
+            constexpr float GELU_COEF_A    = 0.044715f;
+            constexpr float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
+            return 0.5f*gate*up*(1.0f + tanhf(SQRT_2_OVER_PI*gate*(1.0f + GELU_COEF_A*gate*gate)));
+        }
+        default:
+            return 0.0f;
+    }
+}
+
+// One warp computes one output row so the half loads along k stay coalesced.
+template <int WARPS_PER_BLOCK>
+static __global__ void ggml_cuda_moe_ffn_f16_up_gate_kernel(
+        const half * up, const half * gate, const float * activation, const int32_t * slots,
+        float * output, int64_t n_embd, int64_t n_ff, size_t up_expert_bytes,
+        size_t gate_expert_bytes, ggml_unary_op unary_op, float limit, int n_hits) {
+    const int hit = blockIdx.y;
+    const int warp = threadIdx.x / WARP_SIZE;
+    const int lane = threadIdx.x % WARP_SIZE;
+    const int64_t row = (int64_t) blockIdx.x * WARPS_PER_BLOCK + warp;
+    if (hit >= n_hits || row >= n_ff) return;
+
+    const int32_t slot = slots[hit];
+    const half * up_row = (const half *) ((const char *) up + (size_t) slot * up_expert_bytes) +
+        (size_t) row * (size_t) n_embd;
+    const half * gate_row = (const half *) ((const char *) gate + (size_t) slot * gate_expert_bytes) +
+        (size_t) row * (size_t) n_embd;
+    float sum_up = 0.0f, sum_gate = 0.0f;
+    for (int64_t i = lane; i < n_embd; i += WARP_SIZE) {
+        const float x = activation[i];
+        sum_up = fmaf(__half2float(up_row[i]), x, sum_up);
+        sum_gate = fmaf(__half2float(gate_row[i]), x, sum_gate);
+    }
+    sum_up = warp_reduce_sum(sum_up);
+    sum_gate = warp_reduce_sum(sum_gate);
+    if (lane == 0) {
+        output[(size_t) hit * (size_t) n_ff + (size_t) row] =
+            ggml_cuda_moe_ffn_activate(sum_gate, sum_up, unary_op, limit);
+    }
+}
+
+template <int WARPS_PER_BLOCK>
+static __global__ void ggml_cuda_moe_ffn_f16_down_kernel(
+        const half * down, const float * hidden, const int32_t * slots, float * output,
+        int64_t n_ff, int64_t n_embd, size_t down_expert_bytes, int n_hits) {
+    const int hit = blockIdx.y;
+    const int warp = threadIdx.x / WARP_SIZE;
+    const int lane = threadIdx.x % WARP_SIZE;
+    const int64_t row = (int64_t) blockIdx.x * WARPS_PER_BLOCK + warp;
+    if (hit >= n_hits || row >= n_embd) return;
+
+    const int32_t slot = slots[hit];
+    const half * down_row = (const half *) ((const char *) down + (size_t) slot * down_expert_bytes) +
+        (size_t) row * (size_t) n_ff;
+    const float * x = hidden + (size_t) hit * (size_t) n_ff;
+    float sum = 0.0f;
+    for (int64_t i = lane; i < n_ff; i += WARP_SIZE) {
+        sum = fmaf(__half2float(down_row[i]), x[i], sum);
+    }
+    sum = warp_reduce_sum(sum);
+    if (lane == 0) {
+        output[(size_t) hit * (size_t) n_embd + (size_t) row] = sum;
+    }
+}
+
+constexpr int GGML_CUDA_MOE_FFN_F16_WARPS = 8;
+
 static bool ggml_cuda_moe_ffn_enqueue_hit_rows(ggml_backend_cuda_context & ctx,
         const ggml_tensor * op, const ggml_cuda_moe_ffn_binding & b,
         ggml_cuda_moe_ffn_cpu_resource_state & resource, int32_t token,
@@ -506,12 +594,7 @@ static bool ggml_cuda_moe_ffn_enqueue_hit_rows(ggml_backend_cuda_context & ctx,
                 cudaMemcpyHostToDevice, stream) != cudaSuccess) return false;
 
     const int64_t up_padded = GGML_PAD(b.layout.n_embd, MATRIX_ROW_PADDING);
-    quantize_row_q8_1_cuda((const float *) activation_data,
-            (char *) resource.device_up_input_q8_1 + draw_offset * up_row_bytes,
-            b.layout.n_embd, 1, 1, up_padded, b.layout.up->type, stream);
-    kernels_started = true;
-    CUDA_CHECK(cudaGetLastError());
-
+    const bool up_gate_f16 = b.layout.up->type == GGML_TYPE_F16;
     ggml_tensor ids = *op->src[1];
     ids.ne[0] = n_hits;
     ids.ne[1] = ids.ne[2] = ids.ne[3] = 1;
@@ -528,39 +611,70 @@ static bool ggml_cuda_moe_ffn_enqueue_hit_rows(ggml_backend_cuda_context & ctx,
     hidden.nb[2] = b.layout.n_ff * sizeof(float);
     hidden.nb[3] = (int64_t) b.layout.n_ff * n_hits * sizeof(float);
     hidden.data = resource.device_hidden + draw_offset * b.layout.n_ff;
-    ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, b.layout.bank_up, &activation, &ids, &hidden, nullptr, nullptr,
-            (const char *) b.layout.bank_up->data, (const char *) b.layout.bank_gate->data, nullptr,
-            (const char *) resource.device_up_input_q8_1 + draw_offset * up_row_bytes,
-            resource.device_hidden + draw_offset * b.layout.n_ff, 0, b.layout.n_ff, 1,
-            up_padded, b.layout.unary_op, b.layout.limit, stream);
-    CUDA_CHECK(cudaGetLastError());
+    if (up_gate_f16) {
+        kernels_started = true;
+        const dim3 blocks((unsigned) ((b.layout.n_ff + GGML_CUDA_MOE_FFN_F16_WARPS - 1) /
+                    GGML_CUDA_MOE_FFN_F16_WARPS), (unsigned) n_hits, 1);
+        ggml_cuda_moe_ffn_f16_up_gate_kernel<GGML_CUDA_MOE_FFN_F16_WARPS>
+            <<<blocks, GGML_CUDA_MOE_FFN_F16_WARPS * WARP_SIZE, 0, stream>>>(
+                (const half *) b.layout.bank_up->data, (const half *) b.layout.bank_gate->data,
+                (const float *) activation_data, resource.device_slots + draw_offset,
+                resource.device_hidden + draw_offset * b.layout.n_ff,
+                b.layout.n_embd, b.layout.n_ff, b.layout.bank_up->nb[2], b.layout.bank_gate->nb[2],
+                b.layout.unary_op, b.layout.limit, n_hits);
+        CUDA_CHECK(cudaGetLastError());
+    } else {
+        quantize_row_q8_1_cuda((const float *) activation_data,
+                (char *) resource.device_up_input_q8_1 + draw_offset * up_row_bytes,
+                b.layout.n_embd, 1, 1, up_padded, b.layout.up->type, stream);
+        kernels_started = true;
+        CUDA_CHECK(cudaGetLastError());
+        ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, b.layout.bank_up, &activation, &ids, &hidden, nullptr, nullptr,
+                (const char *) b.layout.bank_up->data, (const char *) b.layout.bank_gate->data, nullptr,
+                (const char *) resource.device_up_input_q8_1 + draw_offset * up_row_bytes,
+                resource.device_hidden + draw_offset * b.layout.n_ff, 0, b.layout.n_ff, 1,
+                up_padded, b.layout.unary_op, b.layout.limit, stream);
+        CUDA_CHECK(cudaGetLastError());
+    }
 
     const int64_t down_padded = GGML_PAD(b.layout.n_ff, MATRIX_ROW_PADDING);
     const size_t q8_per_expert = (size_t) GGML_PAD((int64_t) b.layout.n_ff, MATRIX_ROW_PADDING) /
         QK8_1 * sizeof(block_q8_1);
-    quantize_row_q8_1_cuda(resource.device_hidden + draw_offset * b.layout.n_ff,
-            (char *) resource.device_down_input_q8_1 + draw_offset * down_row_bytes,
-            b.layout.n_ff, n_hits, 1, down_padded, b.layout.down->type, stream);
-    CUDA_CHECK(cudaGetLastError());
-    ggml_tensor down_input = hidden;
-    down_input.ne[1] = 1;
-    down_input.ne[2] = 1;
-    down_input.nb[1] = q8_per_expert;
-    down_input.nb[2] = q8_per_expert;
-    ggml_tensor down_output{};
-    down_output.type = GGML_TYPE_F32;
-    down_output.ne[0] = b.layout.n_embd; down_output.ne[1] = 1;
-    down_output.ne[2] = n_hits; down_output.ne[3] = 1;
-    down_output.nb[0] = sizeof(float); down_output.nb[1] = b.layout.n_embd * sizeof(float);
-    down_output.nb[2] = b.layout.n_embd * sizeof(float);
-    down_output.nb[3] = (int64_t) b.layout.n_embd * down_output.ne[2] * sizeof(float);
     const size_t down_offset = size_t(token) * (b.layout.n_experts_used + 1) * b.layout.n_embd;
-    down_output.data = resource.device_down + down_offset;
-    ggml_cuda_op_mul_mat_vec_q_id(ctx, b.layout.bank_down, &down_input, &ids, &down_output, nullptr,
-            (const char *) b.layout.bank_down->data, nullptr,
-            (const char *) resource.device_down_input_q8_1 + draw_offset * down_row_bytes,
-            resource.device_down + down_offset, 0, b.layout.n_embd, 1, down_padded, stream);
-    CUDA_CHECK(cudaGetLastError());
+    if (b.layout.down->type == GGML_TYPE_F16) {
+        const dim3 blocks((unsigned) ((b.layout.n_embd + GGML_CUDA_MOE_FFN_F16_WARPS - 1) /
+                    GGML_CUDA_MOE_FFN_F16_WARPS), (unsigned) n_hits, 1);
+        ggml_cuda_moe_ffn_f16_down_kernel<GGML_CUDA_MOE_FFN_F16_WARPS>
+            <<<blocks, GGML_CUDA_MOE_FFN_F16_WARPS * WARP_SIZE, 0, stream>>>(
+                (const half *) b.layout.bank_down->data,
+                resource.device_hidden + draw_offset * b.layout.n_ff,
+                resource.device_slots + draw_offset, resource.device_down + down_offset,
+                b.layout.n_ff, b.layout.n_embd, b.layout.bank_down->nb[2], n_hits);
+        CUDA_CHECK(cudaGetLastError());
+    } else {
+        quantize_row_q8_1_cuda(resource.device_hidden + draw_offset * b.layout.n_ff,
+                (char *) resource.device_down_input_q8_1 + draw_offset * down_row_bytes,
+                b.layout.n_ff, n_hits, 1, down_padded, b.layout.down->type, stream);
+        CUDA_CHECK(cudaGetLastError());
+        ggml_tensor down_input = hidden;
+        down_input.ne[1] = 1;
+        down_input.ne[2] = 1;
+        down_input.nb[1] = q8_per_expert;
+        down_input.nb[2] = q8_per_expert;
+        ggml_tensor down_output{};
+        down_output.type = GGML_TYPE_F32;
+        down_output.ne[0] = b.layout.n_embd; down_output.ne[1] = 1;
+        down_output.ne[2] = n_hits; down_output.ne[3] = 1;
+        down_output.nb[0] = sizeof(float); down_output.nb[1] = b.layout.n_embd * sizeof(float);
+        down_output.nb[2] = b.layout.n_embd * sizeof(float);
+        down_output.nb[3] = (int64_t) b.layout.n_embd * down_output.ne[2] * sizeof(float);
+        down_output.data = resource.device_down + down_offset;
+        ggml_cuda_op_mul_mat_vec_q_id(ctx, b.layout.bank_down, &down_input, &ids, &down_output, nullptr,
+                (const char *) b.layout.bank_down->data, nullptr,
+                (const char *) resource.device_down_input_q8_1 + draw_offset * down_row_bytes,
+                resource.device_down + down_offset, 0, b.layout.n_embd, 1, down_padded, stream);
+        CUDA_CHECK(cudaGetLastError());
+    }
 
     return true;
 }
@@ -949,6 +1063,12 @@ static bool ggml_cuda_moe_ffn_get_workspace_sizes(int32_t n_embd, int32_t n_ff,
     return true;
 }
 
+// F16 experts are executed by the executor's own GEMV kernels; every other
+// type still goes through the quantized MMV path.
+static bool ggml_cuda_moe_ffn_type_supported(ggml_type type) {
+    return type == GGML_TYPE_F16 || ggml_cuda_mmvq_type_supported(type);
+}
+
 GGML_CALL bool ggml_backend_cuda_moe_ffn_layout_supported(ggml_backend_t backend,
         const ggml_moe_ffn_layout * layout) {
     if (!ggml_backend_is_cuda(backend) || !layout) return false;
@@ -956,8 +1076,8 @@ GGML_CALL bool ggml_backend_cuda_moe_ffn_layout_supported(ggml_backend_t backend
     ggml_cuda_moe_ffn_workspace_sizes sizes{};
     return layout->owner_backend == backend && (layout->device < 0 || layout->device == ctx->device) &&
         ggml_moe_ffn_layout_supported(layout) && layout->up->type == layout->gate->type &&
-        ggml_cuda_mmvq_type_supported(layout->up->type) &&
-        ggml_cuda_mmvq_type_supported(layout->down->type) &&
+        ggml_cuda_moe_ffn_type_supported(layout->up->type) &&
+        ggml_cuda_moe_ffn_type_supported(layout->down->type) &&
         ggml_cuda_moe_ffn_get_workspace_sizes(layout->n_embd, layout->n_ff,
                 layout->n_experts_used, layout->token_capacity, sizes);
 }
