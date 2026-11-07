@@ -1870,9 +1870,12 @@ llm_expert_gating_func_type   gating_op,
             }
             layout.limit = lctx.model.swiglu_limit(il, false);
             layout.graph_flags = 0;
-            // Multi-token hybrid execution is only valid when the graph consumes every token output.
-            if (n_tokens > 0 && n_tokens <= layout.token_capacity &&
-                    lctx.n_outputs == n_tokens && !add_input)
+            // The hybrid executor computes and writes every token row of the
+            // routed FFN, including rows whose logits are not selected by this
+            // ubatch.  Prompt processing and batches that request only a subset
+            // of logits are therefore valid; the downstream output-row
+            // selection is independent of this op.
+            if (n_tokens > 0 && n_tokens <= layout.token_capacity)
                 layout.graph_flags |= GGML_MOE_FFN_GRAPH_ALL_TOKEN_OUTPUTS;
             if (lctx.lora_adapters.empty()) layout.graph_flags |= GGML_MOE_FFN_GRAPH_NO_LORA;
             // These are final route weights after ordinary router normalization/scaling.
@@ -1889,6 +1892,14 @@ llm_expert_gating_func_type   gating_op,
                 layout.graph_flags |= GGML_MOE_FFN_GRAPH_NO_HADAMARD;
             ggml_tensor * semantic = cache_ffn.build_node(ctx, lctx.sched, layout);
             if (semantic) {
+                // The semantic op returns only the routed-expert projection.
+                // Callers that ask llm_build_moe_ffn() for the residual (the
+                // Llama4 and generic Llama MoE builders) expect the input to
+                // be added here, exactly like the stock path below.
+                if (add_input) {
+                    semantic = ggml_add(ctx, semantic, input);
+                    cb(semantic, "ffn_out_with_inp", il);
+                }
                 cb(semantic, "moe_cache_ffn", il);
                 return semantic;
             }
