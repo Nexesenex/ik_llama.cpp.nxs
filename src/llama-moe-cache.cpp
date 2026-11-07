@@ -21,6 +21,9 @@ struct moe_cache_lru {
 
     int32_t n_expert = 0;
     int32_t n_slots = 0;
+    // Number of layers belonging to this cache group; a budget that can hold
+    // every layer's experts admits misses immediately.
+    int32_t n_group_layers = 0;
     std::vector<int32_t *> slot_map;
     std::vector<int32_t> key_of;
     std::vector<uint64_t> slot_generation;
@@ -30,13 +33,18 @@ struct moe_cache_lru {
     std::vector<int32_t> next;
     std::vector<uint32_t> seen;
     std::vector<int32_t> uniq;
+    // Consecutive observations of a missing (layer, expert) key.  Evicting a
+    // resident expert for a one-off route is destructive at low hit rates, so
+    // fills are demand-driven instead of admitted on every miss.
+    std::vector<uint8_t> miss_demand;
     uint32_t seen_gen = 0;
     int32_t head = -1;
     int32_t tail = -1;
 
-    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots) {
+    void init(int32_t n_layer, int32_t n_group_layers, int32_t n_expert, int32_t n_slots) {
         this->n_expert = n_expert;
         this->n_slots = n_slots;
+        this->n_group_layers = n_group_layers;
         slot_map.assign(n_layer, nullptr);
         key_of.assign(n_slots, -1);
         slot_generation.assign(n_slots, 0);
@@ -51,6 +59,26 @@ struct moe_cache_lru {
         head = 0;
         tail = n_slots - 1;
         seen.assign(n_expert, 0);
+        miss_demand.assign((size_t) n_layer * n_expert, 0);
+    }
+
+    struct miss_observation {
+        uint8_t demand = 0;
+        bool incremented = false;
+    };
+
+    miss_observation observe_miss(int32_t key) {
+        miss_observation observation;
+        if (key < 0 || (size_t) key >= miss_demand.size()) return observation;
+        uint8_t & demand = miss_demand[key];
+        observation.incremented = demand < std::numeric_limits<uint8_t>::max();
+        if (observation.incremented) ++demand;
+        observation.demand = demand;
+        return observation;
+    }
+
+    void reset_miss_demand(int32_t key) {
+        if (key >= 0 && (size_t) key < miss_demand.size()) miss_demand[key] = 0;
     }
 
     void touch(int32_t s) {
@@ -466,7 +494,7 @@ struct llama_moe_cache::impl {
             }
             g.cache.init((int32_t) layers.size(), n_expert, g.n_slots,
                     policy == LLAMA_MOE_CACHE_POLICY_CLASSLRU ? llama_moe_cache_policy_detail::kind::classlru : llama_moe_cache_policy_detail::kind::lru);
-            g.lru.init((int32_t) layers.size(), n_expert, g.n_slots);
+            g.lru.init((int32_t) layers.size(), (int32_t) g.layers.size(), n_expert, g.n_slots);
             device_tensor_counts[g.device] += g.ref.size();
             for (const int32_t il : g.layers) {
                 const auto & layer = model.layers[il];
@@ -920,11 +948,23 @@ bool llama_moe_cache::reserve_fill(int32_t device, int32_t group_id, int32_t il,
     }
 
     int32_t slot = -1;
+    bool has_free_slot = false;
     int32_t old_key = -1;
     for (int32_t s = 0; s < g.lru.n_slots; ++s) {
         if (g.lru.state[s] == moe_cache_lru::slot_state::FREE &&
-                g.lru.key_of[s] < 0 && g.lru.pin_count[s] == 0) { slot = s; break; }
+                g.lru.key_of[s] < 0 && g.lru.pin_count[s] == 0) { slot = s; has_free_slot = true; break; }
     }
+
+    // Demand admission.  A first miss is admitted when the group can hold all
+    // of its experts anyway, otherwise it must be observed twice before a free
+    // slot is spent.  Replacing a resident expert requires eight observations,
+    // which keeps one-off routes from thrashing the bank.
+    const bool full_group_resident = (size_t) g.lru.n_slots >=
+        (size_t) g.lru.n_group_layers * (size_t) g.lru.n_expert;
+    const uint8_t threshold = has_free_slot ? (full_group_resident ? 1 : 2) : 8;
+    const auto observation = g.lru.observe_miss(key);
+    if (observation.demand < threshold) return false;
+
     if (slot < 0) {
         for (int32_t s = g.lru.head; s >= 0; s = g.lru.next[s]) {
             if (g.lru.state[s] != moe_cache_lru::slot_state::READY ||
@@ -979,6 +1019,8 @@ bool llama_moe_cache::finish_fill(const ggml_cuda_moe_ffn_fill_job * job, bool c
         g.lru.slot_map[job->layer][job->key % g.lru.n_expert] = job->slot;
         g.lru.state[job->slot] = moe_cache_lru::slot_state::READY;
         g.lru.link_tail(job->slot);
+        // The key is resident now; a future eviction must earn its way back.
+        g.lru.reset_miss_demand(job->key);
     } else {
         g.lru.key_of[job->slot] = -1;
         g.lru.state[job->slot] = moe_cache_lru::slot_state::FREE;

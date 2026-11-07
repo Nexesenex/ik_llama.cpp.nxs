@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <float.h>
 #include <limits>
 #include <map>
@@ -50,17 +51,23 @@ struct ggml_cuda_moe_ffn_cpu_resource_state {
     std::vector<ggml_cuda_moe_ffn_resource_signature> signatures;
     int32_t device = -1;
     size_t draw_capacity = 0;
+    // Bound the asynchronous fill pipeline so one burst cannot reserve an
+    // unbounded number of cache slots or pin an unbounded amount of host RAM.
+    static constexpr size_t MAX_FILL_JOBS = 128;
+    static constexpr size_t MAX_FILL_QUEUE_BYTES = 512ull * 1024ull * 1024ull;
+    static constexpr int32_t MAX_FILLS_PER_OP = 8;
+
     std::mutex execution_mutex;
     std::mutex fill_mutex;
     std::condition_variable fill_cv;
     std::thread fill_worker;
     ggml_backend_cuda_context * cuda_context = nullptr;
     cudaStream_t fill_stream = nullptr;
-    fill_request queued_fill{};
+    std::deque<fill_request> fill_queue;
     fill_request stuck_fill{};
-    bool fill_queued = false;
+    size_t queued_fill_bytes = 0;
+    uint32_t fill_outstanding = 0;
     bool fill_active = false;
-    bool fill_outstanding = false;
     bool fill_stuck = false;
     bool fill_stopping = false;
     bool transport_stopped = false;
@@ -290,15 +297,32 @@ static void ggml_cuda_moe_ffn_fill_worker(ggml_cuda_moe_ffn_cpu_resource_state *
         {
             std::unique_lock<std::mutex> lock(resource->fill_mutex);
             resource->fill_cv.wait(lock, [&]() {
-                return resource->fill_stopping || resource->fill_queued;
+                return resource->fill_stopping || !resource->fill_queue.empty();
             });
-            if (!resource->fill_queued) {
-                if (resource->fill_stopping) return;
-                continue;
+            if (resource->fill_stopping) {
+                // Return every queued reservation without copying.  A slot in
+                // COPYING must be released even when the engine is torn down.
+                std::deque<ggml_cuda_moe_ffn_cpu_resource_state::fill_request> cancelled;
+                cancelled.swap(resource->fill_queue);
+                resource->queued_fill_bytes = 0;
+                lock.unlock();
+                for (auto & pending : cancelled) {
+                    if (!pending.callbacks || !pending.callbacks->finish_fill || !pending.cache_context ||
+                            !pending.callbacks->finish_fill(pending.cache_context, &pending.owner_job, false)) {
+                        std::lock_guard<std::mutex> stuck_lock(resource->fill_mutex);
+                        resource->fill_stuck = true;
+                        resource->stuck_fill = std::move(pending);
+                        return;
+                    }
+                    std::lock_guard<std::mutex> stats_lock(resource->fill_mutex);
+                    if (resource->fill_outstanding > 0) --resource->fill_outstanding;
+                    ++resource->fills_failed;
+                }
+                return;
             }
-            request = std::move(resource->queued_fill);
-            resource->queued_fill = {};
-            resource->fill_queued = false;
+            request = std::move(resource->fill_queue.front());
+            resource->fill_queue.pop_front();
+            resource->queued_fill_bytes -= request.owner_job.total_bytes;
             resource->fill_active = true;
         }
 
@@ -308,14 +332,14 @@ static void ggml_cuda_moe_ffn_fill_worker(ggml_cuda_moe_ffn_cpu_resource_state *
             resource->fill_active = false;
             if (result == ggml_cuda_moe_ffn_fill_result::ownership_unresolved) {
                 resource->fill_stuck = true;
-                resource->stuck_fill = request;
+                resource->stuck_fill = std::move(request);
             } else {
                 if (result == ggml_cuda_moe_ffn_fill_result::committed) {
                     ++resource->fills_completed;
                     resource->fill_bytes_completed += request.owner_job.total_bytes;
                 }
                 else ++resource->fills_failed;
-                resource->fill_outstanding = false;
+                if (resource->fill_outstanding > 0) --resource->fill_outstanding;
             }
         }
         resource->fill_cv.notify_all();
@@ -324,12 +348,15 @@ static void ggml_cuda_moe_ffn_fill_worker(ggml_cuda_moe_ffn_cpu_resource_state *
 }
 
 static bool ggml_cuda_moe_ffn_enqueue_fill(ggml_cuda_moe_ffn_cpu_resource_state & resource,
-        const ggml_cuda_moe_ffn_binding & binding, int32_t binding_id, int32_t expert) {
+        const ggml_cuda_moe_ffn_binding & binding, int32_t binding_id, int32_t expert,
+        int32_t & accepted_this_op) {
+    if (accepted_this_op >= ggml_cuda_moe_ffn_cpu_resource_state::MAX_FILLS_PER_OP) return false;
     const auto * callbacks = binding.cache_callbacks;
     if (!callbacks || !callbacks->reserve_fill || !callbacks->finish_fill) return false;
     {
         std::lock_guard<std::mutex> lock(resource.fill_mutex);
-        if (!resource.accepting_fills || resource.fill_stopping || resource.fill_outstanding) {
+        if (!resource.accepting_fills || resource.fill_stopping ||
+                resource.fill_queue.size() >= ggml_cuda_moe_ffn_cpu_resource_state::MAX_FILL_JOBS) {
             return false;
         }
     }
@@ -366,10 +393,13 @@ static bool ggml_cuda_moe_ffn_enqueue_fill(ggml_cuda_moe_ffn_cpu_resource_state 
     bool accepted = false;
     {
         std::lock_guard<std::mutex> lock(resource.fill_mutex);
-        if (resource.accepting_fills && !resource.fill_stopping && !resource.fill_outstanding) {
-            resource.queued_fill = std::move(request);
-            resource.fill_queued = true;
-            resource.fill_outstanding = true;
+        if (resource.accepting_fills && !resource.fill_stopping &&
+                resource.fill_queue.size() < ggml_cuda_moe_ffn_cpu_resource_state::MAX_FILL_JOBS &&
+                job.total_bytes <= ggml_cuda_moe_ffn_cpu_resource_state::MAX_FILL_QUEUE_BYTES -
+                    resource.queued_fill_bytes) {
+            resource.fill_queue.push_back(std::move(request));
+            resource.queued_fill_bytes += job.total_bytes;
+            ++resource.fill_outstanding;
             ++resource.fills_accepted;
             accepted = true;
         }
@@ -380,6 +410,7 @@ static bool ggml_cuda_moe_ffn_enqueue_fill(ggml_cuda_moe_ffn_cpu_resource_state 
         }
         return false;
     }
+    ++accepted_this_op;
     resource.fill_cv.notify_one();
     return true;
 }
@@ -869,8 +900,12 @@ bool ggml_cuda_moe_ffn_compute(ggml_backend_cuda_context & ctx, ggml_tensor * op
     std::sort(resource.fill_candidates.begin(), resource.fill_candidates.end(), [](const auto & a, const auto & b) {
         return a.first_draw < b.first_draw;
     });
+    // Admit at most a handful of misses per routed FFN.  A low hit-rate op
+    // touches many distinct experts at once; filling them all would let one
+    // token evict the entire resident bank before the next layer reuses it.
+    int32_t accepted_fills = 0;
     for (const auto & candidate : resource.fill_candidates)
-        ggml_cuda_moe_ffn_enqueue_fill(resource, b, params.binding_id, candidate.expert);
+        ggml_cuda_moe_ffn_enqueue_fill(resource, b, params.binding_id, candidate.expert, accepted_fills);
 
     bool cpu_inputs_ready = false;
     const auto read_cpu_inputs = [&]() {
@@ -1253,12 +1288,12 @@ static bool ggml_cuda_moe_ffn_stop_transport(ggml_backend_cuda_context * ctx,
                 !stuck.callbacks->finish_fill(stuck.cache_context, &stuck.owner_job, false)) return false;
         std::lock_guard<std::mutex> lock(state.fill_mutex);
         state.fill_stuck = false;
-        state.fill_outstanding = false;
+        if (state.fill_outstanding > 0) --state.fill_outstanding;
         state.stuck_fill = {};
     }
     {
         std::lock_guard<std::mutex> lock(state.fill_mutex);
-        if (state.fill_outstanding || state.fill_queued || state.fill_active) return false;
+        if (!state.fill_queue.empty() || state.fill_outstanding || state.fill_active) return false;
     }
 
     std::lock_guard<std::mutex> execution_lock(state.execution_mutex);
@@ -1339,7 +1374,7 @@ GGML_CALL bool ggml_backend_cuda_moe_ffn_cpu_resource_get_stats(ggml_backend_t b
         stats->fills_accepted = state->fills_accepted;
         stats->fills_completed = state->fills_completed;
         stats->fills_failed = state->fills_failed;
-        stats->fill_outstanding = state->fill_outstanding ? 1 : 0;
+        stats->fill_outstanding = state->fill_outstanding;
         stats->fill_bytes_completed = state->fill_bytes_completed;
     }
     return true;
