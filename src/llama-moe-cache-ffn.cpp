@@ -282,56 +282,13 @@ bool llama_moe_cache_ffn_state::initialize(llama_moe_cache & cache, const llama_
             layer_binding layer;
             layer.snapshot = std::move(snapshot);
             layer.cuda_backend = d.cuda_backend;
+            layer.cpu_backend = d.cpu_backend;
+            layer.cpu_resource_id = d.cpu_resource_id;
             layer.layout = layout;
-            layer.cpu_ctx = ggml_init({ CPU_GRAPH_CONTEXT_BYTES, nullptr, true });
-            if (!layer.cpu_ctx) return fail("per-layer CPU graph context allocation");
-            layer.cpu_activations = ggml_new_tensor_2d(layer.cpu_ctx, GGML_TYPE_F32, layout.n_embd, 1);
-            layer.cpu_ids = ggml_new_tensor_2d(layer.cpu_ctx, GGML_TYPE_I32, 1, 1);
-            layer.cpu_routes = ggml_new_tensor_3d(layer.cpu_ctx, GGML_TYPE_F32, 1, 1, 1);
-            ggml_tensor * up_gate = ggml_moe_up_gate(layer.cpu_ctx,
-                    const_cast<ggml_tensor *>(layer.snapshot.host_up),
-                    const_cast<ggml_tensor *>(layer.snapshot.host_gate),
-                    layer.cpu_activations, layer.cpu_ids, GGML_UNARY_OP_SILU);
-            *(float *)(up_gate->op_params + 1) = layout.limit;
-            layer.cpu_output = ggml_mul_multi_add(layer.cpu_ctx,
-                    ggml_mul_mat_id(layer.cpu_ctx, const_cast<ggml_tensor *>(layer.snapshot.host_down),
-                            up_gate, layer.cpu_ids), layer.cpu_routes);
-            if (!layer.cpu_activations || !layer.cpu_ids || !layer.cpu_routes || !up_gate || !layer.cpu_output ||
-                    layer.cpu_output->ne[0] != layout.n_embd || layer.cpu_output->ne[1] != 1 || layer.cpu_output->ne[2] != 1) {
-                ggml_free(layer.cpu_ctx);
-                return fail("per-layer CPU graph construction");
-            }
-            layer.cpu_graph = ggml_new_graph_custom(layer.cpu_ctx, 64, false);
-            ggml_build_forward_expand(layer.cpu_graph, layer.cpu_output);
-            layer.cpu_buffer = ggml_backend_alloc_ctx_tensors(layer.cpu_ctx, d.cpu_backend);
-            if (!layer.cpu_buffer) {
-                ggml_free(layer.cpu_ctx);
-                return fail("per-layer CPU graph workspace allocation");
-            }
-            const std::vector<float> priming_activations(layout.n_embd, 0.0f);
-            const int32_t priming_id = 0;
-            const float priming_route = 1.0f;
-            ggml_backend_tensor_set(layer.cpu_activations,
-                    priming_activations.data(), 0, ggml_nbytes(layer.cpu_activations));
-            ggml_backend_tensor_set(layer.cpu_ids,
-                    &priming_id, 0, ggml_nbytes(layer.cpu_ids));
-            ggml_backend_tensor_set(layer.cpu_routes,
-                    &priming_route, 0, ggml_nbytes(layer.cpu_routes));
+            // The routed activation is only known when the model graph is
+            // built.  Defer the CPU miss graph and the CUDA binding to
+            // build_node(), which knows the actual unary op.
             d.layer_bindings.push_back(std::move(layer));
-            auto & registered = d.layer_bindings.back();
-            ggml_cuda_moe_ffn_binding binding = {};
-            binding.generation = registered.snapshot.generation;
-            binding.layout = registered.layout;
-            binding.cache_callbacks = llama_moe_cache_get_cuda_callbacks();
-            binding.cache_context = &cache;
-            binding.cpu_resource_id = d.cpu_resource_id;
-            binding.cpu_graph = registered.cpu_graph;
-            binding.cpu_activations = registered.cpu_activations;
-            binding.cpu_ids = registered.cpu_ids;
-            binding.cpu_route_weights = registered.cpu_routes;
-            binding.cpu_output = registered.cpu_output;
-            registered.binding_id = ggml_backend_cuda_moe_ffn_register(d.cuda_backend, &binding);
-            if (registered.binding_id <= 0) return fail("per-layer semantic binding registration");
         }
     }
 
@@ -423,11 +380,95 @@ const llama_moe_cache_ffn_state::layer_binding * llama_moe_cache_ffn_state::find
     return layer_by_index[il];
 }
 
+llama_moe_cache_ffn_state::layer_binding * llama_moe_cache_ffn_state::find_layer_mutable(int32_t il) {
+    if (!ready || il < 0 || (size_t) il >= layer_by_index.size()) return nullptr;
+    return const_cast<layer_binding *>(layer_by_index[il]);
+}
+
+bool llama_moe_cache_ffn_state::build_layer_cpu_graph(layer_binding & layer,
+        ggml_unary_op unary_op, float limit) {
+#ifdef GGML_USE_CUDA
+    if (layer.binding_id > 0) {
+        if (!ggml_backend_cuda_moe_ffn_unregister(layer.cuda_backend, layer.binding_id)) return false;
+        layer.binding_id = 0;
+    }
+    if (layer.cpu_buffer) { ggml_backend_buffer_free(layer.cpu_buffer); layer.cpu_buffer = nullptr; }
+    if (layer.cpu_ctx) { ggml_free(layer.cpu_ctx); layer.cpu_ctx = nullptr; }
+    layer.cpu_graph = nullptr;
+    layer.cpu_activations = nullptr;
+    layer.cpu_ids = nullptr;
+    layer.cpu_routes = nullptr;
+    layer.cpu_output = nullptr;
+    layer.layout.unary_op = unary_op;
+    layer.layout.limit = limit;
+    if (!ggml_moe_ffn_unary_supported(unary_op)) return false;
+
+    const auto fail = [&]() {
+        if (layer.cpu_buffer) { ggml_backend_buffer_free(layer.cpu_buffer); layer.cpu_buffer = nullptr; }
+        if (layer.cpu_ctx) { ggml_free(layer.cpu_ctx); layer.cpu_ctx = nullptr; }
+        layer.cpu_graph = nullptr;
+        layer.cpu_activations = nullptr;
+        layer.cpu_ids = nullptr;
+        layer.cpu_routes = nullptr;
+        layer.cpu_output = nullptr;
+        return false;
+    };
+
+    layer.cpu_ctx = ggml_init({ CPU_GRAPH_CONTEXT_BYTES, nullptr, true });
+    if (!layer.cpu_ctx) return false;
+    layer.cpu_activations = ggml_new_tensor_2d(layer.cpu_ctx, GGML_TYPE_F32, layer.layout.n_embd, 1);
+    layer.cpu_ids = ggml_new_tensor_2d(layer.cpu_ctx, GGML_TYPE_I32, 1, 1);
+    layer.cpu_routes = ggml_new_tensor_3d(layer.cpu_ctx, GGML_TYPE_F32, 1, 1, 1);
+    ggml_tensor * up_gate = ggml_moe_up_gate(layer.cpu_ctx,
+            const_cast<ggml_tensor *>(layer.snapshot.host_up),
+            const_cast<ggml_tensor *>(layer.snapshot.host_gate),
+            layer.cpu_activations, layer.cpu_ids, unary_op);
+    if (!up_gate) return fail();
+    *(float *)(up_gate->op_params + 1) = limit;
+    layer.cpu_output = ggml_mul_multi_add(layer.cpu_ctx,
+            ggml_mul_mat_id(layer.cpu_ctx, const_cast<ggml_tensor *>(layer.snapshot.host_down),
+                    up_gate, layer.cpu_ids), layer.cpu_routes);
+    if (!layer.cpu_activations || !layer.cpu_ids || !layer.cpu_routes || !layer.cpu_output ||
+            layer.cpu_output->ne[0] != layer.layout.n_embd || layer.cpu_output->ne[1] != 1 ||
+            layer.cpu_output->ne[2] != 1) return fail();
+    layer.cpu_graph = ggml_new_graph_custom(layer.cpu_ctx, 64, false);
+    ggml_build_forward_expand(layer.cpu_graph, layer.cpu_output);
+    layer.cpu_buffer = ggml_backend_alloc_ctx_tensors(layer.cpu_ctx, layer.cpu_backend);
+    if (!layer.cpu_buffer) return fail();
+    const std::vector<float> priming_activations(layer.layout.n_embd, 0.0f);
+    const int32_t priming_id = 0;
+    const float priming_route = 1.0f;
+    ggml_backend_tensor_set(layer.cpu_activations,
+            priming_activations.data(), 0, ggml_nbytes(layer.cpu_activations));
+    ggml_backend_tensor_set(layer.cpu_ids,
+            &priming_id, 0, ggml_nbytes(layer.cpu_ids));
+    ggml_backend_tensor_set(layer.cpu_routes,
+            &priming_route, 0, ggml_nbytes(layer.cpu_routes));
+
+    ggml_cuda_moe_ffn_binding binding = {};
+    binding.generation = layer.snapshot.generation;
+    binding.layout = layer.layout;
+    binding.cache_callbacks = llama_moe_cache_get_cuda_callbacks();
+    binding.cache_context = cache;
+    binding.cpu_resource_id = layer.cpu_resource_id;
+    binding.cpu_graph = layer.cpu_graph;
+    binding.cpu_activations = layer.cpu_activations;
+    binding.cpu_ids = layer.cpu_ids;
+    binding.cpu_route_weights = layer.cpu_routes;
+    binding.cpu_output = layer.cpu_output;
+    layer.binding_id = ggml_backend_cuda_moe_ffn_register(layer.cuda_backend, &binding);
+    if (layer.binding_id <= 0) return fail();
+    return true;
+#else
+    GGML_UNUSED(layer); GGML_UNUSED(unary_op); GGML_UNUSED(limit); return false;
+#endif
+}
+
 ggml_tensor * llama_moe_cache_ffn_state::build_node(ggml_context * ctx, ggml_backend_sched_t sched,
         const ggml_moe_ffn_layout & layout) {
 #ifdef GGML_USE_CUDA
-    const layer_binding * layer = find_layer(layout.cache_layer);
-    if (!ready || !layer || !sched || !cache || layer->binding_id <= 0 ||
+    layer_binding * layer = find_layer_mutable(layout.cache_layer);
+    if (!ready || !layer || !sched || !cache ||
             !cache->frozen_snapshot_valid(layer->snapshot) || !ggml_moe_ffn_layout_supported(&layout) ||
             !ggml_moe_ffn_graph_supported(&layout) || layout.owner_backend != layer->cuda_backend ||
             layout.cache_owner != cache || layout.device != layer->layout.device ||
@@ -440,8 +481,12 @@ ggml_tensor * llama_moe_cache_ffn_state::build_node(ggml_context * ctx, ggml_bac
             layout.bank_up != layer->layout.bank_up || layout.bank_gate != layer->layout.bank_gate ||
             layout.bank_down != layer->layout.bank_down || layout.up_gate_storage != layer->layout.up_gate_storage ||
             layout.bank_up_gate_storage != layer->layout.bank_up_gate_storage ||
-            layout.unary_op != layer->layout.unary_op ||
-            layout.limit != layer->layout.limit || layout.flags != layer->layout.flags) return nullptr;
+            layout.flags != layer->layout.flags) return nullptr;
+    if (!ggml_moe_ffn_unary_supported(layout.unary_op)) return nullptr;
+    if (layer->binding_id <= 0 || layer->layout.unary_op != layout.unary_op ||
+            layer->layout.limit != layout.limit) {
+        if (!build_layer_cpu_graph(*layer, layout.unary_op, layout.limit)) return nullptr;
+    }
     ggml_tensor * op = ggml_moe_ffn(ctx, const_cast<ggml_tensor *>(layout.activation),
             const_cast<ggml_tensor *>(layout.selected_ids), const_cast<ggml_tensor *>(layout.route_weights),
             layout.device, layer->binding_id, layer->snapshot.generation, layout.n_tokens,
