@@ -9959,6 +9959,7 @@ struct llama_context * llama_init_from_model(
     cparams.moe_cache_size   = params.moe_cache_size;
     cparams.moe_cache_policy = params.moe_cache_policy;
     cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
+    cparams.moe_cache_async  = params.moe_cache_async;
     cparams.worst_graph_tokens = params.worst_case_tokens;
     cparams.dflash_query_capacity = params.dflash_query_capacity;
 
@@ -10498,14 +10499,24 @@ struct llama_context * llama_init_from_model(
 
             llama_repack_up_gate_exps(*ctx);
 
-            if (cparams.moe_cache_size > 0) {
-                try {
-                    ctx->moe_cache = std::make_unique<llama_moe_cache>(*model, ctx->backends, backend_buft,
-                            cparams.moe_cache_size, cparams.moe_cache_policy, cparams.moe_cache_cpu_share);
+            // In asynchronous mode the CUDA hybrid executor performs all cache
+            // fills.  Installing the blocking copy callbacks would make every
+            // layer that the hybrid rejected fall back to synchronous fills,
+            // which is exactly the regression that PR 2716 removed.
+            const auto install_moe_cache_execution = [&]() {
+                if (ctx->moe_cache && !cparams.moe_cache_async) {
                     ggml_backend_sched_set_copy_callback(ctx->sched, llama_context::sched_copy_moe_cache, ctx);
                     ggml_backend_sched_set_expert_range_copy_callback(ctx->sched,
                             llama_context::sched_copy_moe_cache_expert_range,
                             ctx->moe_cache->copy_expert_range_min_tokens(), ctx);
+                }
+            };
+
+            if (cparams.moe_cache_size > 0) {
+                try {
+                    ctx->moe_cache = std::make_unique<llama_moe_cache>(*model, ctx->backends, backend_buft,
+                            cparams.moe_cache_size, cparams.moe_cache_policy, cparams.moe_cache_cpu_share);
+                    install_moe_cache_execution();
                 } catch (const std::exception & e) {
                     LLAMA_LOG_ERROR("%s: failed to initialize MoE cache: %s\n", __func__, e.what());
                     llama_free(ctx);
@@ -10528,6 +10539,10 @@ struct llama_context * llama_init_from_model(
                     llama_free(ctx);
                     return nullptr;
                 }
+                // The hybrid executor owns every eligible layer.  Do not leave
+                // a blocking copy callback behind for layers it rejected.
+                ggml_backend_sched_set_copy_callback(ctx->sched, nullptr, nullptr);
+                ggml_backend_sched_set_expert_range_copy_callback(ctx->sched, nullptr, 0, nullptr);
             }
 
             // build worst-case graph
@@ -10550,13 +10565,9 @@ struct llama_context * llama_init_from_model(
             {
                 if (pipeline_parallel) {
                     LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
+                    ggml_backend_sched_free(ctx->sched);
                     ctx->sched = ggml_backend_sched_new(ctx->backends.data(), backend_buft.data(), ctx->backends.size(), max_nodes, false);
-                    if (ctx->moe_cache) {
-                        ggml_backend_sched_set_copy_callback(ctx->sched, llama_context::sched_copy_moe_cache, ctx);
-                        ggml_backend_sched_set_expert_range_copy_callback(ctx->sched,
-                                llama_context::sched_copy_moe_cache_expert_range,
-                                ctx->moe_cache->copy_expert_range_min_tokens(), ctx);
-                    }
+                    install_moe_cache_execution();
                     gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
                 }
                 if (!gf_success) {
