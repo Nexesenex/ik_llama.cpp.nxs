@@ -3,7 +3,6 @@
 // ggml-backend internal header
 
 #include "ggml-backend.h"
-#include "ggml-moe-provider.h"
 
 #ifdef  __cplusplus
 extern "C" {

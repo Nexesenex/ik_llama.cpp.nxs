@@ -10,7 +10,6 @@ struct mmvq_args {
     const void * vy;
     float      * dst;
     const char * ids_data;
-    const char * activation_map_data;
     const int    ncols_x;
     const int    nrows_x;
     const int    nrows_y;
@@ -27,3 +26,4 @@ struct mmvq_args {
     float          beta;
     float          beta_linear;
 };
+
