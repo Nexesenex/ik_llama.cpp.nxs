@@ -206,6 +206,9 @@ static inline bool ggml_moe_ffn_graph_inputs_supported(const struct ggml_moe_ffn
 }
 
 static inline bool ggml_moe_ffn_graph_supported(const struct ggml_moe_ffn_layout * l) {
+    // ALL_TOKEN_OUTPUTS means the executor writes every row of the activation
+    // batch, not that every row requests logits.  Partial-logits and prompt
+    // batches are handled by the ordinary downstream row selection.
     uint32_t required = GGML_MOE_FFN_GRAPH_ALL_TOKEN_OUTPUTS | GGML_MOE_FFN_GRAPH_NO_LORA |
         GGML_MOE_FFN_GRAPH_FINAL_ROUTE_WEIGHTS |
         GGML_MOE_FFN_GRAPH_NO_EXPERT_EXECUTION_EXTRAS | GGML_MOE_FFN_GRAPH_NO_HADAMARD;
