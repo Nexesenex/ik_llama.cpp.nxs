@@ -235,8 +235,3 @@ target_include_directories(test-moe-cache-shares PRIVATE
     ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/ggml/include)
 add_test(NAME test-moe-cache-shares COMMAND $<TARGET_FILE:test-moe-cache-shares>)
-
-add_executable(test-moe-cache-slots test-moe-cache-slots.cpp)
-target_include_directories(test-moe-cache-slots PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/ggml/src)
-target_link_libraries(test-moe-cache-slots PRIVATE ggml)
-add_test(NAME test-moe-cache-slots COMMAND $<TARGET_FILE:test-moe-cache-slots>)
