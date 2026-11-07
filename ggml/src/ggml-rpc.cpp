@@ -1127,6 +1127,7 @@ GGML_CALL static bool ggml_backend_rpc_supports_op(ggml_backend_t backend, const
     if (op->op == GGML_OP_FLASH_ATTN_EXT && op->src[6]) {
         return false;
     }
+    if (op->op == GGML_OP_MOE_FFN) return false;
     //TODO: call the remote backend and cache the results
     return true;
 }
@@ -1136,7 +1137,7 @@ GGML_CALL static bool ggml_backend_rpc_supports_buft(ggml_backend_t backend, ggm
         return false;
     }
     ggml_backend_rpc_buffer_type_context * buft_ctx = (ggml_backend_rpc_buffer_type_context *)buft->context;
-    ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *)backend->context;   
+    ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *)backend->context;
     return buft_ctx->name == rpc_ctx->name;
 }
 
@@ -1228,7 +1229,7 @@ GGML_CALL int ggml_backend_rpc_reg_devices() {
     int device_count = (int)rpc_server_map.size();
     int i = 0;
     for (auto& it : rpc_server_map)
-    {     
+    {
         std::string name = it.second->name;
         std::string endpoint = std::string(it.second->endpoint);
         uint32_t device = it.second->device;
@@ -2252,7 +2253,7 @@ GGML_API GGML_CALL void ggml_backend_rpc_start_server(const char* endpoint,
         auto dev = devices[i];
         backends.push_back(dev);
         const char* name = ggml_backend_name(devices[i]);
-        printf("  %8s:  %10zu MiB total, %10zu MiB free\n", name, 
+        printf("  %8s:  %10zu MiB total, %10zu MiB free\n", name,
             total_mem_vec[i] / 1024 / 1024, free_mem_vec[i] / 1024 / 1024);
     }
     std::string host;
