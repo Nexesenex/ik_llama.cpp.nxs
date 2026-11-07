@@ -70,6 +70,19 @@ static inline bool ggml_moe_ffn_unary_supported(enum ggml_unary_op op) {
         op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_SWIGLU_OAI;
 }
 
+// Shape contracts are explicit on the semantic op.  PR 2716 fed the stock
+// MUL_MAT_ID / MOE_FUSED_UP_GATE kernels through a ggml_moe_provider whose
+// eligibility test was expressed in provider rows: ids was flattened
+// token-major, at most GGML_MOE_PROVIDER_MAX_BATCH (32) tokens and
+// GGML_MOE_PROVIDER_MAX_ROWS (1024) selected rows, and collect() could ask the
+// CPU to recompute rows that dispatch failed to serve.  None of those contracts
+// apply here: the builder creates a single op with explicit
+// n_tokens/n_experts_used/token_capacity, the executor sizes its workspace from
+// those numbers with overflow checks instead of a fixed row cap, and it owns
+// the CPU/GPU row split internally.  Out-of-range expert ids are rejected by
+// cache resolution instead of being routed to a provider CPU mask.  The helpers
+// below therefore validate the tensors the op actually consumes; there is no
+// provider row eligibility port to keep.
 static inline bool ggml_moe_ffn_tensor_shape(const struct ggml_tensor * tensor,
         enum ggml_type type, int64_t ne0, int64_t ne1, int64_t ne2) {
     return tensor && tensor->type == type && tensor->ne[0] == ne0 && tensor->ne[1] == ne1 &&
