@@ -4,6 +4,7 @@
 #include "llama-model.h"
 #include "llama-context.h"
 #include "llama-moe-cache-ffn.h"
+#include "llama-moe-cache-lru.h"
 #include "llama-moe-cache.h"
 #include "llama-delta-net.h"
 
@@ -1943,7 +1944,8 @@ llm_expert_gating_func_type   gating_op,
     // the hybrid rejected must run the stock FFN graph instead of the blocking
     // cache path: the async copy callback is not installed, so a legacy lookup
     // would otherwise observe unfilled slot-map entries.
-    if (lctx.moe_cache && !lctx.cparams.moe_cache_async && lctx.lora_adapters.empty()) {
+    if (llama_moe_cache_detail::legacy_lookup_allowed(lctx.moe_cache != nullptr,
+            lctx.cparams.moe_cache_async, !lctx.lora_adapters.empty())) {
         ggml_tensor * slot_map = lctx.moe_cache->get_slot_map(il, n_tokens, n_expert_used);
         cached_up_gate = lctx.moe_cache->get_experts(up_gate_exps);
         cached_up = lctx.moe_cache->get_experts(up_exps);
