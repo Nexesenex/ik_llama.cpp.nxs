@@ -1888,7 +1888,11 @@ llm_expert_gating_func_type   gating_op,
     ggml_tensor * cached_up = nullptr;
     ggml_tensor * cached_gate = nullptr;
     ggml_tensor * cached_down = nullptr;
-    if (lctx.moe_cache && lctx.lora_adapters.empty()) {
+    // In async mode the CUDA hybrid executor owns eligible layers.  Layers that
+    // the hybrid rejected must run the stock FFN graph instead of the blocking
+    // cache path: the async copy callback is not installed, so a legacy lookup
+    // would otherwise observe unfilled slot-map entries.
+    if (lctx.moe_cache && !lctx.cparams.moe_cache_async && lctx.lora_adapters.empty()) {
         ggml_tensor * slot_map = lctx.moe_cache->get_slot_map(il, n_tokens, n_expert_used);
         cached_up_gate = lctx.moe_cache->get_experts(up_gate_exps);
         cached_up = lctx.moe_cache->get_experts(up_exps);
