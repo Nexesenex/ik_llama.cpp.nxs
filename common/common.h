@@ -793,6 +793,7 @@ struct gpt_params {
     bool dsa               = false; // enable GLM DSA sparse attention (off by default; opt-in via --dsa)
     bool fused_idx_topk    = true;  // enable the fused indexer topk op (on by default; -no-fidx or --no-fused-indexer-topk turns it off)
     bool swa_compress      = false;
+    bool swa_split         = false; // with --swa-compress and split-mode tensor parallel, keep the compacted SWA cache sharded per device
     bool feod              = false; // If true, force offload of experts left in RAM to the default layer device
     int  dsv41_replay_keep = 256;   // DeepSeek-V4.1 prefill: run the decoder layers on the last N prompt tokens only (0 = off; requires --swa-compress)
     bool dsv4_legacy_state = false; // if true, write DeepSeek-V4 state in the legacy full-slice layout (no MAGIC), byte-identical to main

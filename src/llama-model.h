@@ -801,6 +801,18 @@ struct llama_model {
             || supports_dflash_swa_compress() ;
     }
 
+    // --swa-split: archs whose graph builder reaches the split-cache branch of
+    // build_std_attention() and always uses the row-compacted SWA cache (not the
+    // SWA ring), so the compacted rows can stay on the per-device KV head shards.
+    // Custom-builder archs (OPENPANGU, dsv4, dflash) are intentionally absent.
+    // FLINT/MAPLE/SPARK2_5/LFM3 share the same builder path but can select the SWA
+    // ring instead of row compaction, so they stay gated until that combination
+    // is validated. Gemma4 has its own dedicated compacted split path and does
+    // not need the flag.
+    bool supports_swa_split() const {
+        return arch == LLM_ARCH_RICURSIVE || arch == LLM_ARCH_LAGUNA;
+    }
+
     static inline int hadamard_size(int head_size) {
         if ((head_size & ~(head_size - 1)) == head_size) return head_size;
         // Note: we do not include 32 as an option because the CUDA Hadamard implementation

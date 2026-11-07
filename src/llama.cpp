@@ -1530,9 +1530,26 @@ static bool llama_kv_cache_init(
         replicate_mla = true;
     }
 
-    if (cache.any_compacted() && ((split_cache && model.arch != LLM_ARCH_GEMMA4) || replicate_mla)) {
-        LLAMA_LOG_ERROR("%s: --swa-compress is not supported with a replicated KV cache "
-                        "(split mode graph/attn); run without --swa-compress or with a single device\n", __func__);
+    // --swa-split keeps the compacted SWA cache on the per-device KV head shards
+    // instead of rejecting compaction under split mode graph/attn. Only archs whose
+    // attention builder handles compacted rows on the split path are allowed;
+    // Gemma4 has its own dedicated compacted split path and stays allowed without it.
+    const bool split_swa_ok = model.arch == LLM_ARCH_GEMMA4 ||
+        (cparams.swa_split && cparams.flash_attn && model.supports_swa_split());
+    if (cache.any_compacted() && ((split_cache && !split_swa_ok) || replicate_mla)) {
+        if (replicate_mla) {
+            LLAMA_LOG_ERROR("%s: --swa-compress is not supported with a replicated MLA KV cache "
+                            "(split mode graph/attn); run without --swa-compress or with a single device\n", __func__);
+        } else if (cparams.swa_split && !cparams.flash_attn) {
+            LLAMA_LOG_ERROR("%s: --swa-split requires flash attention\n", __func__);
+        } else if (cparams.swa_split) {
+            LLAMA_LOG_ERROR("%s: --swa-split is not implemented for this model; "
+                            "run without --swa-compress or with a single device\n", __func__);
+        } else {
+            LLAMA_LOG_ERROR("%s: --swa-compress is not supported with the split KV cache "
+                            "(split mode graph/attn); pass --swa-split to shard the compacted "
+                            "SWA cache across devices, or run without --swa-compress\n", __func__);
+        }
         return false;
     }
 
@@ -1997,8 +2014,9 @@ static bool llama_kv_cache_init(
         }
     }
     if (split_cache || replicate_mla) {
+        const bool split_swa = split_cache && cache.any_compacted();
         LLAMA_LOG_INFO("%s: KV cache size per device%s:\n", __func__,
-                       replicate_mla ? " (MLA replicated)" : "");
+                       replicate_mla ? " (MLA replicated)" : split_swa ? " (compacted SWA split)" : "");
         for (int i = 0; i < int(mem_split.size()); ++i) LLAMA_LOG_INFO("    Device %d:  %g MiB\n", i, mem_split[i]/1024./1024.);
     }
 
@@ -9946,6 +9964,7 @@ struct llama_context_params llama_context_default_params() {
         /*.dsa                         =*/ false,
         /*.fused_idx_topk              =*/ true,
         /*.swa_compress                =*/ false,
+        /*.swa_split                   =*/ false,
         /*.force_experts_offload_device=*/ false,
         /*.dsv41_replay_keep           =*/ 256,
         /*.dsv4_legacy_state           =*/ false,
@@ -10693,6 +10712,7 @@ struct llama_context * llama_init_from_model(
     cparams.rope_cache       = params.rope_cache;
     cparams.graph_reuse      = params.graph_reuse;
     cparams.swa_compress     = params.swa_compress;
+    cparams.swa_split        = params.swa_split;
     cparams.dsa              = params.dsa;
     cparams.fused_idx_topk   = params.fused_idx_topk;
     cparams.swa_compress     = params.swa_compress;
@@ -10716,6 +10736,12 @@ struct llama_context * llama_init_from_model(
     cparams.checkpoint_state_type = params.checkpoint_state_type;
     cparams.dsa_top_k        = params.dsa_top_k;
 
+    // --swa-split is only meaningful for the compacted sliding-window cache; the
+    // command line parser enables both together, but the API can set them apart.
+    if (cparams.swa_split && !cparams.swa_compress) {
+        LLAMA_LOG_WARN("%s: --swa-split requires --swa-compress; ignoring --swa-split\n", __func__);
+        cparams.swa_split = false;
+    }
     if (cparams.swa_compress != model->swa_compress) {
         LLAMA_LOG_ERROR("%s: swa_compress differs between llama_model_params (%d) and llama_context_params (%d); "
                         "the cache-size fit would not match the allocation\n",

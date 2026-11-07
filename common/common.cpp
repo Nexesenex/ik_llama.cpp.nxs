@@ -3200,6 +3200,14 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.swa_compress = true;
         return true;
     }
+    if (arg == "--swa-split") {
+        // Keep the compacted sliding-window cache sharded on the per-device KV head
+        // shards (split-mode tensor parallel/attn). It only makes sense together with
+        // --swa-compress, so enable compaction as well.
+        params.swa_split    = true;
+        params.swa_compress = true;
+        return true;
+    }
     if (arg == "-feod" || arg == "--force-expert-offload-device") {
         params.feod = true;
         return true;
@@ -5227,6 +5235,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-fidx,  --fused-indexer-topk",  "enable the fused indexer topk op (DSA only; default: %s)", params.fused_idx_topk ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-fidx, --no-fused-indexer-topk", "disable the fused indexer topk op (DSA only; default: %s)", params.fused_idx_topk ? "enabled" : "disabled" });
     options.push_back({ "*",           "        --swa-compress",         "allocate sliding-window layers at window size instead of n_ctx (default: %s)", params.swa_compress ? "enabled" : "disabled" });
+    options.push_back({ "*",           "        --swa-split",            "split the compacted sliding-window cache across devices under split-mode tensor parallel; implies --swa-compress (default: %s)", params.swa_split ? "enabled" : "disabled" });
     options.push_back({ "*",           "-feod, --force-expert-offload-device", "force offload of experts left in RAM to the default layer device (default: %s)", params.feod ? "enabled" : "disabled" });
     options.push_back({ "*",           "-dsv41-r-k N , --dsv41-replay-keep N", "DeepSeek-V4.1 prefill: run the decoder layers on the last N prompt tokens only; requires --swa-compress (default: %d, 0 = off)", params.dsv41_replay_keep });
     options.push_back({ "*",           "-dsv4l-s ,     --dsv4-legacy-state",   "write DeepSeek-V4 state in the legacy full-slice layout, byte-identical to main (default: %d)", params.dsv4_legacy_state });
@@ -6894,6 +6903,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.dsa               = params.dsa;
     cparams.fused_idx_topk    = params.fused_idx_topk;
     cparams.swa_compress      = params.swa_compress;
+    cparams.swa_split         = params.swa_split;
     cparams.force_experts_offload_device = params.feod;
     cparams.dsv41_replay_keep = params.dsv41_replay_keep;
     cparams.dsv4_legacy_state = params.dsv4_legacy_state;
