@@ -749,6 +749,8 @@ extern "C" {
         GGML_OP_DS4_COMP,
 
         GGML_OP_FMA,
+        // Keep backend-local semantic extensions appended to preserve existing operation values.
+        GGML_OP_MOE_FFN,
 
         GGML_OP_COUNT,
     };
@@ -1177,6 +1179,21 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    // Selected-expert FFN contribution: route weights are normalized and reduced into F32 output.
+    GGML_API struct ggml_tensor * ggml_moe_ffn(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * activations,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * route_weights,
+            int32_t device,
+            int32_t binding_id,
+            uint64_t generation,
+            int32_t n_tokens,
+            int32_t n_embd,
+            int32_t n_ff,
+            int32_t unary_op,
+            float limit);
 
     // Source may be F32, F16, or a supported quantized type; output is always F32.
     GGML_API struct ggml_tensor * ggml_hadamard(

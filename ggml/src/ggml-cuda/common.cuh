@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 #if defined(GGML_USE_HIPBLAS)
 #define GGML_COMMON_DECL_HIP
@@ -69,6 +70,11 @@
 #endif
 
 #define GGML_CUDA_MAX_STREAMS 8
+constexpr int32_t GGML_CUDA_STREAM_COMPUTE = 0;
+constexpr int32_t GGML_CUDA_STREAM_MOE_FILL = 1;
+static_assert(GGML_CUDA_STREAM_MOE_FILL > GGML_CUDA_STREAM_COMPUTE &&
+        GGML_CUDA_STREAM_MOE_FILL < GGML_CUDA_MAX_STREAMS,
+        "MoE fill transport requires a reserved non-compute CUDA stream");
 
 [[noreturn]]
 void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, const char * msg);
@@ -973,6 +979,8 @@ struct ggml_tensor_extra_gpu {
 #endif
 
 struct ggml_cuda_graph;
+struct ggml_cuda_moe_ffn_binding_state;
+struct ggml_cuda_moe_ffn_cpu_resource_state;
 
 struct ggml_backend_cuda_context {
     int device;
@@ -1005,6 +1013,12 @@ struct ggml_backend_cuda_context {
     void * copy_buffer = nullptr;
     size_t copy_size   = 0;
 
+    std::mutex moe_ffn_mutex;
+    std::unordered_map<int32_t, std::shared_ptr<ggml_cuda_moe_ffn_binding_state>> moe_ffn_bindings;
+    std::unordered_map<int32_t, std::shared_ptr<ggml_cuda_moe_ffn_cpu_resource_state>> moe_ffn_cpu_resources;
+    int32_t moe_ffn_next_binding_id = 1;
+    int32_t moe_ffn_next_cpu_resource_id = 1;
+
     explicit ggml_backend_cuda_context(int device, const void * model);
 
     ~ggml_backend_cuda_context();
@@ -1018,7 +1032,13 @@ struct ggml_backend_cuda_context {
     }
 
     cudaStream_t stream() {
-        return stream(device, 0);
+        return stream(device, GGML_CUDA_STREAM_COMPUTE);
+    }
+
+    // Stream 0 is ordinary backend compute. MoE fill publication uses a
+    // separate non-blocking transport stream so cache copies do not own it.
+    cudaStream_t moe_fill_stream() {
+        return stream(device, GGML_CUDA_STREAM_MOE_FILL);
     }
 
     cublasHandle_t cublas_handle(int device) {
