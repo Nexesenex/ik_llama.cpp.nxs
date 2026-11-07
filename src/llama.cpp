@@ -26,6 +26,7 @@
 #include "llama-context.h"
 #include "llama-moe-cache.h"
 #include "llama-moe-cache-policy.h"
+#include "llama-moe-cache-ffn.h"
 #include "llama-spec-features.h"
 #include "llama-dflash.h"
 #include "llama-dsv4.h"
@@ -911,6 +912,10 @@ llama_context::~llama_context() {
     free_dflash_kv_cache_tensors();
     free_dsv4_cache_tensors();
     ggml_backend_sched_free(sched);
+    if (moe_cache_ffn) {
+        moe_cache_ffn->shutdown();
+        moe_cache_ffn.reset();
+    }
     moe_cache.reset();
 
     for (ggml_backend_t backend : backends) {
@@ -9192,6 +9197,7 @@ struct llama_context_params llama_context_default_params() {
         /*.dflash_query_capacity       =*/ 0,
         /*.cpu_affinity                =*/ nullptr,
         /*.n_cpu_affinity              =*/ 0,
+        /*.moe_cache_async             =*/ false,
     };
 
     return result;
@@ -9537,6 +9543,17 @@ struct llama_context * llama_init_from_model(
         LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
         return nullptr;
     }
+
+    if (params.moe_cache_async && params.moe_cache_size == 0) {
+        LLAMA_LOG_ERROR("%s: --moe-cache-async requires a nonzero --moe-cache-mib budget\n", __func__);
+        return nullptr;
+    }
+#ifndef GGML_USE_CUDA
+    if (params.moe_cache_async) {
+        LLAMA_LOG_ERROR("%s: --moe-cache-async requires a CUDA-enabled build\n", __func__);
+        return nullptr;
+    }
+#endif
 
     if (params.moe_cache_size > 0) {
         if (model->fit) {
@@ -10294,6 +10311,23 @@ struct llama_context * llama_init_from_model(
                     ggml_backend_sched_set_copy_callback(ctx->sched, llama_context::sched_copy_moe_cache, ctx);
                 } catch (const std::exception & e) {
                     LLAMA_LOG_ERROR("%s: failed to initialize MoE cache: %s\n", __func__, e.what());
+                    llama_free(ctx);
+                    return nullptr;
+                }
+            }
+
+            if (params.moe_cache_async) {
+                if (!ctx->moe_cache) {
+                    LLAMA_LOG_ERROR("%s: --moe-cache-async requires the MoE cache\n", __func__);
+                    llama_free(ctx);
+                    return nullptr;
+                }
+                ctx->moe_cache_ffn = std::make_unique<llama_moe_cache_ffn_state>();
+                const int32_t token_capacity = static_cast<int32_t>(std::min(cparams.n_ubatch,
+                        llama_moe_cache::max_batch_tokens));
+                if (!ctx->moe_cache_ffn->initialize(*ctx->moe_cache, *model, cparams.n_threads,
+                            token_capacity)) {
+                    LLAMA_LOG_ERROR("%s: failed to initialize CUDA hybrid MoE FFN execution\n", __func__);
                     llama_free(ctx);
                     return nullptr;
                 }

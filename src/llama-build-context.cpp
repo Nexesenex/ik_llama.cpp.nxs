@@ -3,6 +3,7 @@
 #include "llama-cparams.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-moe-cache-ffn.h"
 #include "llama-moe-cache.h"
 #include "llama-delta-net.h"
 
@@ -1844,6 +1845,42 @@ llm_expert_gating_func_type   gating_op,
 
     if (graph) {
         ggml_build_forward_expand(graph, weights);
+    }
+
+    if (lctx.moe_cache_ffn) {
+        auto & cache_ffn = *lctx.moe_cache_ffn;
+        const auto * cache_ffn_layer = cache_ffn.find_layer(il);
+        if (cache_ffn_layer) {
+            ggml_moe_ffn_layout layout = cache_ffn_layer->layout;
+            layout.n_experts = n_expert > 0 && n_expert <= INT32_MAX ? (int32_t) n_expert : 0;
+            layout.n_experts_used = n_expert_used > 0 && n_expert_used <= INT32_MAX ? (int32_t) n_expert_used : 0;
+            layout.up = up_exps; layout.gate = gate_exps; layout.down = down_exps;
+            layout.activation = cur; layout.selected_ids = selected_experts; layout.route_weights = weights;
+            layout.n_tokens = n_tokens;
+            layout.graph_flags = 0;
+            // Multi-token hybrid execution is only valid when the graph consumes every token output.
+            if (n_tokens > 0 && n_tokens <= layout.token_capacity &&
+                    lctx.n_outputs == n_tokens && !add_input)
+                layout.graph_flags |= GGML_MOE_FFN_GRAPH_ALL_TOKEN_OUTPUTS;
+            if (lctx.lora_adapters.empty()) layout.graph_flags |= GGML_MOE_FFN_GRAPH_NO_LORA;
+            // These are final route weights after ordinary router normalization/scaling.
+            if (!weight_before_ffn) layout.graph_flags |= GGML_MOE_FFN_GRAPH_FINAL_ROUTE_WEIGHTS;
+            const float routed_limit = lctx.model.swiglu_limit(il, false);
+            if (type_op == LLM_FFN_SILU && std::isfinite(routed_limit) && routed_limit >= 0.0f)
+                layout.graph_flags |= GGML_MOE_FFN_GRAPH_SILU_LIMIT;
+            if (ggml_moe_ffn_expert_execution_inputs_supported(up_exps_b, gate_exps_b,
+                    down_exps_b, up_gate_exps_b, down_exps_s))
+                layout.graph_flags |= GGML_MOE_FFN_GRAPH_NO_EXPERT_EXECUTION_EXTRAS;
+            if ((!up_exps || !lctx.model.hadamard_rotation(up_exps)) &&
+                    (!gate_exps || !lctx.model.hadamard_rotation(gate_exps)) &&
+                    (!down_exps || !lctx.model.hadamard_rotation(down_exps)))
+                layout.graph_flags |= GGML_MOE_FFN_GRAPH_NO_HADAMARD;
+            ggml_tensor * semantic = cache_ffn.build_node(ctx, lctx.sched, layout);
+            if (semantic) {
+                cb(semantic, "moe_cache_ffn", il);
+                return semantic;
+            }
+        }
     }
 
     ggml_tensor * cache_ids = nullptr;

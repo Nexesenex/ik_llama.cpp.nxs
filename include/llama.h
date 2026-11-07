@@ -566,6 +566,7 @@ extern "C" {
         // pinned to cpu_affinity[t % n_cpu_affinity], NULL = no pinning
         const int32_t * cpu_affinity;
         int32_t         n_cpu_affinity;
+        bool            moe_cache_async; // [EXPERIMENTAL] asynchronously fill the MoE cache, execute current misses on CPU
     };
 
     // model quantization parameters

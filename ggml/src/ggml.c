@@ -13,6 +13,7 @@
 #include "ggml.h"
 #include "ggml-aarch64.h"
 #include "ggml-moe-prefetch.h"
+#include "ggml-moe-ffn.h"
 #include "iqk/iqk_quantize.h"
 #include "iqk/iqk_cpu_ops.h"
 #if GGML_USE_IQK_MULMAT
@@ -4854,9 +4855,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "LATENT_ATTN",
     "DS4_COMP",
     "FMA",
+    "MOE_FFN",
 };
 
-static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
+static_assert(GGML_OP_COUNT == 113, "GGML_OP_COUNT != 113");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4984,10 +4986,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "latent_attn_prefix(q,c,pk,pv,mask)",
     "ds4_comp(state, score, idx)",
     "c + a*b",
+    "moe_ffn(activation, ids, route_weights)",
 
 };
 
-static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
+static_assert(GGML_OP_COUNT == 113, "GGML_OP_COUNT != 113");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6826,6 +6829,44 @@ struct ggml_tensor * ggml_mul_multi_add(
     result->src[0] = a;
     result->src[1] = b;
 
+    return result;
+}
+
+struct ggml_tensor * ggml_moe_ffn(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * activations,
+        struct ggml_tensor  * ids,
+        struct ggml_tensor  * route_weights,
+        int32_t device,
+        int32_t binding_id,
+        uint64_t generation,
+        int32_t n_tokens,
+        int32_t n_embd,
+        int32_t n_ff,
+        int32_t unary_op,
+        float limit) {
+    GGML_ASSERT(activations && ids && route_weights);
+    GGML_ASSERT(activations->type == GGML_TYPE_F32);
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
+    GGML_ASSERT(route_weights->type == GGML_TYPE_F32);
+    GGML_ASSERT(device >= 0 && binding_id > 0 && generation > 0 && n_tokens > 0 && n_embd > 0 && n_ff > 0);
+    GGML_ASSERT(activations->ne[1] == n_tokens && activations->ne[2] == 1 && activations->ne[3] == 1);
+    GGML_ASSERT(ids->ne[2] == 1 && ids->ne[3] == 1 && route_weights->ne[3] == 1);
+    GGML_ASSERT(ids->ne[0] > 0 && ids->ne[1] == n_tokens);
+    GGML_ASSERT(route_weights->ne[0] == 1 && route_weights->ne[1] == ids->ne[0]);
+    GGML_ASSERT(route_weights->ne[2] == n_tokens);
+
+    const int64_t ne[GGML_MAX_DIMS] = { n_embd, activations->ne[1], 1, 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, ne);
+    result->op = GGML_OP_MOE_FFN;
+    result->src[0] = activations;
+    result->src[1] = ids;
+    result->src[2] = route_weights;
+
+    const struct ggml_moe_ffn_op_params op_params = {
+        device, binding_id, generation, n_tokens, n_embd, n_ff, unary_op, limit,
+    };
+    memcpy(result->op_params, &op_params, sizeof(op_params));
     return result;
 }
 
@@ -23698,7 +23739,7 @@ static void ggml_compute_forward_pad_f32(
         for (int ib = ith; ib < nblocks; ib += nth) {
             int first = ib*k_block_size;
             int last  = MIN(first + k_block_size, nelem);
-            // 
+            //
             //int ii = first;
             //int i3 = ii/(ne0*ne1*ne2); ii -= i3*ne0*ne1*ne2;
             //int i2 = ii/(ne0*ne1    ); ii -= i2*ne0*ne1;
@@ -28032,6 +28073,8 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_mul_mat_id_up_gate(params, tensor);
             } break;
+        case GGML_OP_MOE_FFN:
+            GGML_ABORT("MOE_FFN requires its registered backend binding");
         case GGML_OP_FUSED_UP_GATE:
             {
                 ggml_compute_forward_mul_mat_up_gate(params, tensor);
@@ -28661,6 +28704,8 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
     struct ggml_tensor * src2 = tensor->src[2];
 
     switch (tensor->op) {
+        case GGML_OP_MOE_FFN:
+            GGML_ABORT("MOE_FFN is not differentiable");
         case GGML_OP_REDUCE:
             {
                 GGML_ABORT("REDUCE not implemented");

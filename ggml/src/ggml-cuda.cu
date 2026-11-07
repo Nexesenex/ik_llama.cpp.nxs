@@ -6,6 +6,8 @@
 // SPDX-License-Identifier: MIT
 //
 #include "ggml-cuda.h"
+#include "ggml-cuda-moe-ffn.h"
+#include "ggml-cuda/moe-ffn.cuh"
 #include "ggml.h"
 #include "ggml-backend-impl.h"
 //#include "ggml-impl.h"
@@ -69,6 +71,7 @@
 #include "ggml-cuda/blend.cuh"
 #include "ggml-cuda/indexer_topk.cuh"
 #include "ggml-cuda/ds4_comp.cuh"
+#include "ggml-moe-ffn.h"
 
 #include <algorithm>
 #include <array>
@@ -76,6 +79,7 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <float.h>
 #include <limits>
 #include <map>
@@ -89,7 +93,6 @@
 #include <string>
 #include <vector>
 #include <sstream>
-
 #ifdef __linux__
 #include <sys/mman.h>
 #endif
@@ -555,6 +558,20 @@ ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * mo
 
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
+    ggml_cuda_set_device(device);
+    for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
+        if (streams[device][j] != nullptr) CUDA_CHECK(cudaStreamSynchronize(streams[device][j]));
+    }
+    decltype(moe_ffn_bindings) moe_ffn_bindings_to_release;
+    decltype(moe_ffn_cpu_resources) moe_ffn_resources_to_release;
+    {
+        std::lock_guard<std::mutex> binding_lock(moe_ffn_mutex);
+        moe_ffn_bindings_to_release.swap(moe_ffn_bindings);
+        moe_ffn_resources_to_release.swap(moe_ffn_cpu_resources);
+    }
+    moe_ffn_bindings_to_release.clear();
+    moe_ffn_resources_to_release.clear();
+
 #ifdef USE_CUDA_GRAPH
     // Let's leave this debug log in for now, so we have a trace in case
     // number of CUDA graphs goes crazy
@@ -619,6 +636,12 @@ GGML_CALL static const char * ggml_backend_cuda_buffer_get_name(ggml_backend_buf
 
 GGML_CALL static bool ggml_backend_buffer_is_cuda(ggml_backend_buffer_t buffer) {
     return buffer->iface.get_name == ggml_backend_cuda_buffer_get_name;
+}
+
+bool ggml_cuda_moe_ffn_tensor_on_device(const ggml_tensor * tensor, int device) {
+    if (!tensor || !tensor->buffer || !ggml_backend_buffer_is_cuda(tensor->buffer)) return false;
+    auto * buffer = (ggml_backend_cuda_buffer_context *) tensor->buffer->context;
+    return buffer->device == device;
 }
 
 GGML_CALL static void ggml_backend_cuda_buffer_free_buffer(ggml_backend_buffer_t buffer) {
@@ -4196,6 +4219,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_MOE_FUSED_UP_GATE:
             i = ggml_cuda_moe_up_gate_unary(ctx, dst, cgraph, i);
             break;
+        case GGML_OP_MOE_FFN:
+            if (!ggml_cuda_moe_ffn_compute(ctx, dst)) return false;
+            break;
         case GGML_OP_FUSED_UP_GATE:
             ggml_cuda_up_gate_unary(ctx, dst);
             break;
@@ -4856,7 +4882,7 @@ static void update_cuda_graph_executable(ggml_cuda_graph * graph) {
 }
 #endif
 
-static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
+static bool evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
     bool & graph_evaluated_or_captured, bool & use_cuda_graph, bool & cuda_graph_update_required) {
     // flag used to determine whether it is an integrated_gpu
     // TODO
@@ -4881,6 +4907,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, cgraph, i);
                 if (!ok) {
+                    if (node->op == GGML_OP_MOE_FFN) return false;
                     GGML_CUDA_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }
                 GGML_ASSERT(ok);
@@ -4914,16 +4941,22 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         }
         // Launch graph
         CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
+    }
 #else
         graph_evaluated_or_captured = true;
 #endif  // USE_CUDA_GRAPH
-    }
+    return true;
 }
 
 GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
     ggml_cuda_set_device(cuda_ctx->device);
+    if (!ggml_cuda_moe_ffn_validate_graph(*cuda_ctx, cgraph)) return GGML_STATUS_FAILED;
+    bool split_has_moe_ffn = false;
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        split_has_moe_ffn = split_has_moe_ffn || cgraph->nodes[i]->op == GGML_OP_MOE_FFN;
+    }
 
 #ifdef USE_CUDA_GRAPH
     cuda_ctx->cur_graph = nullptr;
@@ -4933,7 +4966,7 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     // Disable CUDA graphs in presence of env var, old GPU, use-case which is changing too rapidly,
     // or previous graph capture failure.
     // Also disable for multi-gpu for now. TO DO investigate
-    bool use_cuda_graph = !disable_cuda_graphs_due_to_env && cuda_ctx->use_cuda_graph;
+    bool use_cuda_graph = !split_has_moe_ffn && !disable_cuda_graphs_due_to_env && cuda_ctx->use_cuda_graph;
 
     ggml_cuda_graph * graph = nullptr;
     if (use_cuda_graph) {
@@ -5006,7 +5039,9 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
 
     bool graph_evaluated_or_captured = false;
 
-    evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required);
+    if (!evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required)) {
+        return GGML_STATUS_FAILED;
+    }
 
     return GGML_STATUS_SUCCESS;
 }
@@ -5062,6 +5097,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             }
             break;
         case GGML_OP_FUSED_MUL_UNARY: return ggml_is_contiguous(op->src[0]);
+        case GGML_OP_MOE_FFN:
+            return ggml_cuda_moe_ffn_supports_op(*cuda_ctx, op);
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
         case GGML_OP_MOE_FUSED_UP_GATE:

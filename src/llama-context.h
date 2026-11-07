@@ -8,6 +8,7 @@
 
 struct llama_model;
 class llama_moe_cache;
+struct llama_moe_cache_ffn_state;
 
 #include <vector>
 #include <map>
@@ -391,6 +392,7 @@ struct llama_context {
 
     std::vector<ggml_backend_t> backends;
     std::unique_ptr<llama_moe_cache> moe_cache;
+    std::unique_ptr<llama_moe_cache_ffn_state> moe_cache_ffn;
 #ifdef GGML_USE_METAL
     ggml_backend_t backend_metal = nullptr;
 #endif

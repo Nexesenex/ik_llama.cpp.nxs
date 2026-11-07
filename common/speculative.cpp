@@ -2161,6 +2161,7 @@ bool common_speculative_load_draft_model(
     params.model_dft = loaded_model;
     params.cparams_dft = common_context_params_to_llama(params_dft);
     params.cparams_dft.moe_cache_size = 0;
+    params.cparams_dft.moe_cache_async = false;
     params.cuda_params = params_dft.cuda_params;
     params.offload_policy = params_dft.offload_policy;
     params.cparams_dft.cuda_params    = params.cuda_params.empty()    ? nullptr : (void *) params.cuda_params.data();
@@ -2212,6 +2213,7 @@ bool common_speculative_prepare_mtp_runtime(
         common_speculative_apply_draft_threads(params, params_mtp);
         params.cparams_dft = common_context_params_to_llama(params_mtp);
         params.cparams_dft.moe_cache_size = 0;
+        params.cparams_dft.moe_cache_async = false;
         params.cuda_params = params_mtp.cuda_params;
         params.offload_policy = params_mtp.offload_policy;
         params.cparams_dft.cuda_params    = params.cuda_params.empty()    ? nullptr : (void *) params.cuda_params.data();
