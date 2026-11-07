@@ -12,7 +12,13 @@ enum ggml_moe_ffn_storage_topology {
 
 enum ggml_moe_ffn_layout_flag {
     GGML_MOE_FFN_LAYOUT_PHYSICAL_STORAGE_VALID = 1u << 0,
+    // No expert biases.  A per-expert down scale is allowed because the caller
+    // folds it into the final route weights before creating the semantic op.
     GGML_MOE_FFN_LAYOUT_NO_EXTRA_WEIGHTS = 1u << 1,
+    // No Hadamard rotation on the down projection.  The up/gate rotation is a
+    // property of the input activation and is folded in by the caller; only the
+    // rotation between the up/gate activation and the down projection would
+    // have to run inside the executor.
     GGML_MOE_FFN_LAYOUT_NO_HADAMARD = 1u << 2,
     GGML_MOE_FFN_LAYOUT_HOST_RESIDENT = 1u << 3,
 };
@@ -22,7 +28,10 @@ enum ggml_moe_ffn_graph_flag {
     GGML_MOE_FFN_GRAPH_NO_LORA = 1u << 1,
     GGML_MOE_FFN_GRAPH_FINAL_ROUTE_WEIGHTS = 1u << 2,
     GGML_MOE_FFN_GRAPH_SILU_LIMIT = 1u << 3,
+    // No per-expert biases.  down_exps_s is folded into the route weights.
     GGML_MOE_FFN_GRAPH_NO_EXPERT_EXECUTION_EXTRAS = 1u << 4,
+    // No Hadamard rotation between the up/gate activation and the down
+    // projection; the up/gate rotation is folded into the activation.
     GGML_MOE_FFN_GRAPH_NO_HADAMARD = 1u << 5,
 };
 
@@ -45,9 +54,12 @@ struct ggml_moe_ffn_layout {
 
 static inline bool ggml_moe_ffn_expert_execution_inputs_supported(
         const struct ggml_tensor * up_bias, const struct ggml_tensor * gate_bias,
-        const struct ggml_tensor * down_bias, const struct ggml_tensor * merged_up_gate_bias,
-        const struct ggml_tensor * down_scale) {
-    return !up_bias && !gate_bias && !down_bias && !merged_up_gate_bias && !down_scale;
+        const struct ggml_tensor * down_bias, const struct ggml_tensor * merged_up_gate_bias) {
+    // Per-expert biases are not representable by the CUDA hit path: the fused
+    // quantized up/gate projection applies the activation inside the kernel,
+    // and the down reduction only knows cache slot ids rather than expert ids.
+    // down_exps_s is handled by folding it into the route weights.
+    return !up_bias && !gate_bias && !down_bias && !merged_up_gate_bias;
 }
 
 static inline bool ggml_moe_ffn_unary_supported(enum ggml_unary_op op) {

@@ -60,11 +60,19 @@ bool model_layer_layout(const llama_model & model, int32_t il, ggml_moe_ffn_layo
     if (layout.down->buffer && !ggml_backend_buffer_is_host(layout.down->buffer)) return false;
     layout.flags = GGML_MOE_FFN_LAYOUT_HOST_RESIDENT;
     if (ggml_moe_ffn_expert_execution_inputs_supported(w.ffn_up_exps_b,
-            w.ffn_gate_exps_b, w.ffn_down_exps_b, w.ffn_up_gate_exps_b, w.ffn_down_exps_s))
+            w.ffn_gate_exps_b, w.ffn_down_exps_b, w.ffn_up_gate_exps_b))
         layout.flags |= GGML_MOE_FFN_LAYOUT_NO_EXTRA_WEIGHTS;
     layout.flags |= GGML_MOE_FFN_LAYOUT_PHYSICAL_STORAGE_VALID;
-    if (!model.hadamard_rotation(w.ffn_up_exps) && !model.hadamard_rotation(w.ffn_gate_exps) &&
-            !model.hadamard_rotation(w.ffn_down_exps)) layout.flags |= GGML_MOE_FFN_LAYOUT_NO_HADAMARD;
+    // Up/gate rotations are folded into the routed activation by the model
+    // builder, so both projections must use the same transform.  The rotation
+    // between the up/gate activation and the down projection would have to run
+    // inside the executor and is still rejected.
+    const auto * up_rotation = model.hadamard_rotation(w.ffn_up_exps);
+    const auto * gate_rotation = model.hadamard_rotation(w.ffn_gate_exps);
+    const bool up_gate_rotation_matches = (!up_rotation && !gate_rotation) ||
+        (up_rotation && gate_rotation && *up_rotation == *gate_rotation);
+    if (up_gate_rotation_matches && !model.hadamard_rotation(w.ffn_down_exps))
+        layout.flags |= GGML_MOE_FFN_LAYOUT_NO_HADAMARD;
     return ggml_moe_ffn_layout_supported(&layout);
 }
 
