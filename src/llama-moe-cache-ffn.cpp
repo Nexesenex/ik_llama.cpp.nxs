@@ -261,11 +261,12 @@ bool llama_moe_cache_ffn_state::initialize(llama_moe_cache & cache, const llama_
     }), devices.end());
 
     if (eligible_count == 0) {
-        layer_by_index.assign(model.layers.size(), nullptr);
-        ready = true;
-        LLAMA_LOG_WARN("%s: no cache group could use the declared token capacity %d; retaining blocking cache path\n",
-                __func__, token_capacity);
-        return true;
+        // The caller requested asynchronous execution.  Falling back to the
+        // blocking cache here would silently reintroduce the synchronous
+        // transfers that --moe-cache-async is meant to eliminate.
+        LLAMA_LOG_ERROR("%s: no layer is eligible for the CUDA hybrid executor at token capacity %d; "
+                "refusing to fall back to the blocking cache\n", __func__, token_capacity);
+        return false;
     }
 
     for (auto & d : devices) for (const auto & g : d.groups) {
