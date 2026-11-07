@@ -13235,6 +13235,16 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
     return kv;
 }
 
+// A negative split dimension marks a replicated split tensor: every device that has a split
+// holds a full copy of the logical tensor, not a slice. That is the layout of the MLA latent
+// KV cache under split mode tensor parallel/attn. Sharded split tensors keep split_dim >= 0
+// and expose only their own slice (KV heads, recurrent state rows), so the two layouts must
+// not share the state serialization path even when the model has MLA layers.
+static inline bool llama_split_tensor_is_replicated(const struct ggml_tensor * tensor) {
+    return tensor->extra != nullptr &&
+        ((const ggml_split_tensor_t *) tensor->extra)->split_dim < 0;
+}
+
 static constexpr uint32_t DSV4_STATE_MAGIC = 0x34565344u;
 static constexpr uint32_t DSV4_STATE_VER = 4; // used-rows layout with compression ratios and shared-streams flag, then the cell tokens
 static constexpr uint32_t DSV4_STATE_VER_SHARED = 5;
@@ -14310,7 +14320,9 @@ struct llama_data_read {
         GGML_ASSERT(ggml_internal_get_type_traits(tensor->type).row_meta_size == 0);
         std::vector<uint8_t> aux;
         auto extra = (ggml_split_tensor_t *)tensor->extra;
-        if (ctx->model.is_mla_model()) {
+        if (llama_split_tensor_is_replicated(tensor)) {
+            // Replicated MLA latent KV cache: every split holds the same full copy, so a
+            // whole logical row can be written to each of them.
             GGML_ASSERT(extra);
             GGML_ASSERT(ctx->cparams.mla_attn == 3);
             for (int id = 0; id < extra->n_device; ++id) {
@@ -15217,9 +15229,11 @@ struct llama_data_write_buffer : llama_data_write {
             throw std::runtime_error(std::string{"Split cache for type "} + ggml_type_name(tensor->type) + " is not supported");
         }
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
-        if (model.is_mla_model()) {
-            // For MLA models, the cache is replicated on all GPUs when using split mode tensor parallel, so it is
-            // enough to get the data from the 1st device that has a copy
+        if (llama_split_tensor_is_replicated(tensor)) {
+            // For MLA models, the latent KV cache is replicated on all GPUs when using split mode tensor
+            // parallel, so it is enough to get the data from the 1st device that has a copy. This must be
+            // gated on the descriptor being replicated: a hybrid MLA model also has sharded recurrent
+            // state tensors (split_dim >= 0) whose per-device slivers must be assembled below.
             auto extra = (const ggml_split_tensor_t *)tensor->extra;
             for (int id = 0; id < extra->n_device; ++id) {
                 if (extra->splits[id]) {
@@ -15363,9 +15377,9 @@ struct llama_data_write_file : llama_data_write {
 
     void get_tensor_data_split(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) {
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
-        if (model.is_mla_model()) {
-            // MLA models have the cache replicated on all devices. Hence, it is enough to get it
-            // from the 1st device that has it.
+        if (llama_split_tensor_is_replicated(tensor)) {
+            // MLA latent KV cache replicated on all devices: it is enough to get it from the
+            // 1st device that has a copy.
             auto extra = (ggml_split_tensor_t *)tensor->extra;
             for (int id = 0; id < extra->n_device; ++id) {
                 if (extra->splits[id]) {
@@ -15375,9 +15389,14 @@ struct llama_data_write_file : llama_data_write {
             }
             return;
         }
-        auto kv = get_kv_cache_split_tensor(tensor, model.layers[il]);
         temp_buffer.resize(size);
-        llama_data_write_buffer::get_tensor_data_split(temp_buffer.data(), tensor, kv, aux_buffer, offset, size);
+        if (model.hparams.recurrent_layer_arr[il]) {
+            // sharded recurrent state: assemble the logical row from the per-device slices
+            llama_data_write_buffer::get_tensor_data_split(temp_buffer.data(), tensor, aux_buffer, offset, size);
+        } else {
+            auto kv = get_kv_cache_split_tensor(tensor, model.layers[il]);
+            llama_data_write_buffer::get_tensor_data_split(temp_buffer.data(), tensor, kv, aux_buffer, offset, size);
+        }
     }
 
     size_t get_size_written() override {
