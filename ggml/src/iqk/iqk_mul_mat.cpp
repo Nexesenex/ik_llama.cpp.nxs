@@ -2223,7 +2223,6 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
                 }
             }
 #endif
-#endif
             for (int row = 0; row < head_dim; ++row) {
                 const float v_new = v_t[row] * beta_val - v_prime[row] * beta_val * decay;
                 v_new_buf[row] = v_new;
@@ -2256,6 +2255,7 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
                     state[row + col * head_dim] = fminf(fmaxf(s, -1e6f), 1e6f);
                 }
             }
+#endif
 #endif
 
             if (saved_steps && t + 1 < n_tokens) {
