@@ -2,7 +2,15 @@
 #include "reduce_rows.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
-#include <cub/cub.cuh>
+#    ifdef _WIN32
+#        ifndef WIN32_LEAN_AND_MEAN
+#            define WIN32_LEAN_AND_MEAN
+#        endif
+#        ifndef NOMINMAX
+#            define NOMINMAX
+#        endif
+#    endif
+#    include <cub/cub.cuh>
 using namespace cub;
 #endif
 
