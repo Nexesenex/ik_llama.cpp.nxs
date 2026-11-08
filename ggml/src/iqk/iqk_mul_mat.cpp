@@ -2106,7 +2106,11 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
         const int out_token_stride = head_dim * n_heads;
 
         float * state = state_out + state_head_offset;
-        std::memcpy(state, state_in + state_head_offset, head_dim*head_dim*sizeof(float));
+        // With the fused copy (src7) state_out aliases state_in, so this is a
+        // self-copy; memcpy requires non-overlapping objects, so skip it.
+        if (state != state_in + state_head_offset) {
+            std::memcpy(state, state_in + state_head_offset, head_dim*head_dim*sizeof(float));
+        }
 
         for (int t = 0; t < n_tokens; ++t) {
             const float * q_t = q_data + qkv_head_offset_kq + t * qkv_token_stride;
