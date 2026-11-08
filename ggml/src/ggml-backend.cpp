@@ -1873,6 +1873,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         }
         split->i_start = 0;
         split->n_inputs = 0;
+        for (int _j = 0; _j < GGML_SCHED_MAX_SPLIT_INPUTS; _j++) split->input_dest_data[_j] = nullptr;
         int cur_backend_id = split->backend_id;
         std::vector<int> node_split(sched->hash_set.size, -1);
         for (; i < graph->n_nodes; i++) {
