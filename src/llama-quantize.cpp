@@ -1989,11 +1989,18 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     if (out_split_count > 1) {
         int n_tensors_out = 0;
         for (auto * ctx : ctx_outs) if (ctx) n_tensors_out += gguf_get_n_tensors(ctx);
+        // A run that writes only part of the source shards (or only the loaded split files)
+        // cannot know how many tensors the complete destination model holds, so keep the
+        // count declared by the source metadata: a rewritten shard must agree with a full
+        // destination. A complete run knows its exact output count, which may include extra
+        // tensors (duplicated output, kept input scales) that the source does not declare.
+        const bool partial_output = params->partial_requant || params->skip_first_shard || tensor_ids != nullptr;
+        const int split_tensor_count = partial_output ? ml.n_tensors_total : n_tensors_out;
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
             if (ctx_outs[i] == NULL) continue;
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_NO).c_str(), i);
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), out_split_count);
-            gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), n_tensors_out);
+            gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), split_tensor_count);
         }
         // splits written by a run that kept input scales cannot be completed by --partial-requant, which keeps none
         for (int i = params->skip_first_shard ? 1 : 0; params->partial_requant && i < out_split_count; ++i) {
@@ -2004,9 +2011,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             const int kid = ctx ? gguf_find_key(ctx, ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str()) : -1;
             const int n_existing = kid >= 0 ? gguf_get_val_i32(ctx, kid) : -1;
             if (ctx) gguf_free(ctx);
-            if (n_existing != n_tensors_out) {
+            if (n_existing != split_tensor_count) {
                 throw std::runtime_error(format("%s has %d tensors in its split set, but this run writes %d; "
-                        "remove the existing splits or run without --partial-requant", split_path, n_existing, n_tensors_out));
+                        "remove the existing splits or run without --partial-requant", split_path, n_existing, split_tensor_count));
             }
         }
     }

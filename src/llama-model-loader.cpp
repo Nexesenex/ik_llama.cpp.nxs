@@ -499,6 +499,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         }
 
         get_key(llm_kv(LLM_KV_SPLIT_TENSORS_COUNT), n_tensors);
+        n_tensors_total = n_tensors;
 
         // sanity check
         // only enforced when all split files are loaded (tensor_ids == nullptr and no missing splits):
@@ -579,6 +580,10 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
 
     n_kv      = gguf_get_n_kv(meta);
     n_tensors = weights.size();
+    if (n_tensors_total <= 0) {
+        // non-split models (or metadata without SPLIT_TENSORS_COUNT)
+        n_tensors_total = n_tensors;
+    }
 
     fver = (enum llama_fver) gguf_get_version(meta);
 
@@ -895,6 +900,7 @@ void llama_model_loader::override_tensor_from_file(const char * tensor_name, con
         // old pre-rename name, so the (file, name, gguf) constructor would miss.
         weights.emplace_back(donor_idx, offs, donor_tensor);
         n_tensors = (int) weights.size();
+        n_tensors_total = std::max(n_tensors_total, n_tensors);
         n_bytes += nbytes;
         // n_elements counts elements for logging; donor dims must match the
         // expected shape (checked later in check_tensor_dims), so just add them.

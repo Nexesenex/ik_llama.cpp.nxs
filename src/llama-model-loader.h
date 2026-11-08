@@ -38,6 +38,10 @@ struct llama_layer;
 struct llama_model_loader {
     int n_kv      = 0;
     int n_tensors = 0;
+    // Total tensor count declared by the model metadata. Unlike n_tensors (loaded
+    // count), this stays correct when only a subset of splits is loaded via
+    // tensor_ids or skip_missing_splits, so output metadata keeps the source total.
+    int n_tensors_total = 0;
     int n_created = 0;
     int n_skipped = 0;
     size_t size_skipped = 0;
