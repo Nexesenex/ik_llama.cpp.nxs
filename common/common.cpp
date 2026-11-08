@@ -1526,8 +1526,11 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
         // must neither be executed nor rejected as unknown - skip the remaining arguments
         if (i == 1) {
             const size_t ns = arg.find_first_not_of(" \t");
-            if (ns != std::string::npos &&
-                (arg[ns] == '#' || arg.compare(ns, 3, "REM") == 0 || arg.compare(ns, 3, "rem") == 0)) {
+            // REM/rem must be a whole word: a prompt or path like "Remember..." is not a comment
+            const bool is_rem = ns != std::string::npos &&
+                (arg.compare(ns, 3, "REM") == 0 || arg.compare(ns, 3, "rem") == 0) &&
+                (ns + 3 == arg.size() || arg[ns + 3] == ' ' || arg[ns + 3] == '\t');
+            if (ns != std::string::npos && (arg[ns] == '#' || is_rem)) {
                 fprintf(stderr, "warning: skipping commented line: %s", argv[i]);
                 for (int j = i + 1; j < argc; j++) {
                     fprintf(stderr, " %s", argv[j]);
