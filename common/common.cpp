@@ -5844,8 +5844,6 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         return iparams;
     }
 
-    auto cparams = common_context_params_to_llama(params);
-
     llama_context * lctx = common_create_context(model, params);
     if (lctx == NULL) {
         llama_free_model(model);
