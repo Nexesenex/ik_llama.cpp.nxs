@@ -14877,6 +14877,8 @@ static void ggml_compute_forward_add_q_f32(
     ggml_to_float_t const dequantize_row_q = type_traits[type].to_float;
     ggml_from_float_t const quantize_row_q = type_traits[dtype].from_float;
 
+    GGML_ASSERT(dequantize_row_q != NULL);
+
     // we don't support permuted src0 or src1
     GGML_ASSERT(nb00 == ggml_type_size(type));
     GGML_ASSERT(nb10 == sizeof(float));
@@ -14932,6 +14934,8 @@ static void ggml_compute_forward_add_q_f32(
     }
 }
 
+// NOTE: this list also contains vec_dot-only types (q8_1, q8_0_x4, q8_K, ...) that have
+// a from_float but no to_float. Handlers that dequantize src0 must assert to_float first.
 #define GGML_COMMON_QUANTIZED_CASES \
         case GGML_TYPE_Q4_0: \
         case GGML_TYPE_Q4_1: \
@@ -15373,6 +15377,8 @@ static void ggml_compute_forward_add1_q_f32(
     const enum ggml_type type = src0->type;
     ggml_to_float_t const dequantize_row_q = type_traits[type].to_float;
     ggml_from_float_t const quantize_row_q = type_traits[type].from_float;
+
+    GGML_ASSERT(dequantize_row_q != NULL);
 
     // we don't support permuted src0
     GGML_ASSERT(nb00 == ggml_type_size(type));
@@ -21694,6 +21700,8 @@ static void ggml_compute_forward_out_prod_q_f32(
     const enum ggml_type type = src0->type;
     ggml_to_float_t const dequantize_row_q = type_traits[type].to_float;
 
+    GGML_ASSERT(dequantize_row_q != NULL);
+
     GGML_ASSERT(ne02 == ne12);
     GGML_ASSERT(ne03 == ne13);
     GGML_ASSERT(ne2  == ne12);
@@ -22543,6 +22551,8 @@ static void ggml_compute_forward_get_rows_q(
 
     const enum ggml_type type = src0->type;
     ggml_to_float_t const dequantize_row_q = type_traits[type].to_float;
+
+    GGML_ASSERT(dequantize_row_q != NULL);
 
     assert(ne0  == nc);
     assert(ne02 == ne11);
