@@ -668,9 +668,14 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
 
 ggml_tensor * create_tensors_helper::create_tied_output(const LLM_TN & tn, int64_t n_embd, int64_t n_vocab) {
     // A sharded head needs its own tensor in the split context for the tail
-    // prepare_split_tensors(); otherwise tie to tok_embd with no duplicate load.
-    // (No embeddings to tie to happens only for MTP-only packs: legacy duplicate path, throws if missing.)
-    if ((model.split_output_tensor && model.split_buft) || model.tok_embd == NULL) {
+    // prepare_split_tensors(). An offloaded head needs its own tensor in the
+    // output context, otherwise aliasing tok_embd would keep it in the CPU
+    // input buffer and the final matmul would fall back to the CPU. Only when
+    // the output would land in tok_embd's context can we alias it with no
+    // duplicate load. (No embeddings to tie to happens only for MTP-only
+    // packs: legacy duplicate path, throws if missing.)
+    if ((model.split_output_tensor && model.split_buft) || model.tok_embd == NULL ||
+        ctx_output != ctx_input) {
         return create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab},
                 llama_model_loader::TENSOR_DUPLICATED);
     }
