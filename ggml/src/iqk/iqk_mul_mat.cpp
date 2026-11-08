@@ -1512,7 +1512,7 @@ constexpr float k_swiglu_oai_limit = 7.f;
 
 void MulMat::swiglu_oai(int n, const float * x, float * y) {
     int i = 0;
-#if defined __AVX2__
+#if defined __AVX2__ && defined __FMA__
     if (i + 7 < n) {
         auto max = _mm256_set1_ps(k_swiglu_oai_limit);
         auto alpha = _mm256_set1_ps(-k_swiglu_oai_alpha);
@@ -1530,7 +1530,7 @@ void MulMat::swiglu_oai(int n, const float * x, float * y) {
 
 void MulMat::clamp_oai(int n, float * x) {
     int i = 0;
-#if defined __AVX2__
+#if defined __AVX2__ && defined __FMA__
     if (i + 7 < n) {
         auto limit = _mm256_set1_ps(k_swiglu_oai_limit);
         auto neg_limit = _mm256_set1_ps(-k_swiglu_oai_limit);
