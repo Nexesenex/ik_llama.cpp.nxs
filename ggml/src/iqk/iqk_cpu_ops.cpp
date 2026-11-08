@@ -1000,7 +1000,11 @@ inline float sum_row_squared(int ncols, const ggml_bf16_t * x) {
     for (; j + 7 < ncols; j += 8) {
         auto vi = _mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)(x + j))), 16);
         auto v = _mm256_castsi256_ps(vi);
+#ifdef __FMA__
         vsum = _mm256_fmadd_ps(v, v, vsum);
+#else
+        vsum = _mm256_add_ps(_mm256_mul_ps(v, v), vsum);
+#endif
     }
     sum = hsum_float_8(vsum);
 #endif
