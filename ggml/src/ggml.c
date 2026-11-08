@@ -3982,14 +3982,16 @@ inline static void ggml_vec_hardswish_f32 (const int n, float * y, const float *
     }
 #endif
 #if defined(__AVX2__)
-    const __m256 inv_six = _mm256_set1_ps(1.0f/6.0f);
-    const __m256 three = _mm256_set1_ps(3.0f);
-    const __m256 one = _mm256_set1_ps(1.0f);
-    const __m256 zero = _mm256_setzero_ps();
+    // distinct names: __AVX2__ is also defined in AVX512 builds, where the
+    // __m512 block above already declared these in the same scope
+    const __m256 inv_six8 = _mm256_set1_ps(1.0f/6.0f);
+    const __m256 three8 = _mm256_set1_ps(3.0f);
+    const __m256 one8 = _mm256_set1_ps(1.0f);
+    const __m256 zero8 = _mm256_setzero_ps();
     for (; i + 7 < n; i += 8) {
         const __m256 xi = _mm256_loadu_ps(x + i);
-        const __m256 scaled = _mm256_mul_ps(_mm256_add_ps(xi, three), inv_six);
-        const __m256 clamped = _mm256_max_ps(zero, _mm256_min_ps(scaled, one));
+        const __m256 scaled = _mm256_mul_ps(_mm256_add_ps(xi, three8), inv_six8);
+        const __m256 clamped = _mm256_max_ps(zero8, _mm256_min_ps(scaled, one8));
         _mm256_storeu_ps(y + i, _mm256_mul_ps(xi, clamped));
     }
 #endif
@@ -4010,14 +4012,16 @@ inline static void ggml_vec_hardsigmoid_f32 (const int n, float * y, const float
     }
 #endif
 #if defined(__AVX2__)
-    const __m256 inv_six = _mm256_set1_ps(1.0f/6.0f);
-    const __m256 three = _mm256_set1_ps(3.0f);
-    const __m256 one = _mm256_set1_ps(1.0f);
-    const __m256 zero = _mm256_setzero_ps();
+    // distinct names: __AVX2__ is also defined in AVX512 builds, where the
+    // __m512 block above already declared these in the same scope
+    const __m256 inv_six8 = _mm256_set1_ps(1.0f/6.0f);
+    const __m256 three8 = _mm256_set1_ps(3.0f);
+    const __m256 one8 = _mm256_set1_ps(1.0f);
+    const __m256 zero8 = _mm256_setzero_ps();
     for (; i + 7 < n; i += 8) {
         const __m256 xi = _mm256_loadu_ps(x + i);
-        const __m256 scaled = _mm256_mul_ps(_mm256_add_ps(xi, three), inv_six);
-        const __m256 clamped = _mm256_max_ps(zero, _mm256_min_ps(scaled, one));
+        const __m256 scaled = _mm256_mul_ps(_mm256_add_ps(xi, three8), inv_six8);
+        const __m256 clamped = _mm256_max_ps(zero8, _mm256_min_ps(scaled, one8));
         _mm256_storeu_ps(y + i, clamped);
     }
 #endif
