@@ -978,7 +978,11 @@ inline float sum_row_squared(int ncols, const ggml_half * x) {
     auto vsum = _mm256_setzero_ps();
     for (; j + 7 < ncols; j += 8) {
         auto v = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + j)));
+#ifdef __FMA__
         vsum = _mm256_fmadd_ps(v, v, vsum);
+#else
+        vsum = _mm256_add_ps(_mm256_mul_ps(v, v), vsum);
+#endif
     }
     sum = hsum_float_8(vsum);
 #endif
