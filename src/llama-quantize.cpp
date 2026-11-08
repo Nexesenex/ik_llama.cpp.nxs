@@ -1577,10 +1577,19 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             // Copy the BF16 data into the persistent buffer
             std::memcpy(vmap_buf + vmap_offs, src_tensor->data, nbytes);
 
-            // Replace the reference tensor's type and data with the source BF16 data
+            // Replace the reference tensor's type and data with the source BF16 data.
+            // The reference tensor's nb[] strides are only valid for its original type,
+            // so adopt the source layout as well: do_quantize_slabbed() walks the data
+            // with tensor->nb[1]/nb[2], and stale strides would read wrong rows/slices.
+            if (std::memcmp(ref_tensor->ne, src_tensor->ne, sizeof(ref_tensor->ne)) != 0) {
+                throw std::runtime_error(format("virtual_map: tensor '%s' shape mismatch between source and reference model", name.c_str()));
+            }
             LLAMA_LOG_INFO("%s: virtual-map: patching '%s' (%s -> %s)\n",
                     __func__, name.c_str(), ggml_type_name(ref_tensor->type), ggml_type_name(src_tensor->type));
             ref_tensor->type = src_tensor->type;
+            for (int j = 0; j < GGML_MAX_DIMS; ++j) {
+                ref_tensor->nb[j] = src_tensor->nb[j];
+            }
             ref_tensor->data = vmap_buf + vmap_offs;
             vmap_offs += nbytes;
 
