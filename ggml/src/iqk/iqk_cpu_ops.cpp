@@ -441,11 +441,12 @@ void iqk_openai_experts(struct ggml_tensor * topk, struct ggml_tensor * softmax,
         auto ids = (int32_t *)((char *)topk->data + ir*topk->nb[1]);
         float max = aux.front().first;
         int j1 = 0;
-#if defined(__AVX2__)
+#if defined(__AVX2__) && defined(__FMA__)
         auto vmax  = _mm256_set1_ps(max);
         auto vsum  = _mm256_setzero_ps();
         for (; j1 + 7 < ne0; j1 += 8) {
-            auto vindex = _mm256_setr_epi32(j1, j1 + 1, j1 + 2, j1 + 3, j1 + 4, j1 + 5, j1 + 6, j1 + 7);
+            // gather indices are relative to &aux[j1]: 8-byte stride over pairs
+            auto vindex = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
             auto w = v_expf(_mm256_sub_ps(_mm256_i32gather_ps((const float *)&aux[j1].first, vindex, 8), vmax));
             vsum = _mm256_add_ps(vsum, w);
             _mm256_storeu_ps(weights + j1, w);
