@@ -379,42 +379,41 @@ struct llama_control_vector {
         if (layer_dir == nullptr) {
             return cur;
         }
-        if (layer_dir != nullptr) {
-            if (cur->op == GGML_OP_REDUCE) {
-                // In tensor-parallel mode the layer output is a REDUCE node: a view of the
-                // last device's partial, and after the reduce runs every device's partial
-                // holds the full sum. Adding the direction on top of the view would force
-                // the scheduler to copy the whole hidden state to every device for the next
-                // layer. Instead, apply the direction to the last local partial and rebuild
-                // the reduce so the full sum (including the direction) is written back into
-                // every device's partial, preserving the local-partial consumption pattern.
-                const int n = cur->op_params[1];
-                const uint32_t placeholders = cur->op_params[4];
-                ggml_tensor * srcs[GGML_MAX_SRC];
-                for (int j = 0; j < n; ++j) {
-                    srcs[j] = cur->src[j];
-                }
-                int last = n - 1;
-                while (last >= 0 && srcs[last] == nullptr) --last;
-                GGML_ASSERT(last >= 0);
-                // the original reduce is already expanded into the graph; turn it into a
-                // no-op so it does not overwrite the partials with the direction-free sum
-                // before the rebuilt reduce runs
-                cur->op_params[3] = 1;
-                srcs[last] = ggml_add(ctx, srcs[last], layer_dir);
-                cur = ggml_reduce(ctx, srcs, n, GGML_OP_ADD);
-                cur->op_params[4] = placeholders;
-            } else {
-                if (layer_dir->type != cur->type && layer_dir->type == GGML_TYPE_F32) {
-                    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
-                }
-                cur = ggml_add(ctx, cur, layer_dir);
+        if (cur->op == GGML_OP_REDUCE) {
+            // In tensor-parallel mode the layer output is a REDUCE node: a view of the
+            // last device's partial, and after the reduce runs every device's partial
+            // holds the full sum. Adding the direction on top of the view would force
+            // the scheduler to copy the whole hidden state to every device for the next
+            // layer. Instead, apply the direction to the last local partial and rebuild
+            // the reduce so the full sum (including the direction) is written back into
+            // every device's partial, preserving the local-partial consumption pattern.
+            const int n = cur->op_params[1];
+            const uint32_t placeholders = cur->op_params[4];
+            ggml_tensor * srcs[GGML_MAX_SRC];
+            for (int j = 0; j < n; ++j) {
+                srcs[j] = cur->src[j];
             }
+            int last = n - 1;
+            while (last >= 0 && srcs[last] == nullptr) --last;
+            GGML_ASSERT(last >= 0);
+            // the original reduce is already expanded into the graph; turn it into a
+            // no-op so it does not overwrite the partials with the direction-free sum
+            // before the rebuilt reduce runs
+            cur->op_params[3] = 1;
+            srcs[last] = ggml_add(ctx, srcs[last], layer_dir);
+            cur = ggml_reduce(ctx, srcs, n, GGML_OP_ADD);
+            cur->op_params[4] = placeholders;
+        } else {
+            if (layer_dir->type != cur->type && layer_dir->type == GGML_TYPE_F32) {
+                cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+            }
+            cur = ggml_add(ctx, cur, layer_dir);
         }
-        if (ggml_tensor * res = apply_to_reduce(ctx, cur, il)) {
-            return res;
-        }
-        return ggml_add(ctx, cur, layer_dir);
+        // Both branches above already applied the direction exactly once. The old
+        // fallback (apply_to_reduce() + ggml_add()) must not run here: it added the
+        // direction a second time and, for REDUCE inputs, wrapped the rebuilt reduce
+        // in a plain add, which is what this function is trying to avoid.
+        return cur;
     }
 
     struct ggml_tensor * apply_to_device(struct ggml_context * ctx, struct ggml_tensor * cur, int il, int id) const;
