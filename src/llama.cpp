@@ -5197,6 +5197,15 @@ static bool llm_load_tensors(
         }
         LLAMA_LOG_INFO("Memory required for model tensors + cache: %.f MiB\n", required_mem/(1024.*1024.));
         LLAMA_LOG_INFO("Memory available on all devices - compute: %.f MiB\n", available_mem/(1024.*1024.));
+        // required_mem above covers every layer, including the ones kept on the CPU by a
+        // partial -ngl, while available_mem only covers VRAM. The split places just the
+        // GPU buckets [i_gpu_start, n_last_gpu), so the fit check must compare that subset.
+        int n_last_gpu = n_layer;
+        if (n_gpu_layers > n_layer) ++n_last_gpu;
+        size_t required_gpu_mem = 0;
+        for (int i = i_gpu_start; i < n_last_gpu; ++i) {
+            required_gpu_mem += layer_sizes[i];
+        }
         // NXS streaming discipline: with explicit -ts the auto-adjust above is skipped,
         // so an impossible split used to burn the full load (host commit + 60s) and die
         // late in compute alloc with a silent exit. Fail fast here with per-device
@@ -5205,16 +5214,16 @@ static bool llm_load_tensors(
         // proportions, with their own count validation below.
         // Overrides (-ot, -ncmoe) are exempt too: they dispatch tensors to host/CPU
         // outside the VRAM split, so full-model bytes vs VRAM headroom misjudges them.
-        if (required_mem > available_mem && has_tensor_split && !tensor_split_strict &&
+        if (required_gpu_mem > available_mem && has_tensor_split && !tensor_split_strict &&
             ml.tensor_buft_overrides == nullptr && ml.ncmoe == 0) {
             LLAMA_LOG_ERROR("%s: explicit -ts split does not fit: required %.f MiB > available %.f MiB (after compute reserve)\n",
-                __func__, required_mem/(1024.*1024.), available_mem/(1024.*1024.));
+                __func__, required_gpu_mem/(1024.*1024.), available_mem/(1024.*1024.));
             float prev = 0.0f;
             for (int id = 0; id < device_count; ++id) {
                 const float frac = model.splits[id] - prev;
                 prev = model.splits[id];
-                const double need = (double) frac * (double) required_mem + (double) max_compute;
-                const double have = (double) device_mem[id] + (double) max_compute;
+                const double need = (double) frac * (double) required_gpu_mem + (double) max_compute;
+                const double have = (double) device_mem[id];
                 LLAMA_LOG_ERROR("%s: device %d (raw %d): split share %.1f%% needs %.f MiB, have %.f MiB free\n",
                     __func__, id, model.devices[id], (double) frac * 100.0,
                     need/(1024.*1024.), have/(1024.*1024.));
