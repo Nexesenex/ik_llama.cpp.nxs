@@ -725,7 +725,10 @@ if (n_split_detect > 1) {
             for (int i_tensor = 0; i_tensor < gguf_get_n_tensors(ctx_gguf); i_tensor++) {
                 const char * t_name = gguf_get_tensor_name(ctx_gguf, i_tensor);
                 gguf_add_tensor(ctx_all_gguf, ggml_get_tensor(ctx_meta_file, t_name));
-                tensor_source_file.push_back(i_split);
+                // Store the index into the compacted source vectors, not the on-disk
+                // shard number: skipped shards are not pushed to ctx_ggufs/ctx_metas/
+                // f_inputs, so the two indices diverge after the first missing shard.
+                tensor_source_file.push_back((int) ctx_metas.size() - 1);
             }
             fprintf(stderr, " done\n");
         }
