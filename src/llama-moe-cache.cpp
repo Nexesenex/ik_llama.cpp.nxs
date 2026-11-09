@@ -146,7 +146,6 @@ struct llama_moe_cache::impl {
         float margin = 0.0f;
         size_t bytes = 0;
     };
-    static constexpr int64_t max_batch = llama_moe_cache_policy_detail::state::max_batch;
 
     int32_t n_expert_used;
     int32_t n_expert;
@@ -645,7 +644,7 @@ struct llama_moe_cache::impl {
             return nullptr;
         }
         if (!llama_moe_cache_policy_detail::slot_map_eligible(n_tokens, n_expert_used,
-                l.slot_map->ne[1], g.n_slots, max_batch)) {
+                l.slot_map->ne[1], g.n_slots, llama_moe_cache::max_batch_tokens)) {
             ++incompatible_layer_skips;
             return nullptr;
         }
@@ -659,10 +658,10 @@ struct llama_moe_cache::impl {
         const layer & l = layers[il];
         if (!l.gpu_map || l.group < 0) return {};
         const group & g = groups[l.group];
-        if (g.frozen || !g.cpu_share_enabled || n_tokens <= 0 || n_tokens > max_batch ||
+        if (g.frozen || !g.cpu_share_enabled || n_tokens <= 0 || n_tokens > llama_moe_cache::max_batch_tokens ||
                 n_expert_used > g.zero_slots ||
                 !llama_moe_cache_policy_detail::slot_map_eligible(n_tokens, n_expert_used,
-                    l.slot_map->ne[1], g.n_slots, max_batch)) return {};
+                    l.slot_map->ne[1], g.n_slots, llama_moe_cache::max_batch_tokens)) return {};
         return {l.gpu_map, l.cpu_map, l.gpu_bias_map, l.cpu_bias_map};
     }
 
@@ -810,7 +809,7 @@ struct llama_moe_cache::impl {
             int32_t first_expert, size_t max_experts, int64_t n_tokens) {
 #ifdef GGML_USE_CUDA
         if (!backend || !src || !dst || !src->buffer || !dst->buffer ||
-                !ggml_backend_is_cuda(backend) || n_tokens <= max_batch) return 0;
+                !ggml_backend_is_cuda(backend) || n_tokens <= llama_moe_cache::max_batch_tokens) return 0;
         auto it_binding = bindings.find(src);
         if (it_binding == bindings.end()) return 0;
         const binding & b = it_binding->second;
@@ -938,7 +937,8 @@ struct llama_moe_cache::impl {
                 int64_t selected_per_token = 0;
                 if (!ggml_is_contiguous(selected) ||
                         !llama_moe_cache_policy_detail::recover_selected_geometry(selected,
-                            g.cache.n_expert, selected_per_token, n_tokens) || n_tokens > max_batch) {
+                            g.cache.n_expert, selected_per_token, n_tokens) ||
+                            n_tokens > llama_moe_cache::max_batch_tokens) {
                     GGML_ABORT("Unable to recover MoE CPU-share token geometry for layer %d", il);
                 }
                 const ggml_tensor * selected_storage = selected->view_src ? selected->view_src : selected;
@@ -1034,7 +1034,8 @@ struct llama_moe_cache::impl {
         int64_t selected_per_token = 0;
         if (g.cache.policy == llama_moe_cache_policy_detail::kind::classlru &&
                 (!llama_moe_cache_policy_detail::recover_selected_geometry(selected,
-                    g.cache.n_expert, selected_per_token, n_tokens) || n_tokens > max_batch)) {
+                    g.cache.n_expert, selected_per_token, n_tokens) ||
+                    n_tokens > llama_moe_cache::max_batch_tokens)) {
             GGML_ABORT("Unable to recover MoE cache token geometry for layer %d", il);
         }
         ids.resize(ggml_nelements(selected));
