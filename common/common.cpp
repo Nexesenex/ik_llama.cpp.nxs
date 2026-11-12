@@ -1657,6 +1657,9 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
     if (params.moe_cache_async && !moe_cache_requested) {
         throw std::invalid_argument("error: --moe-cache-async requires a nonzero --moe-cache-mib budget or --moe-cache-layers");
     }
+    if (params.moe_cache_async && params.moe_cache_cpu_share > 0.0f) {
+        LLAMA_LOG_WARN("gpt_params: --moe-cache-cpu-share is ignored with --moe-cache-async (the async hybrid executor always runs misses on the CPU)\n");
+    }
 
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
