@@ -2684,12 +2684,12 @@ llm_expert_gating_func_type   gating_op,
     ggml_tensor * result;
     if (n_expert_used == 1) {
         result = ggml_cont(ctx, ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], 0));
-    }
-    if (n_expert_used == 2) {
+    } else if (n_expert_used == 2) {
         result = ggml_add(ctx, ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], 0),
                              ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], experts->nb[1]));
+    } else {
+        result = ggml_multi_add(ctx, ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], 0), n_expert_used);
     }
-    result = ggml_multi_add(ctx, ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], 0), n_expert_used);
     if (add_input) {
         cb(result, "ffn_out", il);
         result = ggml_add(ctx, result, input);
