@@ -322,7 +322,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
                 auto d_name = tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i);
                 auto d_meta = ml.get_tensor_meta(d_name.c_str());
                 if (d_meta) {
-                    std::string pattern = "blk\\." + std::to_string(i) + "\\.ffn_(up|down|gate|gate_up)_exps\\.(weight|scale)";
+                    std::string pattern = "blk\\." + std::to_string(i) + "\\.ffn_(up|down|gate|gate_up)_exps\\.(weight|scale|bias)";
                     this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
                     if (++ndone == ml.ncmoe) break;
                 }
@@ -389,7 +389,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
             for (int i = n_layer-1; i >= 0; --i) {
                 int id = model.default_layer_device[i];
                 if (n_override[id] > 0) {
-                    std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                    std::string pattern = "blk\\." + std::to_string(i) + "\\.ffn_(up|down|gate|gate_up)_exps\\.(weight|scale|bias)";
                     LLAMA_LOG_INFO("Adding override %s=%s\n", pattern.c_str(), ggml_backend_buft_name(buft));
                     this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
                     --n_override[id];
