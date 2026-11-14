@@ -1675,6 +1675,12 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
     if (params.moe_cache_async && params.moe_cache_policy == LLAMA_MOE_CACHE_POLICY_CLASSLRU) {
         LLAMA_LOG_WARN("gpt_params: --moe-cache-policy classlru is ignored with --moe-cache-async (the async hybrid executor always uses LRU)\n");
     }
+    if (params.moe_cache_async && params.min_experts > 0 && params.thresh_experts > 0) {
+        // SER marks dropped experts with -1; the async hybrid executor cannot
+        // resolve those ids and would fail every layer that runs on the CPU.
+        LLAMA_LOG_WARN("gpt_params: --moe-cache-async is disabled with --smart-expert-reduction (the async hybrid executor cannot skip dropped experts)\n");
+        params.moe_cache_async = false;
+    }
 
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
@@ -6889,6 +6895,10 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.moe_cache_policy  = params.moe_cache_policy;
     cparams.moe_cache_cpu_share = (float) params.moe_cache_cpu_share;
     cparams.moe_cache_async   = params.moe_cache_async;
+    if (cparams.moe_cache_async && params.min_experts > 0 && params.thresh_experts > 0) {
+        // the async hybrid executor cannot skip experts dropped by SER
+        cparams.moe_cache_async = false;
+    }
     if (cparams.moe_cache_async) {
         // the async hybrid executor always uses the plain LRU bank and runs
         // current misses on the CPU, so classlru and CPU-share slots are void

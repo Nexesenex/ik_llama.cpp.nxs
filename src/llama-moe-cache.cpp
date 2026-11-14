@@ -548,7 +548,7 @@ struct llama_moe_cache::impl {
                 device_tensor_counts[g.device] += layer.ffn_up_gate_exps ?
                     (layer.ffn_up_exps && layer.ffn_gate_exps ? 4 : 2) : 3;
             }
-            host_layer_count += g.layers.size() * (g.cpu_share_enabled ? 5 : 1);
+            host_layer_count += g.layers.size() * (g.cpu_share_enabled ? 10 : 2);
         }
         if (host_layer_count == 0) throw std::runtime_error("MoE cache budget is too small to hold one token");
 
@@ -628,26 +628,30 @@ struct llama_moe_cache::impl {
                         bindings[l.experts[ip]] = { il, (int32_t) ip, cached };
                     }
                 }
-                l.slot_map = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, g.ref[0]->ne[2]);
-                ggml_format_name(l.slot_map, "moe_cache.slot_map-%d", il);
+                // Each map has one extra leading row.  GET_ROWS on an id of -1
+                // (SER dropped expert) reads that row, which holds an
+                // out-of-range sentinel that mul_mat_id/add_id skip.  The map
+                // view starts at row 1 so normal expert ids keep their meaning.
+                const int64_t n_expert = g.ref[0]->ne[2];
+                auto make_map = [&](const char * fmt) {
+                    ggml_tensor * storage = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, n_expert + 1);
+                    ggml_tensor * map = ggml_view_2d(ctx_host.get(), storage, 1, n_expert,
+                            storage->nb[1], ggml_element_size(storage));
+                    ggml_format_name(map, fmt, il);
+                    buf_host_size += GGML_PAD(ggml_nbytes(storage), alignment_host);
+                    return map;
+                };
+                l.slot_map = make_map("moe_cache.slot_map-%d");
                 layer_of[l.slot_map] = il;
-                buf_host_size += GGML_PAD(ggml_nbytes(l.slot_map), alignment_host);
                 if (g.cpu_share_enabled) {
-                    l.gpu_map = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, g.ref[0]->ne[2]);
-                    l.cpu_map = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, g.ref[0]->ne[2]);
-                    l.gpu_bias_map = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, g.ref[0]->ne[2]);
-                    l.cpu_bias_map = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, g.ref[0]->ne[2]);
-                    ggml_format_name(l.gpu_map, "moe_cache.gpu_map-%d", il);
-                    ggml_format_name(l.cpu_map, "moe_cache.cpu_map-%d", il);
-                    ggml_format_name(l.gpu_bias_map, "moe_cache.gpu_bias_map-%d", il);
-                    ggml_format_name(l.cpu_bias_map, "moe_cache.cpu_bias_map-%d", il);
+                    l.gpu_map = make_map("moe_cache.gpu_map-%d");
+                    l.cpu_map = make_map("moe_cache.cpu_map-%d");
+                    l.gpu_bias_map = make_map("moe_cache.gpu_bias_map-%d");
+                    l.cpu_bias_map = make_map("moe_cache.cpu_bias_map-%d");
                     share_map_of[l.gpu_map] = il;
                     share_map_of[l.cpu_map] = il;
                     share_map_of[l.gpu_bias_map] = il;
                     share_map_of[l.cpu_bias_map] = il;
-                    for (ggml_tensor * map : {l.gpu_map, l.cpu_map, l.gpu_bias_map, l.cpu_bias_map}) {
-                        buf_host_size += GGML_PAD(ggml_nbytes(map), alignment_host);
-                    }
                 }
             }
             d.buffer_size += alloc_size(g, g.n_slots, g.zero_slots);
@@ -668,6 +672,26 @@ struct llama_moe_cache::impl {
         ggml_backend_buffer_clear(buf_host.get(), 0xff);
         buf_host_size = ggml_backend_buffer_get_size(buf_host.get());
         for (group & g : groups) if (g.n_slots > 0) for (int32_t il : g.layers) g.cache.slot_map[il] = (int32_t *) layers[il].slot_map->data;
+        for (layer & l : layers) if (l.slot_map) {
+            const group & g = groups[l.group];
+            const int32_t n_expert = (int32_t) l.slot_map->ne[1];
+            // The cached bank views expose n_slots + zero_slots rows, so that
+            // index is skipped by both the CPU and CUDA expert matmuls.
+            const int64_t guard64 = (int64_t) g.n_slots + g.zero_slots;
+            GGML_ASSERT(guard64 <= INT32_MAX);
+            const int32_t guard = (int32_t) guard64;
+            auto set_prefix = [](ggml_tensor * map, int32_t value) {
+                *(int32_t *) ((uint8_t *) map->data - ggml_element_size(map)) = value;
+            };
+            set_prefix(l.slot_map, guard);
+            if (l.gpu_map) {
+                // Host expert tensors and padded biases have n_expert rows.
+                set_prefix(l.gpu_map, guard);
+                set_prefix(l.cpu_map, n_expert);
+                set_prefix(l.gpu_bias_map, n_expert);
+                set_prefix(l.cpu_bias_map, n_expert);
+            }
+        }
         for (layer & l : layers) if (l.gpu_bias_map) {
             const int32_t n_expert = (int32_t) l.gpu_bias_map->ne[1];
             std::fill((int32_t *) l.gpu_bias_map->data, (int32_t *) l.gpu_bias_map->data + n_expert, n_expert);
@@ -971,6 +995,28 @@ struct llama_moe_cache::impl {
     }
 
 
+    // Read the selected expert ids through the backend that owns their buffer.
+    // CUDA streams are non-blocking, so only a synchronize on the owning device
+    // orders this read after the graph split that produced the ids.
+    void read_ids(const ggml_tensor * tensor) {
+        ids.resize(ggml_nelements(tensor));
+        const ggml_tensor * storage = tensor->view_src ? tensor->view_src : tensor;
+        if (!storage->buffer) GGML_ABORT("MoE cache selected IDs have no backing buffer");
+        const ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(storage->buffer);
+        for (const device & d : devices) {
+            if (d.backend && d.buft == buft) {
+                ggml_backend_tensor_get_async(d.backend, tensor, ids.data(), 0, ggml_nbytes(tensor));
+                ggml_backend_synchronize(d.backend);
+                return;
+            }
+        }
+        if (ggml_backend_buffer_is_host(storage->buffer)) {
+            ggml_backend_tensor_get(tensor, ids.data(), 0, ggml_nbytes(tensor));
+            return;
+        }
+        GGML_ABORT("MoE cache selected IDs use an unsupported buffer type");
+    }
+
     bool copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph,
             ggml_backend_sched_copy_phase phase) {
         auto it_share = share_map_of.find(src);
@@ -1020,16 +1066,7 @@ struct llama_moe_cache::impl {
                 }
                 const ggml_tensor * selected_storage = selected->view_src ? selected->view_src : selected;
                 if (!selected_storage->buffer) GGML_ABORT("CPU-share selected IDs have no backing buffer for layer %d", il);
-                ids.resize(ggml_nelements(selected));
-                const auto * selected_buft = ggml_backend_buffer_get_type(selected_storage->buffer);
-                if (selected_buft == d.buft) {
-                    ggml_backend_tensor_get_async(d.backend, selected, ids.data(), 0, ggml_nbytes(selected));
-                    ggml_backend_synchronize(d.backend);
-                } else if (ggml_backend_buffer_is_host(selected_storage->buffer)) {
-                    ggml_backend_tensor_get(selected, ids.data(), 0, ggml_nbytes(selected));
-                } else {
-                    GGML_ABORT("CPU-share selected IDs use unsupported buffer type for layer %d", il);
-                }
+                read_ids(selected);
                 if (!g.cache.plan_with_cpu_share(il, ids.data(), ids.size(), n_tokens, selected_per_token,
                         cpu_share, g.zero_slots, l.share_plan)) {
                     GGML_ABORT("Unable to plan MoE CPU-share assignments for layer %d", il);
@@ -1115,9 +1152,7 @@ struct llama_moe_cache::impl {
                     n_tokens > llama_moe_cache::max_batch_tokens)) {
             GGML_ABORT("Unable to recover MoE cache token geometry for layer %d", il);
         }
-        ids.resize(ggml_nelements(selected));
-        ggml_backend_tensor_get_async(backend, selected, ids.data(), 0, ggml_nbytes(selected));
-        ggml_backend_synchronize(backend);
+        read_ids(selected);
         size_t n_hit = 0;
         size_t n_eviction = 0;
         if (!g.cache.plan(il, ids.data(), ids.size(), n_tokens, fills, n_hit, n_eviction)) GGML_ABORT("MoE cache slot count is smaller than the routed expert set");

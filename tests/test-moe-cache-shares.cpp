@@ -56,6 +56,41 @@ static bool check_cache_policy() {
     std::vector<int32_t> layer0(8, -1), layer1(8, -1);
     classlru.slot_map[0] = layer0.data();
     classlru.slot_map[1] = layer1.data();
+    // SER sentinels (-1) are skipped before they can consume a slot.
+    state ser_lru;
+    ser_lru.init(1, 8, 2, kind::lru);
+    std::vector<int32_t> ser_map(8, -1);
+    ser_lru.slot_map[0] = ser_map.data();
+    std::vector<state::fill> ser_fills;
+    size_t ser_hits = 0, ser_evictions = 0;
+    const std::vector<int32_t> ser_route = {-1, -1, 6, -1};
+    if (!ser_lru.plan(0, ser_route.data(), ser_route.size(), 1, ser_fills, ser_hits, ser_evictions) ||
+            ser_fills.size() != 1 || ser_fills[0].expert != 6 || ser_hits != 0 ||
+            ser_evictions != 0 || ser_lru.filled_real_slots != 1 || ser_map[6] < 0) {
+        std::fprintf(stderr, "LRU SER route\n"); return false;
+    }
+    ser_fills.clear();
+    const std::vector<int32_t> ser_dropped = {-1, -1};
+    if (!ser_lru.plan(0, ser_dropped.data(), ser_dropped.size(), 1, ser_fills, ser_hits, ser_evictions) ||
+            !ser_fills.empty() || ser_hits != 0 || ser_evictions != 0 ||
+            ser_lru.filled_real_slots != 1 || ser_map[6] < 0) {
+        std::fprintf(stderr, "LRU SER dropped-only route\n"); return false;
+    }
+    state ser_class;
+    ser_class.init(1, 8, 2, kind::classlru);
+    std::vector<int32_t> ser_class_map(8, -1);
+    ser_class.slot_map[0] = ser_class_map.data();
+    if (!ser_class.plan(0, ser_route.data(), ser_route.size(), 1, ser_fills, ser_hits, ser_evictions) ||
+            ser_fills.size() != 1 || ser_fills[0].expert != 6 || ser_hits != 0 ||
+            ser_evictions != 0 || ser_class.filled_real_slots != 1 || ser_class_map[6] < 0) {
+        std::fprintf(stderr, "ClassLRU SER route\n"); return false;
+    }
+    ser_fills.clear();
+    if (!ser_class.plan(0, ser_dropped.data(), ser_dropped.size(), 1, ser_fills, ser_hits, ser_evictions) ||
+            !ser_fills.empty() || ser_hits != 0 || ser_evictions != 0 ||
+            ser_class.filled_real_slots != 1 || ser_class_map[6] < 0) {
+        std::fprintf(stderr, "ClassLRU SER dropped-only route\n"); return false;
+    }
     auto plan = [&](int layer, std::vector<int32_t> ids, int tokens, size_t want_hits) {
         std::vector<state::fill> fills;
         size_t hits = 0, evictions = 0;
@@ -135,6 +170,35 @@ static bool check_cpu_share_plan() {
             zero.filled_real_slots != ordinary.filled_real_slots || !plan.cpu.empty() ||
             plan.n_hit != hits || plan.n_eviction != evictions || plan.fills.size() != fills.size()) {
         std::fprintf(stderr, "share-zero ClassLRU parity\n"); return false;
+    }
+    // SER (-1 ids) must be skipped by the share planner: dropped experts never
+    // occupy rows, consume CPU-share staging slots, or touch the maps.
+    state ser;
+    ser.init(1, n_experts, real_rows, kind::lru);
+    std::vector<int32_t> ser_slots(n_experts, -1);
+    ser.slot_map[0] = ser_slots.data();
+    const std::vector<int32_t> ser_seed = {-1, 0, 3, 5};
+    if (!ser.plan_with_cpu_share(0, ser_seed.data(), ser_seed.size(), 1, ser_seed.size(), 0.0, 0, plan) ||
+            plan.fills.size() != 3 || !plan.cpu.empty() || ser.filled_real_slots != real_rows) {
+        std::fprintf(stderr, "SER underfull share plan\n"); return false;
+    }
+    const std::vector<int32_t> ser_mixed = {-1, 2, -1, 4};
+    if (!ser.plan_with_cpu_share(0, ser_mixed.data(), ser_mixed.size(), 1, ser_mixed.size(),
+            1.0, zero_rows, plan) || !plan.fills.empty() || plan.cpu.size() != 2 ||
+            ser.filled_real_slots != real_rows) {
+        std::fprintf(stderr, "SER mixed share plan\n"); return false;
+    }
+    bool ser_cpu2 = false, ser_cpu4 = false;
+    for (const auto & candidate : plan.cpu) {
+        ser_cpu2 |= candidate.expert == 2;
+        ser_cpu4 |= candidate.expert == 4;
+    }
+    if (!ser_cpu2 || !ser_cpu4 ||
+            plan.gpu_map[2] < real_rows || plan.gpu_map[2] >= real_rows + zero_rows ||
+            plan.gpu_map[4] < real_rows || plan.gpu_map[4] >= real_rows + zero_rows ||
+            plan.gpu_map[2] == plan.gpu_map[4] ||
+            plan.cpu_map[2] != 2 || plan.cpu_map[4] != 4) {
+        std::fprintf(stderr, "SER mixed share maps\n"); return false;
     }
     return true;
 }

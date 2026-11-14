@@ -238,7 +238,10 @@ struct state {
         }
         uniq.clear();
         for (size_t i = 0; i < n_ids; ++i) {
-            GGML_ASSERT(ids[i] >= 0 && ids[i] < n_expert);
+            // Smart expert reduction marks dropped experts with -1.  They never
+            // enter the bank, so they must not consume slots or LRU history.
+            if (ids[i] < 0) continue;
+            GGML_ASSERT(ids[i] < n_expert);
             if (seen[ids[i]] != seen_gen) {
                 seen[ids[i]] = seen_gen;
                 uniq.push_back(ids[i]);
@@ -279,7 +282,7 @@ struct state {
                 n_tokens <= 0 || n_ids == 0 || (uint64_t) n_tokens > n_ids ||
                 n_ids % (size_t) n_tokens != 0) return false;
         for (size_t i = 0; i < n_ids; ++i) {
-            if (ids[i] < 0 || ids[i] >= n_expert) return false;
+            if (ids[i] >= n_expert) return false;
         }
         if (++seen_gen == 0) {
             std::fill(seen.begin(), seen.end(), 0);
@@ -287,6 +290,8 @@ struct state {
         }
         uniq.clear();
         for (size_t i = 0; i < n_ids; ++i) {
+            // SER sentinels (-1) routed for this token never reach the bank.
+            if (ids[i] < 0) continue;
             if (seen[ids[i]] != seen_gen) {
                 seen[ids[i]] = seen_gen;
                 uniq.push_back(ids[i]);
@@ -351,7 +356,7 @@ struct state {
         }
         if (requested_q != 0 && zero_slots == 0) return false;
         for (size_t i = 0; i < n_ids; ++i) {
-            if (ids[i] < 0 || ids[i] >= n_expert) return false;
+            if (ids[i] >= n_expert) return false;
         }
 
         if (requested_q == 0) {
@@ -362,6 +367,7 @@ struct state {
             out.cpu_bias_map.assign(n_expert, n_expert);
             const int32_t * slots = slot_map[il];
             for (size_t i = 0; i < n_ids; ++i) {
+                if (ids[i] < 0) continue;
                 out.gpu_map[ids[i]] = slots[ids[i]];
                 out.gpu_bias_map[ids[i]] = ids[i];
             }
@@ -374,6 +380,7 @@ struct state {
         }
         uniq.clear();
         for (size_t i = 0; i < n_ids; ++i) {
+            if (ids[i] < 0) continue;
             if (seen[ids[i]] != seen_gen) {
                 seen[ids[i]] = seen_gen;
                 uniq.push_back(ids[i]);
