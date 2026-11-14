@@ -229,6 +229,8 @@ int main() {
     ok &= check_layers("layers capped by total", 100, {1.0, 1.0}, {3, 4}, {3, 4});
     ok &= check_layers("layers skip zero weight", 3, {0.0, 1.0}, {5, 5}, {0, 3});
     ok &= check_layers("layers equal fallback", 3, {0.0, 0.0}, {2, 2}, {2, 1});
+    ok &= check_layers("layers spread by -ts", 72,
+            {14592.0/62808.0, 23040.0/62808.0, 24576.0/62808.0}, {72, 72, 72}, {17, 27, 28});
     llama_backend_free();
     return ok ? 0 : 1;
 }

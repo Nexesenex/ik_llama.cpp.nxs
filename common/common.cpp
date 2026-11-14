@@ -5538,7 +5538,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-rtrd,  --run-time-repack-direct", "repack tensors + direct repacked GEMM (no R4/R8->Q8 convert, restores cdd2c9f+02f6f91 behaviour)"});
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the highest-numbered N MoE layers in CPU memory"});
-    options.push_back({ "*",           "       --moe-cache-mib N",       "Total GPU cache budget in MiB for CPU-resident MoE experts, split across GPUs (default: 0, disabled)"});
+    options.push_back({ "*",           "       --moe-cache-mib N",       "Total GPU cache budget in MiB for CPU-resident MoE experts, split across GPUs by -ts (default: 0, disabled)"});
     options.push_back({ "*",           "       --moe-cache-layers N",    "Total number of CPU-resident MoE layers to cache on GPUs, split across GPUs (default: 0, disabled)"});
     options.push_back({ "*",           "       --moe-cache-policy NAME", "MoE cache replacement policy: lru (default) or classlru (async always uses lru)"});
     options.push_back({ "*",           "       --moe-cache-cpu-share N", "fixed fraction of unique MoE cache misses assigned to CPU (default: 0, range: 0..1; ignored with async)"});

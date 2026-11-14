@@ -342,6 +342,11 @@ struct llama_moe_cache::impl {
         }
         if (devices.empty()) throw std::runtime_error("MoE cache requires a GPU backend");
 
+        struct host_layer {
+            int32_t il;
+            std::vector<ggml_tensor *> experts;
+        };
+        std::vector<host_layer> host_layers;
         for (size_t il = 0; il < model.layers.size(); ++il) {
             auto experts = layer_experts(model.layers[il]);
             if (experts.empty() || !std::all_of(experts.begin(), experts.end(), is_host_weight)) continue;
@@ -349,13 +354,82 @@ struct llama_moe_cache::impl {
                     return t->ne[2] == experts[0]->ne[2];
                 })) continue;
             if (il >= model.default_layer_device.size()) continue;
-            const int32_t model_device = model.default_layer_device[il];
-            if (model_device < 0 || (size_t) model_device >= model.devices.size()) continue;
-            const auto * layer_buft = model.default_buffer_type_offload(model_device);
-            auto it_dev = std::find_if(devices.begin(), devices.end(), [&](const device & d) { return d.buft == layer_buft; });
-            if (it_dev == devices.end()) continue;
-            const int32_t id = (int32_t) (it_dev - devices.begin());
-            it_dev->model_device = model_device;
+            host_layers.push_back({ (int32_t) il, std::move(experts) });
+        }
+
+        // Under tensor-parallel/attention split every layer keeps
+        // default_layer_device == main_gpu, so grouping by it would pile the
+        // whole cache onto one GPU.  In that case spread the host-resident
+        // expert layers over the participating devices with the -ts weights.
+        // Layer split already assigns a distinct device per layer, and --fit
+        // may have distributed the devices itself: keep those placements.
+        int32_t uniform_device = -1;
+        bool uniform_layers = !host_layers.empty();
+        for (const host_layer & h : host_layers) {
+            const int32_t model_device = model.default_layer_device[h.il];
+            if (uniform_device < 0) {
+                uniform_device = model_device;
+            } else if (model_device != uniform_device) {
+                uniform_layers = false;
+                break;
+            }
+        }
+        const bool spread_devices = devices.size() > 1 && uniform_layers &&
+                (model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL ||
+                 model.split_mode == LLAMA_SPLIT_MODE_ATTN);
+
+        std::vector<int32_t> host_layer_device(host_layers.size(), -1);
+        if (spread_devices) {
+            // model.splits is in model device order; map the cache devices to it.
+            std::vector<int32_t> model_device_of(devices.size(), -1);
+            std::vector<bool> eligible(model.splits.size(), false);
+            for (size_t id = 0; id < devices.size(); ++id) {
+                for (size_t j = 0; j < model.devices.size(); ++j) {
+                    if (devices[id].buft == model.default_buffer_type_offload((int32_t) j)) {
+                        model_device_of[id] = (int32_t) j;
+                        break;
+                    }
+                }
+                const int32_t md = model_device_of[id];
+                if (md < 0 || (size_t) md >= eligible.size()) continue;
+                devices[id].model_device = md;
+                eligible[md] = true;
+            }
+            const std::vector<double> shares = llama_moe_cache_detail::device_shares(model.splits, eligible);
+            std::vector<double> weights(devices.size(), 0.0);
+            std::vector<size_t> capacities(devices.size(), 0);
+            for (size_t id = 0; id < devices.size(); ++id) {
+                const int32_t md = model_device_of[id];
+                if (md < 0 || (size_t) md >= shares.size()) continue;
+                weights[id] = shares[md];
+                capacities[id] = host_layers.size();
+            }
+            const std::vector<size_t> counts = llama_moe_cache_detail::layer_allocations(
+                    host_layers.size(), weights, capacities);
+            size_t ih = 0;
+            for (size_t id = 0; id < devices.size(); ++id) {
+                for (size_t n = 0; n < counts[id]; ++n) {
+                    host_layer_device[ih++] = (int32_t) id;
+                }
+            }
+        }
+
+        for (size_t ih = 0; ih < host_layers.size(); ++ih) {
+            const int32_t il = host_layers[ih].il;
+            const auto & experts = host_layers[ih].experts;
+            int32_t id = -1;
+            if (spread_devices) {
+                id = host_layer_device[ih];
+                if (id < 0) continue;
+            } else {
+                const int32_t model_device = model.default_layer_device[il];
+                if (model_device < 0 || (size_t) model_device >= model.devices.size()) continue;
+                const auto * layer_buft = model.default_buffer_type_offload(model_device);
+                auto it_dev = std::find_if(devices.begin(), devices.end(), [&](const device & d) { return d.buft == layer_buft; });
+                if (it_dev == devices.end()) continue;
+                id = (int32_t) (it_dev - devices.begin());
+                it_dev->model_device = model_device;
+            }
             auto it = std::find_if(groups.begin(), groups.end(), [&](const group & g) { return g.device == id && same_layout(g.ref, experts); });
             if (it == groups.end()) {
                 groups.emplace_back();
@@ -363,7 +437,7 @@ struct llama_moe_cache::impl {
                 it->device = id;
                 it->ref = experts;
             }
-            it->layers.push_back((int32_t) il);
+            it->layers.push_back(il);
             for (ggml_tensor * t : experts) {
                 it->host_bytes += ggml_nbytes(t);
                 devices[id].host_bytes += ggml_nbytes(t);
@@ -582,7 +656,10 @@ struct llama_moe_cache::impl {
         for (device & d : devices) {
             if (!d.ctx) continue;
             d.buffer.reset(ggml_backend_alloc_ctx_tensors_from_buft(d.ctx.get(), d.buft));
-            if (!d.buffer) throw std::runtime_error("failed to allocate MoE cache buffers");
+            if (!d.buffer) {
+                throw std::runtime_error(format("failed to allocate %.2f MiB of MoE cache on %s; lower --moe-cache-mib or --moe-cache-layers",
+                        d.buffer_size / 1048576.0, ggml_backend_buft_name(d.buft)));
+            }
             ggml_backend_buffer_clear(d.buffer.get(), 0);
             d.buffer_size = ggml_backend_buffer_get_size(d.buffer.get());
         }
