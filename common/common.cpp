@@ -18,6 +18,7 @@
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "ggml.h"
+#include "llama-moe-cache-policy.h"
 #include "llama-vocab.h"
 #include "llama.h"
 #include "chat.h"
@@ -1651,14 +1652,28 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
         throw std::invalid_argument("error: --moe-cache-mib and --moe-cache-layers are mutually exclusive");
     }
     const bool moe_cache_requested = params.moe_cache_size > 0 || params.moe_cache_layers > 0;
-    if (params.fit && moe_cache_requested) {
+    // llama.cpp disables --fit when -ncmoe or tensor overrides are present, so
+    // only reject the combinations where --fit would actually remain active.
+    const bool fit_active = params.fit && params.ncmoe == 0 && params.tensor_buft_overrides.empty();
+    if (fit_active && moe_cache_requested) {
         throw std::invalid_argument("error: --fit cannot be combined with --moe-cache-mib or --moe-cache-layers because fit does not reserve context-time cache memory");
     }
     if (params.moe_cache_async && !moe_cache_requested) {
         throw std::invalid_argument("error: --moe-cache-async requires a nonzero --moe-cache-mib budget or --moe-cache-layers");
     }
-    if (params.moe_cache_async && params.moe_cache_cpu_share > 0.0f) {
+    if (!moe_cache_requested) {
+        if (params.moe_cache_policy != LLAMA_MOE_CACHE_POLICY_LRU) {
+            LLAMA_LOG_WARN("gpt_params: --moe-cache-policy has no effect without --moe-cache-mib or --moe-cache-layers\n");
+        }
+        if (params.moe_cache_cpu_share > 0.0) {
+            LLAMA_LOG_WARN("gpt_params: --moe-cache-cpu-share has no effect without --moe-cache-mib or --moe-cache-layers\n");
+        }
+    }
+    if (params.moe_cache_async && params.moe_cache_cpu_share > 0.0) {
         LLAMA_LOG_WARN("gpt_params: --moe-cache-cpu-share is ignored with --moe-cache-async (the async hybrid executor always runs misses on the CPU)\n");
+    }
+    if (params.moe_cache_async && params.moe_cache_policy == LLAMA_MOE_CACHE_POLICY_CLASSLRU) {
+        LLAMA_LOG_WARN("gpt_params: --moe-cache-policy classlru is ignored with --moe-cache-async (the async hybrid executor always uses LRU)\n");
     }
 
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
@@ -3954,9 +3969,13 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-ncmoe" || arg == "--n-cpu-moe") {
         CHECK_ARG
-        int32_t n_layers = std::stoi(argv[i]);
-        if (n_layers < 0) {
-            fprintf(stderr, "error: Invalid value for --n-cpu-moe: %d (must be >= 0)\n", n_layers);
+        // accept only a complete non-negative integer, no trailing garbage
+        int32_t n_layers = 0;
+        const char * value = argv[i];
+        const char * end = value + std::strlen(value);
+        const auto parsed = std::from_chars(value, end, n_layers);
+        if (parsed.ec != std::errc() || parsed.ptr != end || n_layers < 0) {
+            fprintf(stderr, "error: Invalid value for --n-cpu-moe: %s (must be a non-negative integer)\n", argv[i]);
             invalid_param = true;
             return true;
         }
@@ -5518,12 +5537,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-rtr16p, --run-time-repack-16-path", "repack tensors + Q8_K_R16 fast path on VNNI256 (preferred over -rtr)"});
     options.push_back({ "*",           "-rtrd,  --run-time-repack-direct", "repack tensors + direct repacked GEMM (no R4/R8->Q8 convert, restores cdd2c9f+02f6f91 behaviour)"});
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
-    options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the highest-numbered N MoE layers in CPU memory"});
     options.push_back({ "*",           "       --moe-cache-mib N",       "Total GPU cache budget in MiB for CPU-resident MoE experts, split across GPUs (default: 0, disabled)"});
-    options.push_back({ "*",           "       --moe-cache-layers N",    "Total cachable layers for CPU-resident MoE experts, split across GPUs (default: 0, disabled)"});
-    options.push_back({ "*",           "       --moe-cache-policy NAME", "MoE cache replacement policy: lru (default) or classlru"});
-    options.push_back({ "*",           "       --moe-cache-cpu-share N", "fixed fraction of unique MoE cache misses assigned to CPU (default: 0, range: 0..1)"});
-    options.push_back({ "*",           "-mca,  --moe-cache-async",       "Use asynchronous MoE cache fills; current misses execute on CPU (requires --moe-cache-mib or --moe-cache-layers)"});
+    options.push_back({ "*",           "       --moe-cache-layers N",    "Total number of CPU-resident MoE layers to cache on GPUs, split across GPUs (default: 0, disabled)"});
+    options.push_back({ "*",           "       --moe-cache-policy NAME", "MoE cache replacement policy: lru (default) or classlru (async always uses lru)"});
+    options.push_back({ "*",           "       --moe-cache-cpu-share N", "fixed fraction of unique MoE cache misses assigned to CPU (default: 0, range: 0..1; ignored with async)"});
+    options.push_back({ "*",           "-mca,  --moe-cache-async",       "Use asynchronous MoE cache fills; current misses execute on CPU (CUDA only; requires --moe-cache-mib or --moe-cache-layers)"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
     options.push_back({ "*",           "-dexp,  --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
     options.push_back({ "*",           "-dple,  --defer-ple",            "keep sparse tables (PLE, engram) on the file instead of resident in memory (Linux, Windows)"});
@@ -6870,6 +6889,12 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.moe_cache_policy  = params.moe_cache_policy;
     cparams.moe_cache_cpu_share = (float) params.moe_cache_cpu_share;
     cparams.moe_cache_async   = params.moe_cache_async;
+    if (cparams.moe_cache_async) {
+        // the async hybrid executor always uses the plain LRU bank and runs
+        // current misses on the CPU, so classlru and CPU-share slots are void
+        llama_moe_cache_policy_detail::normalize_async_cache_options(
+                cparams.moe_cache_policy, cparams.moe_cache_cpu_share);
+    }
     cparams.n_seq_max         = params.n_parallel;
     cparams.n_batch           = n_batch;
     cparams.n_ubatch          = n_ubatch;

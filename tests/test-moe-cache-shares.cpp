@@ -139,6 +139,41 @@ static bool check_cpu_share_plan() {
     return true;
 }
 
+// The async executor implements only the plain LRU bank and never uses
+// CPU-share staging slots, so these options must normalize to defaults.
+static bool check_async_options() {
+    using llama_moe_cache_policy_detail::normalize_async_cache_options;
+    enum llama_moe_cache_policy policy = LLAMA_MOE_CACHE_POLICY_CLASSLRU;
+    float share = 0.5f;
+    normalize_async_cache_options(policy, share);
+    if (policy != LLAMA_MOE_CACHE_POLICY_LRU || share != 0.0f) {
+        std::fprintf(stderr, "async policy/share were not normalized\n");
+        return false;
+    }
+    policy = LLAMA_MOE_CACHE_POLICY_LRU;
+    share = 0.0f;
+    normalize_async_cache_options(policy, share);
+    if (policy != LLAMA_MOE_CACHE_POLICY_LRU || share != 0.0f) {
+        std::fprintf(stderr, "async normalization changed the defaults\n");
+        return false;
+    }
+    double share64 = 0.25;
+    policy = LLAMA_MOE_CACHE_POLICY_CLASSLRU;
+    normalize_async_cache_options(policy, share64);
+    if (policy != LLAMA_MOE_CACHE_POLICY_LRU || share64 != 0.0) {
+        std::fprintf(stderr, "async normalization missed the double share\n");
+        return false;
+    }
+    policy = (enum llama_moe_cache_policy) 7;
+    share = 0.5f;
+    normalize_async_cache_options(policy, share);
+    if (policy != (enum llama_moe_cache_policy) 7 || share != 0.0f) {
+        std::fprintf(stderr, "async normalization masked an invalid policy\n");
+        return false;
+    }
+    return true;
+}
+
 static bool check_layers(const char * name, size_t layers,
         const std::vector<double> & weights, const std::vector<size_t> & capacities,
         const std::vector<size_t> & expected) {
@@ -158,9 +193,11 @@ static bool check_layers(const char * name, size_t layers,
 }
 
 int main() {
+    llama_backend_init();
     bool ok = true;
     if (!check_cache_policy()) { std::fprintf(stderr, "cache policy regression failed\n"); ok = false; }
     if (!check_cpu_share_plan()) { std::fprintf(stderr, "CPU-share plan regression failed\n"); ok = false; }
+    if (!check_async_options()) { std::fprintf(stderr, "async option regression failed\n"); ok = false; }
     if (llama_context_default_params().moe_cache_policy != LLAMA_MOE_CACHE_POLICY_LRU) {
         std::fprintf(stderr, "default cache policy is not LRU\n"); ok = false;
     }
@@ -192,5 +229,6 @@ int main() {
     ok &= check_layers("layers capped by total", 100, {1.0, 1.0}, {3, 4}, {3, 4});
     ok &= check_layers("layers skip zero weight", 3, {0.0, 1.0}, {5, 5}, {0, 3});
     ok &= check_layers("layers equal fallback", 3, {0.0, 0.0}, {2, 2}, {2, 1});
+    llama_backend_free();
     return ok ? 0 : 1;
 }

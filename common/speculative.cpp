@@ -2022,12 +2022,20 @@ static bool common_speculative_parse_params(const std::string & args, gpt_params
     return ok;
 }
 
+template <typename T>
+static void common_speculative_reset_moe_cache(T & params) {
+    params.moe_cache_size = 0;
+    params.moe_cache_layers = 0;
+    params.moe_cache_policy = LLAMA_MOE_CACHE_POLICY_LRU;
+    params.moe_cache_cpu_share = 0;
+    params.moe_cache_async = false;
+}
+
 void common_speculative_reset_draft_offload_defaults(gpt_params & params) {
     params.ncmoe = 0;
     params.tensor_buft_overrides.clear();
     params.offload_policy.clear();
-    params.moe_cache_size = 0;
-    params.moe_cache_layers = 0;
+    common_speculative_reset_moe_cache(params);
     params.ngram_file.clear();
 }
 
@@ -2168,9 +2176,7 @@ bool common_speculative_load_draft_model(
 
     params.model_dft = loaded_model;
     params.cparams_dft = common_context_params_to_llama(params_dft);
-    params.cparams_dft.moe_cache_size = 0;
-    params.cparams_dft.moe_cache_layers = 0;
-    params.cparams_dft.moe_cache_async = false;
+    common_speculative_reset_moe_cache(params.cparams_dft);
     params.cuda_params = params_dft.cuda_params;
     params.offload_policy = params_dft.offload_policy;
     params.cparams_dft.cuda_params    = params.cuda_params.empty()    ? nullptr : (void *) params.cuda_params.data();
@@ -2233,9 +2239,7 @@ bool common_speculative_prepare_mtp_runtime(
         params.cparams_dft = common_context_params_to_llama(params_mtp);
         LOG_INF("%s: embedded MTP companion uses n_ctx=%d, n_batch=%d, n_ubatch=%d\n",
                 __func__, params.cparams_dft.n_ctx, params.cparams_dft.n_batch, params.cparams_dft.n_ubatch);
-        params.cparams_dft.moe_cache_size = 0;
-        params.cparams_dft.moe_cache_layers = 0;
-        params.cparams_dft.moe_cache_async = false;
+        common_speculative_reset_moe_cache(params.cparams_dft);
         params.cuda_params = params_mtp.cuda_params;
         params.offload_policy = params_mtp.offload_policy;
         params.cparams_dft.cuda_params    = params.cuda_params.empty()    ? nullptr : (void *) params.cuda_params.data();

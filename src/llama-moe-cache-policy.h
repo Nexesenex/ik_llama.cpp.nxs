@@ -46,6 +46,18 @@ inline bool valid(enum llama_moe_cache_policy policy) {
     return policy == LLAMA_MOE_CACHE_POLICY_LRU || policy == LLAMA_MOE_CACHE_POLICY_CLASSLRU;
 }
 
+// The async hybrid executor fills the plain LRU bank directly and runs every
+// current miss on the CPU.  ClassLRU bookkeeping and CPU-share staging slots
+// therefore have no effect there: normalize them to the values the executor
+// actually implements, without masking an invalid policy for API validation.
+template <typename T>
+inline void normalize_async_cache_options(enum llama_moe_cache_policy & policy, T & cpu_share) {
+    if (policy == LLAMA_MOE_CACHE_POLICY_CLASSLRU) {
+        policy = LLAMA_MOE_CACHE_POLICY_LRU;
+    }
+    cpu_share = T(0);
+}
+
 struct state {
     static constexpr int n_class = 8;
     static constexpr float half_life = 128.0f;

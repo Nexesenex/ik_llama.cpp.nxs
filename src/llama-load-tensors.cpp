@@ -317,6 +317,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         if (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || ml.ncmoe >= n_layer || model.devices.size() < 2) {
             const auto tn = LLM_TN(model.arch);
             int last_layer = n_layer - model.hparams.nextn_predict_layers;
+            // select the highest-numbered MoE layers first (see -n-cpu-moe help)
             int ndone = 0;
             for (int i = last_layer-1; i >= 0; --i) {
                 auto d_name = tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i);

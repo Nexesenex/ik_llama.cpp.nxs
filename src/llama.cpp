@@ -10532,6 +10532,17 @@ struct llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    if (params.moe_cache_async) {
+        if (params.moe_cache_cpu_share > 0.0f) {
+            LLAMA_LOG_WARN("%s: MoE cache CPU share %.9g is ignored with --moe-cache-async (the async hybrid executor always runs misses on the CPU)\n",
+                    __func__, (double) params.moe_cache_cpu_share);
+        }
+        if (params.moe_cache_policy == LLAMA_MOE_CACHE_POLICY_CLASSLRU) {
+            LLAMA_LOG_WARN("%s: MoE cache policy classlru is ignored with --moe-cache-async (the async hybrid executor always uses LRU)\n", __func__);
+        }
+        llama_moe_cache_policy_detail::normalize_async_cache_options(params.moe_cache_policy, params.moe_cache_cpu_share);
+    }
+
     if (moe_cache_requested) {
         if (model->fit) {
             LLAMA_LOG_ERROR("%s: MoE cache cannot be combined with --fit because fit does not reserve context-time cache memory\n", __func__);

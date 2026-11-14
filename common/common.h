@@ -451,7 +451,7 @@ struct gpt_params {
     float   split_usage_penalty_factor  = 0.0f; // factor for memory usage penalty (neutral: 0.0, you can test: 0.25)
     float   split_vram_reserve_factor[128] = {0}; // per-GPU VRAM reserve factor (<1: fraction reserved, >1: direct limit %)
     int32_t split_granularity           = 32;   // round-up ceiling for base-16 FFN/output TP split granularity (power of 2 recommended: 16=fine packing, 128=kernel efficiency)
-    int32_t ncmoe                 =       0; // number of layers in which MoE tensors are left in VRAM
+    int32_t ncmoe                 =       0; // number of highest-numbered MoE layers kept in CPU memory
     size_t moe_cache_size         =       0; // total GPU cache budget in bytes for CPU-resident MoE experts
     int32_t moe_cache_layers      =       0; // total number of CPU-resident MoE expert layers to cache on GPUs
     enum llama_moe_cache_policy moe_cache_policy = LLAMA_MOE_CACHE_POLICY_LRU;
