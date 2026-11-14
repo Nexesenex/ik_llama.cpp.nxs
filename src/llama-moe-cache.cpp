@@ -809,7 +809,7 @@ struct llama_moe_cache::impl {
             int32_t first_expert, size_t max_experts, int64_t n_tokens) {
 #ifdef GGML_USE_CUDA
         if (!backend || !src || !dst || !src->buffer || !dst->buffer ||
-                !ggml_backend_is_cuda(backend) || n_tokens <= llama_moe_cache::max_batch_tokens) return 0;
+                !ggml_backend_is_cuda(backend) || n_tokens <= llama_moe_cache_policy_detail::state::max_batch) return 0;
         auto it_binding = bindings.find(src);
         if (it_binding == bindings.end()) return 0;
         const binding & b = it_binding->second;
