@@ -2290,9 +2290,11 @@ static void estimate_imatrix_internal(const std::string & fname_inp,
 
         std::string name = ggml_get_name(tensor);
 
-        if (is_repack_forbidden(name)) {
-            // We do not want to spend time estimating an imatrix for token embeddings,
-            // per layer embeddings, engrams, etc.
+        if (is_repack_forbidden(name) && name != "token_embd.weight") {
+            // We do not want to spend time estimating an imatrix for per layer embeddings,
+            // engrams, etc. The initial token embeddings are kept because they still
+            // benefit from an estimated imatrix, and they are the output projection
+            // in tied-embedding models.
             continue;
         }
 

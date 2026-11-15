@@ -330,7 +330,12 @@ static bool is_named_imatrix_tensor(const std::string & wname, const gpt_params 
     if (wname == "mtp_pre_proj.weight" || wname == "mtp_post_proj.weight") {
         return true;
     }
-    return (params.process_output || collect_lsim) && wname == params.output_tensor_name;
+    if (!(params.process_output || collect_lsim)) {
+        return false;
+    }
+    // In tied-embedding models token_embd.weight is used as the output projection,
+    // so it sees the same activations as output.weight and is equally useful.
+    return wname == params.output_tensor_name || wname == "token_embd.weight";
 }
 
 static std::string default_draft_imatrix_out_file(const std::string & target_out_file) {
