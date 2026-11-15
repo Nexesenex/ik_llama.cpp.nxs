@@ -6523,12 +6523,9 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             if (K < 1) {
                 return false; // legacy layout runs on the CPU
             }
-            // Mamba-2 only (the kernel supports d_state 96/128/256 with d_head % 16 == 0).
-            // src[3] is A: the Mamba-2 layout is one scalar per head, and the launcher picks the
-            // kernel from exactly that shape - a legacy-layout scan (2-D A) would otherwise be
-            // claimed here and then abort inside the Mamba-1 branch instead of falling back.
-            // match the launcher's actual test (src3_nb1 == sizeof(float)): a non-contiguous A
-            // would otherwise be claimed here and abort inside the Mamba-1 branch
+            // Mamba-2 only: the kernel instantiates d_state 96/128/256 and takes A as one scalar
+            // per head with the contiguous stride the launcher dispatches on. Anything else -
+            // including the legacy 2-D A - falls back to the CPU.
             if (op->src[3] == nullptr || op->src[3]->ne[0] != 1 || op->src[3]->nb[1] != sizeof(float)) {
                 return false;
             }
