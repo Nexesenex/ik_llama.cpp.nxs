@@ -91,6 +91,13 @@ struct llama_moe_cache::impl {
         size_t buffer_size = 0;
         ggml_context_ptr ctx;
         ggml_backend_buffer_ptr buffer;
+        // Pageable host experts are staged through small pinned buffers before
+        // the upload.  The backend stream orders the copy with the split.
+        ggml_backend_buffer_ptr stage[2];
+        size_t stage_bytes = 0;
+        int stage_next = 0;
+        bool stage_busy[2] = { false, false };
+        bool stage_failed = false;
     };
     struct group {
         int32_t device = -1;
@@ -997,6 +1004,63 @@ struct llama_moe_cache::impl {
     }
 
 
+    bool ensure_stage(device & d) {
+#ifdef GGML_USE_CUDA
+        if (d.stage_bytes) return true;
+        if (d.stage_failed) return false;
+        static const size_t candidates[] = { 16u << 20, 8u << 20, 4u << 20 };
+        for (const size_t size : candidates) {
+            bool ok = true;
+            for (int i = 0; i < 2; ++i) {
+                d.stage[i].reset(ggml_backend_buft_alloc_buffer(llama_default_buffer_type_cpu(true), size));
+                ok = d.stage[i] && ggml_backend_buffer_is_host(d.stage[i].get()) &&
+                        ggml_backend_cuda_host_is_pinned(ggml_backend_buffer_get_base(d.stage[i].get()));
+                if (!ok) break;
+            }
+            if (ok) {
+                d.stage_bytes = size;
+                d.stage_next = 0;
+                d.stage_busy[0] = d.stage_busy[1] = false;
+                return true;
+            }
+            d.stage[0].reset();
+            d.stage[1].reset();
+        }
+        // The pinned cap left no room for staging; keep the direct pageable
+        // copy path rather than retrying on every fill.
+        d.stage_failed = true;
+        return false;
+#else
+        GGML_UNUSED(d);
+        return false;
+#endif
+    }
+
+    void set_bank_tensor(device & d, ggml_tensor * bank, const void * data, size_t offset, size_t size) {
+#ifdef GGML_USE_CUDA
+        if (ggml_backend_is_cuda(d.backend) && !ggml_backend_cuda_host_is_pinned(data) && ensure_stage(d)) {
+            for (size_t done = 0; done < size;) {
+                const int slot = d.stage_next;
+                if (d.stage_busy[slot]) {
+                    // The previous upload from this slot is on the backend
+                    // stream.  Drain it before overwriting the staging copy.
+                    ggml_backend_synchronize(d.backend);
+                    d.stage_busy[0] = d.stage_busy[1] = false;
+                }
+                const size_t chunk = std::min(d.stage_bytes, size - done);
+                void * base = ggml_backend_buffer_get_base(d.stage[slot].get());
+                std::memcpy(base, (const uint8_t *) data + done, chunk);
+                ggml_backend_tensor_set_async(d.backend, bank, base, offset + done, chunk);
+                d.stage_busy[slot] = true;
+                d.stage_next = (slot + 1) % 2;
+                done += chunk;
+            }
+            return;
+        }
+#endif
+        ggml_backend_tensor_set_async(d.backend, bank, data, offset, size);
+    }
+
     // Read the selected expert ids through the backend that owns their buffer.
     // CUDA streams are non-blocking, so only a synchronize on the owning device
     // orders this read after the graph split that produced the ids.
@@ -1027,7 +1091,7 @@ struct llama_moe_cache::impl {
             const int32_t il = it_share->second;
             layer & l = layers[il];
             group & g = groups[l.group];
-            const device & d = devices[g.device];
+            device & d = devices[g.device];
             if (!l.share_planned) {
                 if (backend != d.backend) {
                     GGML_ABORT("CPU-share map callback ran outside its cache backend for layer %d", il);
@@ -1100,7 +1164,7 @@ struct llama_moe_cache::impl {
                         while (i+n < l.share_plan.fills.size() &&
                                 l.share_plan.fills[i+n].expert == l.share_plan.fills[i].expert + (int32_t) n &&
                                 l.share_plan.fills[i+n].slot == l.share_plan.fills[i].slot + (int32_t) n) ++n;
-                        ggml_backend_tensor_set_async(d.backend, bank,
+                        set_bank_tensor(d, bank,
                                 (const uint8_t *) w->data + l.share_plan.fills[i].expert*expert_size,
                                 l.share_plan.fills[i].slot*expert_size, n*expert_size);
                         bytes += n*expert_size;
@@ -1127,7 +1191,7 @@ struct llama_moe_cache::impl {
         group & g = groups[l.group];
         if (g.frozen) return false;
         if (phase == GGML_BACKEND_SCHED_COPY_PHASE_QUERY) return true;
-        const device & d = devices[g.device];
+        device & d = devices[g.device];
         GGML_ASSERT(backend == d.backend);
         const ggml_tensor * lookup = nullptr;
         const ggml_tensor * repeated_map = nullptr;
@@ -1172,7 +1236,7 @@ struct llama_moe_cache::impl {
                 size_t n = 1;
                 while (i+n < fills.size() && fills[i+n].expert == fills[i].expert + (int32_t)n &&
                         fills[i+n].slot == fills[i].slot + (int32_t)n) ++n;
-                ggml_backend_tensor_set_async(backend, bank, (const uint8_t *) w->data + fills[i].expert*expert_size,
+                set_bank_tensor(d, bank, (const uint8_t *) w->data + fills[i].expert*expert_size,
                         fills[i].slot*expert_size, n*expert_size);
                 bytes += n*expert_size;
                 i += n;
@@ -1362,7 +1426,13 @@ bool llama_moe_cache::resolve_and_pin(int32_t device, int32_t group_id, int32_t 
     int32_t n_pins = 0;
     for (int32_t i = 0; i < n_ids; ++i) {
         const int32_t expert = ids[i];
-        if (expert < 0 || expert >= g.lru.n_expert) return false;
+        // SER marks dropped experts with -1.  They have a zero routing weight,
+        // are never cached, and the executor skips their CPU/GPU draw.
+        if (expert < 0) {
+            result->draw_slots[i] = -1;
+            continue;
+        }
+        if (expert >= g.lru.n_expert) return false;
         const int32_t slot = g.lru.slot_map[il][expert];
         if (slot < -1 || slot >= g.lru.n_slots) return false;
         result->draw_slots[i] = slot;

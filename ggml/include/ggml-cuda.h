@@ -34,6 +34,10 @@ GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_split_buffer_typ
 // pinned host buffer for use with the CPU backend for faster copies between CPU and GPU
 GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type(void);
 
+// Whether a host pointer is pinned/registered with the CUDA runtime.  Pageable
+// host memory needs a staging copy before an asynchronous upload.
+GGML_API GGML_CALL bool ggml_backend_cuda_host_is_pinned(const void * ptr);
+
 GGML_API GGML_CALL int  ggml_backend_cuda_get_device_count(void);
 GGML_API GGML_CALL int  ggml_backend_cuda_get_device_ordinal(int device);
 GGML_API GGML_CALL bool ggml_backend_cuda_device_is_tcc(int device);

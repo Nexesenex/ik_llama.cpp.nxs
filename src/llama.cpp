@@ -10543,13 +10543,6 @@ struct llama_context * llama_init_from_model(
         llama_moe_cache_policy_detail::normalize_async_cache_options(params.moe_cache_policy, params.moe_cache_cpu_share);
     }
 
-    if (params.moe_cache_async && params.min_experts > 0 && params.thresh_experts > 0) {
-        // SER marks dropped experts with -1; the async hybrid executor cannot
-        // resolve those ids and would fail every layer that runs on the CPU.
-        LLAMA_LOG_WARN("%s: --moe-cache-async is disabled with smart expert reduction (the async hybrid executor cannot skip dropped experts)\n", __func__);
-        params.moe_cache_async = false;
-    }
-
     if (moe_cache_requested) {
         if (model->fit) {
             LLAMA_LOG_ERROR("%s: MoE cache cannot be combined with --fit because fit does not reserve context-time cache memory\n", __func__);

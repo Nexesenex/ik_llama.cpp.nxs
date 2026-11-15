@@ -76,6 +76,9 @@ struct ggml_cuda_moe_ffn_cpu_resource_state {
     uint64_t fills_completed = 0;
     uint64_t fills_failed = 0;
     uint64_t fill_bytes_completed = 0;
+    // Pinned bounce buffer for background fills from pageable model weights.
+    void * fill_stage = nullptr;
+    size_t fill_stage_bytes = 0;
     void * host_stage = nullptr;
     int32_t * host_ids = nullptr;
     int32_t * host_slots = nullptr;
@@ -113,6 +116,7 @@ struct ggml_cuda_moe_ffn_cpu_resource_state {
         if (device_hidden) cudaFree(device_hidden);
         if (device_down) cudaFree(device_down);
         if (device_output) cudaFree(device_output);
+        if (fill_stage) cudaFreeHost(fill_stage);
         if (host_stage) cudaFreeHost(host_stage);
         cudaSetDevice(previous_device);
         if (resource.cpu_backend) ggml_backend_free(resource.cpu_backend);
@@ -270,14 +274,32 @@ static ggml_cuda_moe_ffn_fill_result ggml_cuda_moe_ffn_copy_fill_request(
                 request.parts.data(), request.parts.size())) return rollback();
 
     if (cudaSetDevice(resource.device) != cudaSuccess) return ggml_cuda_moe_ffn_fill_result::ownership_unresolved;
+    // Model weights are persistent pageable host buffers. A direct
+    // cudaMemcpyAsync from pageable memory makes the driver stage the copy
+    // synchronously, which is very slow under WDDM. Bounce bounded chunks
+    // through the small pinned buffer instead.
+    auto upload = [&](void * destination, const void * source, size_t bytes) {
+        if (bytes == 0) return true;
+        if (!resource.fill_stage || resource.fill_stage_bytes == 0) {
+            return cudaMemcpyAsync(destination, source, bytes,
+                    cudaMemcpyHostToDevice, resource.fill_stream) == cudaSuccess;
+        }
+        for (size_t done = 0; done < bytes;) {
+            const size_t chunk = std::min(resource.fill_stage_bytes, bytes - done);
+            std::memcpy(resource.fill_stage, (const uint8_t *) source + done, chunk);
+            if (cudaMemcpyAsync((uint8_t *) destination + done, resource.fill_stage, chunk,
+                        cudaMemcpyHostToDevice, resource.fill_stream) != cudaSuccess) return false;
+            // The staging buffer is reused by the next chunk of this fill.
+            if (cudaStreamSynchronize(resource.fill_stream) != cudaSuccess) return false;
+            done += chunk;
+        }
+        return true;
+    };
     bool copied = true;
     for (size_t i = 0; i < request.parts.size(); ++i) {
         const auto & part = request.parts[i];
-        // Model weights are persistent host buffers. CUDA may stage pageable sources synchronously
-        if (cudaMemcpyAsync(part.destination, part.source, part.bytes,
-                    cudaMemcpyHostToDevice, resource.fill_stream) != cudaSuccess ||
-                (part.bytes2 && cudaMemcpyAsync(part.destination2, part.source2, part.bytes2,
-                    cudaMemcpyHostToDevice, resource.fill_stream) != cudaSuccess)) {
+        if (!upload(part.destination, part.source, part.bytes) ||
+                (part.bytes2 && !upload(part.destination2, part.source2, part.bytes2))) {
             copied = false;
             break;
         }
@@ -508,6 +530,9 @@ static bool ggml_cuda_moe_ffn_cpu_draws(const ggml_cuda_moe_ffn_binding & b,
         for (int32_t selection = 0; selection < b.layout.n_experts_used; ++selection) {
             const size_t draw = size_t(token) * b.layout.n_experts_used + selection;
             if (misses_only && resource.host_slots[draw] >= 0) continue;
+            // SER dropped this expert; its routing weight is zero and it has no
+            // host weight row, so it contributes nothing.
+            if (resource.host_ids[draw] < 0) continue;
             *(int32_t *) b.cpu_ids->data = resource.host_ids[draw];
             *(float *) b.cpu_route_weights->data = resource.host_routes[draw];
             if (ggml_backend_graph_compute(resource.resource.cpu_backend, b.cpu_graph) != GGML_STATUS_SUCCESS) {
@@ -884,11 +909,24 @@ bool ggml_cuda_moe_ffn_compute(ggml_backend_cuda_context & ctx, ggml_tensor * op
         return false;
     }
     int32_t n_hits = 0;
-    for (size_t i = 0; i < n_draws; ++i) n_hits += resolved.draw_slots[i] >= 0;
-    const int32_t n_misses = (int32_t) n_draws - n_hits;
+    int32_t n_dropped = 0;
+    for (size_t i = 0; i < n_draws; ++i) {
+        // SER-dropped experts are neither cache hits nor CPU misses; they have a
+        // zero routing weight and are skipped by both executors.
+        if (resource.host_ids[i] < 0) {
+            ++n_dropped;
+            continue;
+        }
+        n_hits += resolved.draw_slots[i] >= 0;
+    }
+    const int32_t n_misses = (int32_t) n_draws - n_hits - n_dropped;
+    // Dropped draws leave gaps in the compacted hit rows, so their routes must
+    // be gathered as well instead of indexing the device route tensor directly.
+    const bool stage_routes = n_misses > 0 || n_dropped > 0;
     resource.fill_candidates.clear();
     for (size_t i = 0; i < n_draws; ++i) {
-        if (resolved.draw_slots[i] >= 0) continue;
+        // Negative ids are SER sentinels, not fillable experts.
+        if (resolved.draw_slots[i] >= 0 || resource.host_ids[i] < 0) continue;
         resource.fill_candidates.push_back({resource.host_ids[i], i});
     }
     std::sort(resource.fill_candidates.begin(), resource.fill_candidates.end(), [](const auto & a, const auto & b) {
@@ -921,7 +959,7 @@ bool ggml_cuda_moe_ffn_compute(ggml_backend_cuda_context & ctx, ggml_tensor * op
         cpu_inputs_ready = true;
         return true;
     };
-    if (n_misses > 0 && !read_cpu_inputs()) {
+    if (stage_routes && !read_cpu_inputs()) {
         if (!release_current_pins()) GGML_ABORT("failed to release MoE cache pins before hit dispatch");
         return false;
     }
@@ -961,7 +999,7 @@ bool ggml_cuda_moe_ffn_compute(ggml_backend_cuda_context & ctx, ggml_tensor * op
             const size_t draw = token_draw_offset + selection;
             if (resolved.draw_slots[draw] >= 0) {
                 resource.host_hit_slots[token_draw_offset + token_hits] = resolved.draw_slots[draw];
-                if (n_misses > 0)
+                if (stage_routes)
                     resource.host_hit_routes[token * (top_k + 1) + token_hits] = resource.host_routes[draw];
                 ++token_hits;
             }
@@ -1002,11 +1040,12 @@ bool ggml_cuda_moe_ffn_compute(ggml_backend_cuda_context & ctx, ggml_tensor * op
         int32_t token_hits = 0, token_misses = 0;
         const size_t token_draw_offset = size_t(token) * top_k;
         for (int32_t selection = 0; selection < top_k; ++selection) {
-            if (resolved.draw_slots[token_draw_offset + selection] >= 0) ++token_hits;
-            else ++token_misses;
+            const size_t draw = token_draw_offset + selection;
+            if (resolved.draw_slots[draw] >= 0) ++token_hits;
+            else if (resource.host_ids[draw] >= 0) ++token_misses;
         }
         dispatch_ok = ggml_cuda_moe_ffn_reduce_commit(ctx, op, b, resource,
-                token, token_hits, token_misses > 0, n_misses > 0);
+                token, token_hits, token_misses > 0, stage_routes);
     }
 
     if (!dispatch_ok) return fallback_after_hit_work(kernels_started);
@@ -1221,6 +1260,15 @@ GGML_CALL int32_t ggml_backend_cuda_moe_ffn_cpu_resource_register(ggml_backend_t
     const size_t host_bytes = sizes.host_stage;
     ggml_cuda_set_device(ctx->device);
     if (cudaHostAlloc(&state->host_stage, host_bytes, cudaHostAllocPortable) != cudaSuccess) return -1;
+    // Background fills from pageable expert rows pay the WDDM staging cost on
+    // the fill thread. Keep a small pinned bounce buffer when the runtime
+    // allows it; otherwise the fill worker falls back to direct copies.
+    state->fill_stage_bytes = 16u << 20;
+    if (cudaHostAlloc(&state->fill_stage, state->fill_stage_bytes, cudaHostAllocPortable) != cudaSuccess) {
+        state->fill_stage = nullptr;
+        state->fill_stage_bytes = 0;
+        (void) cudaGetLastError();
+    }
     auto * host = (uint8_t *) state->host_stage;
     state->host_ids = (int32_t *) host;
     state->host_slots = (int32_t *) (host + ids_bytes);

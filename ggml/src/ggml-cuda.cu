@@ -6647,6 +6647,32 @@ GGML_CALL bool ggml_backend_cuda_is_integrated(int device) {
     return ggml_cuda_info().devices[device].integrated;
 }
 
+GGML_CALL bool ggml_backend_cuda_host_is_pinned(const void * ptr) {
+#if defined(GGML_USE_HIPBLAS) || defined(GGML_USE_MUSA)
+    // The attribute query is not portable across these runtimes.  Report
+    // "unknown" so callers keep their previous direct-copy behavior.
+    GGML_UNUSED(ptr);
+    return false;
+#else
+    if (ptr == nullptr) {
+        return false;
+    }
+    cudaPointerAttributes attrs;
+    const cudaError_t err = cudaPointerGetAttributes(&attrs, ptr);
+    if (err != cudaSuccess) {
+        // Pageable host memory is not known to the runtime.  Clear the error so
+        // it cannot leak into the next CUDA call.
+        (void) cudaGetLastError();
+        return false;
+    }
+#if CUDART_VERSION >= 10000
+    return attrs.type == cudaMemoryTypeHost;
+#else
+    return attrs.memoryType == cudaMemoryTypeHost;
+#endif
+#endif
+}
+
 GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
     if (getenv("GGML_CUDA_REGISTER_HOST") == nullptr) {
         return false;
