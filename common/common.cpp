@@ -5541,7 +5541,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --moe-cache-layers N",    "Total number of CPU-resident MoE layers to cache on GPUs, split across GPUs (default: 0, disabled)"});
     options.push_back({ "*",           "       --moe-cache-policy NAME", "MoE cache replacement policy: lru (default) or classlru (async always uses lru)"});
     options.push_back({ "*",           "       --moe-cache-cpu-share N", "fixed fraction of unique MoE cache misses assigned to CPU (default: 0, range: 0..1; ignored with async)"});
-    options.push_back({ "*",           "-mca,  --moe-cache-async",       "Use asynchronous MoE cache fills; current misses execute on CPU (CUDA only; requires --moe-cache-mib or --moe-cache-layers)"});
+    options.push_back({ "*",           "-mca,  --moe-cache-async",       "Use asynchronous MoE cache fills; current misses execute on CPU (CUDA only; requires --moe-cache-mib or --moe-cache-layers; routed experts stay in their file layout)"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
     options.push_back({ "*",           "-dexp,  --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
     options.push_back({ "*",           "-dple,  --defer-ple",            "keep sparse tables (PLE, engram) on the file instead of resident in memory (Linux, Windows)"});
@@ -6784,6 +6784,10 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
     mparams.repack_tensors  = params.repack_tensors;
+    mparams.moe_cache_async = params.moe_cache_async;
+    if (params.repack_tensors && params.moe_cache_async) {
+        LLAMA_LOG_WARN("gpt_params: --moe-cache-async keeps routed expert tensors in their file layout; -rtr still repacks other host tensors\n");
+    }
     mparams.split_output_tensor = params.split_output_tensor;
     mparams.split_output_tensor_subset = params.split_output_tensor_subset < 0 ? params.split_output_tensor : params.split_output_tensor_subset;
     if (params.split_output_tensor_subset != 0 && params.split_output_tensor == 0) {

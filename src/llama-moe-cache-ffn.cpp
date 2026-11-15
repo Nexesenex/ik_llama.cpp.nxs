@@ -128,6 +128,7 @@ bool llama_moe_cache_ffn_state::initialize(llama_moe_cache & cache, const llama_
     const int32_t first_layer = 0;
     const int32_t last_layer = (int32_t) model.layers.size();
     // Establish every device signature and allocate its complete context envelope before freezing cache groups.
+    bool reported_unsupported_layer = false;
     for (int32_t il = first_layer; il < last_layer; ++il) {
         ggml_moe_ffn_layout candidate{};
         if (!model_layer_layout(model, il, candidate)) continue;
@@ -136,7 +137,15 @@ bool llama_moe_cache_ffn_state::initialize(llama_moe_cache & cache, const llama_
         candidate.owner_backend = owner;
         candidate.device = -1;
         candidate.token_capacity = token_capacity;
-        if (!ggml_backend_cuda_moe_ffn_layout_supported(owner, &candidate)) continue;
+        if (!ggml_backend_cuda_moe_ffn_layout_supported(owner, &candidate)) {
+            if (!reported_unsupported_layer) {
+                reported_unsupported_layer = true;
+                LLAMA_LOG_WARN("%s: layer %d routed experts (%s up/gate, %s down) are not executable by %s\n",
+                        __func__, il, ggml_type_name(candidate.up->type), ggml_type_name(candidate.down->type),
+                        ggml_backend_name(owner));
+            }
+            continue;
+        }
 
         auto it = std::find_if(devices.begin(), devices.end(), [&](const auto & d) {
             return d.cuda_backend == owner;
@@ -273,7 +282,9 @@ bool llama_moe_cache_ffn_state::initialize(llama_moe_cache & cache, const llama_
         // blocking cache here would silently reintroduce the synchronous
         // transfers that --moe-cache-async is meant to eliminate.
         LLAMA_LOG_ERROR("%s: no layer is eligible for the CUDA hybrid executor at token capacity %d; "
-                "refusing to fall back to the blocking cache\n", __func__, token_capacity);
+                "refusing to fall back to the blocking cache (routed experts must use a CUDA-executable layout; "
+                "set llama_model_params::moe_cache_async before loading the model to keep them native)\n",
+                __func__, token_capacity);
         return false;
     }
 

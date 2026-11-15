@@ -480,6 +480,7 @@ extern "C" {
         bool use_mlock;     // force system to keep model in RAM
         bool check_tensors; // validate model tensor data
         bool repack_tensors;// repack if available
+        bool moe_cache_async; // must match llama_context_params::moe_cache_async; keeps routed expert tensors in their file layout
         bool use_thp;       // use transparent huge pages (linux only)
         bool validate_quants; // if true, check for NaNs while loading the model
         bool merge_qkv;     // if true, merge separate Q, K, V tensors into a single, contiguous tensor

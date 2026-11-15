@@ -5085,6 +5085,7 @@ static bool llm_load_tensors(
         int worst_case_tokens,
         bool flash_attn,
         bool swa_compress,
+        bool moe_cache_async,
         bool use_mlock,
         bool validate_quants,
         bool mtp,
@@ -6153,6 +6154,18 @@ static bool llm_load_tensors(
     if (ml.repack_tensors) {
         int n_repacked = 0;
         int n_skipped = 0;
+        int n_native_experts = 0;
+        // The asynchronous MoE cache feeds host expert bytes to CUDA kernels
+        // that only implement the native quant layouts.  Keep routed experts
+        // in the layout stored in the file when the context will own them.
+        std::unordered_set<const ggml_tensor *> native_experts;
+        if (moe_cache_async) {
+            for (const auto & l : model.layers) {
+                for (const ggml_tensor * w : { l.ffn_up_exps, l.ffn_gate_exps, l.ffn_down_exps, l.ffn_up_gate_exps }) {
+                    if (w) native_experts.insert(w);
+                }
+            }
+        }
         if (!ml.use_mmap || keep_ple_mapping) {
             // row views of a file weight keep the file type
             std::unordered_set<const ggml_tensor *> viewed_weights;
@@ -6165,6 +6178,12 @@ static bool llm_load_tensors(
                 if (ggml_backend_buffer_is_host(it.second->buffer)) {
                     auto orig_type = it.second->type;
                     if (it.second->view_src || viewed_weights.count(it.second)) continue;
+                    if (native_experts.count(it.second)) {
+                        if ((ggml_type) iqk_repacked_type(it.second) != it.second->type) {
+                            ++n_native_experts;
+                        }
+                        continue;
+                    }
                     if (tensor_is_file_aliased(it.second)) {
                         if ((ggml_type) iqk_repacked_type(it.second) != it.second->type) {
                             ++n_skipped;
@@ -6176,7 +6195,8 @@ static bool llm_load_tensors(
                 }
             }
         }
-        LLAMA_LOG_INFO("============ Repacked %d tensors (%d skipped file-aliased)\n", n_repacked, n_skipped);
+        LLAMA_LOG_INFO("============ Repacked %d tensors (%d skipped file-aliased, %d routed experts kept native for the async MoE cache)\n",
+                n_repacked, n_skipped, n_native_experts);
     }
 
     if (model.arch == LLM_ARCH_BITNET) {
@@ -6348,6 +6368,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             params.worst_graph_tokens,
             params.flash_attn,
             params.swa_compress,
+            params.moe_cache_async,
             params.use_mlock,
             params.validate_quants,
             params.mtp,
@@ -9880,6 +9901,7 @@ struct llama_model_params llama_model_default_params() {
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.repack_tensors              =*/ false,
+        /*.moe_cache_async             =*/ false,
         /*.use_thp                     =*/ false,
         /*.validate_quants             =*/ false,
         /*.merge_qkv                   =*/ false,
