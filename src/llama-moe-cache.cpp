@@ -628,10 +628,12 @@ struct llama_moe_cache::impl {
                         bindings[l.experts[ip]] = { il, (int32_t) ip, cached };
                     }
                 }
-                // Each map has one extra leading row.  GET_ROWS on an id of -1
-                // (SER dropped expert) reads that row, which holds an
-                // out-of-range sentinel that mul_mat_id/add_id skip.  The map
-                // view starts at row 1 so normal expert ids keep their meaning.
+                // Each map has one extra leading row.  A CPU GET_ROWS on an id of
+                // -1 (SER dropped expert) reads that row, which holds an
+                // out-of-range sentinel that mul_mat_id/add_id skip; the CUDA
+                // GET_ROWS kernels instead zero rows for out-of-range ids.  The
+                // map view starts at row 1 so normal expert ids keep their
+                // meaning.
                 const int64_t n_expert = g.ref[0]->ne[2];
                 auto make_map = [&](const char * fmt) {
                     ggml_tensor * storage = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, n_expert + 1);
