@@ -8959,8 +8959,6 @@ def parse_args() -> argparse.Namespace:
         help="path to write to; default: based on input. {ftype} will be replaced by the outtype.",
     )
     parser.add_argument(
-        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "q6_0", "auto"], default="f16",
-        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, q4_0, q4_1, q5_0, q5_1, q6_0 for a smaller conversion to then create an iMatrix file for example, and auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type",
         "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "q6_0",
                                         "q8_0_M", "q4_0_M", "q4_1_M", "q5_0_M", "q5_1_M", "q6_0_M",
                                         "q8_0_L", "q4_0_L", "q4_1_L", "q5_0_L", "q5_1_L", "q6_0_L",
