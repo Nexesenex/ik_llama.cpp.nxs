@@ -5584,7 +5584,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "-stpf, --split-tensor-split-factor f", "factor for proportional split (neutral: 1.0, you can test: 0.75)", params.split_tensor_split_factor });
         options.push_back({ "*",           "-svff, --split-vram-free-factor f", "factor for VRAM availability (neutral: 0.0, you can test: 0.75)", params.split_vram_free_factor });
         options.push_back({ "*",           "-supf, --split-usage-penalty-factor f", "factor for memory usage penalty (neutral: 0.0, you can test: 0.25)", params.split_usage_penalty_factor });
-        options.push_back({ "*",           "-svrf, --split-vram-reserve-factor LIST", "per-GPU VRAM reserve factors, comma-separated (<1: fraction reserved, >1: direct limit %%%, default: 0 = 12.5%%/6.25%% auto)" });
+        options.push_back({ "*",           "-svrf, --split-vram-reserve-factor LIST", "per-GPU VRAM reserve factors, comma-separated (<1: fraction reserved, >1: direct limit %%, default: 0 = 12.5%%/6.25%% auto)" });
         options.push_back({ "*",           "-sg,   --split-granularity i", "round-up ceiling for base-16 FFN/output tensor-parallel split granularity (power of 2 recommended: 16=fine VRAM packing, 128=kernel efficiency) (default: %d)", params.split_granularity });
     }
 

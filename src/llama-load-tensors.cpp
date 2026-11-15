@@ -443,9 +443,9 @@ static float get_ceiling_factor(int i, int min_vram_gpu_index, const std::vector
         std::any_of(split_vram_reserve_factor.begin(), split_vram_reserve_factor.end(), [](float x) { return x != 0.0f; });
     if (has_custom) {
         float val = (i < (int)split_vram_reserve_factor.size()) ? split_vram_reserve_factor[i] : 0.0f;
-        if (val == 0.0f) return 1.0f;
         if (val > 1.0f) return val / 100.0f;
-        return 1.0f - val;
+        if (val > 0.0f) return 1.0f - val;
+        // val == 0 (or missing): per-GPU default ceiling
     }
     return (i == min_vram_gpu_index) ? (7.0f / 8.0f) : (15.0f / 16.0f);
 }
