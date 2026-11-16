@@ -3367,6 +3367,10 @@ static ggml_tensor * llm_compute_wkv_b(ggml_context * ctx, ggml_cgraph * graph,
     return wkv_b;
 }
 
+static bool llm_mla_requantize(ggml_type type) {
+    return ggml_is_quantized(type) || type == GGML_TYPE_F8_E4M3_KS || type == GGML_TYPE_F8_E4M3_B128;
+}
+
 static void llm_prepare_mla(llama_model & model, int mla) {
     if (!model.is_mla_model()) return;
     const auto& hparams = model.hparams;
@@ -3406,7 +3410,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         size_t max_wk_size = 0;
         for (auto& l : model.layers) {
             if (!l.wk_b && l.wkv_b) {
-                auto new_type = ggml_is_quantized(l.wkv_b->type) ? GGML_TYPE_Q8_0 : l.wkv_b->type;
+                auto new_type = llm_mla_requantize(l.wkv_b->type) ? GGML_TYPE_Q8_0 : l.wkv_b->type;
                 auto size = ggml_row_size(new_type, n_embd_head_qk_nope)*kv_lora_rank*n_head;
                 max_wk_size = std::max(max_wk_size, size);
                 if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
@@ -3445,7 +3449,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
             auto wk_b_f32_t = ggml_cont(ctx, wk_b_f32_tview);
             wk_b_f32_t->data = (char *)wk_b_f32->data + ggml_nbytes(wk_b_f32);
 
-            auto new_type = ggml_is_quantized(wkv_b.type) ?
+            auto new_type = llm_mla_requantize(wkv_b.type) ?
                 wkv_b.type >= GGML_TYPE_Q4_0_R8 && wkv_b.type <= GGML_TYPE_Q8_K_R8 ? GGML_TYPE_Q8_0_R8 : GGML_TYPE_Q8_0 : wkv_b.type;
             auto wk_b = ggml_cast(ctx, wk_b_f32_t, new_type);
             wk_b->data = (char *)wk_b_f32_t->data + ggml_nbytes(wk_b_f32_t);
@@ -4594,7 +4598,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         for (int il = 0; il < n_layer; ++il) {
             auto & mla = mla_tensors[il];
             if (mla.wk_b && mla.wv_b && !mla.wkv_b) {
-                auto type = ggml_is_quantized(mla.wk_b->type) ? GGML_TYPE_Q8_0 : mla.wk_b->type;
+                auto type = llm_mla_requantize(mla.wk_b->type) ? GGML_TYPE_Q8_0 : mla.wk_b->type;
                 auto wkv_b_size = ggml_row_size(type, mla.wv_b->ne[0]) * (mla.wv_b->ne[1] + mla.wk_b->ne[1]) * mla.wv_b->ne[2] * 2;
                 result[il] += wkv_b_size;
             }
@@ -5708,7 +5712,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
                 params.defer_experts,
                 params.kv_overrides, params.tensor_buft_overrides,
-                params.ngram_file ? params.ngram_file : "", params.nvfp4_precision);
+                params.ngram_file ? params.ngram_file : "", params.nvfp4_precision, params.fp8_precision);
 
         model.hparams.vocab_only = params.vocab_only;
 
@@ -8996,6 +9000,7 @@ struct llama_model_params llama_model_default_params() {
         /*.tensor_buft_overrides       =*/ nullptr,
         /*.ngram_file                  =*/ nullptr,
         /*.nvfp4_precision             =*/ LLAMA_NVFP4_PRECISION_AUTO,
+        /*.fp8_precision               =*/ LLAMA_FP8_PRECISION_AUTO,
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
         /*.use_mlock                   =*/ false,
