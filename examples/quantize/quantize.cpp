@@ -160,15 +160,16 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //  ./llama-quantize [--allow-requantize] [--leave-output-tensor] [--pure] models/llama/ggml-model.gguf [models/llama/ggml-model-quant.gguf] type [nthreads]
 //
 [[noreturn]]
-static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [-dev/--device] [-ts/--tensor-split] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] [--analytical-imatrix output_file] [--estimate-imatrix] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+static void usage(const char * executable, int exit_code = 1) {
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [-dev/--device DEVICES] [-ts/--tensor-split SPLIT] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--custom-q] [--repack] [--repack-pattern] [--symmetric-q40] [--slow-iq2ks] [--keep-split] [--partial-requant] [--override-kv] [--analytical-imatrix output_file] [--estimate-imatrix] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("  -h, --help: print usage and exit\n");
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
     printf("  --imatrix file_name: use data in file_name as importance matrix for quant optimizations\n");
     printf("  --hide-imatrix: do not store imatrix details in the quantized model\n");
     printf("  --ignore-imatrix-rules: ignore importance matrix rules when quantizing\n");
-    printf("  --dry-run: show what would be quantized without actually writing the output file\n");
+    printf("  -dr, --dry-run: show what would be quantized without actually writing the output file\n");
     printf("  --slab-size N: process tensors larger than N MiB of f32 in slabs of up to N MiB, or of one expert slice or row group if that is larger (default: 1024, 0 = never)\n");
     printf("  --cuda-quantize: quantize IQ4_KT, IQ3_KT, IQ2_KT, IQ1_KT, IQ3_KS, IQ4_KS, IQ4_KS_R4, IQ4_KS_R16, IQ5_KS, and IQ5_KS_R4 tensors on a CUDA device; other types use the CPU\n");
     printf("  -dev DEVICES, --device DEVICES: CUDA device(s) for --cuda-quantize (default CUDA0; 2+ devices = row-split, e.g. -dev CUDA0,CUDA1)\n");
@@ -199,7 +200,7 @@ static void usage(const char * executable) {
     printf("  --partial-requant: quantize only missing split files in the split quantized .gguf destination directory\n");
     printf("  --analytical-imatrix output_file: Compute an estimate of the imatrix and store it in output_file. If an input imatrix is provided, it will be combined with the estimate. Nothing else happens when this option is specified\n");
     printf("  --estimate-imatrix: Use an estimated imatrix for quantization, possibly combining with the input imatrix (if specified)\n");
-    printf("  --override-kv KEY=TYPE:VALUE\n");
+    printf("  -okv KEY=TYPE:VALUE, --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n\n");
     printf("Note: --include-weights and --exclude-weights cannot be used together\n");
     printf("Note: The token embeddings tensor is loaded in system RAM, even in case of full GPU/VRAM offload.\n");
@@ -218,7 +219,7 @@ static void usage(const char * executable) {
         }
         printf("%-7s : %s\n", it.name.c_str(), it.desc.c_str());
     }
-    exit(1);
+    exit(exit_code);
 }
 
 static int load_imatrix(const std::string & imatrix_file, std::string & imatrix_dataset, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
@@ -425,6 +426,9 @@ static bool parse_fudge_factors(const std::string & arg, std::unordered_map<ggml
 }
 
 int main(int argc, char ** argv) {
+    if (argc >= 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
+        usage(argv[0], 0);
+    }
     if (argc < 3) {
         usage(argv[0]);
     }
@@ -451,12 +455,14 @@ int main(int argc, char ** argv) {
     std::vector<float> cuda_ts;
     bool have_cuda_ts = false;
 
-    for (; arg_idx < argc && (strncmp(argv[arg_idx], "--", 2) == 0 || strcmp(argv[arg_idx], "-dev") == 0 || strcmp(argv[arg_idx], "-ts") == 0); arg_idx++) {
+    for (; arg_idx < argc && (strncmp(argv[arg_idx], "--", 2) == 0 || strcmp(argv[arg_idx], "-h") == 0 || strcmp(argv[arg_idx], "-dr") == 0 || strcmp(argv[arg_idx], "-okv") == 0 || strcmp(argv[arg_idx], "-dev") == 0 || strcmp(argv[arg_idx], "-ts") == 0); arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
             params.quantize_output_tensor = false;
+        } else if (strcmp(argv[arg_idx], "--help") == 0 || strcmp(argv[arg_idx], "-h") == 0) {
+            usage(argv[0], 0);
         } else if (strcmp(argv[arg_idx], "--ignore-imatrix-rules") == 0) {
             params.ignore_imatrix_rules = true;
-        } else if (strcmp(argv[arg_idx], "--dry-run") == 0) {
+        } else if (strcmp(argv[arg_idx], "--dry-run") == 0 || strcmp(argv[arg_idx], "-dr") == 0) {
             params.dry_run = true;
         } else if (strcmp(argv[arg_idx], "--slab-size") == 0) {
             if (arg_idx < argc-1) {
@@ -599,7 +605,7 @@ int main(int argc, char ** argv) {
             } else {
                 usage(argv[0]);
             }
-        } else if (strcmp(argv[arg_idx], "--override-kv") == 0) {
+        } else if (strcmp(argv[arg_idx], "--override-kv") == 0 || strcmp(argv[arg_idx], "-okv") == 0) {
             if (arg_idx == argc-1 || !string_parse_kv_override(argv[++arg_idx], kv_overrides)) {
                 usage(argv[0]);
             }

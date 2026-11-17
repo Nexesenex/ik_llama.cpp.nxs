@@ -64,12 +64,7 @@ static void print_usage(int argc, char ** argv) {
     gpt_params_print_usage(argc, argv, params);
 
     LOG_TEE("\nsweep-bench specific options:\n\n");
-    LOG_TEE("  -nrep, --n-repetitions N        number of repetitions for each context size (default: 1)\n");
-    LOG_TEE("         --sweep-stride N         measure every Nth sweep row (default: 1)\n");
-    LOG_TEE("         --sweep-memory           report RSS high-water and sampled VRAM delta\n");
-    LOG_TEE("  -wb,   --warmup-batch           run a warmup batch before measurement\n");
     LOG_TEE("  -f,    --file FNAME             feed the tokens of a text file instead of random tokens\n");
-    LOG_TEE("         --output-format FORMAT    output format: table (default) or jsonl\n");
     LOG_TEE("\nexample usage:\n");
     LOG_TEE("\n    %s -m model.gguf -c 8192 -b 2048 -ub 512\n", argv[0]);
     LOG_TEE("\n");

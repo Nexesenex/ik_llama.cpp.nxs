@@ -106,7 +106,8 @@ sampling:
          --xtc-probability p      xtc probability (default: 0.0 => disabled)
          --xtc-threshold t        xtc threshold (default: 1.0 => disabled)
          --top-n-sigma t          top-n-sigma parameter (default: 0.0 => disabled)
-         -l TOKEN_ID(+/-)BIAS     modifies the likelihood of token appearing in the completion,
+  -l,    --logit-bias TOKEN_ID(+/-)BIAS
+                                  modifies the likelihood of token appearing in the completion,
                                   i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',
                                   or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'
          --cfg-negative-prompt PROMPT
@@ -164,6 +165,8 @@ perplexity:
          --multiple-choice-tasks N
                                   number of tasks to use when computing the multiple choice score (default: 0)
          --kl-divergence          computes KL-divergence to logits provided via --kl-divergence-base
+         --kl-divergence-base FNAME, --save-all-logits FNAME
+                                  set the logits file used to save or read logits for KL-divergence calculation
          --ppl-stride N           stride for perplexity calculation (default: 0)
          --ppl-output-type {0,1}  output type for perplexity calculation (default: 0)
 
@@ -176,7 +179,8 @@ parallel:
 
 multi-modality:
 
-         --mmproj FILE            path to a multimodal projector file. see examples/mtmd/README.md
+  -mm,   --mmproj FILE            path to a multimodal projector file. see examples/mtmd/README.md
+  -mmu,  --mmproj-url URL         URL to download the multimodal projector file
          --image FILE             path to an image file. use with multimodal models. Specify multiple times for batching
 
 backend:
@@ -215,7 +219,7 @@ model:
                 examples: --spec-type mtp:n_max=1,p_min=0.0
                 --spec-type ngram-mod:n_max=64,n_min=2,ngram_size_n=8 --spec-type mtp:n_max=1,p_min=0.0
   -mu,   --model-url MODEL_URL    model download url (default: unused)
-  -hfr,  --hf-repo REPO           Hugging Face model repository (default: unused)
+  -hf, -hfr, --hf-repo REPO       Hugging Face model repository (default: unused)
   -hff,  --hf-file FILE           Hugging Face model file (default: unused)
   -hft,  --hf-token TOKEN         Hugging Face access token (default: value from HF_TOKEN environment variable)
 
@@ -224,7 +228,7 @@ server:
          --host HOST              ip address to listen (default: 127.0.0.1)
          --port PORT              port to listen (default: 8080)
          --path PATH              path to serve static files from (default: )
-         --embedding(s)           restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)
+         --embedding, --embeddings  restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)
          --api-key KEY            API key to use for authentication (default: none)
          --api-key-file FNAME     path to file containing API keys (default: none)
          --ssl-key-file FNAME     path to file a PEM-encoded SSL private key

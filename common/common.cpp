@@ -1386,20 +1386,20 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.escape = true;
         return true;
     }
-    if (arg == "--no-escape") {
+    if (arg == "-ne" || arg == "--no-escape") {
         params.escape = false;
         return true;
     }
-    if (arg == "--prompt-cache") {
+    if (arg == "-pc" || arg == "--prompt-cache") {
         CHECK_ARG
         params.path_prompt_cache = argv[i];
         return true;
     }
-    if (arg == "--prompt-cache-all") {
+    if (arg == "-pc-all" || arg == "--prompt-cache-all") {
         params.prompt_cache_all = true;
         return true;
     }
-    if (arg == "--prompt-cache-ro") {
+    if (arg == "-pc-ro" || arg == "--prompt-cache-ro") {
         params.prompt_cache_ro = true;
         return true;
     }
@@ -1743,12 +1743,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.speculative.replacements.emplace_back(std::move(target), std::move(draft));
         return true;
     }
-    if (arg == "--cfg-negative-prompt") {
+    if (arg == "-cfg-np" || arg == "--cfg-negative-prompt") {
         CHECK_ARG
         sparams.cfg_negative_prompt = argv[i];
         return true;
     }
-    if (arg == "--cfg-negative-prompt-file") {
+    if (arg == "-cfg-np-f" || arg == "--cfg-negative-prompt-file") {
         CHECK_ARG
         std::ifstream file(argv[i]);
         if (!file) {
@@ -1762,7 +1762,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "--cfg-scale") {
+    if (arg == "-cfg-s" || arg == "--cfg-scale") {
         CHECK_ARG
         sparams.cfg_scale = std::stof(argv[i]);
         return true;
@@ -1912,7 +1912,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.hf_token = argv[i];
         return true;
     }
-    if (arg == "-hfr" || arg == "--hf-repo") {
+    if (arg == "-hf" || arg == "-hfr" || arg == "--hf-repo") {
         CHECK_ARG
         params.hf_repo = argv[i];
         return true;
@@ -1944,31 +1944,31 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.lora_init_without_apply = true;
         return true;
     }
-    if (arg == "--control-vector") {
+    if (arg == "-cv" || arg == "--control-vector") {
         CHECK_ARG
         params.control_vectors.push_back({ 1.0f, argv[i], });
         return true;
     }
-    if (arg == "--control-vector-scaled") {
+    if (arg == "-cv-s" || arg == "--control-vector-scaled") {
         CHECK_ARG
         const char* fname = argv[i];
         CHECK_ARG
         params.control_vectors.push_back({ std::stof(argv[i]), fname, });
         return true;
     }
-    if (arg == "--control-vector-layer-range") {
+    if (arg == "-cv-lr" || arg == "--control-vector-layer-range") {
         CHECK_ARG
         params.control_vector_layer_start = std::stoi(argv[i]);
         CHECK_ARG
         params.control_vector_layer_end = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "--mmproj") {
+    if (arg == "-mm" || arg == "--mmproj") {
         CHECK_ARG
         params.mmproj.path = argv[i];
         return true;
     }
-    if (arg == "--mmproj-url") {
+    if (arg == "-mmu" || arg == "--mmproj-url") {
         CHECK_ARG
         params.mmproj.url = argv[i];
         return true;
@@ -2195,12 +2195,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.feod = true;
         return true;
     }
-    if (arg == "--dsv41-replay-keep") {
+    if (arg == "-dsv41-r-k" || arg == "--dsv41-replay-keep") {
         CHECK_ARG
         params.dsv41_replay_keep = std::max(0, std::stoi(argv[i]));
         return true;
     }
-    if (arg == "-dsv4ls" || arg == "--dsv4-legacy-state") {
+    if (arg == "-dsv4l-s" || arg == "-dsv4ls" || arg == "--dsv4-legacy-state") {
         params.dsv4_legacy_state = true;
         return true;
     }
@@ -2472,7 +2472,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.moe_cache_cpu_share = share;
         return true;
     }
-    if (arg == "--fit") {
+    if (arg == "-fit" || arg == "--fit") {
         params.fit = true;
         return true;
     }
@@ -2999,12 +2999,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "--reasoning-tokens") {
+    if (arg == "-rea-t" || arg == "--reasoning-tokens") {
         CHECK_ARG
         params.think_tokens = thinking_tokens_from_string(std::string(argv[i]));
         return true;
     }
-    if (arg == "--reasoning-budget") {
+    if (arg == "-rea-b" || arg == "--reasoning-budget") {
         CHECK_ARG
         params.reasoning_budget = std::stoi(argv[i]);
         return true;
@@ -3019,7 +3019,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.sqlite_zstd_ext_file = argv[i];
         return true;
     }
-    if (arg == "--chat-template") {
+    if (arg == "-ct" || arg == "--chat-template") {
         CHECK_ARG
         if (!common_chat_verify_template(argv[i], true)) {
             fprintf(stderr, "error: the supplied chat template is not supported: %s\n", argv[i]);
@@ -3030,7 +3030,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.chat_template = argv[i];
         return true;
     }
-    if (arg == "--chat-template-file") {
+    if (arg == "-ct-f" || arg == "--chat-template-file") {
         CHECK_ARG
         std::string chat_template = read_file(std::string(argv[i]));
         if (!common_chat_verify_template(chat_template, true)) {
@@ -3048,7 +3048,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--peg") {
         return true;
     }
-    if (arg == "--chat-template-kwargs") {
+    if (arg == "-ct-kwargs" || arg == "--chat-template-kwargs") {
         CHECK_ARG
         std::string value = argv[i];
         auto parsed = json::parse(value);
@@ -3061,7 +3061,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "--reasoning-format") {
+    if (arg == "-rea-f" || arg == "--reasoning-format") {
         CHECK_ARG
         std::string value = argv[i];
         params.reasoning_format = common_reasoning_format_from_name(value);
@@ -3189,12 +3189,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.ctx_checkpoints_tolerance = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "--ctx-ckpt-spill-dir" || arg == "--ctx-checkpoints-spill-dir") {
+    if (arg == "-ctx-ckpt-spill-dir" || arg == "--ctx-ckpt-spill-dir" || arg == "--ctx-checkpoints-spill-dir") {
         CHECK_ARG
         params.ctx_checkpoint_spill_dir = argv[i];
         return true;
     }
-    if (arg == "--ctx-ckpt-live-n" || arg == "--ctx-checkpoints-live-n") {
+    if (arg == "-ctx-ckpt-live-n" || arg == "--ctx-ckpt-live-n" || arg == "--ctx-checkpoints-live-n") {
         CHECK_ARG
         params.ctx_checkpoint_ram_live = std::stoi(argv[i]);
         return true;
@@ -3296,7 +3296,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         else { invalid_param = true; }
         return true;
     }
-    if (arg == "--no-warmup") {
+    if (arg == "-nw" || arg == "--no-warmup") {
         params.warmup = false;
         return true;
     }
@@ -3308,7 +3308,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         CHECK_ARG
         std::string value(argv[i]);
         /**/ if (value == "jsonl") { params.sweep_bench_output_jsonl = true; }
-        else if (value == "md") { params.sweep_bench_output_jsonl = false; }
+        else if (value == "md" || value == "table") { params.sweep_bench_output_jsonl = false; }
         else { invalid_param = true; }
         return true;
     }
@@ -3409,15 +3409,15 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-lcd,  --lookup-cache-dynamic FNAME",
                                                                         "path to dynamic lookup cache to use for lookup decoding (updated by generation)" });
 
-    options.push_back({ "*",           "-c,    --ctx-size N",           "size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx });
-    options.push_back({ "*",           "-cd,   --ctx-size-draft N",     "size of the prompt context for the draft model (default: %d, 0 = inherits target context for DFlash/DSpark, otherwise loaded from model)", params.speculative.n_ctx });
+    options.push_back({ "*",           "-c N,  --ctx-size N",           "size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx });
+    options.push_back({ "*",           "-cd N, --ctx-size-draft N",     "size of the prompt context for the draft model (default: %d, 0 = inherits target context for DFlash/DSpark, otherwise loaded from model)", params.speculative.n_ctx });
 
-    options.push_back({ "*",           "-ctx-ckpt N, --ctx-checkpoints N",           "max number of context checkpoints to create per slot (default: %d)",params.ctx_checkpoints_n});
-    options.push_back({ "*",           "--ctx-ckpt-spill-dir DIR, --ctx-checkpoints-spill-dir DIR",           "spill evicted checkpoints to DIR (NVMe) instead of dropping them; empty disables"});
-    options.push_back({ "*",           "--ctx-ckpt-live-n N, --ctx-checkpoints-live-n N",           "max checkpoints with resident data when spill is on (default: %d)",params.ctx_checkpoint_ram_live});
-    options.push_back({ "*",           "-ctx-ckpt-i N, --ctx-checkpoints-interval N",  "minimum number of tokens between each context checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_interval});
-    options.push_back({ "*",           "-ctx-ckpt-t N, --ctx-checkpoints-tolerance N", "the number of tokens before the full prompt to create the checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_tolerance});
-    options.push_back({ "*",           "-ctx-ckpt-e NAME, --ctx-checkpoints-eviction NAME", "Eviction strategy for checkpoint. Accepts fifo, variance and auto. Auto defaults to variance. Variance preserves coverage and maintains uniform interval.  (default: variance)" });
+    options.push_back({ "*",           "-ctx-ckpt N,             --ctx-checkpoints N",           "max number of context checkpoints to create per slot (default: %d)",params.ctx_checkpoints_n});
+    options.push_back({ "*",           "-ctx-ckpt-spill-dir DIR, --ctx-checkpoints-spill-dir DIR",           "spill evicted checkpoints to DIR (NVMe) instead of dropping them; empty disables"});
+    options.push_back({ "*",           "-ctx-ckpt-live-n N,      --ctx-checkpoints-live-n N",           "max checkpoints with resident data when spill is on (default: %d)",params.ctx_checkpoint_ram_live});
+    options.push_back({ "*",           "-ctx-ckpt-i N,           --ctx-checkpoints-interval N",  "minimum number of tokens between each context checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_interval});
+    options.push_back({ "*",           "-ctx-ckpt-t N,           --ctx-checkpoints-tolerance N", "the number of tokens before the full prompt to create the checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_tolerance});
+    options.push_back({ "*",           "-ctx-ckpt-e NAME,        --ctx-checkpoints-eviction NAME", "Eviction strategy for checkpoint. Accepts fifo, variance and auto. Auto defaults to variance. Variance preserves coverage and maintains uniform interval.  (default: variance)" });
     options.push_back({ "*",           "-cram, --cache-ram N",          "set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)",params.cache_ram_mib });
     options.push_back({ "*",           "-crs,  --cache-ram-similarity N",           "minimum fraction of a cached entry that must match the new prompt for that entry to be reusable (default: %.2f).",params.cache_ram_similarity });
     options.push_back({ "*",           "-cram-n-min N, --cache-ram-n-min N",           "minimum number of the cached tokens that triggers prompt cache (default: %d).", params.cache_ram_n_min });
@@ -3436,8 +3436,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-no-fidx, --no-fused-indexer-topk", "disable the fused indexer topk op (DSA only; default: %s)", params.fused_idx_topk ? "enabled" : "disabled" });
     options.push_back({ "*",           "        --swa-compress",         "allocate sliding-window layers at window size instead of n_ctx (default: %s)", params.swa_compress ? "enabled" : "disabled" });
     options.push_back({ "*",           "-feod, --force-expert-offload-device", "force offload of experts left in RAM to the default layer device (default: %s)", params.feod ? "enabled" : "disabled" });
-    options.push_back({ "*",           "        --dsv41-replay-keep N", "DeepSeek-V4.1 prefill: run the decoder layers on the last N prompt tokens only; requires --swa-compress (default: %d, 0 = off)", params.dsv41_replay_keep });
-    options.push_back({ "*",           "-dsv4ls, --dsv4-legacy-state",   "write DeepSeek-V4 state in the legacy full-slice layout, byte-identical to main (default: %d)", params.dsv4_legacy_state });
+    options.push_back({ "*",           "-dsv41-r-k N , --dsv41-replay-keep N", "DeepSeek-V4.1 prefill: run the decoder layers on the last N prompt tokens only; requires --swa-compress (default: %d, 0 = off)", params.dsv41_replay_keep });
+    options.push_back({ "*",           "-dsv4l-s ,     --dsv4-legacy-state",   "write DeepSeek-V4 state in the legacy full-slice layout, byte-identical to main (default: %d)", params.dsv4_legacy_state });
     options.push_back({ "*",           "-dsatk, --dsa-top-k",           "DSA top-k override; <0 uses the model's configured indexer_top_k (default: %d)", params.dsa_top_k });
     options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
     options.push_back({ "*",           "-no-fmoe, --no-fused-moe",      "disable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
@@ -3466,12 +3466,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --in-file FNAME",        "an input file (repeat to specify multiple files)" });
     options.push_back({ "*",           "-bf,   --binary-file FNAME",    "binary file containing the prompt (default: none)" });
     options.push_back({ "*",           "-e,    --escape",               "process escapes sequences (\\n, \\r, \\t, \\', \\\", \\\\) (default: %s)", params.escape ? "true" : "false" });
-    options.push_back({ "*",           "       --no-escape",            "do not process escape sequences" });
+    options.push_back({ "*",           "-ne,   --no-escape",            "do not process escape sequences" });
     options.push_back({ "main",        "-ptc,  --print-token-count N",  "print token count every N tokens (default: %d)", params.n_print });
-    options.push_back({ "main",        "       --prompt-cache FNAME",   "file to cache prompt state for faster startup (default: none)" });
-    options.push_back({ "main",        "       --prompt-cache-all",     "if specified, saves user input and generations to cache as well\n"
+    options.push_back({ "main",        "-pc FNAME , --prompt-cache FNAME",   "file to cache prompt state for faster startup (default: none)" });
+    options.push_back({ "main",        "-pc-all,    --prompt-cache-all",     "if specified, saves user input and generations to cache as well\n"
                                                                         "not supported with --interactive or other interactive options" });
-    options.push_back({ "main",        "       --prompt-cache-ro",      "if specified, uses the prompt cache but does not update it" });
+    options.push_back({ "main",        "-pc-ro,     --prompt-cache-ro",      "if specified, uses the prompt cache but does not update it" });
     options.push_back({ "main",        "-r,    --reverse-prompt PROMPT",
                                                                         "halt generation at PROMPT, return control in interactive mode\n"
                                                                         "can be specified more than once for multiple prompts" });
@@ -3486,7 +3486,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "main infill", "       --in-prefix STRING",     "string to prefix user inputs with (default: empty)" });
     options.push_back({ "main infill", "       --in-suffix STRING",     "string to suffix after user inputs with (default: empty)" });
     options.push_back({ "main infill", "       --infill",               "use infill mode" });
-    options.push_back({ "main",        "       --no-warmup",            "skip warming up the model with an empty run" });
+    options.push_back({ "main",        "-nw,   --no-warmup",            "skip warming up the model with an empty run" });
     options.push_back({ "server infill",
                                        "       --spm-infill",           "use Suffix/Prefix/Middle pattern for infill (instead of Prefix/Suffix/Middle) as some models prefer this. (default: %s)", params.spm_infill ? "enabled" : "disabled" });
 
@@ -3534,16 +3534,17 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
     options.push_back({ "*",           "       --allowlist-keyword-delay",
                                                                         "# tokens to delay matching for the first keyword (default: %zu)", params.allow_kw_delay });
-    options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
+    options.push_back({ "*",           "       -l, --logit-bias TOKEN_ID(+/-)BIAS",
+                                                                        "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
     options.push_back({ "*",           "       --expiring-logit-bias-file",
                                                                         "original PR: https://github.com/ikawrakow/ik_llama.cpp/pull/1731\n"});
-    options.push_back({ "main",        "       --cfg-negative-prompt PROMPT",
+    options.push_back({ "main",        "-cfg-np PROMPT ,  --cfg-negative-prompt PROMPT",
                                                                         "negative prompt to use for guidance (default: '%s')", sparams.cfg_negative_prompt.c_str() });
-    options.push_back({ "main",        "       --cfg-negative-prompt-file FNAME",
+    options.push_back({ "main",        "-cfg-np-f FNAME , --cfg-negative-prompt-file FNAME",
                                                                         "negative prompt file to use for guidance" });
-    options.push_back({ "main",        "       --cfg-scale N",          "strength of guidance (default: %.1f, 1.0 = disable)", (double)sparams.cfg_scale });
+    options.push_back({ "main",        "-cfg-s N ,        --cfg-scale N",  "strength of guidance (default: %.1f, 1.0 = disable)", (double)sparams.cfg_scale });
     options.push_back({ "template" });
     options.push_back({ "main",        "       --jinja",
                                                                         "set custom jinja chat template (default: template taken from model's metadata)\n"
@@ -3551,22 +3552,22 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "only commonly used templates are accepted:\n"
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
     options.push_back({ "main",        "-ptcall, --parallel-tool-calls",  "enable parallel tool calls\n" });
-    options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
+    options.push_back({ "main",        "-ct JINJA_TEMPLATE , --chat-template JINJA_TEMPLATE",
                                                                         "use jinja template for chat (default: disabled)\n" });
-    options.push_back({ "main",        "       --chat-template-file file_with_JINJA_TEMPLATE",
+    options.push_back({ "main",        "-ct-f FNAME ,        --chat-template-file file_with_JINJA_TEMPLATE",
                                                                         "load jinja template for chat from the file\n" });
-    options.push_back({ "main",        "       --reasoning-format FORMAT",
+    options.push_back({ "main",        "-ct-kwargs JSON ,    --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
+
+    options.push_back({ "main",        "-rea-f FORMAT , --reasoning-format FORMAT",
                                                                  "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
                         "- none: leaves thoughts unparsed in `message.content`\n"
                         "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
                         "- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`\n"
                         "(default: none)", });
-    options.push_back({ "main",        "-rea,  --reasoning",  "[on|off|auto]"
-                                                                 "Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))" });
-    options.push_back({ "main",        "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
-
-    options.push_back({ "main",        "       --reasoning-budget N",  "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)" });
-    options.push_back({ "main",        "       --reasoning-tokens FORMAT",     "exclude reasoning tokens to select the slot more accurately.\n"
+    options.push_back({ "main",        "-rea MODE,      --reasoning MODE",
+                                                                         "Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))" });
+    options.push_back({ "main",        "-rea-b N,       --reasoning-budget N",  "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)" });
+    options.push_back({ "main",        "-rea-t FORMAT , --reasoning-tokens FORMAT",     "exclude reasoning tokens to select the slot more accurately.\n"
                         "none: include all tokens\n"
                         "auto: exclude all tokens between <think> and </think>\n"
                         "Or comma separated start and end tokens such as [THINK],[/THINK]\n"
@@ -3628,6 +3629,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "perplexity",  "       --multiple-choice-tasks N",
                                                                         "number of tasks to use when computing the multiple choice score (default: %zu)", params.multiple_choice_tasks });
     options.push_back({ "perplexity",  "       --kl-divergence",        "computes KL-divergence to logits provided via --kl-divergence-base" });
+    options.push_back({ "perplexity",  "       --kl-divergence-base FNAME, --save-all-logits FNAME",
+                                                                        "set the logits file used to save or read logits for KL-divergence calculation" });
     options.push_back({ "perplexity",  "       --ppl-stride N",         "stride for perplexity calculation (default: %d)", params.ppl_stride });
     options.push_back({ "perplexity",  "       --ppl-output-type {0,1}",
                                                                         "output type for perplexity calculation (default: %d)", params.ppl_output_type });
@@ -3641,10 +3644,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-nocb, --no-cont-batching",     "disable continuous batching" });
 
     options.push_back({ "multi-modality" });
-    options.push_back({ "*",           "       --mmproj FILE",          "path to a multimodal projector file. see examples/mtmd/README.md" });
+    options.push_back({ "*",           "-mm,   --mmproj FILE",          "path to a multimodal projector file. see examples/mtmd/README.md" });
     options.push_back({ "*",           "       --image FILE",           "path to an image file. use with multimodal models. Specify multiple times for batching" });
     options.push_back({ "*",           "       --audio FILE",           "path to an audio file for multimodal models. Specify multiple times for batching" });
-    options.push_back({ "*",           "       --mmproj-url URL",       "URL to download the multimodal projector file" });
+    options.push_back({ "*",           "-mmu,  --mmproj-url URL",       "URL to download the multimodal projector file" });
     options.push_back({ "*",           "       --no-mmproj-offload",    "do not offload multimodal projector to GPU (default: offload enabled)" });
     options.push_back({ "*",           "       --image-min-tokens N",   "minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)"});
     options.push_back({ "*",           "       --image-max-tokens N",   "maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)" });
@@ -3680,7 +3683,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
     options.push_back({ "*",           "-gfm,  --gpu-fit-margin N",     "per-layer GPU fit margin as layer_id,margin pairs, comma-separated" });
     options.push_back({ "*",           "-wgt, --worst-graph-tokens N",  "number of tokens to use for worst-case graph"});
-    options.push_back({ "*",           "       --fit",                  "automatically determine which tensors to offload to the GPU(s)"});
+    options.push_back({ "*",           "-fit,  --fit",                  "automatically determine which tensors to offload to the GPU(s)"});
     options.push_back({ "*",           "       --numa TYPE",            "attempt optimizations that help on some NUMA systems\n"
                                                                         "  - distribute: spread execution evenly over all nodes\n"
                                                                         "  - isolate: only spawn threads on CPUs on the node that execution started on\n"
@@ -3722,18 +3725,18 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                          "types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false" });
     options.push_back({ "*",           "       --lora FNAME",           "apply LoRA adapter (can be repeated to use multiple adapters)" });
     options.push_back({ "*",           "       --lora-scaled FNAME S",  "apply LoRA adapter with user defined scaling S (can be repeated to use multiple adapters)" });
-    options.push_back({ "*",           "       --control-vector FNAME", "add a control vector\n"
+    options.push_back({ "*",           "-cv FNAME ,         --control-vector FNAME", "add a control vector\n"
                                                                         "note: this argument can be repeated to add multiple control vectors" });
-    options.push_back({ "*",           "       --control-vector-scaled FNAME SCALE",
+    options.push_back({ "*",           "-cv-s FNAME SCALE , --control-vector-scaled FNAME SCALE",
                                                                         "add a control vector with user defined scaling SCALE\n"
                                                                         "note: this argument can be repeated to add multiple scaled control vectors" });
-    options.push_back({ "*",           "       --control-vector-layer-range START END",
+    options.push_back({ "*",           "-cv-lr START END ,  --control-vector-layer-range START END",
                                                                         "layer range to apply the control vector(s) to, start and end inclusive" });
     options.push_back({ "*",           "-m,    --model FNAME",          "model path (default: models/$filename with filename from --hf-file\n"
                                                                         "or --model-url if set, otherwise %s)", DEFAULT_MODEL_PATH });
     options.push_back({ "*",           "-md,   --model-draft FNAME",    "draft model for speculative decoding (default: unused)" });
     options.push_back({ "*",           "-mu,   --model-url MODEL_URL",  "model download url (default: unused)" });
-    options.push_back({ "*",           "-hfr,  --hf-repo REPO",         "Hugging Face model repository (default: unused)" });
+    options.push_back({ "*",           "-hf, -hfr, --hf-repo REPO",     "Hugging Face model repository (default: unused)" });
     options.push_back({ "*",           "-hff,  --hf-file FILE",         "Hugging Face model file (default: unused)" });
     options.push_back({ "*",           "-hft,  --hf-token TOKEN",       "Hugging Face access token (default: value from HF_TOKEN environment variable)" });
     options.push_back({ "*",           "-a,    --alias STRING",         "model alias (default: unknown)" });
@@ -3787,13 +3790,13 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "bench",   "        --sweep-memory",         "report RSS high-water and sampled VRAM delta" });
     }
     options.push_back({ "bench",       "-wb,    --warmup-batch",         "run a warmup batch before measurement" });
-    options.push_back({ "bench",       "       --output-format FORMAT",  "output format: table, jsonl, or csv (default: table)" });
+    options.push_back({ "bench",       "       --output-format FORMAT",  "output format: md (Markdown table, default) or jsonl" });
 
     options.push_back({ "server" });
     options.push_back({ "server",      "       --host HOST",            "ip address to listen (default: %s)", params.hostname.c_str() });
     options.push_back({ "server",      "       --port PORT",            "port to listen (default: %d)", params.port });
     options.push_back({ "server",      "       --path PATH",            "path to serve static files from (default: %s)", params.public_path.c_str() });
-    options.push_back({ "server",      "       --embedding(s)",         "restrict to only support embedding use case; use only with dedicated embedding models (default: %s)", params.embedding ? "enabled" : "disabled" });
+    options.push_back({ "server",      "       --embedding, --embeddings", "restrict to only support embedding use case; use only with dedicated embedding models (default: %s)", params.embedding ? "enabled" : "disabled" });
     options.push_back({ "server",        "       --webui NAME",
                                                              "controls which webui to server:\n"
                                                             "- none: disable webui\n"
