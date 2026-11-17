@@ -5555,6 +5555,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "how to split the model across multiple GPUs, one of:\n"
                                                                         "  - none: use one GPU only\n"
                                                                         "  - tenpar / graph: split model tensors and computation graph in parallel across GPUs\n"
+                                                                        "  - attn: split self-attention computations across GPUs\n"
                                                                         "  - layer (default): split layers and KV across GPUs\n" });
         options.push_back({ "*",           "-ts,   --tensor-split SPLIT",
                                                                         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1" });

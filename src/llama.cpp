@@ -10880,20 +10880,22 @@ struct llama_context * llama_init_from_model(
             cparams.mla_attn = 3;
         }
     }
-    if (model->arch == LLM_ARCH_OPENAI_MOE && model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
+    if (model->arch == LLM_ARCH_OPENAI_MOE &&
+        (model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model->split_mode == LLAMA_SPLIT_MODE_ATTN)) {
         if (cparams.reduce_type == GGML_TYPE_F16) {
             LLAMA_LOG_WARN("=====================================================================\n");
-            LLAMA_LOG_WARN("GPT-OSS with split mode tensor parallel requires f32 precision\n");
+            LLAMA_LOG_WARN("GPT-OSS with split mode tensor parallel/attn requires f32 precision\n");
             LLAMA_LOG_WARN("    => changing cparams.reduce_type to f32\n");
             LLAMA_LOG_WARN("=====================================================================\n");
             cparams.reduce_type = GGML_TYPE_F32;
         }
     }
-    if ((model->arch == LLM_ARCH_MELLUM || model->arch == LLM_ARCH_LAGUNA) && model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
+    if ((model->arch == LLM_ARCH_MELLUM || model->arch == LLM_ARCH_LAGUNA) &&
+        (model->split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL || model->split_mode == LLAMA_SPLIT_MODE_ATTN)) {
         if (cparams.reduce_type == GGML_TYPE_F16) {
             const char * mname = model->arch == LLM_ARCH_MELLUM ? "Mellum" : "Laguna";
             LLAMA_LOG_WARN("=====================================================================\n");
-            LLAMA_LOG_WARN("%s with split mode tensor parallel bf16 or f32 precision\n", mname);
+            LLAMA_LOG_WARN("%s with split mode tensor parallel/attn bf16 or f32 precision\n", mname);
             LLAMA_LOG_WARN("    => changing cparams.reduce_type to bf16\n");
             LLAMA_LOG_WARN("=====================================================================\n");
             cparams.reduce_type = GGML_TYPE_BF16;

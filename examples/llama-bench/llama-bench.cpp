@@ -221,6 +221,7 @@ static const char * split_mode_str(llama_split_mode mode) {
     switch (mode) {
         case LLAMA_SPLIT_MODE_NONE:  return "none";
         case LLAMA_SPLIT_MODE_LAYER: return "layer";
+        case LLAMA_SPLIT_MODE_ATTN:  return "attn";
         case LLAMA_SPLIT_MODE_TENSOR_PARALLEL: return "tenpar";
         default: GGML_ABORT("invalid split mode");
     }
@@ -389,7 +390,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -cph, --cpu-power-hold <1..100>     sustained test at a fixed cap, reports plateau and stability (needs root)\n");
     printf("  -cpm, --cpu-power-hold-minutes <n>  duration of the hold test (default: %d)\n", cmd_params_defaults.cpu_power_hold_minutes);
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
-    printf("  -sm, --split-mode <none|layer|graph>(default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
+    printf("  -sm, --split-mode <none|layer|attn|tenpar|graph>(default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>        (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1|on|off|auto> (default: %s)\n", join(cmd_params_defaults.flash_attn, ",").c_str());
@@ -716,7 +717,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     mode = LLAMA_SPLIT_MODE_NONE;
                 } else if (m == "layer") {
                     mode = LLAMA_SPLIT_MODE_LAYER;
-                } else if (m == "tenpar") {
+                } else if (m == "attn") {
+                    mode = LLAMA_SPLIT_MODE_ATTN;
+                } else if (m == "tenpar" || m == "graph") {
                     mode = LLAMA_SPLIT_MODE_TENSOR_PARALLEL;
                 } else {
                     invalid_param = true;
