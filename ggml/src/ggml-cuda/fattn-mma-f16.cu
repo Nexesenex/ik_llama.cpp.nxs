@@ -1,6 +1,11 @@
 #include "fattn-mma-f16.cuh"
 #include "fattn-mma-f16-interface.cuh"
 
+// KV cache types that the MMA decode path can stage and expand without a global conversion to f16.
+static inline bool fattn_mma_stageable(const ggml_type type) {
+    return type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0;
+}
+
 static __global__ void k_repack_q(int nelements, int ne0, int ne0_1, const float * src, float * dst1, float * dst2) {
     int i = blockDim.x * blockIdx.x + threadIdx.x;
     if (i >= nelements) {
@@ -159,13 +164,20 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
             const ggml_tensor * V = dst->src[2];
             // With fewer K/V rows the conversion to f16 can be faster.
             constexpr int min_rows_unpack = 8192;
-            if (Q->ne[1] == 1 && ggml_nrows(K) >= min_rows_unpack && K->type == V->type &&
-                    (K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0) &&
+            if (Q->ne[1] == 1 && ggml_nrows(K) >= min_rows_unpack && fattn_mma_stageable(K->type) && fattn_mma_stageable(V->type) &&
                     cp_async_available(ggml_cuda_info().devices[ctx.device].cc)) {
                 if (K->type == GGML_TYPE_Q8_0) {
-                    ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q8_0>(ctx, dst);
+                    if (V->type == GGML_TYPE_Q8_0) {
+                        ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0>(ctx, dst);
+                    } else {
+                        ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0>(ctx, dst);
+                    }
                 } else {
-                    ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q4_0>(ctx, dst);
+                    if (V->type == GGML_TYPE_Q8_0) {
+                        ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0>(ctx, dst);
+                    } else {
+                        ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0>(ctx, dst);
+                    }
                 }
                 return;
             }
