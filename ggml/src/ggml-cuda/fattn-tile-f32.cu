@@ -94,7 +94,7 @@ static __global__ void flash_attn_tile_ext_f32(
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
     const float2 * Q_f2  = (const float2 *) (Q    + nb02* blockIdx.y              + nb01*ic0);
     const half2  * K_h2  = (const half2  *) (K    + nb12*(blockIdx.y / gqa_ratio));
-    const half2  * V_h2  = (const half2  *) (V    + nb12*(blockIdx.y / gqa_ratio)); // K and V have same shape
+    const half2  * V_h2  = (const half2  *) (V    + nb22*(blockIdx.y / gqa_ratio)); // V uses its own head stride.
     // Mask row stride must come from the mask tensor (nb31), not ne11 (= K->ne[1]). For SWA models the
     // fattn.cu n_swa windowing re-points K/V/mask to the last nton tokens (ne11 = nton) while the mask keeps
     // its original row stride, so indexing the mask by ne11 reads garbage and yields NaN on the tile kernels.
@@ -102,7 +102,8 @@ static __global__ void flash_attn_tile_ext_f32(
     const half   * maskh  = (const half   *)  mask + stride_mask*ic0;
     const float  * sinksf = (const float  *)  sinks;
 
-    const int stride_KV2 = nb11 / sizeof(half2);
+    const int stride_K2 = nb11 / sizeof(half2);
+    const int stride_V2 = nb21 / sizeof(half2);
 
     const float slope = get_alibi_slope(max_bias, blockIdx.y, n_head_log2, m0, m1);
     static_assert(D % (2 * WARP_SIZE) == 0, "D not divisible by 2*WARP_SIZE == 64.");
@@ -159,7 +160,7 @@ static __global__ void flash_attn_tile_ext_f32(
             for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += WARP_SIZE) {
                 const int k_KQ = k_KQ_0 + threadIdx.x;
 
-                KV_tmp[i_KQ][k_KQ] = K_h2[(k_VKQ_0 + i_KQ)*stride_KV2 + k_KQ];
+                KV_tmp[i_KQ][k_KQ] = K_h2[(k_VKQ_0 + i_KQ)*stride_K2 + k_KQ];
             }
         }
 
@@ -261,7 +262,7 @@ static __global__ void flash_attn_tile_ext_f32(
             for (int i0 = 0; i0 < D/2; i0 += WARP_SIZE) {
                 const int i = i0 + threadIdx.x;
 
-                KV_tmp[k][i] = V_h2[(k_VKQ_0 + k)*stride_KV2 + i];
+                KV_tmp[k][i] = V_h2[(k_VKQ_0 + k)*stride_V2 + i];
             }
         }
 
