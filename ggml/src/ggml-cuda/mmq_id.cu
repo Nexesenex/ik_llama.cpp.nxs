@@ -155,7 +155,7 @@ static void launch_mmq_ids_helper(
     // entries would be uninitialized pool memory, and quantize_mmq_q8_1_cuda_id reads ALL of them
     // (ne12*n_expert_used rows), causing out-of-bounds reads of src1. Zero them so dropped rows
     // map to src1 row 0 (valid reads; those q8_1 rows are never consumed by mul_mat_q_id).
-    CUDA_CHECK(cudaMemsetAsync(ids_src1, 0, n_tokens*n_expert_used*sizeof(int32_t), stream));
+    CUDA_CHECK(cudaMemsetAsync(ids_src1, 0, size_t(n_tokens)*n_expert_used*sizeof(int32_t), stream));
 
     const dim3 num_blocks(n_experts, 1, 1);
     const dim3 block_size(warp_size, 1, 1);
