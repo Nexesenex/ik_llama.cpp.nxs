@@ -3,7 +3,10 @@
 
 // KV cache types that the MMA decode path can stage and expand without a global conversion to f16.
 static inline bool fattn_mma_stageable(const ggml_type type) {
-    return type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0;
+    return type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0 ||
+           type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q5_0 ||
+           type == GGML_TYPE_Q5_1 || type == GGML_TYPE_Q4_1 ||
+           type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_BF16;
 }
 
 static __global__ void k_repack_q(int nelements, int ne0, int ne0_1, const float * src, float * dst1, float * dst2) {
@@ -154,6 +157,120 @@ static void glm45_flash_attention(ggml_backend_cuda_context & ctx, ggml_tensor *
     pack_glm45_result(&fa1, &fa2, dst, ctx.stream());
 }
 
+template <int D, int ncols1, int ncols2>
+static void ggml_cuda_flash_attn_ext_mma_f16_staged_case(
+        ggml_backend_cuda_context & ctx, ggml_tensor * dst, const ggml_type type_K, const ggml_type type_V) {
+    switch (type_K) {
+        case GGML_TYPE_Q8_0:
+            switch (type_V) {
+                case GGML_TYPE_Q8_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0>(ctx, dst); return;
+                case GGML_TYPE_Q4_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0>(ctx, dst); return;
+                case GGML_TYPE_Q6_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_Q6_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_Q5_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1>(ctx, dst); return;
+                case GGML_TYPE_Q4_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_Q4_1>(ctx, dst); return;
+                case GGML_TYPE_IQ4_NL: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                case GGML_TYPE_BF16: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_BF16>(ctx, dst); return;
+                default: break;
+            }
+            break;
+        case GGML_TYPE_Q4_0:
+            switch (type_V) {
+                case GGML_TYPE_Q8_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0>(ctx, dst); return;
+                case GGML_TYPE_Q4_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0>(ctx, dst); return;
+                case GGML_TYPE_Q6_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_Q6_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_Q5_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_Q5_1>(ctx, dst); return;
+                case GGML_TYPE_Q4_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1>(ctx, dst); return;
+                case GGML_TYPE_IQ4_NL: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                case GGML_TYPE_BF16: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_BF16>(ctx, dst); return;
+                default: break;
+            }
+            break;
+        case GGML_TYPE_Q6_0:
+            switch (type_V) {
+                case GGML_TYPE_Q8_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q6_0, GGML_TYPE_Q8_0>(ctx, dst); return;
+                case GGML_TYPE_Q4_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q6_0, GGML_TYPE_Q4_0>(ctx, dst); return;
+                case GGML_TYPE_Q6_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q6_0, GGML_TYPE_Q6_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q6_0, GGML_TYPE_Q5_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q6_0, GGML_TYPE_Q5_1>(ctx, dst); return;
+                case GGML_TYPE_Q4_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q6_0, GGML_TYPE_Q4_1>(ctx, dst); return;
+                case GGML_TYPE_IQ4_NL: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q6_0, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                case GGML_TYPE_BF16: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q6_0, GGML_TYPE_BF16>(ctx, dst); return;
+                default: break;
+            }
+            break;
+        case GGML_TYPE_Q5_0:
+            switch (type_V) {
+                case GGML_TYPE_Q8_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_0, GGML_TYPE_Q8_0>(ctx, dst); return;
+                case GGML_TYPE_Q4_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_0, GGML_TYPE_Q4_0>(ctx, dst); return;
+                case GGML_TYPE_Q6_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_0, GGML_TYPE_Q6_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_0, GGML_TYPE_Q5_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1>(ctx, dst); return;
+                case GGML_TYPE_Q4_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1>(ctx, dst); return;
+                case GGML_TYPE_IQ4_NL: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_0, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                case GGML_TYPE_BF16: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_0, GGML_TYPE_BF16>(ctx, dst); return;
+                default: break;
+            }
+            break;
+        case GGML_TYPE_Q5_1:
+            switch (type_V) {
+                case GGML_TYPE_Q8_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0>(ctx, dst); return;
+                case GGML_TYPE_Q4_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_1, GGML_TYPE_Q4_0>(ctx, dst); return;
+                case GGML_TYPE_Q6_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_1, GGML_TYPE_Q6_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_1, GGML_TYPE_Q5_1>(ctx, dst); return;
+                case GGML_TYPE_Q4_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_1, GGML_TYPE_Q4_1>(ctx, dst); return;
+                case GGML_TYPE_IQ4_NL: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_1, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                case GGML_TYPE_BF16: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q5_1, GGML_TYPE_BF16>(ctx, dst); return;
+                default: break;
+            }
+            break;
+        case GGML_TYPE_Q4_1:
+            switch (type_V) {
+                case GGML_TYPE_Q8_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_1, GGML_TYPE_Q8_0>(ctx, dst); return;
+                case GGML_TYPE_Q4_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0>(ctx, dst); return;
+                case GGML_TYPE_Q6_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_1, GGML_TYPE_Q6_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_1, GGML_TYPE_Q5_1>(ctx, dst); return;
+                case GGML_TYPE_Q4_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_1, GGML_TYPE_Q4_1>(ctx, dst); return;
+                case GGML_TYPE_IQ4_NL: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                case GGML_TYPE_BF16: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_Q4_1, GGML_TYPE_BF16>(ctx, dst); return;
+                default: break;
+            }
+            break;
+        case GGML_TYPE_IQ4_NL:
+            switch (type_V) {
+                case GGML_TYPE_Q8_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_IQ4_NL, GGML_TYPE_Q8_0>(ctx, dst); return;
+                case GGML_TYPE_Q4_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_IQ4_NL, GGML_TYPE_Q4_0>(ctx, dst); return;
+                case GGML_TYPE_Q6_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_IQ4_NL, GGML_TYPE_Q6_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_IQ4_NL, GGML_TYPE_Q5_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_IQ4_NL, GGML_TYPE_Q5_1>(ctx, dst); return;
+                case GGML_TYPE_Q4_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_IQ4_NL, GGML_TYPE_Q4_1>(ctx, dst); return;
+                case GGML_TYPE_IQ4_NL: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                case GGML_TYPE_BF16: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_IQ4_NL, GGML_TYPE_BF16>(ctx, dst); return;
+                default: break;
+            }
+            break;
+        case GGML_TYPE_BF16:
+            switch (type_V) {
+                case GGML_TYPE_Q8_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_BF16, GGML_TYPE_Q8_0>(ctx, dst); return;
+                case GGML_TYPE_Q4_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_BF16, GGML_TYPE_Q4_0>(ctx, dst); return;
+                case GGML_TYPE_Q6_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_BF16, GGML_TYPE_Q6_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_0: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_BF16, GGML_TYPE_Q5_0>(ctx, dst); return;
+                case GGML_TYPE_Q5_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_BF16, GGML_TYPE_Q5_1>(ctx, dst); return;
+                case GGML_TYPE_Q4_1: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_BF16, GGML_TYPE_Q4_1>(ctx, dst); return;
+                case GGML_TYPE_IQ4_NL: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_BF16, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                case GGML_TYPE_BF16: ggml_cuda_flash_attn_ext_mma_f16_case<D, ncols1, ncols2, GGML_TYPE_BF16, GGML_TYPE_BF16>(ctx, dst); return;
+                default: break;
+            }
+            break;
+        default:
+            break;
+    }
+    GGML_ABORT("unsupported staged KV type pair");
+}
+
 template <int D, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * Q = dst->src[0];
@@ -166,19 +283,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
             constexpr int min_rows_unpack = 8192;
             if (Q->ne[1] == 1 && ggml_nrows(K) >= min_rows_unpack && fattn_mma_stageable(K->type) && fattn_mma_stageable(V->type) &&
                     cp_async_available(ggml_cuda_info().devices[ctx.device].cc)) {
-                if (K->type == GGML_TYPE_Q8_0) {
-                    if (V->type == GGML_TYPE_Q8_0) {
-                        ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0>(ctx, dst);
-                    } else {
-                        ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0>(ctx, dst);
-                    }
-                } else {
-                    if (V->type == GGML_TYPE_Q8_0) {
-                        ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0>(ctx, dst);
-                    } else {
-                        ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0>(ctx, dst);
-                    }
-                }
+                ggml_cuda_flash_attn_ext_mma_f16_staged_case<D, 8/ncols2, ncols2>(ctx, dst, K->type, V->type);
                 return;
             }
         }
