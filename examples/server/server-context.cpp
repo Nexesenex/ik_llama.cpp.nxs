@@ -5412,7 +5412,7 @@ bool server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
             slot.cache_tokens.keep_first(0);
             slot.n_past = 0;
             slot.sampled = 0;
-            n_keep_buffer = 0;)
+            n_keep_buffer = 0;
         }
     }
 

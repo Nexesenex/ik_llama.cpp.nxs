@@ -832,17 +832,11 @@ void llama_model_loader::override_tensor_from_file(const char * tensor_name, con
                 __func__, tensor_name, donor_path.c_str()));
     }
 
-    // Allocate a fresh split index that cannot collide with real model splits.
-    // Real splits use 0..n_split_total-1, so start donor indices at 0xF000.
-    uint16_t donor_idx = (uint16_t) (0xF000 + files.size());
-    while (split_to_file_idx.find(donor_idx) != split_to_file_idx.end()) {
-        donor_idx++;
-    }
-
-    const size_t file_idx = files.size();
+    // Donor files are appended to `files` before init_mappings(), so the file
+    // index is also the split index used by llama_tensor_weight::idx.
+    const uint16_t donor_idx = (uint16_t) files.size();
     files.emplace_back(std::move(donor_file));
     contexts.emplace_back(donor_ctx);
-    split_to_file_idx[donor_idx] = file_idx;
 
     bool replaced = false;
     for (auto & w : weights) {
