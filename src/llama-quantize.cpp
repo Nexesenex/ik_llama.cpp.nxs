@@ -2113,7 +2113,11 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         // count declared by the source metadata: a rewritten shard must agree with a full
         // destination. A complete run knows its exact output count, which may include extra
         // tensors (duplicated output, kept input scales) that the source does not declare.
-        const bool partial_output = params->partial_requant || params->skip_first_shard || tensor_ids != nullptr;
+        // --split-max-tensors with --skip-first-shard still emits every tensor (shard 0 is
+        // only an empty metadata placeholder), so it is a complete run, unlike the --keep-split
+        // case where --skip-first-shard is combined with a partial --individual-tensors load.
+        const bool partial_output = params->partial_requant ||
+            (params->skip_first_shard && params->split_max_tensors <= 0) || tensor_ids != nullptr;
         const int split_tensor_count = partial_output ? ml.n_tensors_total : n_tensors_out;
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
             if (ctx_outs[i] == NULL) continue;
