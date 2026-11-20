@@ -6,6 +6,17 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 
+// Visual Studio IntelliSense has no CUDA front-end and cannot parse the
+// CUDA 12.4+ expansion of __launch_bounds__(func(), n), which becomes
+// __declspec(launch_bounds(...)) and breaks on the nested call parentheses.
+// That single parse failure cascades into hundreds of bogus errors in the
+// .cu sources.  Neutralize the attribute for IntelliSense only; nvcc and
+// every real compiler leave __INTELLISENSE__ undefined.
+#if defined(__INTELLISENSE__)
+#undef __launch_bounds__
+#define __launch_bounds__(...)
+#endif
+
 #if CUDART_VERSION >= 12050
 #include <cuda_fp8.h>
 #endif // CUDART_VERSION >= 12050
