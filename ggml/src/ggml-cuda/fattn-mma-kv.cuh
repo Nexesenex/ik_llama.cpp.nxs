@@ -33,6 +33,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_stage_inplace(
     constexpr int rows = tile_A::I;
     constexpr int row_bytes = fattn_mma_raw_row_bytes<D, type_KV>;
     constexpr int tile_stride = D/2 + 4;
+    static_assert(row_bytes <= 4*tile_stride, "raw KV row does not fit in the shared tile");
     half2 * warp_tile = tile + threadIdx.y*rows*tile_stride;
     char * raw = (char *)(warp_tile + rows*tile_stride) - rows*row_bytes;
     const char * src = (const char *)kv + int64_t(row0 + threadIdx.y*rows)*stride;
@@ -68,6 +69,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_expand_inplace(
     constexpr int rows = tile_A::I;
     constexpr int row_bytes = fattn_mma_raw_row_bytes<D, type_KV>;
     constexpr int tile_stride = D/2 + 4;
+    static_assert(row_bytes <= 4*tile_stride, "raw KV row does not fit in the shared tile");
     half2 * warp_tile = tile + threadIdx.y*rows*tile_stride;
     char * raw = (char *)(warp_tile + rows*tile_stride) - rows*row_bytes;
     constexpr int chunks = (D+127)/128;
