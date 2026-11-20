@@ -2234,7 +2234,7 @@ static void launch_fattn_mma_f16_case(ggml_backend_cuda_context & ctx, ggml_tens
     constexpr int nwarps        = nwarps_max_x*nwarps_max_y <= c::nwarps_max ? nwarps_max_x*nwarps_max_y : c::nwarps_max;
 
     const int nbatch_K2      = c::get_nbatch_K2_host     (cc, ncols);
-    const int nbatch_V2      = c::get_nbatch_K2_host     (cc, ncols);
+    const int nbatch_V2      = c::get_nbatch_V2_host     (cc, ncols);
     const int nbatch_combine = c::get_nbatch_combine_host(cc, ncols);
 
     static_assert(DKQ   % tile_B::J     == 0, "bad DKQ");
