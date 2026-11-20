@@ -2286,7 +2286,10 @@ static bool fattn_mma_can_copy_rows(const ggml_tensor * kv) {
 
 // KV cache types that the new MMA decode path can stage and expand without a global conversion to f16.
 static inline bool fattn_mma_new_stageable(const ggml_type type) {
-    return type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0;
+    return type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0 ||
+           type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q5_0 ||
+           type == GGML_TYPE_Q5_1 || type == GGML_TYPE_Q4_1 ||
+           type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_BF16;
 }
 
 template <int DKQ, int DV, int ncols1, int ncols2, bool is_mla>
@@ -2297,6 +2300,12 @@ static void ggml_cuda_flash_attn_ext_mma_new_staged_case(
         switch (type_K) {
             case GGML_TYPE_Q8_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0>(ctx, dst); return;
             case GGML_TYPE_Q4_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0>(ctx, dst); return;
+            case GGML_TYPE_Q6_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q6_0, GGML_TYPE_Q6_0>(ctx, dst); return;
+            case GGML_TYPE_Q5_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_0, GGML_TYPE_Q5_0>(ctx, dst); return;
+            case GGML_TYPE_Q5_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_1, GGML_TYPE_Q5_1>(ctx, dst); return;
+            case GGML_TYPE_Q4_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_1, GGML_TYPE_Q4_1>(ctx, dst); return;
+            case GGML_TYPE_IQ4_NL: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+            case GGML_TYPE_BF16: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_BF16, GGML_TYPE_BF16>(ctx, dst); return;
             default: break;
         }
     } else {
@@ -2305,6 +2314,12 @@ static void ggml_cuda_flash_attn_ext_mma_new_staged_case(
                 switch (type_V) {
                     case GGML_TYPE_Q8_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0>(ctx, dst); return;
                     case GGML_TYPE_Q4_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0>(ctx, dst); return;
+                    case GGML_TYPE_Q6_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q8_0, GGML_TYPE_Q6_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q8_0, GGML_TYPE_Q5_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1>(ctx, dst); return;
+                    case GGML_TYPE_Q4_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q8_0, GGML_TYPE_Q4_1>(ctx, dst); return;
+                    case GGML_TYPE_IQ4_NL: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                    case GGML_TYPE_BF16: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q8_0, GGML_TYPE_BF16>(ctx, dst); return;
                     default: break;
                 }
                 break;
@@ -2312,6 +2327,90 @@ static void ggml_cuda_flash_attn_ext_mma_new_staged_case(
                 switch (type_V) {
                     case GGML_TYPE_Q8_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0>(ctx, dst); return;
                     case GGML_TYPE_Q4_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0>(ctx, dst); return;
+                    case GGML_TYPE_Q6_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_0, GGML_TYPE_Q6_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_0, GGML_TYPE_Q5_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_0, GGML_TYPE_Q5_1>(ctx, dst); return;
+                    case GGML_TYPE_Q4_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1>(ctx, dst); return;
+                    case GGML_TYPE_IQ4_NL: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                    case GGML_TYPE_BF16: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_0, GGML_TYPE_BF16>(ctx, dst); return;
+                    default: break;
+                }
+                break;
+            case GGML_TYPE_Q6_0:
+                switch (type_V) {
+                    case GGML_TYPE_Q8_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q6_0, GGML_TYPE_Q8_0>(ctx, dst); return;
+                    case GGML_TYPE_Q4_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q6_0, GGML_TYPE_Q4_0>(ctx, dst); return;
+                    case GGML_TYPE_Q6_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q6_0, GGML_TYPE_Q6_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q6_0, GGML_TYPE_Q5_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q6_0, GGML_TYPE_Q5_1>(ctx, dst); return;
+                    case GGML_TYPE_Q4_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q6_0, GGML_TYPE_Q4_1>(ctx, dst); return;
+                    case GGML_TYPE_IQ4_NL: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q6_0, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                    case GGML_TYPE_BF16: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q6_0, GGML_TYPE_BF16>(ctx, dst); return;
+                    default: break;
+                }
+                break;
+            case GGML_TYPE_Q5_0:
+                switch (type_V) {
+                    case GGML_TYPE_Q8_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_0, GGML_TYPE_Q8_0>(ctx, dst); return;
+                    case GGML_TYPE_Q4_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_0, GGML_TYPE_Q4_0>(ctx, dst); return;
+                    case GGML_TYPE_Q6_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_0, GGML_TYPE_Q6_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_0, GGML_TYPE_Q5_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1>(ctx, dst); return;
+                    case GGML_TYPE_Q4_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1>(ctx, dst); return;
+                    case GGML_TYPE_IQ4_NL: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_0, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                    case GGML_TYPE_BF16: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_0, GGML_TYPE_BF16>(ctx, dst); return;
+                    default: break;
+                }
+                break;
+            case GGML_TYPE_Q5_1:
+                switch (type_V) {
+                    case GGML_TYPE_Q8_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0>(ctx, dst); return;
+                    case GGML_TYPE_Q4_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_1, GGML_TYPE_Q4_0>(ctx, dst); return;
+                    case GGML_TYPE_Q6_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_1, GGML_TYPE_Q6_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_1, GGML_TYPE_Q5_1>(ctx, dst); return;
+                    case GGML_TYPE_Q4_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_1, GGML_TYPE_Q4_1>(ctx, dst); return;
+                    case GGML_TYPE_IQ4_NL: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_1, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                    case GGML_TYPE_BF16: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q5_1, GGML_TYPE_BF16>(ctx, dst); return;
+                    default: break;
+                }
+                break;
+            case GGML_TYPE_Q4_1:
+                switch (type_V) {
+                    case GGML_TYPE_Q8_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_1, GGML_TYPE_Q8_0>(ctx, dst); return;
+                    case GGML_TYPE_Q4_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0>(ctx, dst); return;
+                    case GGML_TYPE_Q6_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_1, GGML_TYPE_Q6_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_1, GGML_TYPE_Q5_1>(ctx, dst); return;
+                    case GGML_TYPE_Q4_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_1, GGML_TYPE_Q4_1>(ctx, dst); return;
+                    case GGML_TYPE_IQ4_NL: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                    case GGML_TYPE_BF16: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_Q4_1, GGML_TYPE_BF16>(ctx, dst); return;
+                    default: break;
+                }
+                break;
+            case GGML_TYPE_IQ4_NL:
+                switch (type_V) {
+                    case GGML_TYPE_Q8_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_IQ4_NL, GGML_TYPE_Q8_0>(ctx, dst); return;
+                    case GGML_TYPE_Q4_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_IQ4_NL, GGML_TYPE_Q4_0>(ctx, dst); return;
+                    case GGML_TYPE_Q6_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_IQ4_NL, GGML_TYPE_Q6_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_IQ4_NL, GGML_TYPE_Q5_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_IQ4_NL, GGML_TYPE_Q5_1>(ctx, dst); return;
+                    case GGML_TYPE_Q4_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_IQ4_NL, GGML_TYPE_Q4_1>(ctx, dst); return;
+                    case GGML_TYPE_IQ4_NL: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                    case GGML_TYPE_BF16: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_IQ4_NL, GGML_TYPE_BF16>(ctx, dst); return;
+                    default: break;
+                }
+                break;
+            case GGML_TYPE_BF16:
+                switch (type_V) {
+                    case GGML_TYPE_Q8_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_BF16, GGML_TYPE_Q8_0>(ctx, dst); return;
+                    case GGML_TYPE_Q4_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_BF16, GGML_TYPE_Q4_0>(ctx, dst); return;
+                    case GGML_TYPE_Q6_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_BF16, GGML_TYPE_Q6_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_0: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_BF16, GGML_TYPE_Q5_0>(ctx, dst); return;
+                    case GGML_TYPE_Q5_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_BF16, GGML_TYPE_Q5_1>(ctx, dst); return;
+                    case GGML_TYPE_Q4_1: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_BF16, GGML_TYPE_Q4_1>(ctx, dst); return;
+                    case GGML_TYPE_IQ4_NL: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_BF16, GGML_TYPE_IQ4_NL>(ctx, dst); return;
+                    case GGML_TYPE_BF16: launch_fattn_mma_f16_case<DKQ, DV, ncols1, ncols2, false, is_mla, false, GGML_TYPE_BF16, GGML_TYPE_BF16>(ctx, dst); return;
                     default: break;
                 }
                 break;
