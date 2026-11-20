@@ -2292,7 +2292,8 @@ static void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ct
     }
 
     if constexpr (ncols1 == 1 && !use_sparse &&
-            ((DKQ == 256 && DV == 256 && ncols2 == 8 && !is_mla) ||
+            ((DKQ == 128 && DV == 128 && !is_mla && (ncols2 == 8 || ncols2 == 16)) ||
+             (DKQ == 256 && DV == 256 && ncols2 == 8 && !is_mla) ||
              (DV == 512 && ncols2 == 16 && ((DKQ == 576 && is_mla) || (DKQ == 512 && !is_mla))))) {
         const ggml_tensor * K = dst->src[1];
         const ggml_tensor * V = dst->src[2];
