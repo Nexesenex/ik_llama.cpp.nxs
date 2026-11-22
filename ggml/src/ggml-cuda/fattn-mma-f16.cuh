@@ -343,9 +343,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     } else {
         flash_attn_ext_f16_stage_tile<D, type_V, KQ_per_iter, nwarps>(V_h2, k_VKQ_0, stride_V, raw_V);
     }
-    if constexpr (type_K == GGML_TYPE_F16) {
-        flash_attn_ext_f16_load_tile<D, nwarps, KQ_per_iter>(K_h2 + k_VKQ_0*stride_K, tile_K, stride_K);
-    } else {
+    // K was already staged into tile_K by process_tile before the loop or by the
+    // previous iteration, so only the quantized -> half2 expansion is needed here.
+    if constexpr (type_K != GGML_TYPE_F16) {
         flash_attn_ext_f16_expand_tile<D, type_K>(K_h2, stride_K, raw_K, tile_K);
     }
 #else
