@@ -1800,6 +1800,22 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
 
     fattn_kernel_mma_t fattn_kernel;
     const bool use_rel_bias = dst->src[6] != nullptr;
+    // CUDA_SET_SHARED_MEMORY_LIMIT caches one flag per call site, but the call sites
+    // below select between the rel-bias and non-rel-bias kernel at runtime. Cache per
+    // kernel instead, otherwise only the first variant gets its shared memory limit
+    // raised (BF16 KV needs > 48 KiB at D = 128/256).
+#if !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA)
+    auto set_shared_memory_limit = [&](fattn_kernel_mma_t kernel) {
+        static fattn_kernel_mma_t last_kernel[GGML_CUDA_MAX_DEVICES] = {};
+        const int dev = ggml_cuda_get_device();
+        if (last_kernel[dev] != kernel) {
+            CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
+            last_kernel[dev] = kernel;
+        }
+    };
+#else
+    auto set_shared_memory_limit = [](fattn_kernel_mma_t) {};
+#endif
     if (logit_softcap == 0.0f) {
         constexpr bool use_logit_softcap = false;
         if constexpr (D == 128) {
@@ -1809,7 +1825,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         } else {
             fattn_kernel = flash_attn_mma_ext_f16<D, ncols1, ncols2, nwarps, KQ_per_iter, ntiles, type_K, type_V, use_logit_softcap, false>;
         }
-        CUDA_SET_SHARED_MEMORY_LIMIT(fattn_kernel, nbytes_shared_total);
+        set_shared_memory_limit(fattn_kernel);
     } else {
         constexpr bool use_logit_softcap = true;
         if constexpr (D == 128) {
@@ -1819,7 +1835,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         } else {
             fattn_kernel = flash_attn_mma_ext_f16<D, ncols1, ncols2, nwarps, KQ_per_iter, ntiles, type_K, type_V, use_logit_softcap, false>;
         }
-        CUDA_SET_SHARED_MEMORY_LIMIT(fattn_kernel, nbytes_shared_total);
+        set_shared_memory_limit(fattn_kernel);
     }
 
     launch_fattn_mma<D, ncols1, ncols2, KQ_per_iter>
