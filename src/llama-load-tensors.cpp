@@ -8149,7 +8149,6 @@ bool create_tensors_helper::create_tensors() {
                         int n_gpus = std::min(model.split_output_tensor, n_devices);
                         std::partial_sort(remaining.begin(), remaining.begin() + n_gpus, remaining.end(),
                             std::greater<std::pair<size_t, int>>{});
-                        GGML_ASSERT(nr % granularity == 0);
                         int nchunk = nr / granularity;
                         int per_gpu = nchunk / n_gpus;
                         int extra = nchunk % n_gpus;
@@ -8158,6 +8157,8 @@ bool create_tensors_helper::create_tensors() {
                             int gpu_idx = remaining[j].second;
                             split[gpu_idx] = (per_gpu + (j < extra ? 1 : 0)) * granularity;
                         }
+                        // keep the row remainder on the last selected GPU, like create_split()
+                        split[remaining[n_gpus - 1].second] += nr - nchunk*granularity;
                         LLAMA_LOG_INFO("%s: splitting output tensor on top %d GPUs by remaining VRAM\n", __func__, n_gpus);
                     } else {
                         split = create_split(nr, granularity, model.splits, mem_used, vram_free, vram_total, ggml_nbytes(model.output), model.split_vram_reserve_factor,
