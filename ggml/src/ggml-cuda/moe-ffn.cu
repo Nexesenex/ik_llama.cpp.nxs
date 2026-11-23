@@ -685,11 +685,13 @@ static bool ggml_cuda_moe_ffn_enqueue_hit_rows(ggml_backend_cuda_context & ctx,
                 b.layout.n_embd, 1, 1, up_padded, b.layout.up->type, stream);
         kernels_started = true;
         CUDA_CHECK(cudaGetLastError());
+        // ggml_moe_ffn_unary_supported() rejects SITU_GLU, so the SiTU
+        // beta parameters added to the fused MMVQ entry point are unused here.
         ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, b.layout.bank_up, &activation, &ids, &hidden, nullptr, nullptr,
                 (const char *) b.layout.bank_up->data, (const char *) b.layout.bank_gate->data, nullptr,
                 (const char *) resource.device_up_input_q8_1 + draw_offset * up_row_bytes,
                 resource.device_hidden + draw_offset * b.layout.n_ff, 0, b.layout.n_ff, 1,
-                up_padded, b.layout.unary_op, b.layout.limit, stream);
+                up_padded, b.layout.unary_op, b.layout.limit, 0.0f, 0.0f, stream);
         CUDA_CHECK(cudaGetLastError());
     }
 
