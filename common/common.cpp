@@ -8461,7 +8461,6 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "v_cache_hadamard: %s # default: false\n", params.v_cache_hadamard ? "true" : "false");
     fprintf(stream, "split_mode_tensor_parallel_scheduling: %s # default: false\n", params.split_mode_tensor_parallel_scheduling ? "true" : "false");
     fprintf(stream, "split_output_tensor: %d # default: 0 (0=off, 1=all GPUs, N>1=top N GPUs)\n", params.split_output_tensor);
-    fprintf(stream, "split_output_tensor: %s # default: false\n", params.split_output_tensor ? "true" : "false");
     fprintf(stream, "split_output_tensor_subset: %d # default: 0 (0=off, 1=all output GPUs, N>1=top N output GPUs)\n", params.split_output_tensor_subset);
     fprintf(stream, "output_subset_host: %d # default: 0 (keep the full output tensor in host memory once the output logits subset is set)\n", params.output_subset_host);
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
